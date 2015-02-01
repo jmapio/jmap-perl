@@ -63,7 +63,7 @@ sub setuser {
 my $O;
 sub O {
   unless ($O) {
-    open (FH, "</home/jmap/jmap-perl/config.json") || die "can't read config.json"
+    open (FH, "</home/jmap/jmap-perl/config.json") || die "can't read config.json";
     local $/ = undef;
     my $data = <FH>;
     close(FH);
