@@ -1,0 +1,11 @@
+{
+  "client_id"    : "XXX",
+  "client_secret": "YYY",
+  "auth_url"     : "https://accounts.google.com/o/oauth2/auth",
+  "token_url"    : "https://accounts.google.com/o/oauth2/token",
+  "callback_url" : "https://proxy.jmap.io/cb/google",
+  "scopes"       : [
+                    "https://www.googleapis.com/auth/userinfo.email",
+                    "https://mail.google.com/"
+                   ]
+}

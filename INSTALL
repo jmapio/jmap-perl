@@ -31,6 +31,11 @@ cpan HTML::GenerateUtil
 
 apt-get install nginx screen
 
+# OAuth2 config
+
+If you want to use the Gmail OAUTH2 you will need your own secrets.  Copy
+config.example to config.json and replace XXX and YYY with your details.
+
 # Running.
 
 Replace /etc/nginx/sites-available/default with the a symlink to nginx.conf
