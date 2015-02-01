@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+<link href='//fonts.googleapis.com/css?family=Open+Sans:400italic,400,700' rel='stylesheet' type='text/css'>
+<link href="main.css" rel="stylesheet" type="text/css">
+<title>JMAP Proxy</title>
+</head>
+<body><article style="padding:0">
+
+<h1>JMAP Proxy</h1>
+
+$SESSIONS
+
+<p>The JMAP proxy is a work in a progress. It is currently stable enough to test out and get a feel for JMAP in action. Not all methods are implemented yet; see below for what is and isn't available.</p>
+
+<p>The eventual goal is to have a proxy you can stick in front of any IMAP server and get a usable JMAP out the other end. For now, the proxy only supports Gmail as it makes use of some of their custom additions to IMAP to provide thread ids and immutable message ids. Source code will be available soon on <a href="https://github.com/jmapio">GitHub</a> and will be MIT licensed.</p>
+
+<p>The web client hooked up for this demo is the <a href="https://www.fastmail.com">FastMail</a> web interface. For now, this is not open source, however we anticipate open sourcing at least the data-model library for other projects to use. The code is unminified, so takes much longer to initially load than the normal FastMail UI, but can be viewed with standard web-dev tools. These can also show the data exchanges being made to load the data and get delta updates.</p>
+
+<p>HTML email is not currently being sanitised in any way, and the service is not running with all of the security measures employed on a production site such as FastMail, so DO NOT USE THIS PROXY FOR ACCOUNTS WITH SENSITIVE DATA.</p>
+
+<p>When you create your account, the most recent 50 emails will be downloaded in their entirity, so the first page should be snappy immediately.  After that, you are redirected to the landing page.  A background task will continue to pull in batches of messages and add them to your account, so you will see older messages appear while you are using the interface.</p>
+
+<p>OK, up to speed? <a href="/register">OAuth to a Gmail account to get started</a> and have a play!</p>
+
+<p>Alternatively, enter your own IMAP server.  It needs to support CONDSTORE, be listening on port 993 and support IDLE.  That's about it really.  Note though, if you have any issues, you'll get very unfriendly errors</p>
+
+<form action="/signup" method="post">
+<table border="1">
+<tr>
+  <th>Host</th>
+  <td><input type="text" name="host"></td>
+</tr>
+<tr>
+  <th>User</th>
+  <td><input type="text" name="user"></td>
+</tr>
+<tr>
+  <th>Pass</th>
+  <td><input type="password" name="pass"></td>
+</tr>
+<tr>
+  <th>Submit</th>
+  <td><input type="submit" value="Create"></td>
+</tr>
+
+</table>
+</form>
+
+
+<table border="1">
+<tr>
+ <th>API</th>
+ <th>Comments</th>
+</tr>
+<tr>
+ <td>getMailboxes</td>
+ <td>Complete.  Says you can't create child mailboxes or delete it, because setMailboxes doesn't exist.</td>
+</tr>
+<tr>
+ <td>getMailboxUpdates</td>
+ <td>Complete.</td>
+</tr>
+<tr>
+ <td>setMailboxes</td>
+ <td>Not Implemented.</td>
+</tr>
+<tr>
+ <td>getMessageList and getMessageListUpdates</td>
+ <td>Partial. Many sorts and filters aren't supported.  Sort by date and filter by mailbox work.</td>
+</tr>
+<tr>
+ <td>getMessages and getMessageUpdates</td>
+ <td>Partial. Attachment handling and HTML escaping is incomplete</td>
+</tr>
+<tr>
+ <td>setMessages</td>
+ <td>Partial. Can change isUnread and isFlagged, and change inMailboxes (move messages).  No compose support</td>
+</tr>
+<tr>
+ <td>getThreads and getThreadUpdates</td>
+ <td>Complete.  Not the most efficient implementation, but working fine</td>
+</tr>
+</table>
+
+</article></body>
+</html>

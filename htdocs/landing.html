@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+<link href='//fonts.googleapis.com/css?family=Open+Sans:400italic,400,700' rel='stylesheet' type='text/css'>
+<link href="/main.css" rel="stylesheet" type="text/css">
+<title>JMAP Proxy</title>
+</head>
+<body><article style="padding:0">
+
+<h1>Good work, your JMAP proxy account is now set up</h1>
+
+<p>$INFO - (<a href="/">back to main page</a>)</p>
+
+<p>To access the account, POST with the JMAP protocol to <a href="https://proxy.jmap.io/jmap/$UUID/">https://proxy.jmap.io/jmap/$UUID/</a> - there is no need to use any other form of authentication, the UUID is used by itself for privacy. Yes, we know this isn't enough security for a public service (and we need to implement the JMAP auth spec!), but it will do for testing.</p>
+
+<p>Alternatively, you can use the <a href="https://proxy.jmap.io/client/?debug=1&amp;k=$UUID">FastMail web client example</a>. Please bookmark this launch page first, as the client link may change. You can always get to it via here!</p>
+
+<p>Please note: it may take a few minutes before the API responds to requests, because it needs to do an initial sync of all mailbox envelope data.</p>
+
+<p>If you need to reset your account or want to delete all your data, please go to <a href="https://proxy.jmap.io/delete/$UUID">https://proxy.jmap.io/delete/$UUID</a>.  It will redirect you to the homepage when the account is wiped.</p>
+
+
+</article></body>
+</html>
