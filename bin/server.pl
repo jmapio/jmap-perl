@@ -148,6 +148,7 @@ $httpd->reg_cb (
   '/delete' => \&do_delete,
   '/cb/google' => \&do_cb_google,
   '/signup' => \&do_signup,
+  '/files' => \&do_files,
   '/home' => \&home_page,
 );
 
@@ -212,6 +213,59 @@ sub send_backend_request {
   my $cmd = "#" . $backend->[1]++;
   $waiting{$accountid}{$cmd} = [$cb || sub {return 1}, $errcb || sub {return 1}];
   $backend->[0]->push_write(json => [$request, $args, $cmd]);
+}
+
+sub do_files {
+  my ($httpd, $req) = @_;
+
+  my $uri = $req->url();
+  my $path = $uri->path();
+
+  return not_found($req) unless $path =~ m{^/files/([^/]+)/(.*)$};
+
+  my $accountid = $1;
+  my $id = $2;
+
+  # fetch existing URL? */
+  if ($id) {
+    return invalid_request($req) unless lc $req->method eq 'get';
+
+    $httpd->stop_request();
+
+    send_backend_request($accountid, 'download', $id, sub {
+      my ($data) = @_;
+      if ($data->[0]) {
+        my %headers = ('Content-Type' => $data->[0]);
+        my $isdownload = $req->parm('download');
+        $headers{"Content-Disposition"} = "attachment" if $isdownload;
+
+        $req->respond([200, 'ok', \%headers, $data->[1]]);
+      }
+      else {
+        not_found($req)
+      }
+      return 1;
+    }, mkerr($req));
+  }
+  else {
+    return invalid_request($req) unless lc $req->method eq 'post';
+
+    my $type = $req->headers->{"content-type"};
+    return invalid_request($req) unless $type;
+
+    my $data = [ $type, $req->content() ];
+
+    $httpd->stop_request();
+
+    send_backend_request($accountid, 'upload', $data, sub {
+      my $res = shift;
+      my $id = delete $res->{id};
+      $res->{url} = "/files/$accountid/$id";
+      my $html = encode_utf8($json->encode($res));
+      $req->respond ({ content => ['application/json', $html] });
+      return 1;
+    }, mkerr($req));
+  }
 }
 
 sub do_raw {

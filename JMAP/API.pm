@@ -663,9 +663,28 @@ sub getRawMessage {
 
   my $dbh = $Self->{db}->dbh();
   my ($content) = $dbh->selectrow_array("SELECT rfc822 FROM jrawmessage WHERE msgid = ?", {}, $msgid);
+  return unless $content;
 
   my ($type, $data) = $Self->{db}->get_raw_message($content, $part);
   return ($type, $data, $filename);
+}
+
+# or this
+sub uploadFile {
+  my $Self = shift;
+  my ($type, $content) = @_; # XXX filehandle?
+
+  return $self->upload_file($type, $content);
+}
+
+sub downloadFile {
+  my $Self = shift;
+  my $jfileid = shift;
+
+  my $dbh = $Self->{db}->dbh();
+  my ($type, $content) = $dbh->selectrow_array("SELECT type, content FROM jfiles WHERE jfileid = ?", {}, $jfileid);
+  return unless $content;
+  return ($type, $content);
 }
 
 sub getMessageUpdates {

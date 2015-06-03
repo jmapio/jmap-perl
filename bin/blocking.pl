@@ -171,6 +171,12 @@ sub mk_handler {
       if ($cmd eq 'ping') {
         return handle_ping();
       }
+      if ($cmd eq 'upload') {
+        return handle_upload(getdb(), $args);
+      }
+      if ($cmd eq 'download') {
+        return handle_download(getdb(), $args);
+      }
       if ($cmd eq 'raw') {
         return handle_raw(getdb(), $args);
       }
@@ -325,6 +331,31 @@ sub handle_gettoken {
 
   my $data = $db->access_token();
   return ['token', $data];
+}
+
+sub handle_upload {
+  my ($db, $req) = @_;
+  my ($type, $content) = @$req;
+
+  $db->connect();
+  $db->begin();
+  my $api = JMAP::API->new($db);
+  my ($res) = $api->uploadFile($type, $content);
+  $db->commit();
+
+  return ['upload', $res];
+}
+
+sub handle_download {
+  my ($db, $id) = @_;
+
+  $db->connect();
+  $db->begin();
+  my $api = JMAP::API->new($db);
+  my ($type, $content) = $api->downloadFile($id);
+  $db->commit();
+
+  return ['download', [$type, $content]];
 }
 
 sub handle_raw {

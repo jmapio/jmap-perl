@@ -519,6 +519,25 @@ sub delete_message {
   return $Self->change_message($msgid, {active => 0}, []);
 }
 
+sub create_file {
+  my $Self = shift;
+  my $type = shift;
+  my $content = shift;
+  my $expires = shift // time() + (7 * 86400);
+
+  my $size = length($content);
+
+  # XXX - no dedup on sha1 here yet
+  my $id = $self->dinsert('jfiles', { type => $type, size => $size, content => $content, expires => $expires });
+
+  return {
+    id => $id,
+    type => $type,
+    expires => $expires,
+    size => $size,
+  };
+}
+
 sub _dbl {
   return '(' . join(', ', map { defined $_ ? "'$_'" : 'NULL' } @_) . ')';
 }
@@ -714,6 +733,18 @@ CREATE TABLE IF NOT EXISTS jrawmessage (
   rfc822 TEXT,
   parsed TEXT,
   mtime DATE
+);
+EOF
+
+  $dbh->do(<<EOF);
+CREATE TABLE IF NOT EXISTS jfiles (
+  jfileid INTEGER PRIMARY KEY,
+  type TEXT,
+  size INTEGER,
+  content TEXT,
+  expires DATE,
+  mtime DATE,
+  active BOOLEAN
 );
 EOF
 
