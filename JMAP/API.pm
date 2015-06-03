@@ -15,6 +15,31 @@ sub new {
   return bless {db => $db}, ref($class) || $class;
 }
 
+sub getAccounts {
+  my $Self = shift;
+  my $args = shift;
+
+  my $dbh = $Self->{db}->dbh();
+
+  my $user = $Self->{db}->get_user();
+
+  my @list;
+  push @list, {
+    id => $Self->{db}->{accountId},
+    name => $user->{displayname} || $user->{email},
+    isPrimary => $JSON::true,
+    isReadOnly => $JSON::false,
+    hasMail => $JSON::true,
+    hasContacts => $JSON::false,
+    hasCalendars => $JSON::false,
+  };
+
+  return ['accounts', {
+    state => 'dummy',
+    list => \@list,
+  }];
+}
+
 sub getMailboxes {
   my $Self = shift;
   my $args = shift;
