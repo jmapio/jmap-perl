@@ -452,6 +452,41 @@ sub update_messages {
   }
 }
 
+sub delete_messages {
+  my $Self = shift;
+  my $ids = shift;
+
+  my $dbh = $Self->{dbh};
+  my $imap = $Self->{imap};
+
+  my %deletemap;
+  foreach my $msgid (@$ids) {
+    my ($ifolderid, $uid) = $dbh->selectrow_array("SELECT ifolderid, uid FROM imessages WHERE msgid = ?", {}, $msgid);
+    $deletemap{$ifolderid}{$uid} = 1;
+  }
+
+  my $folderdata = $dbh->selectall_arrayref("SELECT ifolderid, imapname, label, jmailboxid FROM ifolders");
+  my %foldermap = map { $_->[0] => $_ } @$folderdata;
+  my %jmailmap = map { $_->[3] => $_ } grep { $_->[3] } @$folderdata;
+
+  foreach my $ifolderid (keys %deletemap) {
+    # XXX - merge similar actions?
+    my $imapname = $foldermap{$ifolderid}[1];
+    die "NO SUCH FOLDER $ifolderid" unless $imapname;
+
+    # we're writing here!
+    my $r = $imap->select($imapname);
+    die "SELECT FAILED $r" unless lc($r) eq 'ok';
+
+    my $uids = [sort keys %{$updatemap{$ifolderid}}];
+    if (@$uids) {
+      $imap->store($uids, "+flags", "(\\Deleted)"));
+      $imap->uidexpunge($uids);
+    }
+    $imap->unselect();
+  }
+}
+
 sub deleted_record {
   my $Self = shift;
   my ($folder, $uid) = @_;
