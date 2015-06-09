@@ -507,7 +507,19 @@ sub change_message {
   }
 }
 
+# NOTE: this can ONLY be used to create draft messages
+sub create_messages {
+  my $Self = shift;
+  my $
+
+}
+
 sub update_messages {
+  my $Self = shift;
+  die "Virtual method";
+}
+
+sub delete_messages {
   my $Self = shift;
   die "Virtual method";
 }

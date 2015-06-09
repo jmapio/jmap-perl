@@ -782,6 +782,12 @@ sub setMessages {
 
   $Self->{db}->sync();
 
+  my $accountid = $self->{db}->accountid();
+  foreach my $cid (sort keys %$created) {
+    my $msgid = $created->{$cid}{id};
+    $created->{$cid}{rawUrl} = "https://proxy.jmap.io/raw/$accountid/$msgid";
+  }
+
   my @res;
   push @res, ['messagesSet', {
     accountId => $Self->{db}->accountid(),
