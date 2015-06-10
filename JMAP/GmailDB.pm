@@ -15,6 +15,8 @@ use OAuth2::Tiny;
 use Encode;
 use Encode::MIME::Header;
 use Date::Format;
+use Email::Sender::Simple qw(sendmail);
+use Email::Sender::Transport::GmailSMTP;
 
 my %KNOWN_SPECIALS = map { lc $_ => 1 } qw(\\HasChildren \\HasNoChildren \\NoSelect);
 my %ROLE_MAP = (
@@ -126,6 +128,24 @@ sub connect {
   }
 
   die "Could not connect to IMAP server: $@";
+}
+
+sub send_email {
+  my $Self = shift;
+  my $MIME = shift;
+  my $data = $Self->dbh->selectrow_arrayref("SELECT username, refresh_token, lastfoldersync FROM iserver");
+  die "UNKNOWN SERVER for $Self->{accountid}" unless ($data and $data->[0]);
+  my $token = $Self->access_token($data->[0], $data->[1]);
+
+  sendmail($MIME, { 
+    from => $data->[0],
+    transport => Email::Sender::Transport::GmailSMTP->new({
+      host => 'smtp.gmail.com',
+      port => 993,
+      sasl_username => $data->[0],
+      access_token => $token,
+    })
+  });
 }
 
 # synchronise list from IMAP server to local folder cache
