@@ -510,7 +510,13 @@ sub change_message {
 # NOTE: this can ONLY be used to create draft messages
 sub create_messages {
   my $Self = shift;
-  die "Virtual method";
+  my $create = shift;
+
+  foreach my $cid (keys %$create) {
+    my $item = $create->{$cid};
+    my $message = _makemsg($item);
+  }
+
 }
 
 sub update_messages {

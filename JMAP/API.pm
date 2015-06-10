@@ -15,6 +15,15 @@ sub new {
   return bless {db => $db}, ref($class) || $class;
 }
 
+sub idmap {
+  my $Self = shift;
+  my $key = shift;
+  if (@_) {
+    $Self->{idmap}{$key} = shift;
+  }
+  return exists $Self->{idmap}{$key} ? $Self->{idmap}{$key} : $key;
+}
+
 sub getAccounts {
   my $Self = shift;
   my $args = shift;
@@ -845,6 +854,7 @@ sub setMessages {
   my $update = $args->{update} || {};
   my $delete = $args->{delete} || [];
 
+  # XXX - idmap support
   my ($created, $notCreated) = $Self->{db}->create_messages($create);
   my ($updated, $notUpdated) = $Self->{db}->update_messages($update);
   my ($deleted, $notDeleted) = $Self->{db}->delete_messages($delete);

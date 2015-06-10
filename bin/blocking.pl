@@ -375,10 +375,11 @@ sub handle_jmap {
 
   my @res;
   $db->connect();
+  # need to keep the API object around for the entire request for idmap purposes
+  my $api = JMAP::API->new($db);
   foreach my $item (@$request) {
     my ($command, $args, $tag) = @$item;
     my @items;
-    my $api = JMAP::API->new($db);
     my $FuncRef = $api->can($command);
     if ($FuncRef) {
       $db->begin();
