@@ -549,7 +549,7 @@ sub create_file {
   my $size = length($content);
 
   # XXX - no dedup on sha1 here yet
-  my $id = $self->dinsert('jfiles', { type => $type, size => $size, content => $content, expires => $expires });
+  my $id = $Self->dinsert('jfiles', { type => $type, size => $size, content => $content, expires => $expires });
 
   return {
     id => $id,
@@ -557,6 +557,15 @@ sub create_file {
     expires => $expires,
     size => $size,
   };
+}
+
+sub get_file {
+  my $Self = shift;
+  my $id = shift;
+
+  my $data = $Self->dbh->selectrow_arrayref("SELECT type,content FROM jfiles WHERE jfileid = ?", {}, $id);
+
+  return @$data;
 }
 
 sub _dbl {

@@ -729,9 +729,8 @@ sub downloadFile {
   my $Self = shift;
   my $jfileid = shift;
 
-  my $dbh = $Self->{db}->dbh();
-  my ($type, $content) = $dbh->selectrow_array("SELECT type, content FROM jfiles WHERE jfileid = ?", {}, $jfileid);
-  return unless $content;
+  my ($type, $content) = $Self->get_file($jfileid);
+
   return ($type, $content);
 }
 
