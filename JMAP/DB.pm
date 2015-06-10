@@ -510,8 +510,6 @@ sub change_message {
 # NOTE: this can ONLY be used to create draft messages
 sub create_messages {
   my $Self = shift;
-  my $
-
 }
 
 sub update_messages {
@@ -529,6 +527,17 @@ sub delete_message {
   my ($msgid) = @_;
 
   return $Self->change_message($msgid, {active => 0}, []);
+}
+
+# returns reported and notFound as a tuple
+sub report_messages {
+  my $Self = shift;
+  my $msgids = shift;
+  my $asSpam = shift;
+
+  # XXX - actually report the messages (or at least check that they exist)
+
+  return ($msgids, []);
 }
 
 sub create_file {

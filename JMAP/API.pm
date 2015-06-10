@@ -845,7 +845,31 @@ sub copyMessages {
 
 sub reportMessages {
   my $Self = shift;
-  return ['error', {type => 'notImplemented'}];
+  my $args = shift;
+
+  my $user = $Self->{db}->get_user();
+  my $accountid = $self->{db}->accountid();
+  return ['error', {type => 'accountNotFound'}]
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  return ['error', {type => 'invalidArguments'}]
+    if not $args->{messageIds};
+
+  return ['error', {type => 'invalidArguments'}]
+    if not exists $args->{asSpam};
+
+  my ($reported, $notfound) = $Self->report_messages($args->{messageIds}, $args->{asSpam});
+
+  my @res;
+  push @res, ['messagesReported', {
+    accountId => $Self->{db}->accountid(),
+    asSpam => $args->{asSpam},
+    reported => $reported,
+    notFound => $notfound,
+  }];
+
+  return @res;
+}
 }
 
 sub getThreads {
