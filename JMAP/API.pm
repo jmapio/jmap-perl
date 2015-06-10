@@ -47,7 +47,9 @@ sub getMailboxes {
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
-  return ['error', {type => 'accountNotFound'}] if ($args->{accountId} and $args->{accountId} ne $Self->{db}->accountid());
+  my $accountid = $self->{db}->accountid();
+  return ['error', {type => 'accountNotFound'}]
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
 
   my $data = $dbh->selectall_arrayref("SELECT jmailboxid, parentid, name, role, precedence, mustBeOnly, mayDelete, mayRename, mayAdd, mayRemove, mayChild, mayRead FROM jmailboxes WHERE active = 1");
 
@@ -121,7 +123,7 @@ sub getMailboxes {
 
   return ['mailboxes', {
     list => \@list,
-    accountId => $Self->{db}->accountid(),
+    accountId => $accountid,
     state => "$user->{jhighestmodseq}",
     notFound => (%missingids ? [map { "$_" } keys %missingids] : undef),
   }];
@@ -130,10 +132,12 @@ sub getMailboxes {
 sub getIdentities {
   my $Self = shift;
   my $args = shift;
+
   my $user = $Self->{db}->get_user();
+  my $accountid = $self->{db}->accountid();
 
   return ['identities', {
-    accountId => $Self->{db}->accountid(),
+    accountId => $accountid,
     list => [
       {
         email => $user->{email},
@@ -151,12 +155,15 @@ sub getMailboxUpdates {
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
+  my $accountid = $self->{db}->accountid();
+  return ['error', {type => 'accountNotFound'}]
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
 
   my $sinceState = $args->{sinceState};
-  return ['error', {type => 'invalidArguments'}] if not $args->{sinceState};
-  return ['error', {type => 'cannotCalculateChanges'}] if ($user->{jdeletedmodseq} and $sinceState <= $user->{jdeletedmodseq});
-
-  return ['error', {type => 'accountNotFound'}] if ($args->{accountId} and $args->{accountId} ne $Self->{db}->accountid());
+  return ['error', {type => 'invalidArguments'}]
+    if not $args->{sinceState};
+  return ['error', {type => 'cannotCalculateChanges'}]
+    if ($user->{jdeletedmodseq} and $sinceState <= $user->{jdeletedmodseq});
 
   my $data = $dbh->selectall_arrayref("SELECT jmailboxid, jmodseq, jcountsmodseq, active FROM jmailboxes ORDER BY jmailboxid");
 
@@ -184,7 +191,7 @@ sub getMailboxUpdates {
   }
 
   my @res = (['mailboxUpdates', {
-    accountId => $Self->{db}->accountid(),
+    accountId => $accountid,
     oldState => "$sinceState",
     newState => "$user->{jhighestmodseq}",
     changed => [map { "$_" } @changed],
@@ -193,7 +200,10 @@ sub getMailboxUpdates {
   }]);
 
   if (@changed and $args->{fetchMailboxes}) {
-    my %items = (ids => \@changed);
+    my %items = (
+      accountid => $accountid,
+      ids => \@changed,
+    );
     if ($onlyCounts) {
       $items{properties} = [qw(totalMessages unreadMessages totalThreads unreadThreads)];
     }
@@ -319,12 +329,18 @@ sub getMessageList {
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
-  return ['error', {type => 'accountNotFound'}] if ($args->{accountId} and $args->{accountId} ne $Self->{db}->accountid());
+  my $accountid = $self->{db}->accountid();
+  return ['error', {type => 'accountNotFound'}]
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  return ['error', {type => 'invalidArguments'}] if (exists $args->{position} and exists $args->{anchor});
-  return ['error', {type => 'invalidArguments'}] if (not exists $args->{position} and not exists $args->{anchor});
-  return ['error', {type => 'invalidArguments'}] if (exists $args->{anchor} and not exists $args->{anchorOffset});
-  return ['error', {type => 'invalidArguments'}] if (not exists $args->{anchor} and exists $args->{anchorOffset});
+  return ['error', {type => 'invalidArguments'}]
+    if (exists $args->{position} and exists $args->{anchor});
+  return ['error', {type => 'invalidArguments'}]
+    if (not exists $args->{position} and not exists $args->{anchor});
+  return ['error', {type => 'invalidArguments'}]
+    if (exists $args->{anchor} and not exists $args->{anchorOffset});
+  return ['error', {type => 'invalidArguments'}]
+    if (not exists $args->{anchor} and exists $args->{anchorOffset});
 
   my $start = $args->{position} || 0;
   return ['error', {type => 'invalidArguments'}] if $start < 0;
@@ -345,6 +361,7 @@ sub getMessageList {
     }
     return ['error', {type => 'anchorNotFound'}];
   }
+
 gotit:
   my $end = $args->{limit} ? $start + $args->{limit} - 1 : $#$data;
   $end = $#$data if $end > $#$data;
@@ -354,7 +371,7 @@ gotit:
 
   my @res;
   push @res, ['messageList', {
-    accountId => $Self->{db}->accountid(),
+    accountId => $accountid,
     filter => $args->{filter},
     sort => $args->{sort},
     collapseThreads => $args->{collapseThreads},
@@ -390,9 +407,14 @@ sub getMessageListUpdates {
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
-  return ['error', {type => 'accountNotFound'}] if ($args->{accountId} and $args->{accountId} ne $Self->{db}->accountid());
-  return ['error', {type => 'invalidArguments'}] if not $args->{sinceState};
-  return ['error', {type => 'cannotCalculateChanges'}] if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
+  my $accountid = $self->{db}->accountid();
+  return ['error', {type => 'accountNotFound'}]
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  return ['error', {type => 'invalidArguments'}]
+    if not $args->{sinceState};
+  return ['error', {type => 'cannotCalculateChanges'}]
+    if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
 
   my $start = $args->{position} || 0;
   return ['error', {type => 'invalidArguments'}] if $start < 0;
@@ -513,7 +535,7 @@ sub getMessageListUpdates {
 
   my @res;
   push @res, ['messageListUpdates', {
-    accountId => $Self->{db}->accountid(),
+    accountId => $accountid,
     filter => $args->{filter},
     sort => $args->{sort},
     collapseThreads => $args->{collapseThreads},
@@ -534,7 +556,9 @@ sub getMessages {
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
-  return ['error', {type => 'accountNotFound'}] if ($args->{accountId} and $args->{accountId} ne $Self->{db}->accountid());
+  my $accountid = $self->{db}->accountid();
+  return ['error', {type => 'accountNotFound'}]
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
 
   return ['error', {type => 'invalidArguments'}] unless $args->{ids};
   #properties: String[] A list of properties to fetch for each message.
@@ -611,7 +635,6 @@ sub getMessages {
     }
 
     if (_prop_wanted($args, 'rawUrl')) {
-      my $accountid = $Self->{db}->accountid();
       $item->{rawUrl} = "https://proxy.jmap.io/raw/$accountid/$msgid";
     }
 
@@ -667,7 +690,7 @@ sub getMessages {
 
   return ['messages', {
     list => \@list,
-    accountId => $Self->{db}->accountid(),
+    accountId => $accountid,
     state => "$user->{jhighestmodseq}",
     notFound => (%missingids ? [keys %missingids] : undef),
   }];
@@ -719,9 +742,14 @@ sub getMessageUpdates {
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
-  return ['error', {type => 'accountNotFound'}] if ($args->{accountId} and $args->{accountId} ne $Self->{db}->accountid());
-  return ['error', {type => 'invalidArguments'}] if not $args->{sinceState};
-  return ['error', {type => 'cannotCalculateChanges'}] if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
+  my $accountid = $self->{db}->accountid();
+  return ['error', {type => 'accountNotFound'}]
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  return ['error', {type => 'invalidArguments'}]
+    if not $args->{sinceState};
+  return ['error', {type => 'cannotCalculateChanges'}]
+    if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
 
   my $sql = "SELECT msgid,active FROM jmessages WHERE jmodseq > ?";
 
@@ -745,7 +773,7 @@ sub getMessageUpdates {
 
   my @res;
   push @res, ['messageUpdates', {
-    accountId => $Self->{db}->accountid(),
+    accountId => $accountid,
     oldState => "$args->{sinceState}",
     newState => "$user->{jhighestmodseq}",
     changed => [map { "$_" } @changed],
@@ -754,6 +782,7 @@ sub getMessageUpdates {
 
   if ($args->{fetchMessages}) {
     push @res, $Self->getMessages({
+      accountid => $accountid,
       ids => \@changed,
       properties => $args->{fetchMessageProperties},
     }) if @changed;
@@ -766,11 +795,10 @@ sub setMessages {
   my $Self = shift;
   my $args = shift;
 
-  #return ['error', {type => 'notImplemented'}] if $args->{create};
-  #return ['error', {type => 'notImplemented'}] if $args->{destroy};
-
   my $user = $Self->{db}->get_user();
-  return ['error', {type => 'accountNotFound'}] if ($args->{accountId} and $args->{accountId} ne $Self->{db}->accountid());
+  my $accountid = $self->{db}->accountid();
+  return ['error', {type => 'accountNotFound'}]
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
 
   my $create = $args->{create} || {};
   my $update = $args->{update} || {};
@@ -782,7 +810,6 @@ sub setMessages {
 
   $Self->{db}->sync();
 
-  my $accountid = $self->{db}->accountid();
   foreach my $cid (sort keys %$created) {
     my $msgid = $created->{$cid}{id};
     $created->{$cid}{rawUrl} = "https://proxy.jmap.io/raw/$accountid/$msgid";
@@ -828,7 +855,9 @@ sub getThreads {
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
-  return ['error', {type => 'accountNotFound'}] if ($args->{accountId} and $args->{accountId} ne $Self->{db}->accountid());
+  my $accountid = $self->{db}->accountid();
+  return ['error', {type => 'accountNotFound'}]
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
 
   # XXX - error if no IDs
 
@@ -876,13 +905,14 @@ sub getThreads {
   my @res;
   push @res, ['threads', {
     list => \@list,
-    accountId => $Self->{db}->accountid(),
+    accountId => $accountid,
     state => "$user->{jhighestmodseq}",
     notFound => (%missingids ? [keys %missingids] : undef),
   }];
 
   if ($args->{fetchMessages}) {
     push @res, $Self->getMessages({
+      accountid => $accountid,
       ids => \@allmsgs,
       properties => $args->{fetchMessageProperties},
     }) if @allmsgs;
@@ -898,9 +928,14 @@ sub getThreadUpdates {
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
-  return ['error', {type => 'accountNotFound'}] if ($args->{accountId} and $args->{accountId} ne $Self->{db}->accountid());
-  return ['error', {type => 'invalidArguments'}] if not $args->{sinceState};
-  return ['error', {type => 'cannotCalculateChanges'}] if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
+  my $accountid = $self->{db}->accountid();
+  return ['error', {type => 'accountNotFound'}]
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  return ['error', {type => 'invalidArguments'}]
+    if not $args->{sinceState};
+  return ['error', {type => 'cannotCalculateChanges'}]
+    if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
 
   my $sql = "SELECT thrid,active FROM jmessages WHERE jmodseq > ?";
 
@@ -934,7 +969,7 @@ sub getThreadUpdates {
 
   my @res;
   push @res, ['threadUpdates', {
-    accountId => $Self->{db}->accountid(),
+    accountId => $accountid,
     oldState => $args->{sinceState},
     newState => "$user->{jhighestmodseq}",
     changed => \@changed,
@@ -943,6 +978,7 @@ sub getThreadUpdates {
 
   if ($args->{fetchThreads}) {
     push @res, $Self->getThreads({
+      accountid => $accountid,
       ids => \@changed,
     }) if @changed;
   }
