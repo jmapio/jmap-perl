@@ -850,18 +850,6 @@ sub importMessage {
   return ['error', {type => 'notFound'}]
     if (not $type or $type ne 'message/rfc822');
 
-  if (grep { $_ eq 'D' } @{$args->{mailboxIds}}) {
-    # draft must be only mailbox
-    return ['error', {type => 'invalidMailboxes'}]
-      if @{$args->{mailboxIds}} > 1;
-  }
-
-  if (grep { $_ eq 'O' } @{$args->{mailboxIds}}) {
-    # outbox must be only mailbox
-    return ['error', {type => 'invalidMailboxes'}]
-      if @{$args->{mailboxIds}} > 1;
-  }
-
   # import to a normal mailbox (or boxes)
   my ($msgid, $thrid) = $Self->import_message($message, $args->{mailboxIds},
     isUnread => $args->{isUnread},
@@ -871,7 +859,7 @@ sub importMessage {
 
   my @res;
   push @res, ['messageImported', {
-    accountId => $accountId,
+    accountId => $accountid,
     messageId => $msgid,
     threadId => $thrid,
   }];
@@ -910,7 +898,6 @@ sub reportMessages {
   }];
 
   return @res;
-}
 }
 
 sub getThreads {
