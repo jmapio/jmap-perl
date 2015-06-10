@@ -1,10 +1,9 @@
 package Email::Sender::Transport::GmailSMTP;
 # ABSTRACT: send email over SMTP with google oauth
 
-use Moo;
+use Moose 0.90;
 extends 'Email::Sender::Transport::SMTP';
 
-use MooX::Types::MooseLike::Base qw(Str);
 use Net::Cmd qw(CMD_OK);
 use MIME::Base64 qw(encode_base64);
 
@@ -25,7 +24,7 @@ use MIME::Base64 qw(encode_base64);
 #pod
 #pod =cut
 
-has access_token => (is => 'ro', isa => Str);
+has access_token => (is => 'ro', isa => 'Str');
 
 sub _smtp_client {
   my ($self) = @_;
@@ -50,7 +49,7 @@ sub _smtp_client {
       # https://developers.google.com/gmail/xoauth2_protocol
       my $cmd = "user=$user\001auth=Bearer $token\001\001";
       my $authstr = encode_base64($cmd, '');
-      unless ($smtp->command("AUTH", "XOAUTH2", $authstr) == CMD_OK) {
+      unless ($smtp->command("AUTH", "XOAUTH2", $authstr)->response() == CMD_OK) {
         $self->_throw('failed AUTH', $smtp);
       }
       return $smtp;
@@ -70,3 +69,5 @@ sub _smtp_client {
 
   return $smtp;
 }
+
+1;

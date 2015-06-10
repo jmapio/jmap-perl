@@ -15,6 +15,7 @@ use OAuth2::Tiny;
 use Encode;
 use Encode::MIME::Header;
 use Date::Format;
+use Email::Simple;
 use Email::Sender::Simple qw(sendmail);
 use Email::Sender::Transport::GmailSMTP;
 
@@ -132,18 +133,21 @@ sub connect {
 
 sub send_email {
   my $Self = shift;
-  my $MIME = shift;
-  my $data = $Self->dbh->selectrow_arrayref("SELECT username, refresh_token, lastfoldersync FROM iserver");
+  my $rfc822 = shift;
+  my $data = $Self->dbh->selectrow_arrayref("SELECT username, refresh_token FROM iserver");
   die "UNKNOWN SERVER for $Self->{accountid}" unless ($data and $data->[0]);
   my $token = $Self->access_token($data->[0], $data->[1]);
+  die "not gmail" unless $token->[0] eq 'gmail';
 
-  sendmail($MIME, { 
+  my $email = Email::Simple->new($rfc822);
+  sendmail($email, { 
     from => $data->[0],
     transport => Email::Sender::Transport::GmailSMTP->new({
       host => 'smtp.gmail.com',
-      port => 993,
-      sasl_username => $data->[0],
-      access_token => $token,
+      port => 465,
+      ssl => 1,
+      sasl_username => $token->[1],
+      access_token => $token->[2],
     })
   });
 }
