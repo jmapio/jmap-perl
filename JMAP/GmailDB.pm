@@ -277,7 +277,7 @@ sub sync_jmailboxes {
   my $haveoutbox = 0;
   foreach my $mailbox (@$jmailboxes) {
     my $id = $mailbox->[0];
-    if ($mailbox->[3] eq 'outbox') {
+    if (($mailbox->[3]||'') eq 'outbox') {
       $haveoutbox = 1;
       next;
     }
@@ -289,6 +289,7 @@ sub sync_jmailboxes {
     $Self->dmake('jmailboxes', {
       role => "outbox",
       name => "Outbox",
+      parentid => 0,
       precedence => 1,
       mustBeOnly => 0,
       mayDelete => 0,
