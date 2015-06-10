@@ -834,7 +834,41 @@ sub setMessages {
 
 sub importMessage {
   my $Self = shift;
-  return ['error', {type => 'notImplemented'}];
+  my $args = shift;
+
+  my $user = $Self->{db}->get_user();
+  my $accountid = $self->{db}->accountid();
+  return ['error', {type => 'accountNotFound'}]
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  return ['error', {type => 'invalidArguments'}]
+    if not $args->{file};
+  return ['error', {type => 'invalidArguments'}]
+    if not $args->{mailboxIds};
+
+  if (grep { $_ eq 'D' } @{$args->{mailboxIds}}) {
+    # draft must be only mailbox
+    return ['error', {type => 'invalidMailboxes'}]
+      if @{$args->{mailboxIds}} > 1;
+  }
+
+  if (grep { $_ eq 'O' } @{$args->{mailboxIds}}) {
+    # outbox must be only mailbox
+    return ['error', {type => 'invalidMailboxes'}]
+      if @{$args->{mailboxIds}} > 1;
+  }
+
+  # import to a normal mailbox (or boxes)
+  my ($msgid, $thrid) = $Self->import_message($args);
+
+  my @res;
+  push @res, ['messageImported', {
+    accountId => $accountId,
+    messageId => $msgid,
+    threadId => $thrid,
+  }];
+
+  return @res;
 }
 
 sub copyMessages {

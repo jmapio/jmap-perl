@@ -14,6 +14,7 @@ use Data::UUID::LibUUID;
 use OAuth2::Tiny;
 use Encode;
 use Encode::MIME::Header;
+use Date::Format;
 
 my %KNOWN_SPECIALS = map { lc $_ => 1 } qw(\\HasChildren \\HasNoChildren \\NoSelect);
 my %ROLE_MAP = (
@@ -401,6 +402,46 @@ sub changed_record {
   $Self->dmaybeupdate('imessages', {flags => $flags, labels => $labels}, {ifolderid => $folder, uid => $uid});
 
   $Self->apply_data($msgid, $flaglist, $labellist);
+}
+
+sub import_message {
+  my $Self = shift;
+  my $args = shift;
+
+  my $dbh = $Self->{dbh};
+  my $imap = $Self->{imap};
+
+  my ($type, $message) = $Self->get_file($args->{file});
+  die "INVALID FILE" unless $type eq 'message/rfc822';
+
+  my $folderdata = $dbh->selectall_arrayref("SELECT ifolderid, imapname, label, jmailboxid FROM ifolders");
+  my %foldermap = map { $_->[0] => $_ } @$folderdata;
+  my %jmailmap = map { $_->[3] => $_ } grep { $_->[3] } @$folderdata;
+
+  # store to the first named folder - we can use labels on gmail to add to other folders later.
+  my $foldername = $jmailmap{$args->{mailboxIds}[0]}[1];
+  $imap->select($foldername);
+
+  my @flags;
+  push @flags, "\\Seen" unless $args->{isUnread};
+  push @flags, "\\Answered" if $args->{isAnswered};
+  push @flags, "\\Flagged" if $args->{isFlagged};
+
+  my $internaldate = time(); # XXX - allow setting?
+  my $date = Date::Format::time2str('%e-%b-%Y %T %z', $internaldate);
+  $imap->append($foldername, "(@flags)", $date, { Literal => $message });
+  my $uid = $imap->get_response_code('appenduid');
+
+  if (@{$args->{mailboxIds}} > 1) {
+    my $labels = join(" ", grep { lc $_ ne '\\allmail' } map { $jmailmap{$_}[2] || $jmailmap{$_}[1] } @{$action->{mailboxIds}});
+    $imap->store($uid, "X-GM-LABELS", "($labels)");
+  }
+
+  my $new = $imap->fetch($uid, '(x-gm-msgid x-gm-thrid)');
+  my $msgid = $new->{$uid}{'x-gm-msgid'};
+  my $thrid = $new->{$uid}{'x-gm-thrid'};
+
+  return ($msgid, $thrid);
 }
 
 sub update_messages {
