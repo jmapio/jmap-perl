@@ -816,7 +816,7 @@ sub setMessages {
 
   my @res;
   push @res, ['messagesSet', {
-    accountId => $Self->{db}->accountid(),
+    accountId => $accountid,
     oldState => undef, # proxy can't guarantee the old state
     # this is actually the state BEFORE the changes, so the client will get a spurious duplicate of the change, but there's
     # no nice way to avoid that...
