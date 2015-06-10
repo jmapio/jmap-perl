@@ -143,6 +143,9 @@ my %backend;
 
 $httpd->reg_cb (
   '/jmap' => \&do_jmap,
+  '/A' => \&do_A,
+  '/J' => \&do_J,
+  '/U' => \&do_U,
   '/upload' => \&do_upload,
   '/raw' => \&do_raw,
   '/register' => \&do_register,
@@ -305,6 +308,56 @@ sub do_raw {
     else {
       not_found($req)
     }
+    return 1;
+  }, mkerr($req));
+}
+
+sub _getaccountid {
+  my $req = shift;
+}
+
+sub do_A {
+  my ($httpd, $req) = @_;
+
+  return not_found($req) unless $req->method eq 'post';
+
+  my $content = $req->content();
+  return invalid_request($req) unless $content;
+  my $request = eval { $json->decode($content) };
+  return invalid_request($req) unless ($request and ref($request) eq 'HASH');
+
+  # more validation?
+
+  $httpd->stop_request();
+
+  send_backend_request("A", 'authenticate', $request, sub {
+    my $res = shift;
+    my $html = encode_utf8($json->encode($res));
+    $req->respond ({ content => ['application/json', $html] });
+    return 1;
+  }, mkerr($req));
+}
+
+sub do_J {
+  my ($httpd, $req) = @_;
+
+  return not_found($req) unless $req->method eq 'post';
+
+  my $accountid = _getaccountid($req);
+
+  prod_idler($accountid);
+
+  my $content = $req->content();
+  return invalid_request($req) unless $content;
+  my $request = eval { $json->decode($content) };
+  return invalid_request($req) unless ($request and ref($request) eq 'ARRAY');
+
+  $httpd->stop_request();
+
+  send_backend_request($accountid, 'jmap', $request, sub {
+    my $res = shift;
+    my $html = encode_utf8($json->encode($res));
+    $req->respond ({ content => ['application/json', $html] });
     return 1;
   }, mkerr($req));
 }
