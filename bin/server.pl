@@ -146,7 +146,6 @@ $httpd->reg_cb (
   '/A' => \&do_A,
   '/J' => \&do_J,
   '/U' => \&do_U,
-  '/upload' => \&do_upload,
   '/raw' => \&do_raw,
   '/register' => \&do_register,
   '/delete' => \&do_delete,
@@ -314,6 +313,9 @@ sub do_raw {
 
 sub _getaccountid {
   my $req = shift;
+  my $header = $req->headers->{"authorization"};
+  $header =~ s/^Token //;
+  return $header;
 }
 
 sub do_A {
@@ -344,6 +346,7 @@ sub do_J {
   return not_found($req) unless $req->method eq 'post';
 
   my $accountid = _getaccountid($req);
+  return need_auth($req) unless $accountid;
 
   prod_idler($accountid);
 
@@ -355,6 +358,31 @@ sub do_J {
   $httpd->stop_request();
 
   send_backend_request($accountid, 'jmap', $request, sub {
+    my $res = shift;
+    my $html = encode_utf8($json->encode($res));
+    $req->respond ({ content => ['application/json', $html] });
+    return 1;
+  }, mkerr($req));
+}
+
+sub do_U {
+  my ($httpd, $req) = @_;
+
+  return not_found($req) unless $req->method eq 'post';
+
+  my $accountid = _getaccountid($req);
+  return need_auth($req) unless $accountid;
+
+  prod_idler($accountid);
+
+  my $content = $req->content();
+  return invalid_request($req) unless $content;
+
+  my $type = $req->headers->{"content-type"};
+
+  $httpd->stop_request();
+
+  send_backend_request($accountid, 'upload', [$type, $content], sub {
     my $res = shift;
     my $html = encode_utf8($json->encode($res));
     $req->respond ({ content => ['application/json', $html] });
@@ -382,36 +410,6 @@ sub do_jmap {
   my $path = $uri->path();
 
   return not_found($req) unless $path =~ m{^/jmap/([^/]+)};
-
-  my $accountid = $1;
-
-  return client_page($req, $accountid) unless lc $req->method eq 'post';
-
-  prod_idler($accountid);
-
-  my $content = $req->content();
-  return invalid_request($req) unless $content;
-  my $request = eval { $json->decode($content) };
-  return invalid_request($req) unless ($request and ref($request) eq 'ARRAY');
-
-  $httpd->stop_request();
-
-  send_backend_request($accountid, 'jmap', $request, sub {
-    my $res = shift;
-    my $html = encode_utf8($json->encode($res));
-    $req->respond ({ content => ['application/json', $html] });
-    return 1;
-  }, mkerr($req));
-}
-
-sub do_upload
-{
-  my ($httpd, $req) = @_;
-
-  my $uri = $req->url();
-  my $path = $uri->path();
-
-  return not_found($req) unless $path =~ m{^/upload/([^/]+)};
 
   my $accountid = $1;
 
@@ -489,6 +487,11 @@ EOF
 
   $html =~ s/\$SESSIONS/$sessiontext/gs;
   $req->respond ({ content => ['text/html', $html] });
+}
+
+sub need_auth {
+  my $req = shift;
+  $req->respond([403, 'need auth', { 'Content-Type' => 'text/plain' }, 'need auth']);
 }
 
 sub not_found {
