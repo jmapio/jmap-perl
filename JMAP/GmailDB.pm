@@ -274,10 +274,30 @@ sub sync_jmailboxes {
     $Self->dmaybeupdate('ifolders', {jmailboxid => $id}, {ifolderid => $folder->[0]});
   }
 
+  my $haveoutbox = 0;
   foreach my $mailbox (@$jmailboxes) {
     my $id = $mailbox->[0];
+    if ($mailbox->[3] eq 'outbox') {
+      $haveoutbox = 1;
+      next;
+    }
     next if $seen{$id};
     $Self->dupdate('jmailboxes', {active => 0}, {jmailboxid => $id});
+  }
+
+  unless ($haveoutbox) {
+    $Self->dmake('jmailboxes', {
+      role => "outbox",
+      name => "Outbox",
+      precedence => 1,
+      mustBeOnly => 0,
+      mayDelete => 0,
+      mayRename => 0,
+      mayAdd => 1,
+      mayRemove => 1,
+      mayChild => 0, # don't go fiddling around
+      mayRead => 1,
+    });
   }
 }
 
