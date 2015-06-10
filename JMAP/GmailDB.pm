@@ -203,7 +203,7 @@ sub sync_jmailboxes {
   foreach my $mailbox (@$jmailboxes) {
     $jbyid{$mailbox->[0]} = $mailbox;
     $roletoid{$mailbox->[3]} = $mailbox->[0] if $mailbox->[3];
-    $byname{$mailbox->[2]}{$mailbox->[1]} = $mailbox->[0];
+    $byname{$mailbox->[2]||'0'}{$mailbox->[1]} = $mailbox->[0];
   }
 
   my %seen;
