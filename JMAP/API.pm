@@ -47,7 +47,7 @@ sub getMailboxes {
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
-  my $accountid = $self->{db}->accountid();
+  my $accountid = $Self->{db}->accountid();
   return ['error', {type => 'accountNotFound'}]
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
@@ -134,7 +134,7 @@ sub getIdentities {
   my $args = shift;
 
   my $user = $Self->{db}->get_user();
-  my $accountid = $self->{db}->accountid();
+  my $accountid = $Self->{db}->accountid();
 
   return ['identities', {
     accountId => $accountid,
@@ -155,7 +155,7 @@ sub getMailboxUpdates {
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
-  my $accountid = $self->{db}->accountid();
+  my $accountid = $Self->{db}->accountid();
   return ['error', {type => 'accountNotFound'}]
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
@@ -329,7 +329,7 @@ sub getMessageList {
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
-  my $accountid = $self->{db}->accountid();
+  my $accountid = $Self->{db}->accountid();
   return ['error', {type => 'accountNotFound'}]
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
@@ -407,7 +407,7 @@ sub getMessageListUpdates {
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
-  my $accountid = $self->{db}->accountid();
+  my $accountid = $Self->{db}->accountid();
   return ['error', {type => 'accountNotFound'}]
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
@@ -556,7 +556,7 @@ sub getMessages {
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
-  my $accountid = $self->{db}->accountid();
+  my $accountid = $Self->{db}->accountid();
   return ['error', {type => 'accountNotFound'}]
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
@@ -722,7 +722,7 @@ sub uploadFile {
   my $Self = shift;
   my ($type, $content) = @_; # XXX filehandle?
 
-  return $self->upload_file($type, $content);
+  return $Self->upload_file($type, $content);
 }
 
 sub downloadFile {
@@ -741,7 +741,7 @@ sub getMessageUpdates {
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
-  my $accountid = $self->{db}->accountid();
+  my $accountid = $Self->{db}->accountid();
   return ['error', {type => 'accountNotFound'}]
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
@@ -795,7 +795,7 @@ sub setMessages {
   my $args = shift;
 
   my $user = $Self->{db}->get_user();
-  my $accountid = $self->{db}->accountid();
+  my $accountid = $Self->{db}->accountid();
   return ['error', {type => 'accountNotFound'}]
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
@@ -837,7 +837,7 @@ sub importMessage {
   my $args = shift;
 
   my $user = $Self->{db}->get_user();
-  my $accountid = $self->{db}->accountid();
+  my $accountid = $Self->{db}->accountid();
   return ['error', {type => 'accountNotFound'}]
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
@@ -889,7 +889,7 @@ sub reportMessages {
   my $args = shift;
 
   my $user = $Self->{db}->get_user();
-  my $accountid = $self->{db}->accountid();
+  my $accountid = $Self->{db}->accountid();
   return ['error', {type => 'accountNotFound'}]
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
@@ -920,7 +920,7 @@ sub getThreads {
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
-  my $accountid = $self->{db}->accountid();
+  my $accountid = $Self->{db}->accountid();
   return ['error', {type => 'accountNotFound'}]
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
@@ -993,7 +993,7 @@ sub getThreadUpdates {
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
-  my $accountid = $self->{db}->accountid();
+  my $accountid = $Self->{db}->accountid();
   return ['error', {type => 'accountNotFound'}]
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 

@@ -481,9 +481,9 @@ sub delete_messages {
     my $r = $imap->select($imapname);
     die "SELECT FAILED $r" unless lc($r) eq 'ok';
 
-    my $uids = [sort keys %{$updatemap{$ifolderid}}];
+    my $uids = [sort keys %{$deletemap{$ifolderid}}];
     if (@$uids) {
-      $imap->store($uids, "+flags", "(\\Deleted)"));
+      $imap->store($uids, "+flags", "(\\Deleted)");
       $imap->uidexpunge($uids);
     }
     $imap->unselect();
