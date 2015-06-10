@@ -18,6 +18,7 @@ use Date::Format;
 use Email::Simple;
 use Email::Sender::Simple qw(sendmail);
 use Email::Sender::Transport::GmailSMTP;
+use IO::All;
 
 my %KNOWN_SPECIALS = map { lc $_ => 1 } qw(\\HasChildren \\HasNoChildren \\NoSelect);
 my %ROLE_MAP = (
@@ -67,10 +68,7 @@ sub setuser {
 my $O;
 sub O {
   unless ($O) {
-    open (FH, "</home/jmap/jmap-perl/config.json") || die "can't read config.json";
-    local $/ = undef;
-    my $data = <FH>;
-    close(FH);
+    my $data = io->file("/home/jmap/jmap-perl/config.json")->slurp;
     my $config = decode_json($data);
     $O = OAuth2::Tiny->new(%$config);
   }
