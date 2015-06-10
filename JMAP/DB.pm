@@ -507,16 +507,59 @@ sub change_message {
   }
 }
 
+sub _makemsg {
+  my $Self = shift;
+  my $args = shift;
+
+  my %replyHeaders;
+  if ($args->{inReplyToMessageId}) {
+    # XXX - get replyheaders
+  }
+
+  my $MIME = Email::Simple->create(
+    header => [
+      From => $args->{from},
+      To => $args->{to},
+      Cc => $args->{cc},
+      Bcc => $args->{bcc},
+      Subject => $args->{subject},
+      %{$Args->{headers} || {}},
+    ],
+    body => $args->{textBody} || $args->{htmlBody},
+  );
+  # XXX - attachments
+
+  return $MIME->as_string();
+}
+
 # NOTE: this can ONLY be used to create draft messages
 sub create_messages {
   my $Self = shift;
   my $create = shift;
+  my %created;
+  my %notCreated;
+
+  # XXX - get draft mailbox ID
+  my ($draftid) = $dbh->selectrow_array("SELECT jmailboxid FROM jmailboxes WHERE role = ?", {}, "drafts");
 
   foreach my $cid (keys %$create) {
     my $item = $create->{$cid};
-    my $message = _makemsg($item);
+    my $message = $Self->_makemsg($item);
+    # XXX - let's just assume goodness for now - lots of error handling to add
+    my ($msgid, $thrid) = $Self->import_message($message, [$draftid], {
+      isUnread => 0,
+      isAnswered => 0,
+      isFlagged => $args->{isFlagged},
+      isDraft => 1,
+    });
+    $created{$cid} = {
+      id => $msgid,
+      threadId => $thrid,
+      size => length($message),
+    };
   }
 
+  return (\%created, \%notCreated);
 }
 
 sub update_messages {
