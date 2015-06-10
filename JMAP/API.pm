@@ -846,6 +846,10 @@ sub importMessage {
   return ['error', {type => 'invalidArguments'}]
     if not $args->{mailboxIds};
 
+  my ($type, $message) = $Self->get_file($args->{file});
+  return ['error', {type => 'notFound'}]
+    if (not $type or $type ne 'message/rfc822');
+
   if (grep { $_ eq 'D' } @{$args->{mailboxIds}}) {
     # draft must be only mailbox
     return ['error', {type => 'invalidMailboxes'}]
@@ -859,7 +863,11 @@ sub importMessage {
   }
 
   # import to a normal mailbox (or boxes)
-  my ($msgid, $thrid) = $Self->import_message($args);
+  my ($msgid, $thrid) = $Self->import_message($message, $args->{mailboxIds},
+    isUnread => $args->{isUnread},
+    isFlagged => $args->{isFlagged},
+    isAnswered => $args->{isAnswered},
+  );
 
   my @res;
   push @res, ['messageImported', {

@@ -406,34 +406,33 @@ sub changed_record {
 
 sub import_message {
   my $Self = shift;
-  my $args = shift;
+  my $message = shift;
+  my $mailboxIds = shift;
+  my %flags = @_;
 
   my $dbh = $Self->{dbh};
   my $imap = $Self->{imap};
-
-  my ($type, $message) = $Self->get_file($args->{file});
-  die "INVALID FILE" unless $type eq 'message/rfc822';
 
   my $folderdata = $dbh->selectall_arrayref("SELECT ifolderid, imapname, label, jmailboxid FROM ifolders");
   my %foldermap = map { $_->[0] => $_ } @$folderdata;
   my %jmailmap = map { $_->[3] => $_ } grep { $_->[3] } @$folderdata;
 
   # store to the first named folder - we can use labels on gmail to add to other folders later.
-  my $foldername = $jmailmap{$args->{mailboxIds}[0]}[1];
+  my $foldername = $jmailmap{$mailboxIds->[0]}[1];
   $imap->select($foldername);
 
   my @flags;
-  push @flags, "\\Seen" unless $args->{isUnread};
-  push @flags, "\\Answered" if $args->{isAnswered};
-  push @flags, "\\Flagged" if $args->{isFlagged};
+  push @flags, "\\Seen" unless $flags{isUnread};
+  push @flags, "\\Answered" if $flags{isAnswered};
+  push @flags, "\\Flagged" if $flags{isFlagged};
 
   my $internaldate = time(); # XXX - allow setting?
   my $date = Date::Format::time2str('%e-%b-%Y %T %z', $internaldate);
   $imap->append($foldername, "(@flags)", $date, { Literal => $message });
   my $uid = $imap->get_response_code('appenduid');
 
-  if (@{$args->{mailboxIds}} > 1) {
-    my $labels = join(" ", grep { lc $_ ne '\\allmail' } map { $jmailmap{$_}[2] || $jmailmap{$_}[1] } @{$action->{mailboxIds}});
+  if (@$mailboxIds > 1) {
+    my $labels = join(" ", grep { lc $_ ne '\\allmail' } map { $jmailmap{$_}[2] || $jmailmap{$_}[1] } @$mailboxIds);
     $imap->store($uid, "X-GM-LABELS", "($labels)");
   }
 
