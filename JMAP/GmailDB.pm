@@ -433,18 +433,18 @@ sub update_messages {
       my $action = $updatemap{$ifolderid}{$uid};
       if (exists $action->{isUnread}) {
         my $act = $action->{isUnread} ? "-flags" : "+flags"; # reverse
-	my $res = $imap->store($uid, $act, "(\\Seen)");
+        my $res = $imap->store($uid, $act, "(\\Seen)");
       }
       if (exists $action->{isFlagged}) {
         my $act = $action->{isFlagged} ? "+flags" : "-flags";
-	$imap->store($uid, $act, "(\\Flagged)");
+        $imap->store($uid, $act, "(\\Flagged)");
       }
       if (exists $action->{isAnswered}) {
         my $act = $action->{isAnswered} ? "+flags" : "-flags";
-	$imap->store($uid, $act, "(\\Answered)");
+        $imap->store($uid, $act, "(\\Answered)");
       }
       if (exists $action->{mailboxIds}) {
-	my $labels = join(" ", grep { lc $_ ne '\\allmail' } map { $jmailmap{$_}[2] || $jmailmap{$_}[1] } @{$action->{mailboxIds}});
+        my $labels = join(" ", grep { lc $_ ne '\\allmail' } map { $jmailmap{$_}[2] || $jmailmap{$_}[1] } @{$action->{mailboxIds}});
         $imap->store($uid, "X-GM-LABELS", "($labels)");
       }
     }
