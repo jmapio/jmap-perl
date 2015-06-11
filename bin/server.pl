@@ -390,21 +390,8 @@ sub do_U {
   }, mkerr($req));
 }
 
-sub options_data {
-  my $req = shift;
-  $req->respond([204, 'no content', { 
-    Access-Control-Allow-Origin => '*',
-    Access-Control-Allow-Methods => 'POST, GET, OPTION',
-    Access-Control-Allow-Headers => 'accept, content-type, x-me-authorization, x-me-clientid, x-me-clientversion, x-me-connectionid, x-me-lastactivity, x-trustedclient',
-    # http://stackoverflow.com/questions/23543719/cors-access-control-max-age-is-ignored
-    Access-Control-Max-Age => '600',
-  }, undef]);
-}
-
 sub do_jmap {
   my ($httpd, $req) = @_;
-
-  return options_data($req) if $req->method eq 'options';
 
   my $uri = $req->url();
   my $path = $uri->path();
