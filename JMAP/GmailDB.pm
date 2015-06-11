@@ -486,6 +486,10 @@ sub import_message {
   return ($msgid, $thrid);
 }
 
+sub create_messages {
+  return ({}, {});
+}
+
 sub update_messages {
   my $Self = shift;
   my $changes = shift;

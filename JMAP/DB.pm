@@ -510,6 +510,7 @@ sub change_message {
 # NOTE: this can ONLY be used to create draft messages
 sub create_messages {
   my $Self = shift;
+  die "Virtual method";
 }
 
 sub update_messages {
