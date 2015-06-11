@@ -40,6 +40,47 @@ sub getAccounts {
   }];
 }
 
+sub getPersonalities {
+  my $Self = shift;
+  my $args = shift;
+
+  my $dbh = $Self->{db}->dbh();
+
+  my $user = $Self->{db}->get_user();
+
+  my @list;
+  push @list, {
+    id => "P1",
+    displayName => $user->{displayname} || $user->{email},
+    isDeletable => $JSON::false,
+    email => $user->{email},
+    name => $user->{displayname} || $user->{email},
+    textSignature => "-- \ntext sig",
+    textSignature => "-- \n<b>html sig</b>",
+    replyTo => $user->{email},
+    autoBcc => "",
+    addBccOnSMTP => $JSON::false,
+    saveSentTo => undef,
+    saveAttachments => $JSON::false,
+    saveOnSMTP => $JSON::false,
+    useForAutoReply => $JSON::false,
+    isAutoConfigured => $JSON::true,
+    enableExternalSMTP => $JSON::false,
+    smtpServer => "",
+    smtpPort => 465,
+    smtpSSL => "ssl",
+    smtpUser => "",
+    smtpPassword => "",
+    smtpRemoteService => undef,
+    popLinkId => undef,
+  };
+
+  return ['personalities', {
+    state => 'dummy',
+    list => \@list,
+  }];
+}
+
 sub getMailboxes {
   my $Self = shift;
   my $args = shift;
