@@ -802,7 +802,7 @@ sub setMessages {
 
   my $create = $args->{create} || {};
   my $update = $args->{update} || {};
-  my $delete = $args->{delete} || {};
+  my $delete = $args->{delete} || [];
 
   my ($created, $notCreated) = $Self->{db}->create_messages($create);
   my ($updated, $notUpdated) = $Self->{db}->update_messages($update);
