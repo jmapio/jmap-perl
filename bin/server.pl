@@ -522,16 +522,6 @@ Content-Type: text/event-stream; charset=utf-8
 EOF
 $EventSourceHeaders =~ s/\n/\r\n/g;
 
-my $OptionsHeaders = <<EOF;
-HTTP/1.0 200 OK
-Access-Control-Allow-Origin: *
-Access-Control-Allow-Methods: POST, GET, OPTIONS
-Access-Control-Allow-Headers: accept, content-type, x-me-authorization, x-me-clientid, x-me-clientversion, x-me-connectionid, x-me-lastactivity, x-trustedclient
-Access-Control-Max-Age: 600
-
-EOF
-$OptionsHeaders =~ s/\n/\r\n/g;
-
 # not using httpd because it's a long running connection
 tcp_server('127.0.0.1', '9001', sub {
   my ($fh) = @_;
@@ -555,9 +545,6 @@ sub HandleEventSource {
   #  and have read the headers so time to store this handler
   #  and get ready to send events
   my ($Request, @Headers) = split /\r?\n/, $Line;
-
-  return ShutdownHandle($Handle, $OptionsHeaders)
-    if ($Request =~ m/^OPTIONS /;
 
   $Request =~ m{^GET /events/(\S+) HTTP}
     || return ShutdownHandle($Handle, "500 Invalid request\r\n");
