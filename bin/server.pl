@@ -427,7 +427,10 @@ sub do_jmap {
   send_backend_request($accountid, 'jmap', $request, sub {
     my $res = shift;
     my $html = encode_utf8($json->encode($res));
-    $req->respond ({ content => ['application/json', $html] });
+    $req->respond (['200', 'ok', {
+      'Content-Type' => 'application/json',
+      'Access-Control-Allow-Origin' => '*',
+    }, $html]);
     return 1;
   }, mkerr($req));
 }
