@@ -864,10 +864,10 @@ sub setMessages {
     # no nice way to avoid that...
     newState => "$user->{jhighestmodseq}",
     created => $created,
-    updated => $updated,
-    deleted => $deleted,
     notCreated => $notCreated,
+    updated => $updated,
     notUpdated => $notUpdated,
+    deleted => $deleted,
     notDeleted => $notDeleted,
   }];
 

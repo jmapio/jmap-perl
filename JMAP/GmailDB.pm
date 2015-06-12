@@ -494,13 +494,16 @@ sub update_messages {
   my $Self = shift;
   my $changes = shift;
 
+  my @updated;
+  my %notUpdated;
+
   my $dbh = $Self->{dbh};
   my $imap = $Self->{imap};
 
   my %updatemap;
   foreach my $msgid (keys %$changes) {
     my ($ifolderid, $uid) = $dbh->selectrow_array("SELECT ifolderid, uid FROM imessages WHERE msgid = ?", {}, $msgid);
-    $updatemap{$ifolderid}{$uid} = $changes->{$msgid};
+    $updatemap{$ifolderid}{$uid} = [$changes->{$msgid}, $msgid];
   }
 
   my $folderdata = $dbh->selectall_arrayref("SELECT ifolderid, imapname, label, jmailboxid FROM ifolders");
@@ -516,8 +519,10 @@ sub update_messages {
     my $r = $imap->select($imapname);
     die "SELECT FAILED $r" unless lc($r) eq 'ok';
 
+    # XXX - error handling
     foreach my $uid (sort keys %{$updatemap{$ifolderid}}) {
-      my $action = $updatemap{$ifolderid}{$uid};
+      my $action = $updatemap{$ifolderid}{$uid}[0];
+      my $msgid = $updatemap{$ifolderid}{$uid}[1];
       if (exists $action->{isUnread}) {
         my $act = $action->{isUnread} ? "-flags" : "+flags"; # reverse
         my $res = $imap->store($uid, $act, "(\\Seen)");
@@ -534,9 +539,12 @@ sub update_messages {
         my $labels = join(" ", grep { lc $_ ne '\\allmail' } map { $jmailmap{$_}[2] || $jmailmap{$_}[1] } @{$action->{mailboxIds}});
         $imap->store($uid, "X-GM-LABELS", "($labels)");
       }
+      push @updated, $msgid;
     }
     $imap->unselect();
   }
+
+  return (\@updated, \%notUpdated);
 }
 
 sub delete_messages {
@@ -545,6 +553,9 @@ sub delete_messages {
 
   my $dbh = $Self->{dbh};
   my $imap = $Self->{imap};
+
+  my @deleted;
+  my %notDeleted;
 
   my %deletemap;
   foreach my $msgid (@$ids) {
@@ -572,6 +583,8 @@ sub delete_messages {
     }
     $imap->unselect();
   }
+
+  return (\@deleted, \%notDeleted);
 }
 
 sub deleted_record {
