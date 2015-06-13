@@ -533,7 +533,7 @@ sub _makemsg {
 
   my $MIME = Email::Simple->create(
     header => [
-      From => _mkemail($args->{from}),
+      From => _mkone($args->{from}),
       To => _mkemail($args->{to}),
       Cc => _mkemail($args->{cc}),
       Bcc => _mkemail($args->{bcc}),
