@@ -476,12 +476,12 @@ sub import_message {
 
   if (@$mailboxIds > 1) {
     my $labels = join(" ", grep { lc $_ ne '\\allmail' } map { $jmailmap{$_}[2] || $jmailmap{$_}[1] } @$mailboxIds);
-    $imap->store($uid, "X-GM-LABELS", "($labels)");
+    $imap->store($uid->[1], "X-GM-LABELS", "($labels)");
   }
 
-  my $new = $imap->fetch($uid, '(x-gm-msgid x-gm-thrid)');
-  my $msgid = $new->{$uid}{'x-gm-msgid'};
-  my $thrid = $new->{$uid}{'x-gm-thrid'};
+  my $new = $imap->fetch($uid->[1], '(x-gm-msgid x-gm-thrid)');
+  my $msgid = $new->{$uid->[1]}{'x-gm-msgid'};
+  my $thrid = $new->{$uid->[1]}{'x-gm-thrid'};
 
   return ($msgid, $thrid);
 }

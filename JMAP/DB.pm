@@ -507,6 +507,21 @@ sub change_message {
   }
 }
 
+sub _mkone {
+  my $h = shift;
+  if ($h->{name} ne '') {
+    return "\"$h->{name}\" <$h->{email}>";
+  }
+  else {
+    return "$h->{email}";
+  }
+}
+
+sub _mkemail {
+  my $a = shift;
+  return join(", ", map { _mkone($_) } @$a);
+}
+
 sub _makemsg {
   my $Self = shift;
   my $args = shift;
@@ -518,12 +533,12 @@ sub _makemsg {
 
   my $MIME = Email::Simple->create(
     header => [
-      From => $args->{from},
-      To => $args->{to},
-      Cc => $args->{cc},
-      Bcc => $args->{bcc},
+      From => _mkemail($args->{from}),
+      To => _mkemail($args->{to}),
+      Cc => _mkemail($args->{cc}),
+      Bcc => _mkemail($args->{bcc}),
       Subject => $args->{subject},
-      %{$Args->{headers} || {}},
+      %{$args->{headers} || {}},
     ],
     body => $args->{textBody} || $args->{htmlBody},
   );
@@ -535,23 +550,25 @@ sub _makemsg {
 # NOTE: this can ONLY be used to create draft messages
 sub create_messages {
   my $Self = shift;
-  my $create = shift;
+  my $args = shift;
   my %created;
   my %notCreated;
+
+  my $dbh = $Self->dbh();
 
   # XXX - get draft mailbox ID
   my ($draftid) = $dbh->selectrow_array("SELECT jmailboxid FROM jmailboxes WHERE role = ?", {}, "drafts");
 
-  foreach my $cid (keys %$create) {
-    my $item = $create->{$cid};
+  foreach my $cid (keys %$args) {
+    my $item = $args->{$cid};
     my $message = $Self->_makemsg($item);
     # XXX - let's just assume goodness for now - lots of error handling to add
-    my ($msgid, $thrid) = $Self->import_message($message, [$draftid], {
+    my ($msgid, $thrid) = $Self->import_message($message, [$draftid],
       isUnread => 0,
       isAnswered => 0,
       isFlagged => $args->{isFlagged},
       isDraft => 1,
-    });
+    );
     $created{$cid} = {
       id => $msgid,
       threadId => $thrid,
