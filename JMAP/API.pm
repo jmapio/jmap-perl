@@ -49,6 +49,37 @@ sub getAccounts {
   }];
 }
 
+sub getPreferences {
+  my $Self = shift;
+  my $args = shift;
+
+  my $dbh = $Self->{db}->dbh();
+
+  my $user = $Self->{db}->get_user();
+
+  my @list;
+
+  return ['preferences', {
+    defaultPersonalityId => "P1",
+  }];
+}
+
+sub getSavedSearches {
+  my $Self = shift;
+  my $args = shift;
+
+  my $dbh = $Self->{db}->dbh();
+
+  my $user = $Self->{db}->get_user();
+
+  my @list;
+
+  return ['savedSearches', {
+    state => 'dummy',
+    list => \@list,
+  }];
+}
+
 sub getPersonalities {
   my $Self = shift;
   my $args = shift;
