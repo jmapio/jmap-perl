@@ -11,6 +11,8 @@ use JSON::XS qw(encode_json decode_json);
 use Email::Simple;
 use Email::Sender::Simple qw(sendmail);
 use Email::Sender::Transport::GmailSMTP;
+use Net::GmailCalendars;
+use Net::GmailContacts;
 
 my %KNOWN_SPECIALS = map { lc $_ => 1 } qw(\\HasChildren \\HasNoChildren \\NoSelect);
 
@@ -27,7 +29,43 @@ sub DESTROY {
   }
 }
 
-sub connect {
+sub get_calendars {
+  my $Self = shift;
+
+  if ($self->{calendars}) {
+    $Self->{lastused} = time();
+    return $Self->{calendars};
+  }
+
+  $Self->{calendars} = Net::GmailCalendars->new(
+    user => $Self->{auth}{username},
+    access_token => $Self->{auth}{access_token},
+    url => "https://apidata.googleusercontent.com/caldav/v2",
+    expandurl => 1,
+  );
+
+  return $Self->{calendars};
+}
+
+sub get_contacts {
+  my $Self = shift;
+
+  if ($self->{contacts}) {
+    $Self->{lastused} = time();
+    return $Self->{contacts};
+  }
+
+  $Self->{contacts} = Net::GmailContacts->new(
+    user => $Self->{auth}{username},
+    access_token => $Self->{auth}{access_token},
+    url => "https://www.googleapis.com/.well-known/carddav",
+    expandurl => 1,
+  );
+
+  return $Self->{contacts};
+}
+
+sub connect_imap {
   my $Self = shift;
 
   if ($Self->{imap}) {
@@ -89,13 +127,13 @@ sub send_email {
 # read folder list from the server
 sub folders {
   my $Self = shift;
-  $Self->connect();
+  $Self->connect_imap();
   return $Self->{folders};
 }
 
 sub labels {
   my $Self = shift;
-  $Self->connect();
+  $Self->connect_imap();
   return $Self->{labels};
 }
 
@@ -103,7 +141,7 @@ sub fetch_status {
   my $Self = shift;
   my $justfolders = shift;
 
-  my $imap = $Self->connect();
+  my $imap = $Self->connect_imap();
 
   my $folders = $Self->folders;
   if ($justfolders) {
@@ -124,7 +162,7 @@ sub fetch_folder {
   my $imapname = shift;
   my $state = shift || { uidvalidity => 0 };
 
-  my $imap = $Self->connect();
+  my $imap = $Self->connect_imap();
 
   my $r = $imap->examine($imapname);
   die "EXAMINE FAILED $r" unless (lc($r) eq 'ok' or lc($r) eq 'read-only');
