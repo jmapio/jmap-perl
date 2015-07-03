@@ -28,6 +28,7 @@ sub setup {
   warn "Connected $id";
   $0 = "[jmap proxy imapsync] $id";
   $hdl->push_write(json => [ 'setup', { folders => $backend->folders() } ]);
+  $hdl->push_write("\n");
 }
 
 sub process_request {
@@ -108,7 +109,10 @@ sub mk_handler {
       $res = ['error', "$@"]
     }
     $res->[2] = $tag;
+    use Data::Dumper;
+    warn Dumper($res);
     $hdl->push_write(json => $res);
+    $hdl->push_write("\n");
 
     warn "HANDLED $cmd ($tag) => $res->[0] ($id)\n";
     $hdl->push_read(json => mk_handler($db));

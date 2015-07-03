@@ -50,7 +50,7 @@ sub connect {
       UseBlocking => $usessl,
     );
     next unless $Self->{imap};
-    $Self->log('debug', "Connected as $Self->{username}");
+    $Self->log('debug', "Connected as $Self->{auth}{username}");
     $Self->{lastused} = time();
     my @folders = $Self->{imap}->xlist('', '*');
 
@@ -113,7 +113,7 @@ sub fetch_status {
     $folders = \%data;
   }
 
-  my $fields = "(uidvalidity uidnext highestmodseq exists)";
+  my $fields = "(uidvalidity uidnext highestmodseq messages)";
   my $data = $imap->multistatus($fields, sort keys %$folders);
 
   return $data;
