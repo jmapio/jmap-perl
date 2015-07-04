@@ -2,7 +2,7 @@
 
 use strict;
 use lib '/home/jmap/jmap-perl';
-package JMAP::IMAPSync;
+package SyncServer;
 
 #use Mail::IMAPTalk qw(:trace);
 
@@ -27,7 +27,7 @@ sub setup {
   $backend = JMAP::Sync::Gmail->new($config) || die "failed to setup $id";
   warn "Connected $id";
   $0 = "[jmap proxy imapsync] $id";
-  $hdl->push_write(json => [ 'setup', { folders => $backend->folders() } ]);
+  $hdl->push_write(json => [ 'setup', $id ]);
   $hdl->push_write("\n");
 }
 
@@ -65,7 +65,7 @@ sub process_request {
   exit 0;
 }
 
-JMAP::IMAPSync->run(host => '127.0.0.1', port => 5005);
+SyncServer->run(host => '127.0.0.1', port => 5005);
 
 sub handle_ping {
   return ['pong', $id];
@@ -81,8 +81,15 @@ sub handle_folder {
   my $args = shift;
   my $folder = $backend->fetch_folder(@$args);
   return ['folder', $folder];
-
 }
+
+sub handle_folders {
+  my $args = shift;
+  my $folders = $backend->folders(@$args);
+  return ['folders', $folders];
+}
+
+
 
 sub mk_handler {
   my ($db) = @_;
@@ -97,11 +104,9 @@ sub mk_handler {
 
     my ($cmd, $args, $tag) = @$json;
     my $res = eval {
-      if ($cmd eq 'ping') {
-        return handle_ping($args);
-      }
-      if ($cmd eq 'status') {
-        return handle_status($args);
+      if (SyncServer->can("handle_$cmd")) {
+        no strict 'refs';
+        return ${"handle_$cmd"}->($args);
       }
       die "Unknown command $cmd";
     };
