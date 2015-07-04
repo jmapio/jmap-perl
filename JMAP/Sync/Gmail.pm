@@ -153,6 +153,7 @@ sub send_email {
   sendmail($email, {
     from => $Self->{auth}{username},
     transport => Email::Sender::Transport::GmailSMTP->new({
+      helo => 'proxy.jmap.io',
       host => 'smtp.gmail.com',
       port => 465,
       ssl => 1,

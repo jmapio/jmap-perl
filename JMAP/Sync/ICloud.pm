@@ -164,7 +164,8 @@ sub send_email {
   sendmail($email, {
     from => $Self->{auth}{username},
     transport => Email::Sender::Transport::SMTPS->new({
-      host => 'smtp.mail.me.com'
+      helo => 'proxy.jmap.io',
+      host => 'smtp.mail.me.com',
       port => 587,
       ssl => 'starttls',
       sasl_username => $Self->{auth}{username},
