@@ -32,7 +32,7 @@ sub setup {
   } else {
     die "UNKNOWN ID $id";
   }
-  warn "Connected $id";
+  warn "$$ Connected $id";
   $0 = "[jmap proxy imapsync] $id";
   $hdl->push_write(json => [ 'setup', $id ]);
   $hdl->push_write("\n");
@@ -130,7 +130,7 @@ sub mk_handler {
   my ($db) = @_;
 
   # don't last forever
-  $hdl->{killer} = AnyEvent->timer(after => 600, cb => sub { warn "SHUTTING DOWN $id ON TIMEOUT\n"; undef $hdl; $cv->send });
+  $hdl->{killer} = AnyEvent->timer(after => 600, cb => sub { warn "$$ SHUTTING DOWN $id ON TIMEOUT\n"; undef $hdl; $cv->send });
 
   return sub {
     my ($hdl, $json) = @_;
@@ -150,12 +150,10 @@ sub mk_handler {
       $res = ['error', "$@"]
     }
     $res->[2] = $tag;
-    use Data::Dumper;
-    warn Dumper($res);
     $hdl->push_write(json => $res);
     $hdl->push_write("\n");
 
-    warn "HANDLED $cmd ($tag) => $res->[0] ($id)\n";
+    warn "$$ HANDLED $cmd ($tag) => $res->[0] ($id)\n";
     $hdl->push_read(json => mk_handler($db));
   };
 }

@@ -176,7 +176,7 @@ sub update_folder {
     my $from = 1;
     my $to = $state->{uidnext} - 1;
     $Self->log('debug', "UPDATING $imapname: $from:$to");
-    my @flags = qw(uid flags), @$dynamic_extra;
+    my @flags = (qw(uid flags), @$dynamic_extra);
     my @extra;
     push @extra, "(changedsince $state->{highestmodseq})" if $state->{highestmodseq};
     $changed = $imap->fetch("$from:$to", "(@flags)", @extra) || {};
@@ -187,7 +187,7 @@ sub update_folder {
     my $from = $state->{uidnext};
     my $to = $uidnext - 1; # or just '*'
     $Self->log('debug', "FETCHING $imapname: $from:$to");
-    my @flags = qw(uid flags internaldate envelope rfc822.size), @$dynamic_extra, @$static_extra;
+    my @flags = (qw(uid flags internaldate envelope rfc822.size), @$dynamic_extra, @$static_extra);
     $new = $imap->fetch("$from:$to", "(@flags)") || {};
   }
 
