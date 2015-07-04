@@ -130,7 +130,7 @@ sub get_abooks {
   my $Self = shift;
   my $talk = $Self->connect_contacts();
 
-  my $data = $talk->GetAdddressBooks();
+  my $data = $talk->GetAddressBooks();
 
   return $data;
 }
@@ -140,7 +140,7 @@ sub get_contacts {
   my $Args = shift;
   my $talk = $Self->connect_contacts();
 
-  my $data = $talk->GetContacts($Args->{href});
+  my $data = $talk->GetContacts($Args->{path});
 
   return $data;
 }

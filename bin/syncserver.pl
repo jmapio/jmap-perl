@@ -73,23 +73,45 @@ sub handle_ping {
 
 sub handle_status {
   my $args = shift;
-  my $status = $backend->fetch_status(@$args);
-  return ['status', $status];
+  my $data = $backend->fetch_status(@$args);
+  return ['status', $data];
 }
 
 sub handle_folder {
   my $args = shift;
-  my $folder = $backend->fetch_folder(@$args);
-  return ['folder', $folder];
+  my $data = $backend->fetch_folder(@$args);
+  return ['folder', $data];
 }
 
 sub handle_folders {
   my $args = shift;
-  my $folders = $backend->folders(@$args);
-  return ['folders', $folders];
+  my $data = $backend->folders(@$args);
+  return ['folders', $data];
 }
 
+sub handle_calendars {
+  my $args = shift;
+  my $data = $backend->get_calendars(@$args);
+  return ['calendars', $data];
+}
 
+sub handle_events {
+  my $args = shift;
+  my $data = $backend->get_events(@$args);
+  return ['events', $data];
+}
+
+sub handle_abooks {
+  my $args = shift;
+  my $data = $backend->get_abooks(@$args);
+  return ['abooks', $data];
+}
+
+sub handle_contacts {
+  my $args = shift;
+  my $data = $backend->get_contacts(@$args);
+  return ['contacts', $data];
+}
 
 sub mk_handler {
   my ($db) = @_;
