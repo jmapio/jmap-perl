@@ -120,6 +120,12 @@ sub handle_contacts {
   return ['contacts', $data];
 }
 
+sub handle_send {
+  my $args = shift;
+  my $data = $backend->send_email(@$args);
+  return ['sent', $data];
+}
+
 sub mk_handler {
   my ($db) = @_;
 
