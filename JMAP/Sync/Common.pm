@@ -83,6 +83,12 @@ sub folders {
   return $Self->{folders};
 }
 
+sub capability {
+  my $Self = shift;
+  my $imap = $Self->connect_imap();
+  return $imap->capability();
+}
+
 sub labels {
   my $Self = shift;
   $Self->connect_imap();
@@ -131,6 +137,83 @@ sub fetch_bodies {
   }
 
   return \%res;
+}
+
+sub update_folder {
+  my $Self = shift;
+  my $imapname = shift;
+  my $state = shift || { uidvalidity => 0 };
+  my $dynamic_extra = shift || [];
+  my $static_extra = shift || [];
+
+  my $imap = $Self->connect_imap();
+
+  my $r = $imap->examine($imapname);
+  die "EXAMINE FAILED $r" unless (lc($r) eq 'ok' or lc($r) eq 'read-only');
+
+  my $uidvalidity = $imap->get_response_code('uidvalidity');
+  my $uidnext = $imap->get_response_code('uidnext');
+  my $highestmodseq = $imap->get_response_code('highestmodseq') || 0;
+  my $exists = $imap->get_response_code('exists') || 0;
+
+  if ($state->{uidvalidity} != $uidvalidity) {
+    # force a delete/recreate and resync
+    $state = {
+      uidvalidity => $uidvalidity.
+      highestmodseq => 0,
+      uidnext => 0,
+      exists => 0,
+    };
+  }
+
+  if ($highestmodseq and $highestmodseq == $state->{highestmodseq}) {
+    $Self->log('debug', "Nothing to do for $imapname at $highestmodseq");
+    return {}; # yay, nothing to do
+  }
+
+  my $changed = {};
+  if ($state->{uidnext} > 1) {
+    my $from = 1;
+    my $to = $state->{uidnext} - 1;
+    $Self->log('debug', "UPDATING $imapname: $from:$to");
+    my @flags = qw(uid flags), @$dynamic_extra;
+    my @extra;
+    push @extra, "(changedsince $state->{highestmodseq})" if $state->{highestmodseq};
+    $changed = $imap->fetch("$from:$to", "(@flags)", @extra) || {};
+  }
+
+  my $new = {};
+  if ($uidnext > $state->{uidnext}) {
+    my $from = $state->{uidnext};
+    my $to = $uidnext - 1; # or just '*'
+    $Self->log('debug', "FETCHING $imapname: $from:$to");
+    my @flags = qw(uid flags internaldate envelope rfc822.size), @$dynamic_extra, @$static_extra;
+    $new = $imap->fetch("$from:$to", "(@flags)") || {};
+  }
+
+  my $alluids = undef;
+  if ($state->{exists} + scalar(keys %$new) > $exists) {
+    # some messages were deleted
+    my $from = 1;
+    my $to = $uidnext - 1;
+    # XXX - you could do some clever UID vs position queries to bisect this out, but it
+    # would need more data than we have here
+    $Self->log('debug', "COUNTING $imapname: $from:$to (something deleted)");
+    $alluids = $imap->search("UID", "$from:$to");
+  }
+
+  return {
+    oldstate => $state,
+    newstate => {
+      highestmodseq => $highestmodseq,
+      uidvalidity => $uidvalidity.
+      uidnext => $uidnext,
+      exists => $exists,
+    },
+    changed => $changed,
+    new => $new,
+    ($alluids ? (alluids => $alluids) : ()),
+  };
 }
 
 1;
