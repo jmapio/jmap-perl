@@ -4,7 +4,7 @@ use strict;
 use warnings;
 
 package JMAP::Sync::ICloud;
-use base qw(JMAP::DB);
+use base qw(JMAP::Sync::Common);
 
 use Mail::IMAPTalk;
 use JSON::XS qw(encode_json decode_json);
@@ -15,19 +15,6 @@ use Net::CalDAVTalk;
 use Net::CardDAVTalk;
 
 my %KNOWN_SPECIALS = map { lc $_ => 1 } qw(\\HasChildren \\HasNoChildren \\NoSelect \\NoInferiors);
-
-sub new {
-  my $Class = shift;
-  my $auth = shift;
-  return bless { auth => $auth }, ref($Class) || $Class;
-}
-
-sub DESTROY {
-  my $Self = shift;
-  if ($Self->{imap}) {
-    $Self->{imap}->logout();
-  }
-}
 
 sub connect_calendars {
   my $Self = shift;
@@ -108,54 +95,6 @@ sub connect_imap {
   die "Could not connect to IMAP server: $@";
 }
 
-sub get_calendars {
-  my $Self = shift;
-  my $talk = $Self->connect_calendars();
-
-  my $data = $talk->GetCalendars();
-
-  return $data;
-}
-
-sub get_events {
-  my $Self = shift;
-  my $Args = shift;
-  my $talk = $Self->connect_calendars();
-
-  my $data = $talk->GetEvents($Args->{href}, Full => 1);
-
-  my %res;
-  foreach my $item (@$data) {
-    $res{$item->{id}} = $item->{_raw};
-  }
-
-  return \%res;
-}
-
-sub get_abooks {
-  my $Self = shift;
-  my $talk = $Self->connect_contacts();
-
-  my $data = $talk->GetAddressBooks();
-
-  return $data;
-}
-
-sub get_contacts {
-  my $Self = shift;
-  my $Args = shift;
-  my $talk = $Self->connect_contacts();
-
-  my $data = $talk->GetContacts($Args->{path});
-
-  my %res;
-  foreach my $item (@$data) {
-    $res{$item->{CPath}} = $item->{_raw};
-  }
-
-  return \%res;
-}
-
 sub send_email {
   my $Self = shift;
   my $rfc822 = shift;
@@ -172,39 +111,6 @@ sub send_email {
       sasl_password => $Self->{auth}{password},
     }),
   });
-}
-
-# read folder list from the server
-sub folders {
-  my $Self = shift;
-  $Self->connect_imap();
-  return $Self->{folders};
-}
-
-sub labels {
-  my $Self = shift;
-  $Self->connect_imap();
-  return $Self->{labels};
-}
-
-sub fetch_status {
-  my $Self = shift;
-  my $justfolders = shift;
-
-  my $imap = $Self->connect_imap();
-
-  my $folders = $Self->folders;
-  if ($justfolders) {
-    my %data = map { $_ => $folders->{$_} }
-               grep { exists $folders->{$_} }
-               @$justfolders;
-    $folders = \%data;
-  }
-
-  my $fields = "(uidvalidity uidnext highestmodseq messages)";
-  my $data = $imap->multistatus($fields, sort keys %$folders);
-
-  return $data;
 }
 
 sub fetch_folder {
