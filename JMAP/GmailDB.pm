@@ -768,6 +768,49 @@ CREATE TABLE IF NOT EXISTS imessages (
 );
 EOF
 
+  $dbh->do(<<EOF);
+CREATE TABLE IF NOT EXISTS icalendars (
+  icalendarid INTEGER PRIMARY KEY NOT NULL,
+  href TEXT,
+  name TEXT,
+  isReadOnly INTEGER,
+  colour TEXT,
+  syncToken TEXT,
+  mtime DATE NOT NULL
+);
+EOF
+
+  $dbh->do(<<EOF);
+CREATE TABLE IF NOT EXISTS ievents (
+  ieventid INTEGER PRIMARY KEY NOT NULL,
+  icalendarid INTEGER,
+  resource TEXT,
+  content TEXT,
+  mtime DATE NOT NULL
+);
+EOF
+
+  $dbh->do(<<EOF);
+CREATE TABLE IF NOT EXISTS iabooks (
+  iabookid INTEGER PRIMARY KEY NOT NULL,
+  href TEXT,
+  name TEXT,
+  isReadOnly INTEGER,
+  syncToken TEXT,
+  mtime DATE NOT NULL
+);
+EOF
+
+  $dbh->do(<<EOF);
+CREATE TABLE IF NOT EXISTS ientries (
+  ientryid INTEGER PRIMARY KEY NOT NULL,
+  iabookid INTEGER,
+  resource TEXT,
+  content TEXT,
+  mtime DATE NOT NULL
+);
+EOF
+
 }
 
 1;

@@ -32,7 +32,7 @@ sub DESTROY {
 sub get_calendars {
   my $Self = shift;
 
-  if ($self->{calendars}) {
+  if ($Self->{calendars}) {
     $Self->{lastused} = time();
     return $Self->{calendars};
   }
@@ -50,7 +50,7 @@ sub get_calendars {
 sub get_contacts {
   my $Self = shift;
 
-  if ($self->{contacts}) {
+  if ($Self->{contacts}) {
     $Self->{lastused} = time();
     return $Self->{contacts};
   }
