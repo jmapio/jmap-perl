@@ -10,11 +10,11 @@ use Mail::IMAPTalk;
 use JSON::XS qw(encode_json decode_json);
 use Email::Simple;
 use Email::Sender::Simple qw(sendmail);
-use Email::Sender::Transport::GmailSMTP;
+use Email::Sender::Transport::SMTPS;
 use Net::CalDAVTalk;
 use Net::CardDAVTalk;
 
-my %KNOWN_SPECIALS = map { lc $_ => 1 } qw(\\HasChildren \\HasNoChildren \\NoSelect);
+my %KNOWN_SPECIALS = map { lc $_ => 1 } qw(\\HasChildren \\HasNoChildren \\NoSelect \\NoInferiors);
 
 sub new {
   my $Class = shift;
@@ -90,7 +90,8 @@ sub connect_imap {
     next unless $Self->{imap};
     $Self->log('debug', "Connected as $Self->{auth}{username}");
     $Self->{lastused} = time();
-    my @folders = $Self->{imap}->xlist('', '*');
+    my $list = $Self->{imap}->capability()->{xlist} ? 'xlist' : 'list';
+    my @folders = $Self->{imap}->$list('', '*');
 
     delete $Self->{folders};
     delete $Self->{labels};
@@ -162,13 +163,13 @@ sub send_email {
   my $email = Email::Simple->new($rfc822);
   sendmail($email, {
     from => $Self->{auth}{username},
-    transport => Email::Sender::Transport::GmailSMTP->new({
-      host => 'smtp.gmail.com',
-      port => 465,
-      ssl => 1,
+    transport => Email::Sender::Transport::SMTPS->new({
+      host => 'smtp.mail.me.com'
+      port => 587,
+      ssl => 'starttls',
       sasl_username => $Self->{auth}{username},
-      access_token => $Self->{auth}{access_token},
-    })
+      sasl_password => $Self->{auth}{password},
+    }),
   });
 }
 
