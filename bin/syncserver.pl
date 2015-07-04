@@ -11,6 +11,7 @@ use AnyEvent::Handle;
 use JSON::XS qw(encode_json decode_json);
 use Net::Server::PreFork;
 use JMAP::Sync::Gmail;
+use JMAP::Sync::ICloud;
 
 use base qw(Net::Server::PreFork);
 
@@ -24,7 +25,13 @@ $0 = '[jmap proxy imapsync]';
 
 sub setup {
   my $config = shift;
-  $backend = JMAP::Sync::Gmail->new($config) || die "failed to setup $id";
+  if ($id =~ m/gmail\.com/) { 
+    $backend = JMAP::Sync::Gmail->new($config) || die "failed to setup $id";
+  } elsif ($id =~ m/icloud\.com/) {
+    $backend = JMAP::Sync::ICloud->new($config) || die "failed to setup $id";
+  } else {
+    die "UNKNOWN ID $id";
+  }
   warn "Connected $id";
   $0 = "[jmap proxy imapsync] $id";
   $hdl->push_write(json => [ 'setup', $id ]);

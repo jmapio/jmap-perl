@@ -121,9 +121,14 @@ sub get_events {
   my $Args = shift;
   my $talk = $Self->connect_calendars();
 
-  my $data = $talk->GetEvents($Args->{href});
+  my $data = $talk->GetEvents($Args->{href}, Full => 1);
 
-  return $data;
+  my %res;
+  foreach my $item (@$data) {
+    $res{$item->{id}} = $item->{_raw};
+  }
+
+  return \%res;
 }
 
 sub get_abooks {
@@ -142,7 +147,12 @@ sub get_contacts {
 
   my $data = $talk->GetContacts($Args->{path});
 
-  return $data;
+  my %res;
+  foreach my $item (@$data) {
+    $res{$item->{CPath}} = $item->{_raw};
+  }
+
+  return \%res;
 }
 
 sub send_email {
