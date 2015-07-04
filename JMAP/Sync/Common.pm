@@ -95,56 +95,79 @@ sub labels {
   return $Self->{labels};
 }
 
-sub fetch_status {
+sub imap_status {
   my $Self = shift;
-  my $justfolders = shift;
+  my $folders = shift;
 
   my $imap = $Self->connect_imap();
 
-  my $folders = $Self->folders;
-  if ($justfolders) {
-    my %data = map { $_ => $folders->{$_} }
-               grep { exists $folders->{$_} }
-               @$justfolders;
-    $folders = \%data;
-  }
-
   my $fields = "(uidvalidity uidnext highestmodseq messages)";
-  my $data = $imap->multistatus($fields, sort keys %$folders);
+  my $data = $imap->multistatus($fields, @$folders);
 
   return $data;
 }
 
-sub fetch_bodies {
+# no newname == delete
+sub imap_move {
   my $Self = shift;
-  my $request = shift;
+  my $imapname = shift;
+  my $olduidvalidity = shift || 0;
+  my $uids = shift;
+  my $newname = shift;
 
   my $imap = $Self->connect_imap();
 
-  my %res;
-  foreach my $item (@$request) {
-    my $name = $item->[0];
-    my $uids = $item->[1];
+  my $r = $imap->select($imapname);
+  die "SELECT FAILED $r" unless lc($r) eq 'ok';
 
-    my $r = $imap->examine($name);
-    die "EXAMINE FAILED $r" unless (lc($r) eq 'ok' or lc($r) eq 'read-only');
+  my $uidvalidity = $imap->get_response_code('uidvalidity');
 
-    my $messages = $imap->fetch(join(',', @$uids), "rfc822");
+  my %res = {
+    imapname => $imapname,
+    newname => $newname,
+    olduidvalidity => $olduidvalidity,
+    newuidvalidity => $uidvalidity,
+  };
 
-    foreach my $uid (keys %$messages) {
-      $res{$name}{$uid} = $messages->{$uid}{rfc822};
+  if ($olduidvalidity != $uidvalidity) {
+    return \%res;
+  }
+
+  if ($newname) {
+    # move
+    if ($imap->capability->{move}) {
+      my $res = $imap->move($uids, $newname);
+      unless ($res) {
+	$res{notMoved} = $uids;
+        return \%res;
+      }
+    }
+    else {
+      my $res = $imap->copy($uids, $newname);
+      unless ($res) {
+	$res{notMoved} = $uids;
+        return \%res;
+      }
+      $imap->store($uids, "+flags", "(\\seen \\deleted)");
+      $imap->uidexpunge($uids);
     }
   }
+  else {
+    $imap->store($uids, "+flags", "(\\seen \\deleted)");
+    $imap->uidexpunge($uids);
+  }
+
+  $res{moved} = $uids;
 
   return \%res;
 }
 
-sub update_folder {
+
+sub imap_fetch {
   my $Self = shift;
   my $imapname = shift;
-  my $state = shift || { uidvalidity => 0 };
-  my $dynamic_extra = shift || [];
-  my $static_extra = shift || [];
+  my $state = shift || {};
+  my $fetch = shift || {};
 
   my $imap = $Self->connect_imap();
 
@@ -156,64 +179,40 @@ sub update_folder {
   my $highestmodseq = $imap->get_response_code('highestmodseq') || 0;
   my $exists = $imap->get_response_code('exists') || 0;
 
-  if ($state->{uidvalidity} != $uidvalidity) {
-    # force a delete/recreate and resync
-    $state = {
-      uidvalidity => $uidvalidity.
-      highestmodseq => 0,
-      uidnext => 0,
-      exists => 0,
-    };
-  }
-
-  if ($highestmodseq and $highestmodseq == $state->{highestmodseq}) {
-    $Self->log('debug', "Nothing to do for $imapname at $highestmodseq");
-    return {}; # yay, nothing to do
-  }
-
-  my $changed = {};
-  if ($state->{uidnext} > 1) {
-    my $from = 1;
-    my $to = $state->{uidnext} - 1;
-    $Self->log('debug', "UPDATING $imapname: $from:$to");
-    my @flags = (qw(uid flags), @$dynamic_extra);
-    my @extra;
-    push @extra, "(changedsince $state->{highestmodseq})" if $state->{highestmodseq};
-    $changed = $imap->fetch("$from:$to", "(@flags)", @extra) || {};
-  }
-
-  my $new = {};
-  if ($uidnext > $state->{uidnext}) {
-    my $from = $state->{uidnext};
-    my $to = $uidnext - 1; # or just '*'
-    $Self->log('debug', "FETCHING $imapname: $from:$to");
-    my @flags = (qw(uid flags internaldate envelope rfc822.size), @$dynamic_extra, @$static_extra);
-    $new = $imap->fetch("$from:$to", "(@flags)") || {};
-  }
-
-  my $alluids = undef;
-  if ($state->{exists} + scalar(keys %$new) > $exists) {
-    # some messages were deleted
-    my $from = 1;
-    my $to = $uidnext - 1;
-    # XXX - you could do some clever UID vs position queries to bisect this out, but it
-    # would need more data than we have here
-    $Self->log('debug', "COUNTING $imapname: $from:$to (something deleted)");
-    $alluids = $imap->search("UID", "$from:$to");
-  }
-
-  return {
+  my %res = (
+    imapname => $imapname,
     oldstate => $state,
     newstate => {
-      highestmodseq => $highestmodseq,
-      uidvalidity => $uidvalidity.
+      uidvalidity => $uidvalidity,
       uidnext => $uidnext,
+      highestmodseq => $highestmodseq,
       exists => $exists,
     },
-    changed => $changed,
-    new => $new,
-    ($alluids ? (alluids => $alluids) : ()),
-  };
+  );
+
+  if (($state->{uidvalidity} || 0) != $uidvalidity) {
+    return \%res;
+  }
+
+  if ($highestmodseq and $highestmodseq == ($state->{highestmodseq} || 0)) {
+    $Self->log('debug', "Nothing to do for $imapname at $highestmodseq");
+    return \%res;
+  }
+
+  foreach my $key (keys %$fetch) {
+    my $item = $fetch->{$key};
+    my $from = $item->[0];
+    my $to = $item->[1];
+    my @flags = qw(uid flags);
+    push @flags, @{$item->[2]} if $item->[2];
+    my @extra;
+    push @extra, "(changedsince $item->[3])" if $item->[3];
+    $Self->log('debug', "FETCHING $imapname: $from:$to @flags @extra");
+    my $data = $imap->fetch("$from:$to", "(@flags)", @extra) || {};
+    $res{$key} = [$item, $data];
+  }
+
+  return \%res;
 }
 
 1;
