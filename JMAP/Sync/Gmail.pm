@@ -29,7 +29,7 @@ sub DESTROY {
   }
 }
 
-sub get_calendars {
+sub connect_calendars {
   my $Self = shift;
 
   if ($Self->{calendars}) {
@@ -47,7 +47,7 @@ sub get_calendars {
   return $Self->{calendars};
 }
 
-sub get_contacts {
+sub connect_contacts {
   my $Self = shift;
 
   if ($Self->{contacts}) {
@@ -105,6 +105,44 @@ sub connect_imap {
   }
 
   die "Could not connect to IMAP server: $@";
+}
+
+sub get_calendars {
+  my $Self = shift;
+  my $talk = $Self->connect_calendars();
+
+  my $data = $talk->GetCalendars();
+
+  return $data;
+}
+
+sub get_events {
+  my $Self = shift;
+  my $Args = shift;
+  my $talk = $Self->connect_calendars();
+
+  my $data = $talk->GetEvents($Args->{href});
+
+  return $data;
+}
+
+sub get_abooks {
+  my $Self = shift;
+  my $talk = $Self->connect_contacts();
+
+  my $data = $talk->GetAdddressBooks();
+
+  return $data;
+}
+
+sub get_contacts {
+  my $Self = shift;
+  my $Args = shift;
+  my $talk = $Self->connect_contacts();
+
+  my $data = $talk->GetContacts($Args->{href});
+
+  return $data;
 }
 
 sub send_email {

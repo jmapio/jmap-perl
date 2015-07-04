@@ -104,9 +104,10 @@ sub mk_handler {
 
     my ($cmd, $args, $tag) = @$json;
     my $res = eval {
-      if (SyncServer->can("handle_$cmd")) {
+      my $fn = "handle_$cmd";
+      if (SyncServer->can($fn)) {
         no strict 'refs';
-        return ${"handle_$cmd"}->($args);
+        return $fn->($args);
       }
       die "Unknown command $cmd";
     };
