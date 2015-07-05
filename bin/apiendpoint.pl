@@ -102,7 +102,6 @@ sub process_request {
     set_accountid(shift);
     warn "Connected $accountid\n";
     $handle->push_read(json => mk_handler($accountid));
-
   });
 
   $cv->recv;
@@ -172,16 +171,16 @@ sub mk_handler {
         return handle_ping();
       }
       if ($cmd eq 'upload') {
-        return handle_upload(getdb(), $args);
+        return handle_upload(getdb(), $args, $tag);
       }
       if ($cmd eq 'download') {
-        return handle_download(getdb(), $args);
+        return handle_download(getdb(), $args, $tag);
       }
       if ($cmd eq 'raw') {
-        return handle_raw(getdb(), $args);
+        return handle_raw(getdb(), $args, $tag);
       }
       if ($cmd eq 'jmap') {
-        return handle_jmap(getdb(), $args);
+        return handle_jmap(getdb(), $args, $tag);
       }
       if ($cmd eq 'cb_google') {
         return handle_cb_google($args);
@@ -193,26 +192,27 @@ sub mk_handler {
         return handle_delete();
       }
       if ($cmd eq 'gettoken') {
-        return handle_gettoken(getdb(), $args);
+        return handle_gettoken(getdb(), $args, $tag);
       }
       if ($cmd eq 'getstate') {
-        return handle_getstate(getdb(), $args);
+        return handle_getstate(getdb(), $args, $tag);
       }
       if ($cmd eq 'sync') {
-        return handle_sync(getdb(), $args);
+        return handle_sync(getdb(), $args, $tag);
       }
       if ($cmd eq 'getinfo') {
-	return handle_getinfo();
+        return handle_getinfo();
       }
       die "Unknown command $cmd";
     };
     unless ($res) {
       $res = ['error', "$@"]
     }
-    $res->[2] = $tag;
-    $hdl->push_write(json => $res);
-
-    warn "HANDLED $cmd ($tag) => $res->[0] ($accountid)\n";
+    if ($res->[0]) {
+      $res->[2] = $tag;
+      $hdl->push_write(json => $res) if $res->[0];
+      warn "HANDLED $cmd ($tag) => $res->[0] ($accountid)\n" ;
+    }
     $hdl->push_read(json => mk_handler($db));
   };
 }
