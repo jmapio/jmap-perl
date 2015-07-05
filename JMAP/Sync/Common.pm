@@ -162,7 +162,6 @@ sub imap_move {
   return \%res;
 }
 
-
 sub imap_fetch {
   my $Self = shift;
   my $imapname = shift;
@@ -213,6 +212,26 @@ sub imap_fetch {
   }
 
   return \%res;
+}
+
+sub imap_append {
+  my $Self = shift;
+  my $imapname = shift;
+  my $flags = shift;
+  my $internaldate = shift;
+  my $rfc822 = shift;
+
+  my $imap = $Self->connect_imap();
+
+  my $r = $imap->append($imapname, $flags, $internaldate, ['Literal', $rfc822]);
+  die "APPEND FAILED $r" unless lc($r) eq 'ok';
+
+  my $uid = $Mailbox->get_response_code('appenduid');
+
+  # XXX - fetch the x-gm-msgid or envelope from the server so we know the
+  # the ID that the server gave this message
+
+  return ['append', $imapname, $uid];
 }
 
 1;
