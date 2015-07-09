@@ -196,7 +196,7 @@ internal methods will always 'die' if they encounter any errors.
 
 =item INTERNAL SOCKET FUNCTIONS
 
-These are functions used internally by the C<Mail::IMAPTalk> object 
+These are functions used internally by the C<Mail::IMAPTalk> object
 to read/write data to/from the IMAP connection socket. The class does
 its own buffering so if you want to read/write to the IMAP socket, you
 should use these functions.
@@ -470,7 +470,7 @@ method for more details.
 
 =item B<Separator>
 
-If supplied, sets the folder name text string separator character. 
+If supplied, sets the folder name text string separator character.
 Passed as the second parameter to the C<set_root_folder()> method.
 
 =item B<CaseInsensitive>
@@ -856,7 +856,7 @@ Examples:
   $IMAP->set_root_folder('inbox', '.', 1, 'user');
 
   # Selects 'Inbox' (because 'Inbox' eq 'inbox' case insensitive)
-  $IMAP->select('Inbox');      
+  $IMAP->select('Inbox');
   # Selects 'inbox.blah'
   $IMAP->select('blah');
   # Selects 'INBOX.fred' (because 'INBOX' eq 'inbox' case insensitive)
@@ -1009,7 +1009,7 @@ sub get_last_error {
 
 Returns the last completion response to the tagged command.
 
-This is either the string "ok", "no" or "bad" (always lower case) 
+This is either the string "ok", "no" or "bad" (always lower case)
 
 =cut
 sub get_last_completion_response {
@@ -1217,7 +1217,7 @@ sub unicode_folders {
 
 =head1 IMAP FOLDER COMMAND METHODS
 
-B<Note:> In all cases where a folder name is used, 
+B<Note:> In all cases where a folder name is used,
 the folder name is first manipulated according to the current root folder
 prefix as described in C<set_root_folder()>.
 
@@ -1227,7 +1227,7 @@ prefix as described in C<set_root_folder()>.
 =item I<select($FolderName, @Opts)>
 
 Perform the standard IMAP 'select' command to select a folder for
-retrieving/moving/adding messages. If $Opts{ReadOnly} is true, the 
+retrieving/moving/adding messages. If $Opts{ReadOnly} is true, the
 IMAP EXAMINE verb is used instead of SELECT.
 
 Mail::IMAPTalk will cache the currently selected folder, and if you
@@ -1673,7 +1673,7 @@ details of a folder/mailbox and possible root quota as well.
 See RFC 2087 for details of the IMAP
 quota extension. The result of this command is a little complex.
 Unfortunately it doesn't map really easily into any structure
-since there are several different responses. 
+since there are several different responses.
 
 Basically it's a hash reference. The 'quotaroot' item is the
 response which lists the root quotas that apply to the given
@@ -2401,7 +2401,7 @@ sub xmove {
 
 Methods provided by extensions to the cyrus IMAP server
 
-B<Note:> In all cases where a folder name is used, 
+B<Note:> In all cases where a folder name is used,
 the folder name is first manipulated according to the current root folder
 prefix as described in C<set_root_folder()>.
 
@@ -2518,13 +2518,13 @@ sub xconvmeta {
         }
         elsif (lc($Item) eq 'folderexists') {
           my %FolderExists = @{$Res->{$Item}};
-          $ResHash{folderexists} = { map { 
+          $ResHash{folderexists} = { map {
              $Self->_unfix_folder_name($_) => int($FolderExists{$_})
           } keys %FolderExists };
         }
         elsif (lc($Item) eq 'folderunseen') {
           my %FolderUnseen = @{$Res->{$Item}};
-          $ResHash{folderunseen} = { map { 
+          $ResHash{folderunseen} = { map {
              $Self->_unfix_folder_name($_) => int($FolderUnseen{$_})
           } keys %FolderUnseen };
         }
@@ -2594,7 +2594,7 @@ messages
 =cut
 sub xconvupdates {
   my ($Self, $Sort, $Window, @Search) = @_;
- 
+
   my %Results;
 
   my %Callbacks = (
@@ -2831,7 +2831,7 @@ Examples:
   # Parse further to find message components
   my $MC = $IMAP->find_message($BS);
   $MC = { 'plain' => ... text body struct ref part ...,
-          'html' => ... html body struct ref part (if present) ... 
+          'html' => ... html body struct ref part (if present) ...
           'htmllist' => [ ... html body struct ref parts (if present) ... ] };
 
   # Now get the text part of the message
@@ -3166,7 +3166,7 @@ The result in response will look like this:
 
 A couple of points to note:
 
-=over 
+=over
 
 =item 1.
 
@@ -3430,7 +3430,7 @@ Would have the result:
       }
     }
   }
-         
+
 =cut
 
 =head1 INTERNAL METHODS
@@ -3649,7 +3649,7 @@ sub _send_data {
     # Handle non-literals
     if (!$IsLiteral) {
       $Arg = _quote(ref($Arg) ? $$Arg : $Arg) if $IsQuote;
-      
+
       # Must be a scalar reference for a non-literal
       $LineBuffer .= ($AddSpace ? " " : "") . (ref($Arg) ? $$Arg : $Arg);
 
@@ -3958,7 +3958,7 @@ sub _trace {
   my ($Self, $Line) = @_;
   $Line =~ s/\015\012/\n/;
   my $Trace = $Self->{Trace};
-  
+
   if (ref($Trace) eq 'GLOB') {
     print $Trace $Line;
   } elsif (ref($Trace) eq 'CODE') {
@@ -4067,7 +4067,7 @@ sub _next_atom {
         $$AtomRef = $CurAtom;
       }
     }
-    
+
     # Bracket?
     elsif ($Line =~ m/\G\(/gc) {
       # Begin a new sub-array
@@ -4365,7 +4365,7 @@ otherwise the function will 'die' with an error if it runs out of data.
 
 If $NBytes is not specified (undef), the function will attempt to
 seek to the end of the file to find the size of the file.
- 
+
 =cut
 sub _copy_handle_to_handle {
   my ($Self, $InHandle, $OutHandle, $NBytes) = @_;
@@ -4407,7 +4407,7 @@ have to copy the contents of our buffer first.
 
 The number of bytes specified must be available on the IMAP socket,
 if the function runs out of data it will 'die' with an error.
- 
+
 =cut
 sub _copy_imap_socket_to_handle {
   my ($Self, $OutHandle, $NBytes) = @_;
@@ -4436,12 +4436,12 @@ sub _copy_imap_socket_to_handle {
   # Done
   return 1;
 }
-  
+
 =item I<_quote($String)>
 
 Returns an IMAP quoted version of a string. This place "..." around the
 string, and replaces any internal " with \".
- 
+
 =cut
 sub _quote {
   # Replace " and \ with \" and \\ and surround with "..."
@@ -4641,7 +4641,7 @@ from an IMAP fetch (envelope) call into a single RFC 822 email string
 finally return to the user.
 
 This is used to parse an envelope structure returned from a fetch call.
-  
+
 See the documentation section 'FETCH RESULTS' for more information.
 
 =cut
@@ -4849,7 +4849,7 @@ sub _parse_bodystructure {
 =item I<_parse_fetch_annotation($AnnotateItem)>
 
 Takes the result from a single IMAP annotation item
-into a Perl friendly structure. 
+into a Perl friendly structure.
 
 See the documentation section 'FETCH RESULTS' from more information.
 
@@ -4867,7 +4867,7 @@ sub _parse_fetch_annotation {
 =item I<_parse_fetch_result($FetchResult)>
 
 Takes the result from a single IMAP fetch response line and parses it
-into a Perl friendly structure. 
+into a Perl friendly structure.
 
 See the documentation section 'FETCH RESULTS' from more information.
 
@@ -5010,7 +5010,7 @@ sub DESTROY {
 
   # If socket exists, and connection is open and authenticated or
   #   selected, do a logout
-  if ($Self->{Socket} && 
+  if ($Self->{Socket} &&
         ($Self->state() == Authenticated || $Self->state() == Selected) &&
         $Self->is_open()) {
     $Self->logout();

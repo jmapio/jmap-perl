@@ -431,17 +431,17 @@ sub update_messages {
       if (exists $action->{isUnread}) {
         my $act = $action->{isUnread} ? "-flags" : "+flags"; # reverse
         $Self->log('debug', "STORING $act SEEN for $uid");
-	my $res = $imap->store($uid, $act, "(\\Seen)");
+        my $res = $imap->store($uid, $act, "(\\Seen)");
       }
       if (exists $action->{isFlagged}) {
         my $act = $action->{isFlagged} ? "+flags" : "-flags";
         $Self->log('debug', "STORING $act FLAGGED for $uid");
-	$imap->store($uid, $act, "(\\Flagged)");
+        $imap->store($uid, $act, "(\\Flagged)");
       }
       if (exists $action->{isAnswered}) {
         my $act = $action->{isAnswered} ? "+flags" : "-flags";
         $Self->log('debug', "STORING $act ANSWERED for $uid");
-	$imap->store($uid, $act, "(\\Answered)");
+        $imap->store($uid, $act, "(\\Answered)");
       }
       if (exists $action->{mailboxIds}) {
         my $id = $action->{mailboxIds}->[0]; # there can be only one

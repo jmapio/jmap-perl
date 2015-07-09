@@ -138,14 +138,14 @@ sub imap_move {
     if ($imap->capability->{move}) {
       my $res = $imap->move($uids, $newname);
       unless ($res) {
-	$res{notMoved} = $uids;
+        $res{notMoved} = $uids;
         return \%res;
       }
     }
     else {
       my $res = $imap->copy($uids, $newname);
       unless ($res) {
-	$res{notMoved} = $uids;
+        $res{notMoved} = $uids;
         return \%res;
       }
       $imap->store($uids, "+flags", "(\\seen \\deleted)");

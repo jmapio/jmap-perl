@@ -193,7 +193,7 @@ sub get_backend {
       connect => ['127.0.0.1', 5000],
       on_error => sub {
         print "CLOSING ON ERROR $accountid\n";
-	delete $backend{$accountid};
+        delete $backend{$accountid};
       },
       on_disconnect => sub {
         print "CLOSING ON DISCONNECT $accountid\n";
@@ -208,7 +208,7 @@ sub get_backend {
 
 sub send_backend_request {
   my $accountid = shift;
-  my $request = shift; 
+  my $request = shift;
   my $args = shift;
   my $cb = shift;
   my $errcb = shift;

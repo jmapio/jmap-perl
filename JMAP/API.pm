@@ -753,7 +753,7 @@ sub getMessages {
         my %wanted;
         foreach my $prop (@{$args->{properties}}) {
           next unless $prop =~ m/^headers\.(.*)/;
-	  $item->{headers} ||= {}; # avoid zero matched headers bug
+          $item->{headers} ||= {}; # avoid zero matched headers bug
           $wanted{lc $1} = 1;
         }
         foreach my $key (keys %{$data->{headers}}) {

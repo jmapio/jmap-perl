@@ -484,7 +484,7 @@ sub change_message {
   my $Self = shift;
   my ($msgid, $data, $newids) = @_;
 
-  # doesn't work if only IDs have changed :( 
+  # doesn't work if only IDs have changed :(
   #return unless $Self->dmaybedirty('jmessages', $data, {msgid => $msgid});
 
   $Self->ddirty('jmessages', $data, {msgid => $msgid});

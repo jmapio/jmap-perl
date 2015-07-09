@@ -138,7 +138,7 @@ sub send_email {
   die "not gmail" unless $token->[0] eq 'gmail';
 
   my $email = Email::Simple->new($rfc822);
-  sendmail($email, { 
+  sendmail($email, {
     from => $data->[0],
     transport => Email::Sender::Transport::GmailSMTP->new({
       host => 'smtp.gmail.com',

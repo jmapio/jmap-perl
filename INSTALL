@@ -3,23 +3,23 @@ Debian install instructions (port to your own OS as you like)
 # Might need some software too
 
 apt-get install build-essential \
-		libanyevent-httpd-perl \
-		libdata-uuid-libuuid-perl \
-		libdatetime-perl \
-		libdbd-sqlite3-perl \
-		libdbi-perl \
-		libemail-address-perl \
-		libemail-mime-perl \
-		libhtml-parser-perl \
-		libhtml-strip-perl \
-		libhttp-tiny-perl \
-		libhttp-date-perl \
-		libimage-size-perl \
-		libio-socket-ssl-perl \
-		libjson-perl \
-		libjson-xs-perl \
-		liblocale-gettext-perl \
-		libswitch-perl
+                libanyevent-httpd-perl \
+                libdata-uuid-libuuid-perl \
+                libdatetime-perl \
+                libdbd-sqlite3-perl \
+                libdbi-perl \
+                libemail-address-perl \
+                libemail-mime-perl \
+                libhtml-parser-perl \
+                libhtml-strip-perl \
+                libhttp-tiny-perl \
+                libhttp-date-perl \
+                libimage-size-perl \
+                libio-socket-ssl-perl \
+                libjson-perl \
+                libjson-xs-perl \
+                liblocale-gettext-perl \
+                libswitch-perl
 
 cpan AnyEvent::HTTPD::CookiePatch
 cpan AnyEvent::IMAP

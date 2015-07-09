@@ -25,7 +25,7 @@ $0 = '[jmap proxy imapsync]';
 
 sub setup {
   my $config = shift;
-  if ($id =~ m/gmail\.com/) { 
+  if ($id =~ m/gmail\.com/) {
     $backend = JMAP::Sync::Gmail->new($config) || die "failed to setup $id";
   } elsif ($id =~ m/icloud\.com/) {
     $backend = JMAP::Sync::ICloud->new($config) || die "failed to setup $id";
