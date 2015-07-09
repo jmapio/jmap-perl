@@ -185,6 +185,9 @@ sub sync_jmailboxes {
           $byname{$parentid}{$name} = $id;
         }
       }
+      if (@bits) {
+        $seen{$id} = 1;
+      }
     }
     next unless $name;
     my %details = (
