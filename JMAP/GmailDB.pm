@@ -802,8 +802,8 @@ CREATE TABLE IF NOT EXISTS iabooks (
 EOF
 
   $dbh->do(<<EOF);
-CREATE TABLE IF NOT EXISTS ientries (
-  ientryid INTEGER PRIMARY KEY NOT NULL,
+CREATE TABLE IF NOT EXISTS icontacts (
+  icontactid INTEGER PRIMARY KEY NOT NULL,
   iabookid INTEGER,
   resource TEXT,
   content TEXT,
