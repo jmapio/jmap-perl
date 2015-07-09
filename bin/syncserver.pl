@@ -25,12 +25,12 @@ $0 = '[jmap proxy imapsync]';
 
 sub setup {
   my $config = shift;
-  if ($id =~ m/gmail\.com/) {
+  if ($config->{hostname} eq 'gmail') {
     $backend = JMAP::Sync::Gmail->new($config) || die "failed to setup $id";
-  } elsif ($id =~ m/icloud\.com/) {
+  } elsif ($config->{hostname} eq 'imap.mail.me.com') {
     $backend = JMAP::Sync::ICloud->new($config) || die "failed to setup $id";
   } else {
-    die "UNKNOWN ID $id";
+    die "UNKNOWN ID $id ($config->{hostname})";
   }
   warn "$$ Connected $id";
   $0 = "[jmap proxy imapsync] $id";
@@ -124,6 +124,24 @@ sub handle_send {
   my $args = shift;
   my $data = $backend->send_email(@$args);
   return ['sent', $data];
+}
+
+sub handle_imap_update {
+  my $args = shift;
+  my $data = $backend->imap_update(@$args);
+  return ['updated', $data];
+}
+
+sub handle_imap_move {
+  my $args = shift;
+  my $data = $backend->imap_move(@$args);
+  return ['moved', $data];
+}
+
+sub handle_imap_fill {
+  my $args = shift;
+  my $data = $backend->imap_fill(@$args);
+  return ['filled', $data];
 }
 
 sub mk_handler {

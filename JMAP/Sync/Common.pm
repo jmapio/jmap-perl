@@ -108,6 +108,73 @@ sub imap_status {
 }
 
 # no newname == delete
+sub imap_update {
+  my $Self = shift;
+  my $imapname = shift;
+  my $olduidvalidity = shift || 0;
+  my $uids = shift;
+  my $isAdd = shift;
+  my $flags = shift;
+
+  my $imap = $Self->connect_imap();
+
+  my $r = $imap->select($imapname);
+  die "SELECT FAILED $r" unless lc($r) eq 'ok';
+
+  my $uidvalidity = $imap->get_response_code('uidvalidity');
+
+  my %res = {
+    imapname => $imapname,
+    olduidvalidity => $olduidvalidity,
+    newuidvalidity => $uidvalidity,
+  };
+
+  if ($olduidvalidity != $uidvalidity) {
+    return \%res;
+  }
+
+  $imap->store($uids, $isAdd ? "+flags" : "-flags", "(@$flags)");
+
+  $res{updated} = $uids;
+
+  return \%res;
+}
+
+sub imap_fill {
+  my $Self = shift;
+  my $imapname = shift;
+  my $olduidvalidity = shift || 0;
+  my $uids = shift;
+
+  my $imap = $Self->connect_imap();
+
+  my $r = $imap->examine($imapname);
+  die "EXAMINE FAILED $r" unless (lc($r) eq 'ok' or lc($r) eq 'read-only');
+
+  my $uidvalidity = $imap->get_response_code('uidvalidity');
+
+  my %res = {
+    imapname => $imapname,
+    newname => $newname,
+    olduidvalidity => $olduidvalidity,
+    newuidvalidity => $uidvalidity,
+  };
+
+  if ($olduidvalidity != $uidvalidity) {
+    return \%res;
+  }
+
+  my $data = $imap->fetch($uids, "rfc822");
+
+  my %ids;
+  foreach my $uid (keys %$data) {
+    $ids{$uid} = $data->{$uid}{rfc822};
+  }
+  $res{data} = \%ids;
+  return \%res;
+}
+
+# no newname == delete
 sub imap_move {
   my $Self = shift;
   my $imapname = shift;
@@ -226,7 +293,7 @@ sub imap_append {
   my $r = $imap->append($imapname, $flags, $internaldate, ['Literal', $rfc822]);
   die "APPEND FAILED $r" unless lc($r) eq 'ok';
 
-  my $uid = $Mailbox->get_response_code('appenduid');
+  my $uid = $imap->get_response_code('appenduid');
 
   # XXX - fetch the x-gm-msgid or envelope from the server so we know the
   # the ID that the server gave this message

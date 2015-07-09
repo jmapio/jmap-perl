@@ -86,7 +86,7 @@ sub connect_imap {
       my ($role) = grep { not $KNOWN_SPECIALS{lc $_} } @{$folder->[0]};
       my $name = $folder->[2];
       my $label = $role || $folder->[2];
-      $Self->{folders}{$name} = $label;
+      $Self->{folders}{$name} = [$folder->[1], $label];
       $Self->{labels}{$label} = $name;
     }
     return $Self->{imap};

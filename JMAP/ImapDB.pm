@@ -7,7 +7,6 @@ package JMAP::ImapDB;
 use base qw(JMAP::DB);
 
 use DBI;
-use Mail::IMAPTalk;
 use Date::Parse;
 use JSON::XS qw(encode_json decode_json);
 use Data::UUID::LibUUID;
@@ -15,6 +14,8 @@ use OAuth2::Tiny;
 use Encode;
 use Encode::MIME::Header;
 use Digest::SHA qw(sha1_hex);
+
+our $TAG = 1;
 
 # XXX - specialuse, this is just for iCloud for now
 my %ROLE_MAP = (
@@ -27,13 +28,6 @@ my %ROLE_MAP = (
   'sent items' => 'sent',
   'trash' => 'trash',
 );
-
-sub DESTROY {
-  my $Self = shift;
-  if ($Self->{imap}) {
-    $Self->{imap}->logout();
-  }
-}
 
 sub setuser {
   my $Self = shift;
@@ -70,42 +64,41 @@ sub access_token {
   return [$hostname, $username, $password];
 }
 
-sub connect {
+# synchronous backend for now
+sub backend_cmd {
   my $Self = shift;
-
-  if ($Self->{imap}) {
-    $Self->{lastused} = time();
-    return $Self->{imap};
+  my $cmd = shift;
+  my $args = shift;
+  unless ($Self->{backend}) {
+    my $w = AnyEvent->condvar;
+    my $auth = $Self->access_token();
+    tcp_connect('localhost', 5005, sub {
+      my $fh = shift;
+      my $handle = AnyEvent::Handle->new(fh => $fh);
+      $handle->push_write(json => {hostname => $auth->[0], username => $auth->[1], password => $auth->[2]});
+      $handle->push_write("\012");
+      $handle->push_read(json => sub {
+        my $hdl = shift;
+        my $json = shift;
+        die "Failed to setup " . Dumper($json) unless $json->[0] eq 'setup';
+        $w->send($handle);
+      });
+    });
+    $Self->{backend} = $w->recv;
   }
+  my $handle = $Self->{backend};
+  my $w = AnyEvent->condvar;
+  my $tag = "T" . $TAG++;
+  $handle->push_write(json => [$cmd, $args, $tag]); # whatever
+  $handle->push_write("\012");
+  $handle->push_read(json => sub {
+    my $hdl = shift;
+    my $json = shift;
+    die "INVALID RESPONSE" unless $json->[2] eq $tag;
+    $w->send($json->[1]);
+  });
 
-  for (1..3) {
-    $Self->log('debug', "Looking for server for $Self->{accountid}");
-    my $data = $Self->dbh->selectrow_arrayref("SELECT hostname, username, password, lastfoldersync FROM iserver");
-    die "UNKNOWN SERVER for $Self->{accountid}" unless ($data and $data->[0]);
-    my $port = 993;
-    my $usessl = $port != 143;  # we use SSL for anything except default
-    $Self->log('debug', "getting imaptalk\n");
-    $Self->{imap} = Mail::IMAPTalk->new(
-      Server   => $data->[0],
-      Port     => $port,
-      Username => $data->[1],
-      Password => $data->[2],
-      # not configurable right now...
-      UseSSL   => $usessl,
-      UseBlocking => $usessl,
-    );
-    next unless $Self->{imap};
-    $Self->log('debug', "Connected to $data->[0] as $data->[1]");
-    eval { $Self->{imap}->enable('condstore') };
-    $Self->begin();
-    $Self->sync_folders();
-    $Self->dmaybeupdate('iserver', {lastfoldersync => time()}, {username => $data->[0]});
-    $Self->commit();
-    $Self->{lastused} = time();
-    return $Self->{imap};
-  }
-
-  die "Could not connect to IMAP server: $@";
+  return $w->recv;
 }
 
 # synchronise list from IMAP server to local folder cache
@@ -114,22 +107,22 @@ sub sync_folders {
   my $Self = shift;
 
   my $dbh = $Self->dbh();
-  my $imap = $Self->{imap};
 
-  my @folders = $imap->list('', '*');
+  my $folders = $Self->backend_cmd('folders', []);
   my $ifolders = $dbh->selectall_arrayref("SELECT ifolderid, sep, imapname, label FROM ifolders");
   my %ibylabel = map { $_->[3] => $_ } @$ifolders;
   my %seen;
 
-  foreach my $folder (@folders) {
-    my $role = $ROLE_MAP{lc $folder->[2]};
-    my $label = $role || $folder->[2];
+  foreach my $name (sort keys %$folders) {
+    my $sep = $folders->{$name}[1];
+    my $role = $ROLE_MAP{lc $name};
+    my $label = $role || $name;
     my $id = $ibylabel{$label}[0];
     if ($id) {
-      $Self->dmaybeupdate('ifolders', {sep => $folder->[1], imapname => $folder->[2]}, {ifolderid => $id});
+      $Self->dmaybeupdate('ifolders', {sep => $sep, imapname => $name}, {ifolderid => $id});
     }
     else {
-      $id = $Self->dinsert('ifolders', {sep => $folder->[1], imapname => $folder->[2], label => $label});
+      $id = $Self->dinsert('ifolders', {sep => $sep, imapname => $name, label => $label});
     }
     $seen{$id} = 1;
   }
@@ -247,7 +240,6 @@ sub labels {
 
 sub sync {
   my $Self = shift;
-  my $imap = $Self->{imap};
   my $data = $Self->dbh->selectall_arrayref("SELECT ifolderid,label FROM ifolders");
 
   foreach my $row (@$data) {
@@ -267,7 +259,6 @@ sub backfill {
 
 sub firstsync {
   my $Self = shift;
-  my $imap = $Self->{imap};
   my $labels = $Self->labels();
 
   my $ifolderid = $labels->{"inbox"}[0];
@@ -409,7 +400,6 @@ sub update_messages {
   my $changes = shift;
 
   my $dbh = $Self->{dbh};
-  my $imap = $Self->{imap};
 
   my %updatemap;
   foreach my $msgid (keys %$changes) {
@@ -417,44 +407,42 @@ sub update_messages {
     $updatemap{$ifolderid}{$uid} = $changes->{$msgid};
   }
 
-  my $folderdata = $dbh->selectall_arrayref("SELECT ifolderid, imapname, label, jmailboxid FROM ifolders");
+  my $folderdata = $dbh->selectall_arrayref("SELECT ifolderid, imapname, uidvalidity, label, jmailboxid FROM ifolders");
   my %foldermap = map { $_->[0] => $_ } @$folderdata;
-  my %jmailmap = map { $_->[3] => $_ } @$folderdata;
+  my %jmailmap = map { $_->[4] => $_ } @$folderdata;
 
   foreach my $ifolderid (keys %updatemap) {
     # XXX - merge similar actions?
     my $imapname = $foldermap{$ifolderid}[1];
+    my $uidvalidity = $foldermap{$ifolderid}[2];
     die "NO SUCH FOLDER $ifolderid" unless $imapname;
-
-    # we're writing here!
-    my $r = $imap->select($imapname);
 
     foreach my $uid (sort keys %{$updatemap{$ifolderid}}) {
       my $action = $updatemap{$ifolderid}{$uid};
       if (exists $action->{isUnread}) {
-        my $act = $action->{isUnread} ? "-flags" : "+flags"; # reverse
-        $Self->log('debug', "STORING $act SEEN for $uid");
-        my $res = $imap->store($uid, $act, "(\\Seen)");
+        my $bool = !$action->{isUnread};
+        my @flags = ("\\Seen");
+        $Self->log('debug', "STORING $bool @flags for $uid");
+        $Self->backend_cmd('imap_update', $imapname, $uidvalidity, $uid, $bool, \@flags);
       }
       if (exists $action->{isFlagged}) {
-        my $act = $action->{isFlagged} ? "+flags" : "-flags";
-        $Self->log('debug', "STORING $act FLAGGED for $uid");
-        $imap->store($uid, $act, "(\\Flagged)");
+        my $bool = $action->{isFlagged};
+        my @flags = ("\\Flagged");
+        $Self->log('debug', "STORING $bool @flags for $uid");
+        $Self->backend_cmd('imap_update', $imapname, $uidvalidity, $uid, $bool, \@flags);
       }
       if (exists $action->{isAnswered}) {
-        my $act = $action->{isAnswered} ? "+flags" : "-flags";
-        $Self->log('debug', "STORING $act ANSWERED for $uid");
-        $imap->store($uid, $act, "(\\Answered)");
+        my $bool = $action->{isAnswered};
+        my @flags = ("\\Answered");
+        $Self->log('debug', "STORING $bool @flags for $uid");
+        $Self->backend_cmd('imap_update', $imapname, $uidvalidity, $uid, $bool, \@flags);
       }
       if (exists $action->{mailboxIds}) {
         my $id = $action->{mailboxIds}->[0]; # there can be only one
         my $newfolder = $foldermap{$id}[1];
-        $imap->copy($uid, $newfolder);  # UIDPLUS?  Also the ID changes
-        $imap->store($uid, '+flags', "(\\Deleted)");
-        $imap->uidexpunge($uid);
+        $Self->backend_cmd('imap_move', $imapname, $uidvalidity, $uid, $newfolder);
       }
     }
-    $imap->unselect();
   }
 }
 
@@ -463,7 +451,6 @@ sub delete_messages {
   my $ids = shift;
 
   my $dbh = $Self->{dbh};
-  my $imap = $Self->{imap};
 
   my %deletemap;
   foreach my $msgid (@$ids) {
@@ -471,25 +458,19 @@ sub delete_messages {
     $deletemap{$ifolderid}{$uid} = 1;
   }
 
-  my $folderdata = $dbh->selectall_arrayref("SELECT ifolderid, imapname, label, jmailboxid FROM ifolders");
+  my $folderdata = $dbh->selectall_arrayref("SELECT ifolderid, imapname, uidvalidity, label, jmailboxid FROM ifolders");
   my %foldermap = map { $_->[0] => $_ } @$folderdata;
-  my %jmailmap = map { $_->[3] => $_ } grep { $_->[3] } @$folderdata;
+  my %jmailmap = map { $_->[4] => $_ } grep { $_->[4] } @$folderdata;
 
   foreach my $ifolderid (keys %deletemap) {
     # XXX - merge similar actions?
     my $imapname = $foldermap{$ifolderid}[1];
+    my $uidvalidity = $foldermap{$ifolderid}[2];
     die "NO SUCH FOLDER $ifolderid" unless $imapname;
 
-    # we're writing here!
-    my $r = $imap->select($imapname);
-    die "SELECT FAILED $r" unless lc($r) eq 'ok';
-
     my $uids = [sort keys %{$deletemap{$ifolderid}}];
-    if (@$uids) {
-      $imap->store($uids, "+flags", "(\\Deleted)");
-      $imap->uidexpunge($uids);
-    }
-    $imap->unselect();
+
+    $Self->backend_cmd('imap_move', $imapname, $uidvalidity, $uids, undef); # no destination folder
   }
 }
 
@@ -605,19 +586,16 @@ sub fill_messages {
     $udata{$row->[0]}{$row->[1]} = $row->[2];
   }
 
-  my $imap = $Self->{imap};
   foreach my $ifolderid (sort keys %udata) {
-    my ($imapname) = $Self->dbh->selectrow_array("SELECT imapname FROM ifolders WHERE ifolderid = ?", {}, $ifolderid);
+    my ($imapname, $uidvalidity) = $Self->dbh->selectrow_array("SELECT imapname, uidvalidity FROM ifolders WHERE ifolderid = ?", {}, $ifolderid);
     my $uhash = $udata{$ifolderid};
 
-    die "NO folder $ifolderid" unless $imapname;
-    my $r = $imap->examine($imapname);
+    my $uids = join(',', sort { $a <=> $b } keys %$uhash);
+    my $res = $Self->backend_cmd('imap_fill', $imapname, $uidvalidity, $uids);
 
-    my $messages = $imap->fetch(join(',', sort { $a <=> $b } keys %$uhash), "rfc822");
-
-    foreach my $uid (keys %$messages) {
+    foreach my $uid (keys %{$res->{data}}) {
       warn "FETCHED BODY FOR $uid\n";
-      my $rfc822 = $messages->{$uid}{rfc822};
+      my $rfc822 = $res->{data}{$uid};
       my $msgid = $uhash->{$uid};
       $result{$msgid} = $Self->add_raw_message($msgid, $rfc822);
     }
