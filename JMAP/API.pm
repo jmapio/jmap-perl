@@ -1704,8 +1704,4 @@ sub getContactUpdates {
   return @res;
 }
 
-
-1;
-
-
 1;
