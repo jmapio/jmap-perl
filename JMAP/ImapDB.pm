@@ -299,39 +299,32 @@ sub do_folder {
   my $imap = $Self->{imap};
   my $dbh = $Self->dbh();
 
-  my ($imapname, $olduidfirst, $olduidnext, $olduidvalidity, $oldhighestmodseq) = $dbh->selectrow_array("SELECT imapname, uidfirst, uidnext, uidvalidity, highestmodseq FROM ifolders WHERE ifolderid = ?", {}, $ifolderid);
+  my ($imapname, $uidfirst, $uidnext, $uidvalidity, $highestmodseq) =
+     $dbh->selectrow_array("SELECT imapname, uidfirst, uidnext, uidvalidity, highestmodseq FROM ifolders WHERE ifolderid = ?", {}, $ifolderid);
   die "NO SUCH FOLDER $ifolderid" unless $imapname;
-  $olduidfirst ||= 0;
+  $uidfirst ||= 0;
 
-  my $r = $imap->examine($imapname);
-
-  my $uidvalidity = $imap->get_response_code('uidvalidity');
-  my $uidnext = $imap->get_response_code('uidnext');
-  my $highestmodseq = $imap->get_response_code('highestmodseq') || 0;
-  my $exists = $imap->get_response_code('exists') || 0;
-
-  if ($olduidvalidity and $olduidvalidity != $uidvalidity) {
-    $oldhighestmodseq = 0;
-    $olduidfirst = 0;
-    $olduidnext = 1;
-    # XXX - delete all the data for this folder and re-sync it
-  }
-  elsif ($olduidfirst == 1 and $oldhighestmodseq and $highestmodseq == $oldhighestmodseq) {
-    $Self->log('debug', "Nothing to do for $imapname at $highestmodseq");
-    return 0; # yay, nothing to do
-  }
-
-  $olduidfirst = $uidnext unless $olduidfirst;
-  $olduidnext = $uidnext unless $olduidnext;
-
-  my $uidfirst = $olduidfirst;
-  my $didold = 0;
-  if ($olduidfirst > 1 and $batchsize) {
-    $uidfirst = $olduidfirst - $batchsize;
+  my @extra;
+  if ($uidfirst > 1 and $batchsize) {
+    my $end = $uidfirst - 1;
+    $uidfirst -= $batchsize;
     $uidfirst = 1 if $uidfirst < 1;
-    my $to = $olduidfirst - 1;
-    $Self->log('debug', "FETCHING $imapname: $uidfirst:$to");
-    my $new = $imap->fetch("$uidfirst:$to", '(uid flags internaldate envelope rfc822.size)') || {};
+    push @extra, backfill => [$uidfirst, $end, [qw(internaldate envelope rfc822.size)]];
+  }
+
+  my $res = $Self->backend_cmd('imap_fetch', $imapname, {
+    uidvalidty => $uidvalidity,
+    highestmodseq => $highestmodseq,
+    uidnext => $uidnext,
+  },{
+    @extra,
+    update => [1, $uidnext - 1, [], $highestmodseq],
+    new => [$uidnext, '*', [qw(internaldate envelope rfc822.size)]],
+  });
+
+  my $didold = 0;
+  if ($res->{backfill}) {
+    my $new = $res->{backfill};
     $Self->{backfilling} = 1;
     foreach my $uid (sort { $a <=> $b } keys %$new) {
       my ($msgid, $thrid) = $Self->calcmsgid($new->{$uid}{envelope});
@@ -341,21 +334,15 @@ sub do_folder {
     delete $Self->{backfilling};
   }
 
-  if ($olduidnext > $olduidfirst) {
-    my $to = $olduidnext - 1;
-    my @extra;
-    push @extra, "(changedsince $oldhighestmodseq)" if $oldhighestmodseq;
-    $Self->log('debug', "UPDATING $imapname: $uidfirst:$to");
-    my $changed = $imap->fetch("$uidfirst:$to", "(flags)", @extra) || {};
+  if ($res->{update}) {
+    my $changed = $res->{update};
     foreach my $uid (sort { $a <=> $b } keys %$changed) {
       $Self->changed_record($ifolderid, $uid, $changed->{$uid}{'flags'}, [$forcelabel]);
     }
   }
 
-  if ($uidnext > $olduidnext) {
-    my $to = $uidnext - 1;
-    $Self->log('debug', "FETCHING $imapname: $olduidnext:$to");
-    my $new = $imap->fetch("$olduidnext:$to", '(uid flags internaldate envelope rfc822.size)') || {};
+  if ($res->{new}) {
+    my $new = $res->{new};
     foreach my $uid (sort { $a <=> $b } keys %$new) {
       my ($msgid, $thrid) = $Self->calcmsgid($new->{$uid}{envelope});
       $Self->new_record($ifolderid, $uid, $new->{$uid}{'flags'}, [$forcelabel], $new->{$uid}{envelope}, str2time($new->{$uid}{internaldate}), $msgid, $thrid, $new->{$uid}{'rfc822.size'});
@@ -364,10 +351,11 @@ sub do_folder {
 
   # need to make changes before counting
   my ($count) = $dbh->selectrow_array("SELECT COUNT(*) FROM imessages WHERE ifolderid = ?", {}, $ifolderid);
-  if ($count != $exists) {
+  if ($count != $res->{exists}) {
     my $to = $uidnext - 1;
     $Self->log('debug', "COUNTING $imapname: $uidfirst:$to (something deleted)");
-    my $uids = $imap->search("UID", "$uidfirst:$to");
+    my $res = $Self->backend_cmd('imap_count', $imapname, $uidvalidity, "$uidfirst:$to");
+    my $uids = $res->{data};
     my $data = $dbh->selectcol_arrayref("SELECT uid FROM imessages WHERE ifolderid = ?", {}, $ifolderid);
     my %exists = map { $_ => 1 } @$uids;
     foreach my $uid (@$data) {
@@ -376,7 +364,7 @@ sub do_folder {
     }
   }
 
-  $Self->dupdate('ifolders', {highestmodseq => $highestmodseq, uidfirst => $uidfirst, uidnext => $uidnext, uidvalidity => $uidvalidity}, {ifolderid => $ifolderid});
+  $Self->dupdate('ifolders', {highestmodseq => $res->{newstate}{highestmodseq}, uidfirst => $uidfirst, uidnext => $res->{newstate}{uidnext}, uidvalidity => $res->{newstate}{uidvalidity}}, {ifolderid => $ifolderid});
 
   return $didold;
 }

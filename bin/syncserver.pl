@@ -144,6 +144,18 @@ sub handle_imap_fill {
   return ['filled', $data];
 }
 
+sub handle_imap_fetch {
+  my $args = shift;
+  my $data = $backend->imap_fetch(@$args);
+  return ['fetched', $data];
+}
+
+sub handle_imap_count {
+  my $args = shift;
+  my $data = $backend->imap_count(@$args);
+  return ['counted', $data];
+}
+
 sub mk_handler {
   my ($db) = @_;
 
