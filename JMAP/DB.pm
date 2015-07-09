@@ -845,6 +845,91 @@ CREATE TABLE IF NOT EXISTS jfiles (
 );
 EOF
 
+  $dbh->do(<<EOF);
+CREATE TABLE IF NOT EXISTS jcalendars (
+  jcalendarid INTEGER PRIMARY KEY,
+  name TEXT,
+  colour TEXT,
+  isVisible BOOLEAN,
+  mayReadFreeBusy BOOLEAN,
+  mayReadItems BOOLEAN,
+  mayAddItems BOOLEAN,
+  mayModifyItems BOOLEAN,
+  mayRemoveItems BOOLEAN,
+  mayDelete BOOLEAN,
+  mayRename BOOLEAN,
+  jmodseq INTEGER,
+  mtime DATE,
+  active BOOLEAN
+);
+EOF
+
+  $dbh->do(<<EOF);
+CREATE TABLE IF NOT EXISTS jevents (
+  eventuid TEXT PRIMARY KEY,
+  jcalendarid INTEGER,
+  firststart DATE,
+  lastend DATE,
+  payload TEXT,
+  jmodseq INTEGER,
+  mtime DATE,
+  active BOOLEAN
+);
+EOF
+
+  $dbh->do(<<EOF);
+CREATE TABLE IF NOT EXISTS jaddressbooks (
+  jaddressbookid INTEGER PRIMARY KEY,
+  name TEXT,
+  isVisible BOOLEAN,
+  mayReadItems BOOLEAN,
+  mayAddItems BOOLEAN,
+  mayModifyItems BOOLEAN,
+  mayRemoveItems BOOLEAN,
+  mayDelete BOOLEAN,
+  mayRename BOOLEAN,
+  jmodseq INTEGER,
+  mtime DATE,
+  active BOOLEAN
+);
+EOF
+
+  $dbh->do(<<EOF);
+CREATE TABLE IF NOT EXISTS jcontactgroups (
+  jcontactgroupid INTEGER PRIMARY KEY,
+  jaddressbookid INTEGER,
+  name TEXT,
+  jmodseq INTEGER,
+  mtime DATE,
+  active BOOLEAN
+);
+EOF
+
+  $dbh->do(<<EOF);
+CREATE TABLE IF NOT EXISTS jgroupmap (
+  jcontactgroupid INTEGER,
+  contactuid TEXT,
+  jmodseq INTEGER,
+  mtime DATE,
+  active BOOLEAN,
+  PRIMARY KEY (jcontactgroupid, contactuid)
+);
+EOF
+
+  $dbh->do("CREATE INDEX IF NOT EXISTS jcontactmap ON jgroupmap (contactuid)");
+
+  $dbh->do(<<EOF);
+CREATE TABLE IF NOT EXISTS jcontacts (
+  contactuid TEXT PRIMARY KEY,
+  jaddressbookid INTEGER,
+  isFlagged BOOLEAN,
+  payload TEXT,
+  jmodseq INTEGER,
+  mtime DATE,
+  active BOOLEAN
+);
+EOF
+
 }
 
 1;

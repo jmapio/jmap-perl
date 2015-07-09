@@ -1130,4 +1130,582 @@ sub _prop_wanted {
   return 0;
 }
 
+sub getCalendars {
+  my $Self = shift;
+  my $args = shift;
+
+  my $dbh = $Self->{db}->dbh();
+
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return ['error', {type => 'accountNotFound'}]
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  my $data = $dbh->selectall_arrayref("SELECT jcalendarid, name, colour, isVisible, mayReadFreeBusy, mayReadItems, mayAddItems, mayModifyItems, mayRemoveItems, mayDelete, mayRename FROM jcalendars WHERE active = 1");
+
+  my %ids;
+  if ($args->{ids}) {
+    %ids = map { $_ => 1 } @{$args->{ids}};
+  }
+  else {
+    %ids = map { $_->[0] => 1 } @$data;
+  }
+
+  my @list;
+
+  foreach my $item (@$data) {
+    next unless delete $ids{$item->[0]};
+
+    my %rec = (
+      id => "$item->[0]",
+      name => $item->[1],
+      colour => $item->[2],
+      isVisible => $item->[3] ? $JSON::true : $JSON::false,
+      mayReadFreeBusy => $item->[4] ? $JSON::true : $JSON::false,
+      mayReadItems => $item->[5] ? $JSON::true : $JSON::false,
+      mayAddItems => $item->[6] ? $JSON::true : $JSON::false,
+      mayModifyItems => $item->[7] ? $JSON::true : $JSON::false,
+      mayRemoveItems => $item->[8] ? $JSON::true : $JSON::false,
+      mayDelete => $item->[9] ? $JSON::true : $JSON::false,
+      mayRename => $item->[10] ? $JSON::true : $JSON::false,
+    );
+
+    foreach my $key (keys %rec) {
+      delete $rec{$key} unless _prop_wanted($args, $key);
+    }
+
+    push @list, \%rec;
+  }
+  my %missingids = %ids;
+
+  return ['calendars', {
+    list => \@list,
+    accountId => $accountid,
+    state => "$user->{jhighestmodseq}",
+    notFound => (%missingids ? [map { "$_" } keys %missingids] : undef),
+  }];
+}
+
+sub getCalendarUpdates {
+  my $Self = shift;
+  my $args = shift;
+  my $dbh = $Self->{db}->dbh();
+
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return ['error', {type => 'accountNotFound'}]
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  my $sinceState = $args->{sinceState};
+  return ['error', {type => 'invalidArguments'}]
+    if not $args->{sinceState};
+  return ['error', {type => 'cannotCalculateChanges'}]
+    if ($user->{jdeletedmodseq} and $sinceState <= $user->{jdeletedmodseq});
+
+  my $data = $dbh->selectall_arrayref("SELECT jcalendarid, jmodseq, active FROM jcalendars ORDER BY jcalendarid");
+
+  my @changed;
+  my @removed;
+  my $onlyCounts = 1;
+  foreach my $item (@$data) {
+    if ($item->[1] > $sinceState) {
+      if ($item->[3]) {
+        push @changed, $item->[0];
+        $onlyCounts = 0;
+      }
+      else {
+        push @removed, $item->[0];
+      }
+    }
+    elsif (($item->[2] || 0) > $sinceState) {
+      if ($item->[3]) {
+        push @changed, $item->[0];
+      }
+      else {
+        push @removed, $item->[0];
+      }
+    }
+  }
+
+  my @res = (['calendarUpdates', {
+    accountId => $accountid,
+    oldState => "$sinceState",
+    newState => "$user->{jhighestmodseq}",
+    changed => [map { "$_" } @changed],
+    removed => [map { "$_" } @removed],
+  }]);
+
+  if (@changed and $args->{fetchRecords}) {
+    my %items = (
+      accountid => $accountid,
+      ids => \@changed,
+    );
+    push @res, $Self->getCalendars(\%items);
+  }
+
+  return @res;
+}
+
+sub _event_match {
+  my $Self = shift;
+  my ($item, $condition, $storage) = @_;
+
+  # XXX - condition handling code
+  if ($condition->{inCalendars}) {
+    my $match = 0;
+    foreach my $id (@{$condition->{inCalendars}}) {
+      next unless $item->[1] eq $id;
+      $match = 1;
+    }
+    return 0 unless $match;
+  }
+
+  return 1;
+}
+
+sub _event_filter {
+  my $Self = shift;
+  my ($data, $filter, $storage) = @_;
+  my @res;
+  foreach my $item (@$data) {
+    next unless $Self->_event_match($item, $filter, $storage);
+    push @res, $item;
+  }
+  return \@res;
+}
+
+sub getCalendarEventList {
+  my $Self = shift;
+  my $args = shift;
+
+  my $dbh = $Self->{db}->dbh();
+
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return ['error', {type => 'accountNotFound'}]
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  my $start = $args->{position} || 0;
+  return ['error', {type => 'invalidArguments'}] if $start < 0;
+
+  my $data = $dbh->selectall_arrayref("SELECT jeventid,jcalendarid FROM jevents WHERE active = 1 ORDER BY jeventid");
+
+  $data = $Self->_event_filter($data, $args->{filter}, {}) if $args->{filter};
+
+  my $end = $args->{limit} ? $start + $args->{limit} - 1 : $#$data;
+  $end = $#$data if $end > $#$data;
+
+  my @result = map { $data->[$_][0] } $start..$end;
+
+  my @res;
+  push @res, ['calendarEventList', {
+    accountId => $accountid,
+    filter => $args->{filter},
+    state => "$user->{jhighestmodseq}",
+    position => $start,
+    total => scalar(@$data),
+    calendarEventIds => [map { "$_" } @result],
+  }];
+
+  if ($args->{fetchCalendarEvents}) {
+    push @res, $Self->getCalendarEvents({
+      ids => \@result,
+      properties => $args->{fetchCalendarEventProperties},
+    }) if @result;
+  }
+
+  return @res;
+}
+
+sub getCalendarEvents {
+  my $Self = shift;
+  my $args = shift;
+
+  my $dbh = $Self->{db}->dbh();
+
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return ['error', {type => 'accountNotFound'}]
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  return ['error', {type => 'invalidArguments'}] unless $args->{ids};
+  #properties: String[] A list of properties to fetch for each message.
+
+  my %seenids;
+  my %missingids;
+  my @list;
+  foreach my $eventid (@{$args->{ids}}) {
+    next if $seenids{$eventid};
+    $seenids{$eventid} = 1;
+    my $data = $dbh->selectrow_hashref("SELECT * FROM jevents WHERE jeventid = ?", {}, $eventid);
+    unless ($data) {
+      $missingids{$eventid} = 1;
+      next;
+    }
+
+    my $item = json_decode($data->{payload});
+
+    foreach my $key (keys %$item) {
+      delete $item->{$key} unless _prop_wanted($args, $key);
+    }
+
+    $item->{id} = $eventid;
+
+    push @list, $item;
+  }
+
+  return ['calendarEvents', {
+    list => \@list,
+    accountId => $accountid,
+    state => "$user->{jhighestmodseq}",
+    notFound => (%missingids ? [keys %missingids] : undef),
+  }];
+}
+
+sub getCalendarEventUpdates {
+  my $Self = shift;
+  my $args = shift;
+
+  my $dbh = $Self->{db}->dbh();
+
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return ['error', {type => 'accountNotFound'}]
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  return ['error', {type => 'invalidArguments'}]
+    if not $args->{sinceState};
+  return ['error', {type => 'cannotCalculateChanges'}]
+    if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
+
+  my $sql = "SELECT jeventid,active FROM jevents WHERE jmodseq > ?";
+
+  my $data = $dbh->selectall_arrayref($sql, {}, $args->{sinceState});
+
+  if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
+    return ['error', {type => 'tooManyChanges'}];
+  }
+
+  my @changed;
+  my @removed;
+
+  foreach my $row (@$data) {
+    if ($row->[1]) {
+      push @changed, $row->[0];
+    }
+    else {
+      push @removed, $row->[0];
+    }
+  }
+
+  my @res;
+  push @res, ['calendarEventUpdates', {
+    accountId => $accountid,
+    oldState => "$args->{sinceState}",
+    newState => "$user->{jhighestmodseq}",
+    changed => [map { "$_" } @changed],
+    removed => [map { "$_" } @removed],
+  }];
+
+  if ($args->{fetchCalendarEvents}) {
+    push @res, $Self->getCalendarEvents({
+      accountid => $accountid,
+      ids => \@changed,
+      properties => $args->{fetchCalendarEventProperties},
+    }) if @changed;
+  }
+
+  return @res;
+}
+
+sub getAddressbooks {
+  my $Self = shift;
+  my $args = shift;
+
+  my $dbh = $Self->{db}->dbh();
+
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return ['error', {type => 'accountNotFound'}]
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  my $data = $dbh->selectall_arrayref("SELECT jaddressbookid, name, isVisible, mayReadItems, mayAddItems, mayModifyItems, mayRemoveItems, mayDelete, mayRename FROM jaddressbooks WHERE active = 1");
+
+  my %ids;
+  if ($args->{ids}) {
+    %ids = map { $_ => 1 } @{$args->{ids}};
+  }
+  else {
+    %ids = map { $_->[0] => 1 } @$data;
+  }
+
+  my @list;
+
+  foreach my $item (@$data) {
+    next unless delete $ids{$item->[0]};
+
+    my %rec = (
+      id => "$item->[0]",
+      name => $item->[1],
+      isVisible => $item->[2] ? $JSON::true : $JSON::false,
+      mayReadItems => $item->[3] ? $JSON::true : $JSON::false,
+      mayAddItems => $item->[4] ? $JSON::true : $JSON::false,
+      mayModifyItems => $item->[5] ? $JSON::true : $JSON::false,
+      mayRemoveItems => $item->[6] ? $JSON::true : $JSON::false,
+      mayDelete => $item->[7] ? $JSON::true : $JSON::false,
+      mayRename => $item->[8] ? $JSON::true : $JSON::false,
+    );
+
+    foreach my $key (keys %rec) {
+      delete $rec{$key} unless _prop_wanted($args, $key);
+    }
+
+    push @list, \%rec;
+  }
+  my %missingids = %ids;
+
+  return ['addressbooks', {
+    list => \@list,
+    accountId => $accountid,
+    state => "$user->{jhighestmodseq}",
+    notFound => (%missingids ? [map { "$_" } keys %missingids] : undef),
+  }];
+}
+
+sub getAddressbookUpdates {
+  my $Self = shift;
+  my $args = shift;
+  my $dbh = $Self->{db}->dbh();
+
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return ['error', {type => 'accountNotFound'}]
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  my $sinceState = $args->{sinceState};
+  return ['error', {type => 'invalidArguments'}]
+    if not $args->{sinceState};
+  return ['error', {type => 'cannotCalculateChanges'}]
+    if ($user->{jdeletedmodseq} and $sinceState <= $user->{jdeletedmodseq});
+
+  my $data = $dbh->selectall_arrayref("SELECT jaddressbookid, jmodseq, active FROM jaddressbooks ORDER BY jaddressbookid");
+
+  my @changed;
+  my @removed;
+  my $onlyCounts = 1;
+  foreach my $item (@$data) {
+    if ($item->[1] > $sinceState) {
+      if ($item->[3]) {
+        push @changed, $item->[0];
+        $onlyCounts = 0;
+      }
+      else {
+        push @removed, $item->[0];
+      }
+    }
+    elsif (($item->[2] || 0) > $sinceState) {
+      if ($item->[3]) {
+        push @changed, $item->[0];
+      }
+      else {
+        push @removed, $item->[0];
+      }
+    }
+  }
+
+  my @res = (['addressbookUpdates', {
+    accountId => $accountid,
+    oldState => "$sinceState",
+    newState => "$user->{jhighestmodseq}",
+    changed => [map { "$_" } @changed],
+    removed => [map { "$_" } @removed],
+  }]);
+
+  if (@changed and $args->{fetchRecords}) {
+    my %items = (
+      accountid => $accountid,
+      ids => \@changed,
+    );
+    push @res, $Self->getAddressbooks(\%items);
+  }
+
+  return @res;
+}
+
+sub _contact_match {
+  my $Self = shift;
+  my ($item, $condition, $storage) = @_;
+
+  # XXX - condition handling code
+  if ($condition->{inAddressbooks}) {
+    my $match = 0;
+    foreach my $id (@{$condition->{inAddressbooks}}) {
+      next unless $item->[1] eq $id;
+      $match = 1;
+    }
+    return 0 unless $match;
+  }
+
+  return 1;
+}
+
+sub _contact_filter {
+  my $Self = shift;
+  my ($data, $filter, $storage) = @_;
+  my @res;
+  foreach my $item (@$data) {
+    next unless $Self->_contact_match($item, $filter, $storage);
+    push @res, $item;
+  }
+  return \@res;
+}
+
+sub getContactList {
+  my $Self = shift;
+  my $args = shift;
+
+  my $dbh = $Self->{db}->dbh();
+
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return ['error', {type => 'accountNotFound'}]
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  my $start = $args->{position} || 0;
+  return ['error', {type => 'invalidArguments'}] if $start < 0;
+
+  my $data = $dbh->selectall_arrayref("SELECT jcontactid,jaddressbookid FROM jcontacts WHERE active = 1 ORDER BY jcontactid");
+
+  $data = $Self->_event_filter($data, $args->{filter}, {}) if $args->{filter};
+
+  my $end = $args->{limit} ? $start + $args->{limit} - 1 : $#$data;
+  $end = $#$data if $end > $#$data;
+
+  my @result = map { $data->[$_][0] } $start..$end;
+
+  my @res;
+  push @res, ['contactList', {
+    accountId => $accountid,
+    filter => $args->{filter},
+    state => "$user->{jhighestmodseq}",
+    position => $start,
+    total => scalar(@$data),
+    contactIds => [map { "$_" } @result],
+  }];
+
+  if ($args->{fetchContacts}) {
+    push @res, $Self->getContacts({
+      ids => \@result,
+      properties => $args->{fetchContactProperties},
+    }) if @result;
+  }
+
+  return @res;
+}
+
+sub getContacts {
+  my $Self = shift;
+  my $args = shift;
+
+  my $dbh = $Self->{db}->dbh();
+
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return ['error', {type => 'accountNotFound'}]
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  return ['error', {type => 'invalidArguments'}] unless $args->{ids};
+  #properties: String[] A list of properties to fetch for each message.
+
+  my %seenids;
+  my %missingids;
+  my @list;
+  foreach my $contactid (@{$args->{ids}}) {
+    next if $seenids{$contactid};
+    $seenids{$contactid} = 1;
+    my $data = $dbh->selectrow_hashref("SELECT * FROM jcontacts WHERE jcontactid = ?", {}, $contactid);
+    unless ($data) {
+      $missingids{$contactid} = 1;
+      next;
+    }
+
+    my $item = json_decode($data->{payload});
+
+    foreach my $key (keys %$item) {
+      delete $item->{$key} unless _prop_wanted($args, $key);
+    }
+
+    $item->{id} = $contactid;
+
+    push @list, $item;
+  }
+
+  return ['contacts', {
+    list => \@list,
+    accountId => $accountid,
+    state => "$user->{jhighestmodseq}",
+    notFound => (%missingids ? [keys %missingids] : undef),
+  }];
+}
+
+sub getContactUpdates {
+  my $Self = shift;
+  my $args = shift;
+
+  my $dbh = $Self->{db}->dbh();
+
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return ['error', {type => 'accountNotFound'}]
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  return ['error', {type => 'invalidArguments'}]
+    if not $args->{sinceState};
+  return ['error', {type => 'cannotCalculateChanges'}]
+    if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
+
+  my $sql = "SELECT jcontactid,active FROM jcontacts WHERE jmodseq > ?";
+
+  my $data = $dbh->selectall_arrayref($sql, {}, $args->{sinceState});
+
+  if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
+    return ['error', {type => 'tooManyChanges'}];
+  }
+
+  my @changed;
+  my @removed;
+
+  foreach my $row (@$data) {
+    if ($row->[1]) {
+      push @changed, $row->[0];
+    }
+    else {
+      push @removed, $row->[0];
+    }
+  }
+
+  my @res;
+  push @res, ['contactUpdates', {
+    accountId => $accountid,
+    oldState => "$args->{sinceState}",
+    newState => "$user->{jhighestmodseq}",
+    changed => [map { "$_" } @changed],
+    removed => [map { "$_" } @removed],
+  }];
+
+  if ($args->{fetchContacts}) {
+    push @res, $Self->getContacts({
+      accountid => $accountid,
+      ids => \@changed,
+      properties => $args->{fetchContactProperties},
+    }) if @changed;
+  }
+
+  return @res;
+}
+
+
+1;
+
+
 1;
