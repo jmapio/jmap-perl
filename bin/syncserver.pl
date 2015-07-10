@@ -77,12 +77,6 @@ sub handle_ping {
   return ['pong', $id];
 }
 
-sub handle_status {
-  my $args = shift;
-  my $data = $backend->fetch_status(@$args);
-  return ['status', $data];
-}
-
 sub handle_folder {
   my $args = shift;
   my $data = $backend->fetch_folder(@$args);

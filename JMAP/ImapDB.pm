@@ -30,6 +30,12 @@ my %ROLE_MAP = (
   'sent messages' => 'sent',
   'sent items' => 'sent',
   'trash' => 'trash',
+  '\\inbox' => 'inbox',
+  '\\trash' => 'trash',
+  '\\sent' => 'sent',
+  '\\junk' => 'junk',
+  '\\archive' => 'archive',
+  '\\drafts' => 'drafts',
 );
 
 sub setuser {
@@ -115,15 +121,15 @@ sub sync_folders {
   my $dbh = $Self->dbh();
 
   my $folders = $Self->backend_cmd('folders', []);
-  my $ifolders = $dbh->selectall_arrayref("SELECT ifolderid, sep, uidvalidity, imapname, label, FROM ifolders");
+  my $ifolders = $dbh->selectall_arrayref("SELECT ifolderid, sep, uidvalidity, imapname, label FROM ifolders");
   my %ibylabel = map { $_->[4] => $_ } @$ifolders;
   my %seen;
 
   my %getstatus;
   foreach my $name (sort keys %$folders) {
-    my $sep = $folders->{$name}[1];
-    my $role = $ROLE_MAP{lc $name};
-    my $label = $role || $name;
+    my $sep = $folders->{$name}[0];
+    my $role = $ROLE_MAP{lc $folders->{$name}[1]};
+    my $label = $role || $folders->{$name}[1];
     my $id = $ibylabel{$label}[0];
     if ($id) {
       $Self->dmaybeupdate('ifolders', {sep => $sep, imapname => $name}, {ifolderid => $id});
@@ -134,12 +140,12 @@ sub sync_folders {
     $seen{$id} = 1;
     unless ($ibylabel{$label}[2]) {
       # no uidvalidity, we need to get status for this one
-      $getstatus{$ibylabel{$label}[3]} = $id;
+      $getstatus{$name} = $id;
     }
   }
 
   if (keys %getstatus) {
-    my $data = $Self->backend_cmd('status', [keys %getstatus]);
+    my $data = $Self->backend_cmd('imap_status', [keys %getstatus]);
     foreach my $name (keys %$data) {
       my $status = $data->{$name};
       $Self->dmaybeupdate('ifolders', {
@@ -147,7 +153,7 @@ sub sync_folders {
         uidnext => $status->{uidnext},
         uidfirst => $status->{uidnext},
         highestmodseq => $status->{highestmodseq},
-      }, {ifolderid => $id});
+      }, {ifolderid => $getstatus{$name}});
     }
   }
 
@@ -180,6 +186,7 @@ sub sync_jmailboxes {
   my %seen;
   foreach my $folder (@$ifolders) {
     my $fname = $folder->[2];
+    warn " MAPPING $fname ($folder->[1])";
     $fname =~ s/^INBOX\.//;
     # check for roles first
     my @bits = split "[$folder->[1]]", $fname;
@@ -191,6 +198,7 @@ sub sync_jmailboxes {
     $precedence = 2 if $role;
     $precedence = 1 if ($role||'') eq 'inbox';
     while (my $item = shift @bits) {
+      $seen{$id} = 1 if $id;
       $name = $item;
       $parentid = $id;
       $id = $byname{$parentid}{$name};
@@ -201,9 +209,6 @@ sub sync_jmailboxes {
           $id = $Self->dmake('jmailboxes', {name => $name, precedence => 4, parentid => $parentid});
           $byname{$parentid}{$name} = $id;
         }
-      }
-      if (@bits) {
-        $seen{$id} = 1;
       }
     }
     next unless $name;
@@ -330,23 +335,22 @@ sub do_folder {
      $dbh->selectrow_array("SELECT imapname, uidfirst, uidnext, uidvalidity, highestmodseq FROM ifolders WHERE ifolderid = ?", {}, $ifolderid);
   die "NO SUCH FOLDER $ifolderid" unless $imapname;
 
-  my @extra;
+  my %fetches;
+  $fetches{new} = [$uidnext, '*', [qw(internaldate envelope rfc822.size)]];
+  $fetches{update} = [$uidfirst, $uidnext - 1, [], $highestmodseq];
+
   if ($uidfirst > 1 and $batchsize) {
     my $end = $uidfirst - 1;
     $uidfirst -= $batchsize;
     $uidfirst = 1 if $uidfirst < 1;
-    push @extra, backfill => [$uidfirst, $end, [qw(internaldate envelope rfc822.size)]];
+    $fetches{backfill} = [$uidfirst, $end, [qw(internaldate envelope rfc822.size)]];
   }
 
   my $res = $Self->backend_cmd('imap_fetch', $imapname, {
-    uidvalidty => $uidvalidity,
+    uidvalidity => $uidvalidity,
     highestmodseq => $highestmodseq,
     uidnext => $uidnext,
-  },{
-    @extra,
-    update => [1, $uidnext - 1, [], $highestmodseq],
-    new => [$uidnext, '*', [qw(internaldate envelope rfc822.size)]],
-  });
+  },\%fetches);
 
   if ($res->{newstate}{uidvalidity} != $uidvalidity) {
     # going to want to nuke everything for the existing folder and create this - but for now, just die
@@ -355,7 +359,7 @@ sub do_folder {
 
   my $didold = 0;
   if ($res->{backfill}) {
-    my $new = $res->{backfill};
+    my $new = $res->{backfill}[1];
     $Self->{backfilling} = 1;
     foreach my $uid (sort { $a <=> $b } keys %$new) {
       my ($msgid, $thrid) = $Self->calcmsgid($new->{$uid}{envelope});
@@ -366,14 +370,14 @@ sub do_folder {
   }
 
   if ($res->{update}) {
-    my $changed = $res->{update};
+    my $changed = $res->{update}[1];
     foreach my $uid (sort { $a <=> $b } keys %$changed) {
       $Self->changed_record($ifolderid, $uid, $changed->{$uid}{'flags'}, [$forcelabel]);
     }
   }
 
   if ($res->{new}) {
-    my $new = $res->{new};
+    my $new = $res->{new}[1];
     foreach my $uid (sort { $a <=> $b } keys %$new) {
       my ($msgid, $thrid) = $Self->calcmsgid($new->{$uid}{envelope});
       $Self->new_record($ifolderid, $uid, $new->{$uid}{'flags'}, [$forcelabel], $new->{$uid}{envelope}, str2time($new->{$uid}{internaldate}), $msgid, $thrid, $new->{$uid}{'rfc822.size'});
@@ -574,7 +578,8 @@ sub apply_data {
 }
 
 sub _envelopedata {
-  my $envelope = decode_json(shift);
+  my $data = shift;
+  my $envelope = decode_json($data);
   my $encsub = decode('MIME-Header', $envelope->{Subject});
   return (
     msgsubject => $encsub,

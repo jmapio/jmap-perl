@@ -103,7 +103,7 @@ sub imap_status {
 
   my @fields = qw(uidvalidity uidnext messages);
   push @fields, "highestmodseq" if $imap->capability->{condstore};
-  my $data = $imap->multistatus($fields, @$folders);
+  my $data = $imap->multistatus("(@fields)", @$folders);
 
   return $data;
 }
@@ -286,11 +286,8 @@ sub imap_fetch {
   );
 
   if (($state->{uidvalidity} || 0) != $uidvalidity) {
-    return \%res;
-  }
-
-  if ($highestmodseq and $highestmodseq == ($state->{highestmodseq} || 0)) {
-    $Self->log('debug', "Nothing to do for $imapname at $highestmodseq");
+    warn "UIDVALID $state->{uidvalidity} $uidvalidity\n";
+    $res{uidfail} = 1;
     return \%res;
   }
 
@@ -298,12 +295,13 @@ sub imap_fetch {
     my $item = $fetch->{$key};
     my $from = $item->[0];
     my $to = $item->[1];
-    next if ($to eq '*' and $from == $uidnext);
+    $to = $uidnext - 1 if $to eq '*';
+    next if $from > $to;
     my @flags = qw(uid flags);
     push @flags, @{$item->[2]} if $item->[2];
+    next if ($highestmodseq and $item->[3] and $item->[3] == $highestmodseq);
     my @extra;
     push @extra, "(changedsince $item->[3])" if $item->[3];
-    $Self->log('debug', "FETCHING $imapname: $from:$to @flags @extra");
     my $data = $imap->fetch("$from:$to", "(@flags)", @extra) || {};
     $res{$key} = [$item, $data];
   }
