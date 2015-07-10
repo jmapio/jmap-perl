@@ -258,6 +258,65 @@ sub sync_jmailboxes {
   }
 }
 
+# synchronise list from CalDAV server to local folder cache
+# call in transaction
+sub sync_calendars {
+  my $Self = shift;
+
+  my $dbh = $Self->dbh();
+
+  my $calendars = $Self->backend_cmd('calendars', []);
+  my $icalendars = $dbh->selectall_arrayref("SELECT icalendarid, href, name, isReadOnly, colour FROM icalendars");
+  my %byhref = map { $_->[1] => $_ } @$icalendars;
+
+  foreach my $calendar (@$calendars) {
+    my $id = $byhref{$calendar->{href}}[0];
+    my $data = {isReadOnly => $calendar->{isReadOnly}, href => $calendar->{href},
+                colour => $calendar->{colour}, name => $calendar->{name}};
+    if ($id) {
+      $Self->dmaybeupdate('icalendars', $data, {icalendarid => $id});
+    }
+    else {
+      $id = $Self->dinsert('icalendars', $data);
+    }
+    $seen{$id} = 1;
+  }
+
+  foreach my $calendar (@$icalendars) {
+    my $id = $calendar->[0];
+    next if $seen{$id};
+    $dbh->do("DELETE FROM icalendars WHERE icalendarid = ?", {}, $id);
+  }
+
+  $Self->sync_jcalendars();
+}
+
+# synchronise from the imap folder cache to the jmap mailbox listing
+# call in transaction
+sub sync_jmailboxes {
+  my $Self = shift;
+  my $dbh = $Self->dbh();
+  my $icalendars = $dbh->selectall_arrayref("SELECT icalendarid, name, colour, jcalendarid FROM icalendars");
+  my $jcalendars = $dbh->selectall_arrayref("SELECT jcalendarid, name, colour, active FROM jcalendars");
+
+  my %jbyid;
+  my %roletoid;
+  my %byname;
+  foreach my $calendar (@$jcalendars) {
+    $jbyid{$calendar->[0]} = $calendar;
+  }
+
+  foreach my $calendar (@$icalendars) {
+
+  }
+
+  foreach my $calendar (@$jcalendars) {
+    my $id = $calendar->[0];
+    next if $seen{$id};
+    $Self->dupdate('jcalendars', {active => 0}, {jcalendarid => $id});
+  }
+}
+
 sub labels {
   my $Self = shift;
   unless ($Self->{t}{labels}) {
@@ -290,6 +349,8 @@ sub firstsync {
   my $Self = shift;
 
   $Self->sync_folders();
+  $Self->sync_calendars();
+  $Self->sync_addressbooks();
 
   my $labels = $Self->labels();
 
@@ -696,6 +757,7 @@ CREATE TABLE IF NOT EXISTS icalendars (
   isReadOnly INTEGER,
   colour TEXT,
   syncToken TEXT,
+  jcalendarid INTEGER,
   mtime DATE NOT NULL
 );
 EOF
@@ -717,6 +779,7 @@ CREATE TABLE IF NOT EXISTS iabooks (
   name TEXT,
   isReadOnly INTEGER,
   syncToken TEXT,
+  jabookid INTEGER,
   mtime DATE NOT NULL
 );
 EOF
