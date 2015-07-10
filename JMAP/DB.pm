@@ -49,7 +49,7 @@ sub log {
   }
   else {
     my ($level, @items) = @_;
-    return if $level eq 'debug';
+    #return if $level eq 'debug';
     my $time = time() - $Self->{start};
     warn "[$level $time]: @items\n";
   }
@@ -678,7 +678,8 @@ sub dupdate {
   my @keys = sort keys %$values;
   my @lkeys = sort keys %$limit;
 
-  my $sql = "UPDATE $table SET " . join (', ', map { "$_ = ?" } @keys) . " WHERE " . join(' AND ', map { "$_ = ?" } @lkeys);
+  my $sql = "UPDATE $table SET " . join (', ', map { "$_ = ?" } @keys);
+  $sql .= " WHERE " . join(' AND ', map { "$_ = ?" } @lkeys) if @lkeys;
 
   $Self->log('debug', $sql, _dbl(map { $values->{$_} } @keys), _dbl(map { $limit->{$_} } @lkeys));
 

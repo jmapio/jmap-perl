@@ -119,15 +119,15 @@ sub imap_update {
   my $imap = $Self->connect_imap();
 
   my $r = $imap->select($imapname);
-  die "SELECT FAILED $r" unless lc($r) eq 'ok';
+  die "SELECT FAILED $imapname" unless $r;
 
-  my $uidvalidity = $imap->get_response_code('uidvalidity');
+  my $uidvalidity = $imap->get_response_code('uidvalidity') + 0;
 
-  my %res = {
+  my %res = (
     imapname => $imapname,
     olduidvalidity => $olduidvalidity,
     newuidvalidity => $uidvalidity,
-  };
+  );
 
   if ($olduidvalidity != $uidvalidity) {
     return \%res;
@@ -149,15 +149,15 @@ sub imap_fill {
   my $imap = $Self->connect_imap();
 
   my $r = $imap->examine($imapname);
-  die "EXAMINE FAILED $r" unless (lc($r) eq 'ok' or lc($r) eq 'read-only');
+  die "EXAMINE FAILED $imapname" unless $r;
 
-  my $uidvalidity = $imap->get_response_code('uidvalidity');
+  my $uidvalidity = $imap->get_response_code('uidvalidity') + 0;
 
-  my %res = {
+  my %res = (
     imapname => $imapname,
     olduidvalidity => $olduidvalidity,
     newuidvalidity => $uidvalidity,
-  };
+  );
 
   if ($olduidvalidity != $uidvalidity) {
     return \%res;
@@ -182,15 +182,15 @@ sub imap_count {
   my $imap = $Self->connect_imap();
 
   my $r = $imap->examine($imapname);
-  die "EXAMINE FAILED $r" unless (lc($r) eq 'ok' or lc($r) eq 'read-only');
+  die "EXAMINE FAILED $imapname" unless $r;
 
-  my $uidvalidity = $imap->get_response_code('uidvalidity');
+  my $uidvalidity = $imap->get_response_code('uidvalidity') + 0;
 
-  my %res = {
+  my %res = (
     imapname => $imapname,
     olduidvalidity => $olduidvalidity,
     newuidvalidity => $uidvalidity,
-  };
+  );
 
   if ($olduidvalidity != $uidvalidity) {
     return \%res;
@@ -213,16 +213,16 @@ sub imap_move {
   my $imap = $Self->connect_imap();
 
   my $r = $imap->select($imapname);
-  die "SELECT FAILED $r" unless lc($r) eq 'ok';
+  die "SELECT FAILED $imapname" unless $r;
 
-  my $uidvalidity = $imap->get_response_code('uidvalidity');
+  my $uidvalidity = $imap->get_response_code('uidvalidity') + 0;
 
-  my %res = {
+  my %res = (
     imapname => $imapname,
     newname => $newname,
     olduidvalidity => $olduidvalidity,
     newuidvalidity => $uidvalidity,
-  };
+  );
 
   if ($olduidvalidity != $uidvalidity) {
     return \%res;
@@ -266,10 +266,10 @@ sub imap_fetch {
   my $imap = $Self->connect_imap();
 
   my $r = $imap->examine($imapname);
-  die "EXAMINE FAILED $r" unless (lc($r) eq 'ok' or lc($r) eq 'read-only');
+  die "EXAMINE FAILED $imapname" unless $r;
 
-  my $uidvalidity = $imap->get_response_code('uidvalidity');
-  my $uidnext = $imap->get_response_code('uidnext');
+  my $uidvalidity = $imap->get_response_code('uidvalidity') + 0;
+  my $uidnext = $imap->get_response_code('uidnext') + 0;
   my $highestmodseq = $imap->get_response_code('highestmodseq') || 0;
   my $exists = $imap->get_response_code('exists') || 0;
 
@@ -277,10 +277,10 @@ sub imap_fetch {
     imapname => $imapname,
     oldstate => $state,
     newstate => {
-      uidvalidity => $uidvalidity,
-      uidnext => $uidnext,
-      highestmodseq => $highestmodseq,
-      exists => $exists,
+      uidvalidity => $uidvalidity + 0,
+      uidnext => $uidnext + 0,
+      highestmodseq => $highestmodseq + 0,
+      exists => $exists + 0,
     },
   );
 
@@ -297,6 +297,7 @@ sub imap_fetch {
     my $item = $fetch->{$key};
     my $from = $item->[0];
     my $to = $item->[1];
+    next if ($to eq '*' and $from == $uidnext);
     my @flags = qw(uid flags);
     push @flags, @{$item->[2]} if $item->[2];
     my @extra;

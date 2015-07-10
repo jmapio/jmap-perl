@@ -14,6 +14,9 @@ use OAuth2::Tiny;
 use Encode;
 use Encode::MIME::Header;
 use Digest::SHA qw(sha1_hex);
+use AnyEvent;
+use AnyEvent::Socket;
+use Data::Dumper;
 
 our $TAG = 1;
 
@@ -34,7 +37,7 @@ sub setuser {
   my ($hostname, $username, $password) = @_;
   my $data = $Self->dbh->selectrow_arrayref("SELECT hostname, username, password FROM iserver");
   if ($data and $data->[0]) {
-    $Self->dmaybeupdate('iserver', {hostname => $hostname, username => $username, password => $password});
+    $Self->dmaybeupdate('iserver', {hostname => $hostname, username => $username, password => $password}, {hostname => $data->[0]});
   }
   else {
     $Self->dinsert('iserver', {
@@ -45,7 +48,7 @@ sub setuser {
   }
   my $user = $Self->dbh->selectrow_arrayref("SELECT email FROM account");
   if ($user and $user->[0]) {
-    $Self->dmaybeupdate('account', {email => $username});
+    $Self->dmaybeupdate('account', {email => $username}, {email => $username});
   }
   else {
     $Self->dinsert('account', {
@@ -68,7 +71,7 @@ sub access_token {
 sub backend_cmd {
   my $Self = shift;
   my $cmd = shift;
-  my $args = shift;
+  my @args = @_;
   unless ($Self->{backend}) {
     my $w = AnyEvent->condvar;
     my $auth = $Self->access_token();
@@ -89,7 +92,7 @@ sub backend_cmd {
   my $handle = $Self->{backend};
   my $w = AnyEvent->condvar;
   my $tag = "T" . $TAG++;
-  $handle->push_write(json => [$cmd, $args, $tag]); # whatever
+  $handle->push_write(json => [$cmd, \@args, $tag]); # whatever
   $handle->push_write("\012");
   $handle->push_read(json => sub {
     my $hdl = shift;
@@ -97,8 +100,11 @@ sub backend_cmd {
     die "INVALID RESPONSE" unless $json->[2] eq $tag;
     $w->send($json->[1]);
   });
+  my $res = $w->recv;
 
-  return $w->recv;
+  warn Dumper ($cmd, \@args, $res);
+
+  return $res;
 }
 
 # synchronise list from IMAP server to local folder cache
@@ -259,6 +265,9 @@ sub backfill {
 
 sub firstsync {
   my $Self = shift;
+
+  $Self->sync_folders();
+
   my $labels = $Self->labels();
 
   my $ifolderid = $labels->{"inbox"}[0];
@@ -302,7 +311,6 @@ sub do_folder {
   my ($imapname, $uidfirst, $uidnext, $uidvalidity, $highestmodseq) =
      $dbh->selectrow_array("SELECT imapname, uidfirst, uidnext, uidvalidity, highestmodseq FROM ifolders WHERE ifolderid = ?", {}, $ifolderid);
   die "NO SUCH FOLDER $ifolderid" unless $imapname;
-  $uidfirst ||= 0;
 
   my @extra;
   if ($uidfirst > 1 and $batchsize) {
@@ -351,7 +359,7 @@ sub do_folder {
 
   # need to make changes before counting
   my ($count) = $dbh->selectrow_array("SELECT COUNT(*) FROM imessages WHERE ifolderid = ?", {}, $ifolderid);
-  if ($count != $res->{exists}) {
+  if ($count != $res->{newstate}{exists}) {
     my $to = $uidnext - 1;
     $Self->log('debug', "COUNTING $imapname: $uidfirst:$to (something deleted)");
     my $res = $Self->backend_cmd('imap_count', $imapname, $uidvalidity, "$uidfirst:$to");

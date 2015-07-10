@@ -20,6 +20,7 @@ use AnyEvent::Handle;
 use AnyEvent::Socket;
 use AnyEvent::Util;
 use AnyEvent::HTTP;
+use EV;
 use JSON::XS qw(encode_json decode_json);
 
 use Net::Server::PreFork;
@@ -28,7 +29,6 @@ use base qw(Net::Server::PreFork);
 
 # we love globals
 my $hdl;
-my $cv;
 my $db;
 my $dbh;
 my $accountid;
@@ -67,7 +67,6 @@ sub getdb {
   $db->{watcher} = AnyEvent->timer(after => 30, interval => 30, cb => sub {
     # check if there's more work to do on the account...
     eval {
-      $db->connect();
       $db->begin();
       $db->backfill();
       $db->commit();
@@ -78,7 +77,6 @@ sub getdb {
 
 sub process_request {
   my $server = shift;
-  $cv = AnyEvent->condvar;
 
   close STDIN;
   close STDOUT;
@@ -87,12 +85,12 @@ sub process_request {
     on_error => sub {
       my ($hdl, $fatal, $msg) = @_;
       $hdl->destroy;
-      $cv->send;
+      EV::unloop;
     },
     on_disconnect => sub {
       my ($hdl, $fatal, $msg) = @_;
       $hdl->destroy;
-      $cv->send;
+      EV::unloop;
     },
   );
 
@@ -104,8 +102,7 @@ sub process_request {
     $handle->push_read(json => mk_handler($accountid));
   });
 
-  $cv->recv;
-  $cv->send;
+  EV::run;
   exit 0;
 }
 
@@ -135,7 +132,6 @@ sub handle_getstate {
   my $db = shift;
   my $cmd = shift;
 
-  $db->connect();
   $db->begin();
   my $user = $db->get_user();
   $db->commit();
@@ -158,7 +154,7 @@ sub mk_handler {
   my ($db) = @_;
 
   # don't last forever
-  $hdl->{killer} = AnyEvent->timer(after => 600, cb => sub { warn "SHUTTING DOWN $accountid ON TIMEOUT\n"; undef $hdl; $cv->send });
+  $hdl->{killer} = AnyEvent->timer(after => 600, cb => sub { warn "SHUTTING DOWN $accountid ON TIMEOUT\n"; undef $hdl; EV::unloop });
 
   return sub {
     my ($hdl, $json) = @_;
@@ -212,6 +208,9 @@ sub mk_handler {
       $res->[2] = $tag;
       $hdl->push_write(json => $res) if $res->[0];
       warn "HANDLED $cmd ($tag) => $res->[0] ($accountid)\n" ;
+      if ($res->[0] eq 'error') {
+	warn Dumper($res);
+      }
     }
     $hdl->push_read(json => mk_handler($db));
   };
@@ -219,7 +218,6 @@ sub mk_handler {
 
 sub handle_sync {
   my $db = shift;
-  $db->connect(); # ensure up-to-date folders
   $db->begin();
   $db->sync();
   $db->commit();
@@ -272,7 +270,6 @@ sub handle_cb_google {
   $db->begin();
   $db->setuser($email, $gmaildata->{refresh_token}, $data->{name}, $data->{picture});
   $db->commit();
-  $db->connect(); # only after user is set
   $db->begin();
   $db->firstsync();
   $db->commit();
@@ -310,7 +307,6 @@ sub handle_signup {
   $db->begin();
   $db->setuser(@$detail);
   $db->commit();
-  $db->connect(); # only after user is set
   $db->begin();
   $db->firstsync();
   $db->commit();
@@ -322,7 +318,7 @@ sub handle_delete {
   my $dbh = accountsdb();
   $dbh->do("DELETE FROM accounts WHERE accountid = ?", {}, $accountid);
   $db->delete() if $db;
-  $hdl->{timer} = AnyEvent->timer(after => 0, cb => sub { undef $hdl; $cv->send });
+  $hdl->{timer} = AnyEvent->timer(after => 0, cb => sub { undef $hdl; EV::unloop; });
   return ['deleted', $accountid];
 }
 
@@ -337,7 +333,6 @@ sub handle_upload {
   my ($db, $req) = @_;
   my ($type, $content) = @$req;
 
-  $db->connect();
   $db->begin();
   my $api = JMAP::API->new($db);
   my ($res) = $api->uploadFile($type, $content);
@@ -349,7 +344,6 @@ sub handle_upload {
 sub handle_download {
   my ($db, $id) = @_;
 
-  $db->connect();
   $db->begin();
   my $api = JMAP::API->new($db);
   my ($type, $content) = $api->downloadFile($id);
@@ -361,7 +355,6 @@ sub handle_download {
 sub handle_raw {
   my ($db, $req) = @_;
 
-  $db->connect();
   $db->begin();
   my $api = JMAP::API->new($db);
   my ($type, $content, $filename) = $api->getRawMessage($req);
@@ -374,7 +367,6 @@ sub handle_jmap {
   my ($db, $request) = @_;
 
   my @res;
-  $db->connect();
   # need to keep the API object around for the entire request for idmap purposes
   my $api = JMAP::API->new($db);
   foreach my $item (@$request) {

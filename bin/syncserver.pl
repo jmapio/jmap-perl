@@ -12,12 +12,13 @@ use JSON::XS qw(encode_json decode_json);
 use Net::Server::PreFork;
 use JMAP::Sync::Gmail;
 use JMAP::Sync::ICloud;
+use EV;
+use Data::Dumper;
 
 use base qw(Net::Server::PreFork);
 
 # we love globals
 my $hdl;
-my $cv;
 my $id;
 my $backend;
 
@@ -40,7 +41,6 @@ sub setup {
 
 sub process_request {
   my $server = shift;
-  $cv = AnyEvent->condvar;
 
   close STDIN;
   close STDOUT;
@@ -49,12 +49,12 @@ sub process_request {
     on_error => sub {
       my ($hdl, $fatal, $msg) = @_;
       $hdl->destroy;
-      $cv->send;
+      EV::unloop;
     },
     on_disconnect => sub {
       my ($hdl, $fatal, $msg) = @_;
       $hdl->destroy;
-      $cv->send;
+      EV::unloop;
     },
   );
 
@@ -67,8 +67,7 @@ sub process_request {
     $handle->push_read(json => mk_handler());
   });
 
-  $cv->recv;
-  $cv->send;
+  EV::run;
   exit 0;
 }
 
@@ -160,7 +159,7 @@ sub mk_handler {
   my ($db) = @_;
 
   # don't last forever
-  $hdl->{killer} = AnyEvent->timer(after => 600, cb => sub { warn "$$ SHUTTING DOWN $id ON TIMEOUT\n"; undef $hdl; $cv->send });
+  $hdl->{killer} = AnyEvent->timer(after => 600, cb => sub { warn "$$ SHUTTING DOWN $id ON TIMEOUT\n"; undef $hdl; EV::unloop });
 
   return sub {
     my ($hdl, $json) = @_;
@@ -184,6 +183,7 @@ sub mk_handler {
     $hdl->push_write("\n");
 
     warn "$$ HANDLED $cmd ($tag) => $res->[0] ($id)\n";
+    warn Dumper($json, $res);
     $hdl->push_read(json => mk_handler($db));
   };
 }
