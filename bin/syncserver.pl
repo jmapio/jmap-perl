@@ -125,6 +125,12 @@ sub handle_send {
   return ['sent', $data];
 }
 
+sub handle_imap_status {
+  my $args = shift;
+  my $data = $backend->imap_status(@$args);
+  return ['status', $data];
+}
+
 sub handle_imap_update {
   my $args = shift;
   my $data = $backend->imap_update(@$args);
