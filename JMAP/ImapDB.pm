@@ -115,10 +115,11 @@ sub sync_folders {
   my $dbh = $Self->dbh();
 
   my $folders = $Self->backend_cmd('folders', []);
-  my $ifolders = $dbh->selectall_arrayref("SELECT ifolderid, sep, imapname, label FROM ifolders");
-  my %ibylabel = map { $_->[3] => $_ } @$ifolders;
+  my $ifolders = $dbh->selectall_arrayref("SELECT ifolderid, sep, uidvalidity, imapname, label, FROM ifolders");
+  my %ibylabel = map { $_->[4] => $_ } @$ifolders;
   my %seen;
 
+  my %getstatus;
   foreach my $name (sort keys %$folders) {
     my $sep = $folders->{$name}[1];
     my $role = $ROLE_MAP{lc $name};
@@ -131,6 +132,23 @@ sub sync_folders {
       $id = $Self->dinsert('ifolders', {sep => $sep, imapname => $name, label => $label});
     }
     $seen{$id} = 1;
+    unless ($ibylabel{$label}[2]) {
+      # no uidvalidity, we need to get status for this one
+      $getstatus{$ibylabel{$label}[3]} = $id;
+    }
+  }
+
+  if (keys %getstatus) {
+    my $data = $Self->backend_cmd('status', [keys %getstatus]);
+    foreach my $name (keys %$data) {
+      my $status = $data->{$name};
+      $Self->dmaybeupdate('ifolders', {
+        uidvalidity => $status->{uidvalidity},
+        uidnext => $status->{uidnext},
+        uidfirst => $status->{uidnext},
+        highestmodseq => $status->{highestmodseq},
+      }, {ifolderid => $id});
+    }
   }
 
   foreach my $folder (@$ifolders) {
@@ -330,6 +348,11 @@ sub do_folder {
     new => [$uidnext, '*', [qw(internaldate envelope rfc822.size)]],
   });
 
+  if ($res->{newstate}{uidvalidity} != $uidvalidity) {
+    # going to want to nuke everything for the existing folder and create this - but for now, just die
+    die "UIDVALIDITY CHANGED $imapname: $uidvalidity => $res->{newstate}{uidvalidity}";
+  }
+
   my $didold = 0;
   if ($res->{backfill}) {
     my $new = $res->{backfill};
@@ -358,21 +381,23 @@ sub do_folder {
   }
 
   # need to make changes before counting
-  my ($count) = $dbh->selectrow_array("SELECT COUNT(*) FROM imessages WHERE ifolderid = ?", {}, $ifolderid);
-  if ($count != $res->{newstate}{exists}) {
-    my $to = $uidnext - 1;
-    $Self->log('debug', "COUNTING $imapname: $uidfirst:$to (something deleted)");
-    my $res = $Self->backend_cmd('imap_count', $imapname, $uidvalidity, "$uidfirst:$to");
-    my $uids = $res->{data};
-    my $data = $dbh->selectcol_arrayref("SELECT uid FROM imessages WHERE ifolderid = ?", {}, $ifolderid);
-    my %exists = map { $_ => 1 } @$uids;
-    foreach my $uid (@$data) {
-      next if $exists{$uid};
-      $Self->deleted_record($ifolderid, $uid);
+  if ($uidfirst == 1) {
+    my ($count) = $dbh->selectrow_array("SELECT COUNT(*) FROM imessages WHERE ifolderid = ?", {}, $ifolderid);
+    if ($count != $res->{newstate}{exists}) {
+      my $to = $uidnext - 1;
+      $Self->log('debug', "COUNTING $imapname: $uidfirst:$to (something deleted)");
+      my $res = $Self->backend_cmd('imap_count', $imapname, $uidvalidity, "$uidfirst:$to");
+      my $uids = $res->{data};
+      my $data = $dbh->selectcol_arrayref("SELECT uid FROM imessages WHERE ifolderid = ?", {}, $ifolderid);
+      my %exists = map { $_ => 1 } @$uids;
+      foreach my $uid (@$data) {
+        next if $exists{$uid};
+        $Self->deleted_record($ifolderid, $uid);
+      }
     }
   }
 
-  $Self->dupdate('ifolders', {highestmodseq => $res->{newstate}{highestmodseq}, uidfirst => $uidfirst, uidnext => $res->{newstate}{uidnext}, uidvalidity => $res->{newstate}{uidvalidity}}, {ifolderid => $ifolderid});
+  $Self->dupdate('ifolders', {highestmodseq => $res->{newstate}{highestmodseq}, uidfirst => $uidfirst, uidnext => $res->{newstate}{uidnext}}, {ifolderid => $ifolderid});
 
   return $didold;
 }
