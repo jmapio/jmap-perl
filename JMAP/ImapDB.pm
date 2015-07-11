@@ -311,12 +311,24 @@ sub sync_jcalendars {
 
   my %seen;
   foreach my $calendar (@$icalendars) {
+    my $data = {
+      name => $calendar->[1],
+      colour => $calendar->[2],
+      isVisible => 1,
+      mayReadFreeBusy => 1,
+      mayReadItems => 1,
+      mayAddItems => 0,
+      mayModifyItems => 0,
+      mayRemoveItems => 0,
+      mayDelete => 0,
+      mayRename => 0,
+    };
     if ($jbyid{$calendar->[3]}) {
-      $Self->dmaybeupdate('jcalendars', {name => $calendar->[1], colour => $calendar->[2]}, {jcalendarid => $calendar->[3]});
+      $Self->dmaybeupdate('jcalendars', $data, {jcalendarid => $calendar->[3]});
       $seen{$calendar->[3]} = 1;
     }
     else {
-      my $id = $Self->dinsert('jcalendars', {name => $calendar->[1], colour => $calendar->[2]});
+      my $id = $Self->dmake('jcalendars', $data);
       $seen{$id} = 1;
     }
   }

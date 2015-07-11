@@ -1343,7 +1343,7 @@ sub getCalendarEvents {
       next;
     }
 
-    my $item = json_decode($data->{payload});
+    my $item = decode_json($data->{payload});
 
     foreach my $key (keys %$item) {
       delete $item->{$key} unless _prop_wanted($args, $key);
@@ -1629,7 +1629,7 @@ sub getContacts {
       next;
     }
 
-    my $item = json_decode($data->{payload});
+    my $item = decode_json($data->{payload});
 
     foreach my $key (keys %$item) {
       delete $item->{$key} unless _prop_wanted($args, $key);

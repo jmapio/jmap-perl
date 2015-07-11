@@ -624,7 +624,7 @@ sub set_event {
   $Self->dmake('jevents', {
     eventuid => $eventuid,
     jcalendarid => $jcalendarid,
-    payload => json_encode($event),
+    payload => encode_json($event),
   });
 }
 
