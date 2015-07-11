@@ -1350,7 +1350,7 @@ sub getCalendarEvents {
     }
 
     $item->{id} = $eventid;
-    $item->{calendarId} = $data->{jcalendarid} if _prop_wanted($args, "calendarId");
+    $item->{calendarId} = "$data->{jcalendarid}" if _prop_wanted($args, "calendarId");
 
     push @list, $item;
   }
