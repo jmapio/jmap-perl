@@ -329,6 +329,7 @@ sub sync_jcalendars {
     }
     else {
       my $id = $Self->dmake('jcalendars', $data);
+      $Self->dupdate('icalendars', {jcalendarid => $id}, {icalendarid => $calendar->[0]});
       $seen{$id} = 1;
     }
   }
