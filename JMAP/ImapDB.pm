@@ -77,9 +77,37 @@ sub access_token {
 sub backend_cmd {
   my $Self = shift;
   my $cmd = shift;
+  my $cb;
+  if (ref($cmd)) {
+    $cb = $cmd;
+    $cmd = shift; 
+  }
   my @args = @_;
-  unless ($Self->{backend}) {
-    my $w = AnyEvent->condvar;
+
+  my $w = AnyEvent->condvar;
+
+  my $action = sub {
+    my $handle = shift;
+    my $tag = "T" . $TAG++;
+    $handle->push_write(json => [$cmd, \@args, $tag]); # whatever
+    $handle->push_write("\012");
+    $handle->push_read(json => sub {
+      my $hdl = shift;
+      my $json = shift;
+      die "INVALID RESPONSE" unless $json->[2] eq $tag;
+      if ($cb) {
+        $cb->($json);
+      }
+      else {
+        $w->send($json);
+      }
+    });
+  };
+  if ($Self->{backend}) {
+    $action->($Self->{backend});
+  }
+  else {
+    my $h = AnyEvent->condvar;
     my $auth = $Self->access_token();
     tcp_connect('localhost', 5005, sub {
       my $fh = shift;
@@ -90,26 +118,21 @@ sub backend_cmd {
         my $hdl = shift;
         my $json = shift;
         die "Failed to setup " . Dumper($json) unless $json->[0] eq 'setup';
-        $w->send($handle);
+        $action->($handle);
+        $h->send($handle);
       });
+      # XXX - handle destroy correctly
+      # handle backend going away, etc
     });
-    $Self->{backend} = $w->recv;
+
+    # synchronous startup to avoid race condition on setting up channel
+    $Self->{backend} = $h->recv;
   }
-  my $handle = $Self->{backend};
-  my $w = AnyEvent->condvar;
-  my $tag = "T" . $TAG++;
-  $handle->push_write(json => [$cmd, \@args, $tag]); # whatever
-  $handle->push_write("\012");
-  $handle->push_read(json => sub {
-    my $hdl = shift;
-    my $json = shift;
-    die "INVALID RESPONSE" unless $json->[2] eq $tag;
-    $w->send($json->[1]);
-  });
+
+  return if $cb; # async usage
+
   my $res = $w->recv;
-
   warn Dumper ($cmd, \@args, $res);
-
   return $res;
 }
 
