@@ -1288,7 +1288,7 @@ sub getCalendarEventList {
   my $start = $args->{position} || 0;
   return ['error', {type => 'invalidArguments'}] if $start < 0;
 
-  my $data = $dbh->selectall_arrayref("SELECT jeventid,jcalendarid FROM jevents WHERE active = 1 ORDER BY jeventid");
+  my $data = $dbh->selectall_arrayref("SELECT eventuid,jcalendarid FROM jevents WHERE active = 1 ORDER BY eventuid");
 
   $data = $Self->_event_filter($data, $args->{filter}, {}) if $args->{filter};
 
@@ -1337,7 +1337,7 @@ sub getCalendarEvents {
   foreach my $eventid (@{$args->{ids}}) {
     next if $seenids{$eventid};
     $seenids{$eventid} = 1;
-    my $data = $dbh->selectrow_hashref("SELECT * FROM jevents WHERE jeventid = ?", {}, $eventid);
+    my $data = $dbh->selectrow_hashref("SELECT * FROM jevents WHERE eventuid = ?", {}, $eventid);
     unless ($data) {
       $missingids{$eventid} = 1;
       next;
@@ -1378,7 +1378,7 @@ sub getCalendarEventUpdates {
   return ['error', {type => 'cannotCalculateChanges'}]
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
 
-  my $sql = "SELECT jeventid,active FROM jevents WHERE jmodseq > ?";
+  my $sql = "SELECT eventuid,active FROM jevents WHERE jmodseq > ?";
 
   my $data = $dbh->selectall_arrayref($sql, {}, $args->{sinceState});
 
