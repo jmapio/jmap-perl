@@ -293,21 +293,27 @@ sub sync_calendars {
 
 # synchronise from the imap folder cache to the jmap mailbox listing
 # call in transaction
-sub sync_jmailboxes {
+sub sync_jcalendars {
   my $Self = shift;
   my $dbh = $Self->dbh();
   my $icalendars = $dbh->selectall_arrayref("SELECT icalendarid, name, colour, jcalendarid FROM icalendars");
   my $jcalendars = $dbh->selectall_arrayref("SELECT jcalendarid, name, colour, active FROM jcalendars");
 
   my %jbyid;
-  my %roletoid;
-  my %byname;
   foreach my $calendar (@$jcalendars) {
     $jbyid{$calendar->[0]} = $calendar;
   }
 
+  my %seen;
   foreach my $calendar (@$icalendars) {
-
+    if ($jbyid{$calendar->[3]}) {
+      $Self->dmaybeupdate('jcalendars', {name => $calendar->[1], colour => $calendar->[2]}, {jcalendarid => $calendar->[3]});
+      $seen{$calendar->[3]} = 1;
+    }
+    else {
+      my $id = $Self->dinsert('jcalendars', {name => $calendar->[1], colour => $calendar->[2]});
+      $seen{$id} = 1;
+    }
   }
 
   foreach my $calendar (@$jcalendars) {
