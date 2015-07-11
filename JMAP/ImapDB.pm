@@ -20,7 +20,7 @@ use Data::Dumper;
 
 our $TAG = 1;
 
-# XXX - specialuse, this is just for iCloud for now
+# special use or name magic
 my %ROLE_MAP = (
   'inbox' => 'inbox',
   'drafts' => 'drafts',
@@ -334,21 +334,33 @@ sub do_calendar {
 
   my $dbh = $Self->dbh();
 
-  my ($href) = $dbh->selectrow_array("SELECT href FROM icalendars WHERE icalendarid = ?", {}, $calendarid);
-  my $exists = $dbh->selectall_arrayref("SELECT ieventid, resource FROM ievents WHERE icalendarid = ?", {}, $calendarid);
-  my %res = map { $_->[1] => $_->[0] } @$exists;
+  my ($href, $jcalendarid) = $dbh->selectrow_array("SELECT href, jcalendarid FROM icalendars WHERE icalendarid = ?", {}, $calendarid);
+  my $exists = $dbh->selectall_arrayref("SELECT ieventid, resource, content FROM ievents WHERE icalendarid = ?", {}, $calendarid);
+  my %res = map { $_->[1] => $_ } @$exists;
 
   my $events = $Self->backend_cmd('events', {href => $href});
 
   foreach my $resource (keys %$events) {
-    my $id = delete $res{$resource};
-    if ($id) {
-      $Self->dmaybeupdate('ievents', {content => $events->{$resource}}, {ieventid => $id});
+    my $data = delete $res{$resource};
+    my $raw = $events->{$resource};
+    if ($data) {
+      my $id = $data->[0];
+      next if $raw eq $data->[2];
+      $Self->dmaybeupdate('ievents', {content => $raw, resource => $resource}, {ieventid => $id});
     }
     else {
-      $Self->dinsert('ievents', {content => $events->{$resource}, resource => $resource});
+      $Self->dinsert('ievents', {content => $raw, resource => $resource});
     }
-    # XXX - parse UID and calculate which JMAP record to update
+    my $event = $Self->parse_event($raw);
+    $Self->set_event($jcalendarid, $event);
+  }
+
+  foreach my $resource (keys %res) {
+    my $data = delete $res{$resource};
+    my $id = $data->[0];
+    $Self->ddelete('ievents', {ieventid => $id});
+    my $event = $Self->parse_event($data->[2]);
+    $Self->delete_event($jcalendarid, $event->{uid});
   }
 }
 

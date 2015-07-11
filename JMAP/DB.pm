@@ -20,6 +20,7 @@ use Encode;
 use Encode::MIME::Header;
 use DateTime;
 use Date::Parse;
+use Net::CalDAVTalk;
 
 sub new {
   my $class = shift;
@@ -605,6 +606,33 @@ sub report_messages {
   # XXX - actually report the messages (or at least check that they exist)
 
   return ($msgids, []);
+}
+
+sub parse_event {
+  my $Self = shift;
+  my $raw = shift;
+  my $CalDAV = Net::CalDAVTalk->new(url => 'http://localhost/');  # empty caldav
+  my ($event) = $CalDAV->vcalendarToEvents($raw);
+  return $event;
+}
+
+sub set_event {
+  my $Self = shift;
+  my $jcalendarid = shift;
+  my $event = shift;
+  my $eventuid = delete $event->{uid};
+  $Self->dmake('jevents', {
+    eventuid => $eventuid,
+    jcalendarid => $jcalendarid,
+    payload => json_encode($event),
+  });
+}
+
+sub delete_event {
+  my $Self = shift;
+  my $jcalendarid = shift; # doesn't matter
+  my $eventuid = shift;
+  return $Self->dupdate('jevents', {active => 0}, {eventuid => $eventuid});
 }
 
 sub create_file {
