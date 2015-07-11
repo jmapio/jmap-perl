@@ -269,6 +269,7 @@ sub sync_calendars {
   my $icalendars = $dbh->selectall_arrayref("SELECT icalendarid, href, name, isReadOnly, colour FROM icalendars");
   my %byhref = map { $_->[1] => $_ } @$icalendars;
 
+  my %seen;
   foreach my $calendar (@$calendars) {
     my $id = $byhref{$calendar->{href}}[0];
     my $data = {isReadOnly => $calendar->{isReadOnly}, href => $calendar->{href},
@@ -342,7 +343,7 @@ sub do_calendar {
   foreach my $resource (keys %$events) {
     my $id = delete $res{$resource};
     if ($id) {
-      $Self->dmaybeupdate('ievents', {content => $events->{$resource}}, {ieventid => id});
+      $Self->dmaybeupdate('ievents', {content => $events->{$resource}}, {ieventid => $id});
     }
     else {
       $Self->dinsert('ievents', {content => $events->{$resource}, resource => $resource});
@@ -384,7 +385,7 @@ sub firstsync {
 
   $Self->sync_folders();
   $Self->sync_calendars();
-  $Self->sync_addressbooks();
+  #$Self->sync_addressbooks();
 
   my $labels = $Self->labels();
 
