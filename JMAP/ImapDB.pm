@@ -289,6 +289,10 @@ sub sync_calendars {
   }
 
   $Self->sync_jcalendars();
+
+  foreach my $id (keys %seen) {
+    $Self->do_calendar($id);
+  }
 }
 
 # synchronise from the imap folder cache to the jmap mailbox listing
