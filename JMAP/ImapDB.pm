@@ -323,6 +323,30 @@ sub sync_jcalendars {
   }
 }
 
+sub do_calendar {
+  my $Self = shift;
+  my $calendarid = shift;
+
+  my $dbh = $Self->dbh();
+
+  my ($href) = $dbh->selectrow_array("SELECT href FROM icalendars WHERE icalendarid = ?", {}, $calendarid);
+  my $exists = $dbh->selectall_arrayref("SELECT ieventid, resource FROM ievents WHERE icalendarid = ?", {}, $calendarid);
+  my %res = map { $_->[1] => $_->[0] } @$exists;
+
+  my $events = $Self->backend_cmd('events', {href => $href});
+
+  foreach my $resource (keys %$events) {
+    my $id = delete $res{$resource};
+    if ($id) {
+      $Self->dmaybeupdate('ievents', {content => $events->{$resource}}, {ieventid => id});
+    }
+    else {
+      $Self->dinsert('ievents', {content => $events->{$resource}, resource => $resource});
+    }
+    # XXX - parse UID and calculate which JMAP record to update
+  }
+}
+
 sub labels {
   my $Self = shift;
   unless ($Self->{t}{labels}) {
