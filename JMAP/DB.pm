@@ -673,7 +673,7 @@ sub parse_card {
 
 sub set_card {
   my $Self = shift;
-  my $jcalendarid = shift;
+  my $jaddressbookid = shift;
   my $card = shift;
   my $carduid = delete $card->{uid};
   my $kind = delete $card->{kind};
@@ -702,7 +702,7 @@ sub set_card {
 
 sub delete_card {
   my $Self = shift;
-  my $jcalendarid = shift; # doesn't matter
+  my $jaddressbookid = shift; # doesn't matter
   my $carduid = shift;
   my $kind = shift;
   if ($kind eq 'contact') {

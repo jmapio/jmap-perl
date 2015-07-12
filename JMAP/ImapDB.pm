@@ -500,9 +500,9 @@ sub do_addressbook {
 
   my $cards = $Self->backend_cmd('cards', {href => $href});
 
-  foreach my $resource (keys %$events) {
+  foreach my $resource (keys %$cards) {
     my $data = delete $res{$resource};
-    my $raw = $events->{$resource};
+    my $raw = $cards->{$resource};
     if ($data) {
       my $id = $data->[0];
       next if $raw eq $data->[2];
