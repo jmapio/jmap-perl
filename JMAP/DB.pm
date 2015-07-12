@@ -21,6 +21,7 @@ use Encode::MIME::Header;
 use DateTime;
 use Date::Parse;
 use Net::CalDAVTalk;
+use Net::CardDAVTalk::VCard;
 
 sub new {
   my $class = shift;
@@ -633,6 +634,78 @@ sub delete_event {
   my $jcalendarid = shift; # doesn't matter
   my $eventuid = shift;
   return $Self->dupdate('jevents', {active => 0}, {eventuid => $eventuid});
+}
+
+sub parse_card {
+  my $Self = shift;
+  my $raw = shift;
+  my ($card) = Net::CalDAVTalk::VCard->new_fromstring($raw);
+
+  my %hash;
+
+  $hash{uid} = $card->uid();
+  $hash{kind} = $card->VKind();
+
+  if ($hash{kind} eq 'contact') {
+    $hash{lastName} = $card->VLastName();
+    $hash{firstName} = $card->VFirstName();
+    $hash{prefix} = $card->VTitle();
+
+    $hash{company} = $card->VCompany();
+    $hash{department} = $card->VDepartment();
+
+    $hash{emails} = [$card->VEmails()];
+    $hash{addresses} = [$card->VAddresses()];
+    $hash{phones} = [$card->VPhones()];
+    $hash{online} = [$card->VOnline()];
+  
+    $hash{nickname} = $card->VNickname();
+    $hash{birthday} = $card->VBirthday();
+    $hash{notes} = $card->VNotes();
+  }
+  else {
+    $hash{name} = $card->VFN();
+    $hash{members} = [$card->VGroupContactUIDs()];
+  }
+
+  return \%hash;
+}
+
+sub set_card {
+  my $Self = shift;
+  my $jcalendarid = shift;
+  my $card = shift;
+  my $carduid = delete $card->{uid};
+  my $kind = delete $card->{kind};
+  if ($kind eq 'contact') {
+    $Self->dmake('jcontacts', {
+      carduid => $carduid,
+      jaddressbookid => $jaddressbookid,
+      payload => encode_json($card),
+    });
+  }
+  else {
+    $Self->ddelete('jcontactgroups', {carduid => $carduid, jaddressbookid => $jaddressbookid});
+    my $gid = $Self->dmake('jcontactgroups', {
+      carduid => $carduid,
+      jaddressbookid => $jaddressbookid,
+      name => $card->{name},
+    });
+    foreach my $item (@{$card->{members}}) {
+      $Self->dmake('jcontactgroupmap', {
+        jcontactgroupid => $gid,
+        contactuid => $item,
+      });
+    }
+  }
+}
+
+sub delete_card {
+  my $Self = shift;
+  my $jcalendarid = shift; # doesn't matter
+  my $carduid = shift;
+  $Self->dupdate('jcontactgroups', {active => 0}, {carduid => $carduid, jaddressbookid => $jaddressbookid});
+  $Self->dupdate('jcontactgroupmap', {active => 0}, {carduid => $carduid, jaddressbookid => $jaddressbookid});
 }
 
 sub create_file {
