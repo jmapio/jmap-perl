@@ -704,8 +704,13 @@ sub delete_card {
   my $Self = shift;
   my $jcalendarid = shift; # doesn't matter
   my $carduid = shift;
-  $Self->dupdate('jcontactgroups', {active => 0}, {carduid => $carduid, jaddressbookid => $jaddressbookid});
-  $Self->dupdate('jcontactgroupmap', {active => 0}, {carduid => $carduid, jaddressbookid => $jaddressbookid});
+  my $kind = shift;
+  if ($kind eq 'contact') {
+    $Self->dupdate('jcontactgroups', {active => 0}, {carduid => $carduid, jaddressbookid => $jaddressbookid});
+  }
+  else {
+    $Self->dupdate('jcontactgroupmap', {active => 0}, {carduid => $carduid, jaddressbookid => $jaddressbookid});
+  }
 }
 
 sub create_file {

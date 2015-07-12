@@ -520,7 +520,7 @@ sub do_addressbook {
     my $id = $data->[0];
     $Self->ddelete('icards', {icardid => $id});
     my $card = $Self->parse_card($data->[2]);
-    $Self->delete_card($jaddressbookid, $card->{uid});
+    $Self->delete_card($jaddressbookid, $card->{uid}, $card->{kind});
   }
 }
 
