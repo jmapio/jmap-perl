@@ -13,7 +13,7 @@ sub new {
     imapserver => 'imap.mail.me.com',
     smtpserver => 'smtp.mail.me.com',
     calurl => 'https://caldav.icloud.com/',
-    aburl => 'https://contacts.icloud.com/',
+    addressbookurl => 'https://contacts.icloud.com/',
     %$auth,
   );
   return JMAP::Sync::Standard->new(\%a);
