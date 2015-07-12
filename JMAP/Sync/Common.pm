@@ -66,7 +66,7 @@ sub get_cards {
   my $Args = shift;
   my $talk = $Self->connect_contacts();
 
-  my $data = $talk->GetContacts($Args->{path});
+  my $data = $talk->GetContacts($Args->{href});
 
   my %res;
   foreach my $item (@$data) {
