@@ -101,16 +101,16 @@ sub handle_events {
   return ['events', $data];
 }
 
-sub handle_abooks {
+sub handle_addressbooks {
   my $args = shift;
-  my $data = $backend->get_abooks(@$args);
-  return ['abooks', $data];
+  my $data = $backend->get_addressbooks(@$args);
+  return ['addressbooks', $data];
 }
 
-sub handle_contacts {
+sub handle_cards {
   my $args = shift;
-  my $data = $backend->get_contacts(@$args);
-  return ['contacts', $data];
+  my $data = $backend->get_cards(@$args);
+  return ['cards', $data];
 }
 
 sub handle_send {

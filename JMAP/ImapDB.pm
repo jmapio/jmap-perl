@@ -96,10 +96,10 @@ sub backend_cmd {
       my $json = shift;
       die "INVALID RESPONSE" unless $json->[2] eq $tag;
       if ($cb) {
-        $cb->($json);
+        $cb->($json->[1]);
       }
       else {
-        $w->send($json);
+        $w->send($json->[1]);
       }
     });
   };

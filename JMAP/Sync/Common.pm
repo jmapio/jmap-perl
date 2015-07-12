@@ -52,7 +52,7 @@ sub get_events {
   return \%res;
 }
 
-sub get_abooks {
+sub get_addressbooks {
   my $Self = shift;
   my $talk = $Self->connect_contacts();
 
@@ -61,7 +61,7 @@ sub get_abooks {
   return $data;
 }
 
-sub get_contacts {
+sub get_cards {
   my $Self = shift;
   my $Args = shift;
   my $talk = $Self->connect_contacts();
