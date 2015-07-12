@@ -295,8 +295,12 @@ sub sync_calendars {
   my %seen;
   foreach my $calendar (@$calendars) {
     my $id = $byhref{$calendar->{href}}[0];
-    my $data = {isReadOnly => $calendar->{isReadOnly}, href => $calendar->{href},
-                colour => $calendar->{colour}, name => $calendar->{name}};
+    my $data = {
+      isReadOnly => $calendar->{isReadOnly},
+      href => $calendar->{href},
+      colour => $calendar->{colour},
+      name => $calendar->{name},
+    };
     if ($id) {
       $Self->dmaybeupdate('icalendars', $data, {icalendarid => $id});
     }
@@ -400,6 +404,126 @@ sub do_calendar {
   }
 }
 
+# synchronise list from CardDAV server to local folder cache
+# call in transaction
+sub sync_addressbooks {
+  my $Self = shift;
+
+  my $dbh = $Self->dbh();
+
+  my $addressbooks = $Self->backend_cmd('addressbooks', []);
+  my $iaddressbooks = $dbh->selectall_arrayref("SELECT iaddressbookid, href, name, isReadOnly FROM iaddressbooks");
+  my %byhref = map { $_->[1] => $_ } @$iaddressbooks;
+
+  my %seen;
+  foreach my $addressbook (@$addressbooks) {
+    my $id = $byhref{$addressbook->{href}}[0];
+    my $data = {
+      isReadOnly => $addressbook->{isReadOnly},
+      href => $addressbook->{href},
+      name => $addressbook->{name},
+    };
+    if ($id) {
+      $Self->dmaybeupdate('iaddressbooks', $data, {iaddressbookid => $id});
+    }
+    else {
+      $id = $Self->dinsert('iaddressbooks', $data);
+    }
+    $seen{$id} = 1;
+  }
+
+  foreach my $addressbook (@$iaddressbooks) {
+    my $id = $addressbook->[0];
+    next if $seen{$id};
+    $dbh->do("DELETE FROM iaddressbooks WHERE iaddressbookid = ?", {}, $id);
+  }
+
+  $Self->sync_jaddressbooks();
+
+  foreach my $id (keys %seen) {
+    $Self->do_addressbook($id);
+  }
+}
+
+# synchronise from the imap folder cache to the jmap mailbox listing
+# call in transaction
+sub sync_jaddressbooks {
+  my $Self = shift;
+  my $dbh = $Self->dbh();
+  my $iaddressbooks = $dbh->selectall_arrayref("SELECT iaddressbookid, name, jaddressbookid FROM iaddressbooks");
+  my $jaddressbooks = $dbh->selectall_arrayref("SELECT jaddressbookid, name, active FROM jaddressbooks");
+
+  my %jbyid;
+  foreach my $addressbook (@$jaddressbooks) {
+    $jbyid{$addressbook->[0]} = $addressbook;
+  }
+
+  my %seen;
+  foreach my $addressbook (@$iaddressbooks) {
+    my $data = {
+      name => $addressbook->[1],
+      isVisible => 1,
+      mayReadItems => 1,
+      mayAddItems => 0,
+      mayModifyItems => 0,
+      mayRemoveItems => 0,
+      mayDelete => 0,
+      mayRename => 0,
+    };
+    if ($jbyid{$addressbook->[2]}) {
+      $Self->dmaybeupdate('jaddressbooks', $data, {jaddressbookid => $addressbook->[2]});
+      $seen{$addressbook->[2]} = 1;
+    }
+    else {
+      my $id = $Self->dmake('jaddressbooks', $data);
+      $Self->dupdate('iaddressbooks', {jaddressbookid => $id}, {iaddressbookid => $addressbook->[0]});
+      $seen{$id} = 1;
+    }
+  }
+
+  foreach my $addressbook (@$jaddressbooks) {
+    my $id = $addressbook->[0];
+    next if $seen{$id};
+    $Self->dupdate('jaddressbooks', {active => 0}, {jaddressbookid => $id});
+  }
+}
+
+sub do_addressbook {
+  my $Self = shift;
+  my $addressbookid = shift;
+
+  my $dbh = $Self->dbh();
+
+  my ($href, $jaddressbookid) = $dbh->selectrow_array("SELECT href, jaddressbookid FROM iaddressbooks WHERE iaddressbookid = ?", {}, $addressbookid);
+  my $exists = $dbh->selectall_arrayref("SELECT icardid, resource, content FROM icards WHERE iaddressbookid = ?", {}, $addressbookid);
+  my %res = map { $_->[1] => $_ } @$exists;
+
+  my $cards = $Self->backend_cmd('cards', {href => $href});
+
+  foreach my $resource (keys %$events) {
+    my $data = delete $res{$resource};
+    my $raw = $events->{$resource};
+    if ($data) {
+      my $id = $data->[0];
+      next if $raw eq $data->[2];
+      $Self->dmaybeupdate('icards', {content => $raw, resource => $resource}, {icardid => $id});
+    }
+    else {
+      $Self->dinsert('icards', {content => $raw, resource => $resource});
+    }
+    my $card = $Self->parse_card($raw);
+    $Self->set_card($jaddressbookid, $card);
+  }
+
+  foreach my $resource (keys %res) {
+    my $data = delete $res{$resource};
+    my $id = $data->[0];
+    $Self->ddelete('icards', {icardid => $id});
+    my $card = $Self->parse_card($data->[2]);
+    $Self->delete_card($jaddressbookid, $card->{uid});
+  }
+}
+
 sub labels {
   my $Self = shift;
   unless ($Self->{t}{labels}) {
@@ -433,7 +557,7 @@ sub firstsync {
 
   $Self->sync_folders();
   $Self->sync_calendars();
-  #$Self->sync_addressbooks();
+  $Self->sync_addressbooks();
 
   my $labels = $Self->labels();
 
@@ -856,21 +980,21 @@ CREATE TABLE IF NOT EXISTS ievents (
 EOF
 
   $dbh->do(<<EOF);
-CREATE TABLE IF NOT EXISTS iabooks (
-  iabookid INTEGER PRIMARY KEY NOT NULL,
+CREATE TABLE IF NOT EXISTS iaddressbooks (
+  iaddressbookid INTEGER PRIMARY KEY NOT NULL,
   href TEXT,
   name TEXT,
   isReadOnly INTEGER,
   syncToken TEXT,
-  jabookid INTEGER,
+  jaddressbookid INTEGER,
   mtime DATE NOT NULL
 );
 EOF
 
   $dbh->do(<<EOF);
-CREATE TABLE IF NOT EXISTS icontacts (
-  icontactid INTEGER PRIMARY KEY NOT NULL,
-  iabookid INTEGER,
+CREATE TABLE IF NOT EXISTS icards (
+  icardid INTEGER PRIMARY KEY NOT NULL,
+  iaddressbookid INTEGER,
   resource TEXT,
   content TEXT,
   mtime DATE NOT NULL
