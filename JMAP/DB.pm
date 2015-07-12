@@ -1025,7 +1025,7 @@ EOF
 
   $dbh->do(<<EOF);
 CREATE TABLE IF NOT EXISTS jcontacts (
-  carduid TEXT PRIMARY KEY,
+  contactuid TEXT PRIMARY KEY,
   jaddressbookid INTEGER,
   isFlagged BOOLEAN,
   payload TEXT,
