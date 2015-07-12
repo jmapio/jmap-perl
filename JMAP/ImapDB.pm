@@ -555,9 +555,10 @@ sub backfill {
 sub firstsync {
   my $Self = shift;
 
-  $Self->sync_folders();
-  $Self->sync_calendars();
+  #$Self->sync_folders();
+  #$Self->sync_calendars();
   $Self->sync_addressbooks();
+  return 0;
 
   my $labels = $Self->labels();
 

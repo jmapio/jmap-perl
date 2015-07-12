@@ -639,7 +639,7 @@ sub delete_event {
 sub parse_card {
   my $Self = shift;
   my $raw = shift;
-  my ($card) = Net::CalDAVTalk::VCard->new_fromstring($raw);
+  my ($card) = Net::CardDAVTalk::VCard->new_fromstring($raw);
 
   my %hash;
 
@@ -679,21 +679,21 @@ sub set_card {
   my $kind = delete $card->{kind};
   if ($kind eq 'contact') {
     $Self->dmake('jcontacts', {
-      carduid => $carduid,
+      contactuid => $carduid,
       jaddressbookid => $jaddressbookid,
       payload => encode_json($card),
     });
   }
   else {
-    $Self->ddelete('jcontactgroups', {carduid => $carduid, jaddressbookid => $jaddressbookid});
-    my $gid = $Self->dmake('jcontactgroups', {
-      carduid => $carduid,
+    $Self->dmake('jcontactgroups', {
+      groupuid => $carduid,
       jaddressbookid => $jaddressbookid,
       name => $card->{name},
     });
+    $Self->ddelete('jcontactgroups', {groupuid => $carduid});
     foreach my $item (@{$card->{members}}) {
-      $Self->dmake('jcontactgroupmap', {
-        jcontactgroupid => $gid,
+      $Self->dinsert('jcontactgroupmap', {
+        groupuid => $carduid,
         contactuid => $item,
       });
     }
@@ -1003,7 +1003,7 @@ EOF
 
   $dbh->do(<<EOF);
 CREATE TABLE IF NOT EXISTS jcontactgroups (
-  jcontactgroupid INTEGER PRIMARY KEY,
+  groupuid TEXT PRIMARY KEY,
   jaddressbookid INTEGER,
   name TEXT,
   jmodseq INTEGER,
@@ -1013,21 +1013,19 @@ CREATE TABLE IF NOT EXISTS jcontactgroups (
 EOF
 
   $dbh->do(<<EOF);
-CREATE TABLE IF NOT EXISTS jgroupmap (
-  jcontactgroupid INTEGER,
+CREATE TABLE IF NOT EXISTS jcontactgroupmap (
+  groupuid TEXT,
   contactuid TEXT,
-  jmodseq INTEGER,
   mtime DATE,
-  active BOOLEAN,
-  PRIMARY KEY (jcontactgroupid, contactuid)
+  PRIMARY KEY (groupuid, contactuid)
 );
 EOF
 
-  $dbh->do("CREATE INDEX IF NOT EXISTS jcontactmap ON jgroupmap (contactuid)");
+  $dbh->do("CREATE INDEX IF NOT EXISTS jcontactmap ON jcontactgroupmap (contactuid)");
 
   $dbh->do(<<EOF);
 CREATE TABLE IF NOT EXISTS jcontacts (
-  contactuid TEXT PRIMARY KEY,
+  carduid TEXT PRIMARY KEY,
   jaddressbookid INTEGER,
   isFlagged BOOLEAN,
   payload TEXT,
