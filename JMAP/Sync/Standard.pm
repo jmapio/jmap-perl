@@ -45,7 +45,7 @@ sub connect_contacts {
   $Self->{contacts} = Net::CardDAVTalk->new(
     user => $Self->{auth}{username},
     password => $Self->{auth}{password},
-    url => $Self->{auth}{abookurl},
+    url => $Self->{auth}{addressbookurl},
     expandurl => 1,
   );
 
