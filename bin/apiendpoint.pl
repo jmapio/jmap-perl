@@ -123,7 +123,7 @@ sub change_cb {
     },
   };
 
-  $hdl->push_write(json => ['push', $data]);
+  $hdl->push_write(json => ['push', $data]) if $hdl;
 }
 
 sub handle_ping {
@@ -155,8 +155,13 @@ sub handle_getstate {
 sub mk_handler {
   my ($db) = @_;
 
-  # don't last forever - XXX send a "bye" packet?
-  $hdl->{killer} = AnyEvent->timer(after => 600, cb => sub { warn "SHUTTING DOWN $accountid ON TIMEOUT\n"; undef $hdl; EV::unloop });
+  $hdl->{killer} = AnyEvent->timer(after => 600, cb => sub {
+    warn "SHUTTING DOWN $accountid ON TIMEOUT\n";
+    $hdl->push_write(json => ['bye']);
+    $hdl->push_shutdown();
+    undef $hdl;
+    EV::unloop;
+  });
 
   return sub {
     my ($hdl, $json) = @_;

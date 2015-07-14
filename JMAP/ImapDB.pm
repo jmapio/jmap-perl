@@ -422,19 +422,25 @@ sub sync_addressbooks {
   my $dbh = $Self->dbh();
 
   my $addressbooks = $Self->backend_cmd('addressbooks', []);
-  my $iaddressbooks = $dbh->selectall_arrayref("SELECT iaddressbookid, href, name, isReadOnly FROM iaddressbooks");
+  my $iaddressbooks = $dbh->selectall_arrayref("SELECT iaddressbookid, href, name, isReadOnly, syncToken FROM iaddressbooks");
   my %byhref = map { $_->[1] => $_ } @$iaddressbooks;
 
   my %seen;
+  my @todo;
   foreach my $addressbook (@$addressbooks) {
     my $id = $byhref{$addressbook->{href}}[0];
     my $data = {
       isReadOnly => $addressbook->{isReadOnly},
       href => $addressbook->{href},
       name => $addressbook->{name},
+      syncToken => $addressbook->{syncToken},
     };
     if ($id) {
-      $Self->dmaybeupdate('iaddressbooks', $data, {iaddressbookid => $id});
+      my $token = $byhref{$addressbook->{href}}[4];
+      if ($token ne $addressbook->{syncToken}) {
+        push @todo, $id;
+        $Self->dmaybeupdate('iaddressbooks', $data, {iaddressbookid => $id});
+      }
     }
     else {
       $id = $Self->dinsert('iaddressbooks', $data);
@@ -450,7 +456,7 @@ sub sync_addressbooks {
 
   $Self->sync_jaddressbooks();
 
-  foreach my $id (keys %seen) {
+  foreach my $id (@todo) {
     $Self->do_addressbook($id);
   }
 }
@@ -554,6 +560,9 @@ sub sync {
     next if ($status->{$row->[1]}{uidvalidity} == $row->[2] and $status->{$row->[1]}{highestmodseq} and $status->{$row->[1]}{highestmodseq} == $row->[3]);
     $Self->do_folder($row->[0], $row->[4]);
   }
+
+  $Self->sync_calendars();
+  $Self->sync_addressbooks();
 }
 
 sub backfill {
