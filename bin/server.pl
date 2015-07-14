@@ -164,10 +164,15 @@ sub mk_json {
     if ($res->[0] eq 'push') {
       PushEvent($accountid, event => "state", data => $res->[1]);
     }
+    elsif ($res->[0] eq 'bye') {
+      print "SERVER CLOSING $accountid\n";
+      delete $backend{$accountid};
+    }
     elsif ($waiting{$accountid}{$res->[2]}) {
       if ($res->[0] eq 'error') {
         $waiting{$accountid}{$res->[2]}[1]->($res->[1]);
         # start again...
+        print "ERROR $res->[1] on $accountid (dropping backend)\n";
         delete $backend{$accountid};
       }
       else {
