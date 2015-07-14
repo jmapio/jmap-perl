@@ -183,7 +183,6 @@ sub mk_handler {
     $hdl->push_write("\n");
 
     warn "$$ HANDLED $cmd ($tag) => $res->[0] ($id)\n";
-    warn Dumper($json, $res);
     $hdl->push_read(json => mk_handler($db));
   };
 }

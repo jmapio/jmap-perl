@@ -153,7 +153,7 @@ sub handle_getstate {
 sub mk_handler {
   my ($db) = @_;
 
-  # don't last forever
+  # don't last forever - XXX send a "bye" packet?
   $hdl->{killer} = AnyEvent->timer(after => 600, cb => sub { warn "SHUTTING DOWN $accountid ON TIMEOUT\n"; undef $hdl; EV::unloop });
 
   return sub {
