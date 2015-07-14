@@ -116,7 +116,9 @@ sub change_cb {
     clientId => undef,
     accountStates => {
       $db->accountid() => {
-        mailState => "$state",
+        messages => "$state",
+        threads => "$state",
+        mailboxes => "$state",
       },
     },
   };

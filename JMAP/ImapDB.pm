@@ -111,7 +111,17 @@ sub backend_cmd {
     my $auth = $Self->access_token();
     tcp_connect('localhost', 5005, sub {
       my $fh = shift;
-      my $handle = AnyEvent::Handle->new(fh => $fh);
+      my $handle;
+      $handle = AnyEvent::Handle->new(fh => $fh,
+	on_disconnect => sub {
+	  delete $Self->{backend};
+	  undef $h;
+        },
+	on_disconnect => sub {
+	  delete $Self->{backend};
+	  undef $h;
+        },
+      );
       $handle->push_write(json => {hostname => $auth->[0], username => $auth->[1], password => $auth->[2]});
       $handle->push_write("\012");
       $handle->push_read(json => sub {
@@ -132,7 +142,7 @@ sub backend_cmd {
   return if $cb; # async usage
 
   my $res = $w->recv;
-  warn Dumper ($cmd, \@args, $res);
+  #warn Dumper ($cmd, \@args, $res);
   return $res;
 }
 
@@ -535,10 +545,14 @@ sub labels {
 
 sub sync {
   my $Self = shift;
-  my $data = $Self->dbh->selectall_arrayref("SELECT ifolderid,label FROM ifolders");
+  my $data = $Self->dbh->selectall_arrayref("SELECT ifolderid, imapname, uidvalidity, highestmodseq, label FROM ifolders");
+  my @imapnames = map { $_->[1] } @$data;
+  my $status = $Self->backend_cmd('imap_status', \@imapnames);
 
   foreach my $row (@$data) {
-    $Self->do_folder(@$row);
+    # XXX - better handling of UIDvalidity change?
+    next if ($status->{$row->[1]}{uidvalidity} == $row->[2] and $status->{$row->[1]}{highestmodseq} and $status->{$row->[1]}{highestmodseq} == $row->[3]);
+    $Self->do_folder($row->[0], $row->[4]);
   }
 }
 

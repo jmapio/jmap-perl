@@ -101,6 +101,8 @@ sub imap_status {
 
   my $imap = $Self->connect_imap();
 
+  $imap->unselect();
+
   my @fields = qw(uidvalidity uidnext messages);
   push @fields, "highestmodseq" if $imap->capability->{condstore};
   my $data = $imap->multistatus("(@fields)", @$folders);

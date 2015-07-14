@@ -4,7 +4,7 @@ use strict;
 use lib '/home/jmap/jmap-perl';
 package SyncServer;
 
-#use Mail::IMAPTalk qw(:trace);
+use Mail::IMAPTalk qw(:trace);
 
 use AnyEvent;
 use AnyEvent::Handle;
@@ -179,6 +179,7 @@ sub mk_handler {
       $res = ['error', "$@"]
     }
     $res->[2] = $tag;
+    #warn Dumper($json, $res);
     $hdl->push_write(json => $res);
     $hdl->push_write("\n");
 

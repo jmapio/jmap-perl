@@ -1575,7 +1575,7 @@ sub getContactList {
   my $start = $args->{position} || 0;
   return ['error', {type => 'invalidArguments'}] if $start < 0;
 
-  my $data = $dbh->selectall_arrayref("SELECT jcontactid,jaddressbookid FROM jcontacts WHERE active = 1 ORDER BY jcontactid");
+  my $data = $dbh->selectall_arrayref("SELECT contactuid,jaddressbookid FROM jcontacts WHERE active = 1 ORDER BY contactuid");
 
   $data = $Self->_event_filter($data, $args->{filter}, {}) if $args->{filter};
 
@@ -1617,18 +1617,18 @@ sub getContacts {
 
   #properties: String[] A list of properties to fetch for each message.
 
-  my $data = $dbh->selectall_hashref("SELECT * FROM jcontacts", 'jcontactid', {Slice => {}});
+  my $data = $dbh->selectall_hashref("SELECT * FROM jcontacts", 'contactuid', {Slice => {}});
 
   my %want;
   if ($args->{ids}) {
     %want = map { $_ => 1 } @{$args->{ids}};
   }
   else {
-    %want = keys %$data;
+    %want = %$data;
   }
 
   my @list;
-  foreach my $id (%want) {
+  foreach my $id (keys %want) {
     next unless $data->{$id};
     delete $want{$id};
 
@@ -1667,7 +1667,7 @@ sub getContactUpdates {
   return ['error', {type => 'cannotCalculateChanges'}]
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
 
-  my $sql = "SELECT jcontactid,active FROM jcontacts WHERE jmodseq > ?";
+  my $sql = "SELECT contactuid,active FROM jcontacts WHERE jmodseq > ?";
 
   my $data = $dbh->selectall_arrayref($sql, {}, $args->{sinceState});
 
@@ -1696,11 +1696,118 @@ sub getContactUpdates {
     removed => [map { "$_" } @removed],
   }];
 
-  if ($args->{fetchContacts}) {
+  if ($args->{fetchRecords}) {
     push @res, $Self->getContacts({
       accountid => $accountid,
       ids => \@changed,
-      properties => $args->{fetchContactProperties},
+      properties => $args->{fetchRecordProperties},
+    }) if @changed;
+  }
+
+  return @res;
+}
+
+sub getContactGroups {
+  my $Self = shift;
+  my $args = shift;
+
+  my $dbh = $Self->{db}->dbh();
+
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return ['error', {type => 'accountNotFound'}]
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  #properties: String[] A list of properties to fetch for each message.
+
+  my $data = $dbh->selectall_hashref("SELECT * FROM jcontactgroups", 'groupuid', {Slice => {}});
+
+  my %want;
+  if ($args->{ids}) {
+    %want = map { $_ => 1 } @{$args->{ids}};
+  }
+  else {
+    %want = %$data;
+  }
+
+  my @list;
+  foreach my $id (keys %want) {
+    next unless $data->{$id};
+    delete $want{$id};
+
+    my $item = {};
+    $item->{id} = $id;
+
+    if (_prop_wanted('name', $args)) {
+      $item->{name} = $data->{name};
+    }
+
+    if (_prop_wanted('contactIds', $args)) {
+      my $ids = $dbh->selectcol_arrayref("SELECT contactuid FROM jgroupmap WHERE groupuid = ?", {}, $id);
+      $item->{contactIds} = $ids;
+    }
+
+    push @list, $item;
+  }
+
+  return ['contactGroups', {
+    list => \@list,
+    accountId => $accountid,
+    state => "$user->{jhighestmodseq}",
+    notFound => (%want ? [keys %want] : undef),
+  }];
+}
+
+sub getContactGroupUpdates {
+  my $Self = shift;
+  my $args = shift;
+
+  my $dbh = $Self->{db}->dbh();
+
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return ['error', {type => 'accountNotFound'}]
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  return ['error', {type => 'invalidArguments'}]
+    if not $args->{sinceState};
+  return ['error', {type => 'cannotCalculateChanges'}]
+    if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
+
+  my $sql = "SELECT groupuid,active FROM jcontactgroups WHERE jmodseq > ?";
+
+  my $data = $dbh->selectall_arrayref($sql, {}, $args->{sinceState});
+
+  if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
+    return ['error', {type => 'tooManyChanges'}];
+  }
+
+  my @changed;
+  my @removed;
+
+  foreach my $row (@$data) {
+    if ($row->[1]) {
+      push @changed, $row->[0];
+    }
+    else {
+      push @removed, $row->[0];
+    }
+  }
+
+  my @res;
+  push @res, ['contactGroupUpdates', {
+    accountId => $accountid,
+    oldState => "$args->{sinceState}",
+    newState => "$user->{jhighestmodseq}",
+    changed => [map { "$_" } @changed],
+    removed => [map { "$_" } @removed],
+  }];
+
+  if ($args->{fetchRecords}) {
+    push @res, $Self->getContactGroups({
+      accountid => $accountid,
+      ids => \@changed,
+      properties => $args->{fetchRecordProperties},
     }) if @changed;
   }
 
