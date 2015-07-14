@@ -280,7 +280,7 @@ sub getMailboxUpdates {
     onlyCountsChanged => $onlyCounts ? JSON::true : JSON::false,
   }]);
 
-  if (@changed and $args->{fetchMailboxes}) {
+  if (@changed and $args->{fetchRecords}) {
     my %items = (
       accountid => $accountid,
       ids => \@changed,
@@ -288,8 +288,8 @@ sub getMailboxUpdates {
     if ($onlyCounts) {
       $items{properties} = [qw(totalMessages unreadMessages totalThreads unreadThreads)];
     }
-    elsif ($args->{fetchMailboxProperties}) {
-      $items{properties} = $args->{fetchMailboxProperties};
+    elsif ($args->{fetchRecordProperties}) {
+      $items{properties} = $args->{fetchRecordProperties};
     }
     push @res, $Self->getMailboxes(\%items);
   }
@@ -861,11 +861,11 @@ sub getMessageUpdates {
     removed => [map { "$_" } @removed],
   }];
 
-  if ($args->{fetchMessages}) {
+  if ($args->{fetchRecords}) {
     push @res, $Self->getMessages({
       accountid => $accountid,
       ids => \@changed,
-      properties => $args->{fetchMessageProperties},
+      properties => $args->{fetchRecordProperties},
     }) if @changed;
   }
 
@@ -1111,7 +1111,7 @@ sub getThreadUpdates {
     removed => \@removed,
   }];
 
-  if ($args->{fetchThreads}) {
+  if ($args->{fetchRecords}) {
     push @res, $Self->getThreads({
       accountid => $accountid,
       ids => \@changed,
@@ -1615,28 +1615,30 @@ sub getContacts {
   return ['error', {type => 'accountNotFound'}]
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  return ['error', {type => 'invalidArguments'}] unless $args->{ids};
   #properties: String[] A list of properties to fetch for each message.
 
-  my %seenids;
-  my %missingids;
-  my @list;
-  foreach my $contactid (@{$args->{ids}}) {
-    next if $seenids{$contactid};
-    $seenids{$contactid} = 1;
-    my $data = $dbh->selectrow_hashref("SELECT * FROM jcontacts WHERE jcontactid = ?", {}, $contactid);
-    unless ($data) {
-      $missingids{$contactid} = 1;
-      next;
-    }
+  my $data = $dbh->selectall_hashref("SELECT * FROM jcontacts", 'jcontactid', {Slice => {}});
 
-    my $item = decode_json($data->{payload});
+  my %want;
+  if ($args->{ids}) {
+    %want = map { $_ => 1 } @{$args->{ids}};
+  }
+  else {
+    %want = keys %$data;
+  }
+
+  my @list;
+  foreach my $id (%want) {
+    next unless $data->{$id};
+    delete $want{$id};
+
+    my $item = decode_json($data->{$id}{payload});
 
     foreach my $key (keys %$item) {
       delete $item->{$key} unless _prop_wanted($args, $key);
     }
 
-    $item->{id} = $contactid;
+    $item->{id} = $id;
 
     push @list, $item;
   }
@@ -1645,7 +1647,7 @@ sub getContacts {
     list => \@list,
     accountId => $accountid,
     state => "$user->{jhighestmodseq}",
-    notFound => (%missingids ? [keys %missingids] : undef),
+    notFound => (%want ? [keys %want] : undef),
   }];
 }
 
