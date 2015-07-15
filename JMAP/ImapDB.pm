@@ -299,6 +299,7 @@ sub sync_calendars {
   my $dbh = $Self->dbh();
 
   my $calendars = $Self->backend_cmd('calendars', []);
+  return unless $calendars;
   my $icalendars = $dbh->selectall_arrayref("SELECT icalendarid, href, name, isReadOnly, colour, syncToken FROM icalendars");
   my %byhref = map { $_->[1] => $_ } @$icalendars;
 
@@ -429,6 +430,7 @@ sub sync_addressbooks {
   my $dbh = $Self->dbh();
 
   my $addressbooks = $Self->backend_cmd('addressbooks', []);
+  return unless $addressbooks;
   my $iaddressbooks = $dbh->selectall_arrayref("SELECT iaddressbookid, href, name, isReadOnly, syncToken FROM iaddressbooks");
   my %byhref = map { $_->[1] => $_ } @$iaddressbooks;
 
