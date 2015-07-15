@@ -155,11 +155,17 @@ sub handle_imap_count {
   return ['counted', $data];
 }
 
+sub reset_keepalive {
+  $hdl->{keepalive} = AnyEvent->timer(after => 600, cb => sub {
+    $backend->imap_noop();
+    reset_keepalive();
+  });
+}
+
 sub mk_handler {
   my ($db) = @_;
 
-  # don't last forever
-  $hdl->{killer} = AnyEvent->timer(after => 600, cb => sub { warn "$$ SHUTTING DOWN $id ON TIMEOUT\n"; undef $hdl; EV::unloop });
+  reset_keepalive();
 
   return sub {
     my ($hdl, $json) = @_;

@@ -95,6 +95,15 @@ sub labels {
   return $Self->{labels};
 }
 
+sub imap_noop {
+  my $Self = shift;
+  my $folders = shift;
+
+  my $imap = $Self->connect_imap();
+
+  $imap->noop();
+}
+
 sub imap_status {
   my $Self = shift;
   my $folders = shift;
