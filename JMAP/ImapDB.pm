@@ -315,10 +315,10 @@ sub sync_calendars {
     };
     if ($id) {
       $Self->dmaybeupdate('icalendars', $data, {icalendarid => $id});
-      my $token = $byhref{$addressbook->{href}}[5];
-      if ($token ne $addressbook->{syncToken}) {
+      my $token = $byhref{$calendar->{href}}[5];
+      if ($token ne $calendar->{syncToken}) {
         push @todo, $id;
-        $Self->dmaybeupdate('iaddressbooks', $data, {iaddressbookid => $id});
+        $Self->dmaybeupdate('icalendars', $data, {icalendarid => $id});
       }
     }
     else {
