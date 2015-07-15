@@ -724,21 +724,27 @@ sub update_messages {
   my %updatemap;
   foreach my $msgid (keys %$changes) {
     my ($ifolderid, $uid) = $dbh->selectrow_array("SELECT ifolderid, uid FROM imessages WHERE msgid = ?", {}, $msgid);
-    $updatemap{$ifolderid}{$uid} = $changes->{$msgid};
+    $updatemap{$ifolderid}{$uid} = $msgid;
   }
 
   my $folderdata = $dbh->selectall_arrayref("SELECT ifolderid, imapname, uidvalidity, label, jmailboxid FROM ifolders");
   my %foldermap = map { $_->[0] => $_ } @$folderdata;
   my %jmailmap = map { $_->[4] => $_ } @$folderdata;
 
+  my %notchanged;
+  my @changed;
   foreach my $ifolderid (keys %updatemap) {
     # XXX - merge similar actions?
     my $imapname = $foldermap{$ifolderid}[1];
     my $uidvalidity = $foldermap{$ifolderid}[2];
-    die "NO SUCH FOLDER $ifolderid" unless $imapname;
 
     foreach my $uid (sort keys %{$updatemap{$ifolderid}}) {
-      my $action = $updatemap{$ifolderid}{$uid};
+      my $msgid = $updatemap{$ifolderid}{$uid};
+      my $action = $changes->{$msgid};
+      unless ($imapname and $uidvaldity) {
+        $notchanged{$msgid} = "No folder found";
+        next;
+      }
       if (exists $action->{isUnread}) {
         my $bool = !$action->{isUnread};
         my @flags = ("\\Seen");
@@ -762,8 +768,12 @@ sub update_messages {
         my $newfolder = $foldermap{$id}[1];
         $Self->backend_cmd('imap_move', $imapname, $uidvalidity, $uid, $newfolder);
       }
+      # XXX - handle errors from backend commands
+      push @changed, $msgid;
     }
   }
+
+  return (\@changed, \%notchanged);
 }
 
 sub delete_messages {
@@ -775,23 +785,26 @@ sub delete_messages {
   my %deletemap;
   foreach my $msgid (@$ids) {
     my ($ifolderid, $uid) = $dbh->selectrow_array("SELECT ifolderid, uid FROM imessages WHERE msgid = ?", {}, $msgid);
-    $deletemap{$ifolderid}{$uid} = 1;
+    $deletemap{$ifolderid}{$uid} = $msgid;
   }
 
   my $folderdata = $dbh->selectall_arrayref("SELECT ifolderid, imapname, uidvalidity, label, jmailboxid FROM ifolders");
   my %foldermap = map { $_->[0] => $_ } @$folderdata;
   my %jmailmap = map { $_->[4] => $_ } grep { $_->[4] } @$folderdata;
 
+  my @deleted, %notdeleted;
   foreach my $ifolderid (keys %deletemap) {
     # XXX - merge similar actions?
     my $imapname = $foldermap{$ifolderid}[1];
     my $uidvalidity = $foldermap{$ifolderid}[2];
-    die "NO SUCH FOLDER $ifolderid" unless $imapname;
-
+    unless ($imapname) {
+      $notdeleted{$_} = "No folder" for values %{$deletemap{$ifolderid}};
+    }
     my $uids = [sort keys %{$deletemap{$ifolderid}}];
-
     $Self->backend_cmd('imap_move', $imapname, $uidvalidity, $uids, undef); # no destination folder
+    push @deleted, values %{$deletemap{$ifolderid}};
   }
+  return (\@deleted, \%notdeleted);
 }
 
 sub deleted_record {
