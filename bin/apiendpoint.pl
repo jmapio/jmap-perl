@@ -74,16 +74,16 @@ sub getdb {
       $db->commit();
     };
   });
-  $db->{calsync} = AnyEvent->timer(after => 10, interval => 300, cb => sub {
+  $db->{calsync} = AnyEvent->timer(after => 10, interval => 100, cb => sub {
     return if $db->in_transaction();
     # check if there's more work to do on the account...
     eval {
       $db->begin();
-      $db->backfill();
+      $db->sync_calendars();
+      $db->sync_addressbooks();
       $db->commit();
     };
   });
-
   return $db;
 }
 
