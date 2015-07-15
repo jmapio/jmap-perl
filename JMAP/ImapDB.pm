@@ -741,7 +741,7 @@ sub update_messages {
     foreach my $uid (sort keys %{$updatemap{$ifolderid}}) {
       my $msgid = $updatemap{$ifolderid}{$uid};
       my $action = $changes->{$msgid};
-      unless ($imapname and $uidvaldity) {
+      unless ($imapname and $uidvalidity) {
         $notchanged{$msgid} = "No folder found";
         next;
       }
@@ -792,7 +792,7 @@ sub delete_messages {
   my %foldermap = map { $_->[0] => $_ } @$folderdata;
   my %jmailmap = map { $_->[4] => $_ } grep { $_->[4] } @$folderdata;
 
-  my @deleted, %notdeleted;
+  my (@deleted, %notdeleted);
   foreach my $ifolderid (keys %deletemap) {
     # XXX - merge similar actions?
     my $imapname = $foldermap{$ifolderid}[1];
