@@ -31,6 +31,7 @@ sub DESTROY {
 sub get_calendars {
   my $Self = shift;
   my $talk = $Self->connect_calendars();
+  return unless $talk;
 
   my $data = $talk->GetCalendars(Sync => 1);
 
@@ -41,6 +42,7 @@ sub get_events {
   my $Self = shift;
   my $Args = shift;
   my $talk = $Self->connect_calendars();
+  return unless $talk;
 
   my $data = $talk->GetEvents($Args->{href}, Full => 1);
 
@@ -55,6 +57,7 @@ sub get_events {
 sub get_addressbooks {
   my $Self = shift;
   my $talk = $Self->connect_contacts();
+  return unless $talk;
 
   my $data = $talk->GetAddressBooks(Sync => 1);
 
@@ -65,6 +68,7 @@ sub get_cards {
   my $Self = shift;
   my $Args = shift;
   my $talk = $Self->connect_contacts();
+  return unless $talk;
 
   my $data = $talk->GetContacts($Args->{href});
 

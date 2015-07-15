@@ -19,6 +19,8 @@ my %KNOWN_SPECIALS = map { lc $_ => 1 } qw(\\HasChildren \\HasNoChildren \\NoSel
 sub connect_calendars {
   my $Self = shift;
 
+  return unless $Self->{auth}{calurl};
+
   if ($Self->{calendars}) {
     $Self->{lastused} = time();
     return $Self->{calendars};
@@ -36,6 +38,8 @@ sub connect_calendars {
 
 sub connect_contacts {
   my $Self = shift;
+
+  return unless $Self->{auth}{addressbookurl};
 
   if ($Self->{contacts}) {
     $Self->{lastused} = time();
