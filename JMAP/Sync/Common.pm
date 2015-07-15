@@ -32,7 +32,7 @@ sub get_calendars {
   my $Self = shift;
   my $talk = $Self->connect_calendars();
 
-  my $data = $talk->GetCalendars();
+  my $data = $talk->GetCalendars(Sync => 1);
 
   return $data;
 }
@@ -56,7 +56,7 @@ sub get_addressbooks {
   my $Self = shift;
   my $talk = $Self->connect_contacts();
 
-  my $data = $talk->GetAddressBooks();
+  my $data = $talk->GetAddressBooks(Sync => 1);
 
   return $data;
 }

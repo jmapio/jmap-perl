@@ -299,10 +299,11 @@ sub sync_calendars {
   my $dbh = $Self->dbh();
 
   my $calendars = $Self->backend_cmd('calendars', []);
-  my $icalendars = $dbh->selectall_arrayref("SELECT icalendarid, href, name, isReadOnly, colour FROM icalendars");
+  my $icalendars = $dbh->selectall_arrayref("SELECT icalendarid, href, name, isReadOnly, colour, syncToken FROM icalendars");
   my %byhref = map { $_->[1] => $_ } @$icalendars;
 
   my %seen;
+  my @todo;
   foreach my $calendar (@$calendars) {
     my $id = $byhref{$calendar->{href}}[0];
     my $data = {
@@ -310,9 +311,15 @@ sub sync_calendars {
       href => $calendar->{href},
       colour => $calendar->{colour},
       name => $calendar->{name},
+      syncToken => $calendar->{syncToken},
     };
     if ($id) {
       $Self->dmaybeupdate('icalendars', $data, {icalendarid => $id});
+      my $token = $byhref{$addressbook->{href}}[5];
+      if ($token ne $addressbook->{syncToken}) {
+        push @todo, $id;
+        $Self->dmaybeupdate('iaddressbooks', $data, {iaddressbookid => $id});
+      }
     }
     else {
       $id = $Self->dinsert('icalendars', $data);
@@ -328,7 +335,7 @@ sub sync_calendars {
 
   $Self->sync_jcalendars();
 
-  foreach my $id (keys %seen) {
+  foreach my $id (@todo) {
     $Self->do_calendar($id);
   }
 }
@@ -549,7 +556,7 @@ sub labels {
   return $Self->{t}{labels};
 }
 
-sub sync {
+sub sync_imap {
   my $Self = shift;
   my $data = $Self->dbh->selectall_arrayref("SELECT ifolderid, imapname, uidvalidity, highestmodseq, label FROM ifolders");
   my @imapnames = map { $_->[1] } @$data;
@@ -560,9 +567,6 @@ sub sync {
     next if ($status->{$row->[1]}{uidvalidity} == $row->[2] and $status->{$row->[1]}{highestmodseq} and $status->{$row->[1]}{highestmodseq} == $row->[3]);
     $Self->do_folder($row->[0], $row->[4]);
   }
-
-  $Self->sync_calendars();
-  $Self->sync_addressbooks();
 }
 
 sub backfill {

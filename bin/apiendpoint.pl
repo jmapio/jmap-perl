@@ -226,7 +226,16 @@ sub mk_handler {
 sub handle_sync {
   my $db = shift;
   $db->begin();
-  $db->sync();
+  $db->sync_imap();
+  $db->commit();
+  return ['sync', $JSON::true];
+}
+
+sub handle_davsync {
+  my $db = shift;
+  $db->begin();
+  $db->sync_calendars();
+  $db->sync_addressbooks();
   $db->commit();
   return ['sync', $JSON::true];
 }
