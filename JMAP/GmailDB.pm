@@ -17,6 +17,7 @@ use Digest::SHA qw(sha1_hex);
 use AnyEvent;
 use AnyEvent::Socket;
 use Data::Dumper;
+use IO::All;
 
 our $TAG = 1;
 
@@ -39,16 +40,41 @@ my %ROLE_MAP = (
   '\\allmail' => 'allmail',
 );
 
+my $O;
+sub O {
+  unless ($O) {
+    my $data = io->file("/home/jmap/jmap-perl/config.json")->slurp;
+    my $config = decode_json($data);
+    $O = OAuth2::Tiny->new(%$config);
+  }
+  return $O;
+}
+
+sub access_token {
+  my $Self = shift;
+  my $username = shift;
+  my $refresh_token = shift;
+
+  unless ($refresh_token) {
+    ($username, $refresh_token) = $Self->dbh->selectrow_array("SELECT username, refresh_token FROM iserver");
+  }
+
+  my $O = $Self->O();
+  my $data = $O->refresh($refresh_token);
+
+  return ['gmail', $username, $data->{access_token}];
+}
+
+
 sub setuser {
   my $Self = shift;
   my ($username, $refresh_token, $displayname, $picture) = @_;
   my $data = $Self->dbh->selectrow_arrayref("SELECT username, refresh_token FROM iserver");
   if ($data and $data->[0]) {
-    $Self->dmaybeupdate('iserver', {hostname => $hostname, username => $username, password => $password}, {hostname => $data->[0]});
+    $Self->dmaybeupdate('iserver', {username => $username, refresh_token => $refresh_token}, {username => $data->[0]});
   }
   else {
     $Self->dinsert('iserver', {
-      hostname => $hostname,
       username => $username,
       refresh_token => $refresh_token,
     });
@@ -66,14 +92,6 @@ sub setuser {
       jhighestmodseq => 1,
     });
   }
-}
-
-sub access_token {
-  my $Self = shift;
-
-  my ($hostname, $username, $password) = $Self->dbh->selectrow_array("SELECT hostname, username, password FROM iserver");
-
-  return [$hostname, $username, $password];
 }
 
 # synchronous backend for now
