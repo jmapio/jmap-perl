@@ -696,7 +696,7 @@ sub do_folder {
     my $res = $Self->backend_cmd('imap_count', $imapname, $uidvalidity, "$uidfirst:$to");
     $Self->begin();
     my $uids = $res->{data};
-    my $data = $dbh->selectcol_arrayref("SELECT uid FROM imessages WHERE ifolderid = ?", {}, $ifolderid);
+    my $data = $dbh->selectcol_arrayref("SELECT uid FROM imessages WHERE ifolderid = ? AND uid >= ?", {}, $ifolderid, $uidfirst);
     my %exists = map { $_ => 1 } @$uids;
     foreach my $uid (@$data) {
       next if $exists{$uid};
