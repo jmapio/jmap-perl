@@ -74,8 +74,9 @@ sub access_token {
 }
 
 # synchronous backend for now
-sub backend_cmd {
+sub async_cmd {
   my $Self = shift;
+  my $backend = shift;
   my $cmd = shift;
   my @args = @_;
 
@@ -97,8 +98,8 @@ sub backend_cmd {
     });
   };
 
-  if ($Self->{backend}) {
-    $action->($Self->{backend});
+  if ($Self->{$backend}) {
+    $action->($Self->{$backend});
   }
   else {
     my $h = AnyEvent->condvar;
@@ -135,10 +136,10 @@ sub backend_cmd {
     });
 
     # synchronous startup to avoid race condition on setting up channel
-    $Self->{backend} = $h->recv;
+    $Self->{$backend} = $h->recv;
   }
 
-  die "Failed to get a backend" unless $Self->{backend};
+  die "Failed to get a $backend" unless $Self->{$backend};
 
   my $res = $w->recv;
   $Self->begin();
@@ -156,7 +157,7 @@ sub sync_folders {
 
   my $dbh = $Self->dbh();
 
-  my $folders = $Self->backend_cmd('folders', []);
+  my $folders = $Self->async_cmd('sync', 'folders', []);
   my $ifolders = $dbh->selectall_arrayref("SELECT ifolderid, sep, uidvalidity, imapname, label FROM ifolders");
   my %ibylabel = map { $_->[4] => $_ } @$ifolders;
   my %seen;
@@ -182,7 +183,7 @@ sub sync_folders {
   }
 
   if (keys %getstatus) {
-    my $data = $Self->backend_cmd('imap_status', [keys %getstatus]);
+    my $data = $Self->async_cmd('sync', 'imap_status', [keys %getstatus]);
     foreach my $name (keys %$data) {
       my $status = $data->{$name};
       $Self->dmaybeupdate('ifolders', {
@@ -301,7 +302,7 @@ sub sync_calendars {
 
   my $dbh = $Self->dbh();
 
-  my $calendars = $Self->backend_cmd('calendars', []);
+  my $calendars = $Self->async_cmd('dav', 'calendars', []);
   return unless $calendars;
   my $icalendars = $dbh->selectall_arrayref("SELECT icalendarid, href, name, isReadOnly, colour, syncToken FROM icalendars");
   my %byhref = map { $_->[1] => $_ } @$icalendars;
@@ -400,7 +401,7 @@ sub do_calendar {
   my $exists = $dbh->selectall_arrayref("SELECT ieventid, resource, content FROM ievents WHERE icalendarid = ?", {}, $calendarid);
   my %res = map { $_->[1] => $_ } @$exists;
 
-  my $events = $Self->backend_cmd('events', {href => $href});
+  my $events = $Self->async_cmd('dav', 'events', {href => $href});
 
   foreach my $resource (keys %$events) {
     my $data = delete $res{$resource};
@@ -433,7 +434,7 @@ sub sync_addressbooks {
 
   my $dbh = $Self->dbh();
 
-  my $addressbooks = $Self->backend_cmd('addressbooks', []);
+  my $addressbooks = $Self->async_cmd('dav', 'addressbooks', []);
   return unless $addressbooks;
   my $iaddressbooks = $dbh->selectall_arrayref("SELECT iaddressbookid, href, name, isReadOnly, syncToken FROM iaddressbooks");
   my %byhref = map { $_->[1] => $_ } @$iaddressbooks;
@@ -528,7 +529,7 @@ sub do_addressbook {
   my $exists = $dbh->selectall_arrayref("SELECT icardid, resource, content FROM icards WHERE iaddressbookid = ?", {}, $addressbookid);
   my %res = map { $_->[1] => $_ } @$exists;
 
-  my $cards = $Self->backend_cmd('cards', {href => $href});
+  my $cards = $Self->async_cmd('dav', 'cards', {href => $href});
 
   foreach my $resource (keys %$cards) {
     my $data = delete $res{$resource};
@@ -565,14 +566,15 @@ sub labels {
 
 sub sync_imap {
   my $Self = shift;
+  my $syncname = shift || 'sync';
   my $data = $Self->dbh->selectall_arrayref("SELECT ifolderid, imapname, uidvalidity, highestmodseq, label FROM ifolders");
   my @imapnames = map { $_->[1] } @$data;
-  my $status = $Self->backend_cmd('imap_status', \@imapnames);
+  my $status = $Self->async_cmd($syncname, 'imap_status', \@imapnames);
 
   foreach my $row (@$data) {
     # XXX - better handling of UIDvalidity change?
     next if ($status->{$row->[1]}{uidvalidity} == $row->[2] and $status->{$row->[1]}{highestmodseq} and $status->{$row->[1]}{highestmodseq} == $row->[3]);
-    $Self->do_folder($row->[0], $row->[4]);
+    $Self->do_folder($syncname, $row->[0], $row->[4]);
   }
 }
 
@@ -581,7 +583,7 @@ sub backfill {
   my $data = $Self->dbh->selectall_arrayref("SELECT ifolderid,label FROM ifolders WHERE uidnext > 1 AND uidfirst > 1 ORDER BY mtime");
   my $rest = 500;
   foreach my $row (@$data) {
-    $rest -= $Self->do_folder(@$row, $rest);
+    $rest -= $Self->do_folder('backfill', @$row, $rest);
     last if $rest < 10;
   }
 }
@@ -596,12 +598,12 @@ sub firstsync {
   my $labels = $Self->labels();
 
   my $ifolderid = $labels->{"inbox"}[0];
-  $Self->do_folder($ifolderid, "inbox", 50);
+  $Self->do_folder('sync', $ifolderid, "inbox", 50);
 
   my $msgids = $Self->dbh->selectcol_arrayref("SELECT msgid FROM imessages WHERE ifolderid = ? ORDER BY uid DESC LIMIT 50", {}, $ifolderid);
 
   # pre-load the INBOX!
-  $Self->fill_messages(@$msgids);
+  $Self->fill_messages('sync', @$msgids);
 }
 
 sub calcmsgid {
@@ -626,6 +628,7 @@ sub calcmsgid {
 
 sub do_folder {
   my $Self = shift;
+  my $syncname = shift;
   my $ifolderid = shift;
   my $forcelabel = shift;
   my $batchsize = shift;
@@ -650,7 +653,7 @@ sub do_folder {
     warn "BACKFILLING $imapname: $uidfirst:$end ($uidnext)\n";
   }
 
-  my $res = $Self->backend_cmd('imap_fetch', $imapname, {
+  my $res = $Self->async_cmd($syncname, 'imap_fetch', $imapname, {
     uidvalidity => $uidvalidity,
     highestmodseq => $highestmodseq,
     uidnext => $uidnext,
@@ -694,7 +697,7 @@ sub do_folder {
     if ($count != $res->{newstate}{exists}) {
       my $to = $uidnext - 1;
       $Self->log('debug', "COUNTING $imapname: $uidfirst:$to (something deleted)");
-      my $res = $Self->backend_cmd('imap_count', $imapname, $uidvalidity, "$uidfirst:$to");
+      my $res = $Self->async_cmd($syncname, 'imap_count', $imapname, $uidvalidity, "$uidfirst:$to");
       my $uids = $res->{data};
       my $data = $dbh->selectcol_arrayref("SELECT uid FROM imessages WHERE ifolderid = ?", {}, $ifolderid);
       my %exists = map { $_ => 1 } @$uids;
@@ -758,24 +761,24 @@ sub update_messages {
         my $bool = !$action->{isUnread};
         my @flags = ("\\Seen");
         $Self->log('debug', "STORING $bool @flags for $uid");
-        $Self->backend_cmd('imap_update', $imapname, $uidvalidity, $uid, $bool, \@flags);
+        $Self->async_cmd('interactive', 'imap_update', $imapname, $uidvalidity, $uid, $bool, \@flags);
       }
       if (exists $action->{isFlagged}) {
         my $bool = $action->{isFlagged};
         my @flags = ("\\Flagged");
         $Self->log('debug', "STORING $bool @flags for $uid");
-        $Self->backend_cmd('imap_update', $imapname, $uidvalidity, $uid, $bool, \@flags);
+        $Self->async_cmd('interactive', 'imap_update', $imapname, $uidvalidity, $uid, $bool, \@flags);
       }
       if (exists $action->{isAnswered}) {
         my $bool = $action->{isAnswered};
         my @flags = ("\\Answered");
         $Self->log('debug', "STORING $bool @flags for $uid");
-        $Self->backend_cmd('imap_update', $imapname, $uidvalidity, $uid, $bool, \@flags);
+        $Self->async_cmd('interactive', 'imap_update', $imapname, $uidvalidity, $uid, $bool, \@flags);
       }
       if (exists $action->{mailboxIds}) {
         my $id = $action->{mailboxIds}->[0]; # there can be only one
         my $newfolder = $foldermap{$id}[1];
-        $Self->backend_cmd('imap_move', $imapname, $uidvalidity, $uid, $newfolder);
+        $Self->async_cmd('interactive', 'imap_move', $imapname, $uidvalidity, $uid, $newfolder);
       }
       # XXX - handle errors from backend commands
       push @changed, $msgid;
@@ -810,7 +813,7 @@ sub delete_messages {
       $notdeleted{$_} = "No folder" for values %{$deletemap{$ifolderid}};
     }
     my $uids = [sort keys %{$deletemap{$ifolderid}}];
-    $Self->backend_cmd('imap_move', $imapname, $uidvalidity, $uids, undef); # no destination folder
+    $Self->async_cmd('interactive', 'imap_move', $imapname, $uidvalidity, $uids, undef); # no destination folder
     push @deleted, values %{$deletemap{$ifolderid}};
   }
   return (\@deleted, \%notdeleted);
@@ -912,6 +915,7 @@ sub _envelopedata {
 
 sub fill_messages {
   my $Self = shift;
+  my $synctype = shift;
   my @ids = @_;
 
   my $data = $Self->dbh->selectall_arrayref("SELECT msgid, parsed FROM jrawmessage WHERE msgid IN (" . join(', ', map { "?" } @ids) . ")", {}, @ids);
@@ -937,7 +941,7 @@ sub fill_messages {
     my ($imapname, $uidvalidity) = $Self->dbh->selectrow_array("SELECT imapname, uidvalidity FROM ifolders WHERE ifolderid = ?", {}, $ifolderid);
     next unless $imapname;
 
-    my $res = $Self->backend_cmd('imap_fill', $imapname, $uidvalidity, $uids);
+    my $res = $Self->async_cmd($synctype, 'imap_fill', $imapname, $uidvalidity, $uids);
 
     foreach my $uid (sort { $a <=> $b } keys %{$res->{data}}) {
       my $msgid = $uhash->{$uid};

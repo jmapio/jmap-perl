@@ -724,7 +724,7 @@ sub getMessages {
 
   # need to load messages from the server
   if ($need_content) {
-    my $content = $Self->{db}->fill_messages(map { $_->{id} } @list);
+    my $content = $Self->{db}->fill_messages('interactive', map { $_->{id} } @list);
     foreach my $item (@list) {
       my $data = $content->{$item->{id}};
       foreach my $prop (qw(preview textBody htmlBody)) {
@@ -890,7 +890,7 @@ sub setMessages {
   my ($updated, $notUpdated) = $Self->{db}->update_messages($update);
   my ($deleted, $notDeleted) = $Self->{db}->delete_messages($delete);
 
-  $Self->{db}->sync_imap();
+  $Self->{db}->sync_imap('interactive');
 
   foreach my $cid (sort keys %$created) {
     my $msgid = $created->{$cid}{id};

@@ -243,7 +243,7 @@ sub mk_handler {
 sub handle_sync {
   my $db = shift;
   $db->begin();
-  $db->sync_imap();
+  $db->sync_imap('sync');
   $db->commit();
   return ['sync', $JSON::true];
 }
