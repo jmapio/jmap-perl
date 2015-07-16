@@ -634,10 +634,11 @@ sub firstsync {
 
 sub calcmsgid {
   my $Self = shift;
-  my $envelope = shift;
-  my $size = shift;
+  my $imapname = shift;
+  my $uid = shift;
+  my $data = shift;
   my $json = JSON::XS->new->allow_nonref->canonical;
-  my $coded = $json->encode([$envelope, $size]);
+  my $coded = $json->encode([$imapname, $uid, $data]);
   my $msgid = 's' . substr(sha1_hex($coded), 0, 11);
 
   my $replyto = lc($envelope->{'In-Reply-To'} || '');
@@ -699,7 +700,7 @@ sub do_folder {
     my $new = $res->{backfill}[1];
     $Self->{backfilling} = 1;
     foreach my $uid (sort { $a <=> $b } keys %$new) {
-      my ($msgid, $thrid) = $Self->calcmsgid($new->{$uid}{envelope}, $new->{$uid}{'rfc822.size'});
+      my ($msgid, $thrid) = $Self->calcmsgid($imapname, $uid, $new->{$uid});
       $didold++;
       $Self->new_record($ifolderid, $uid, $new->{$uid}{'flags'}, [$forcelabel], $new->{$uid}{envelope}, str2time($new->{$uid}{internaldate}), $msgid, $thrid, $new->{$uid}{'rfc822.size'});
     }
@@ -716,7 +717,7 @@ sub do_folder {
   if ($res->{new}) {
     my $new = $res->{new}[1];
     foreach my $uid (sort { $a <=> $b } keys %$new) {
-      my ($msgid, $thrid) = $Self->calcmsgid($new->{$uid}{envelope}, $new->{$uid}{'rfc822.size'});
+      my ($msgid, $thrid) = $Self->calcmsgid($imapname, $uid, $new->{$uid});
       $Self->new_record($ifolderid, $uid, $new->{$uid}{'flags'}, [$forcelabel], $new->{$uid}{envelope}, str2time($new->{$uid}{internaldate}), $msgid, $thrid, $new->{$uid}{'rfc822.size'});
     }
   }
