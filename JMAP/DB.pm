@@ -237,17 +237,18 @@ sub add_raw_message {
 
   my $eml = Email::MIME->new($rfc822);
   my $message = $Self->parse_message($msgid, $eml);
+  my $parsed = encode_json($message);
 
   # fiddle the top-level fields
   my $data = {
     msgid => $msgid,
     rfc822 => $rfc822,
-    parsed => encode_json($message),
+    parsed => $parsed,
   };
 
-  $Self->dinsert('jrawmessage', $data);
+  my $jid = $Self->dinsert('jrawmessage', $data);
 
-  return $message;
+  return decode_json($parsed);
 }
 
 sub parse_date {
@@ -294,8 +295,8 @@ sub parse_message {
     bcc => [$Self->parse_emails($eml->header('Bcc'))],
     from => [$Self->parse_emails($eml->header('From'))]->[0],
     replyTo => [$Self->parse_emails($eml->header('Reply-To'))]->[0],
-    subject => decode('MIME-Header', $eml->header('Subject')),
-    date => $Self->isodate($Self->parse_date($eml->header('Date'))),
+    subject => scalar(decode('MIME-Header', $eml->header('Subject'))),
+    date => scalar($Self->isodate($Self->parse_date($eml->header('Date')))),
     preview => $preview,
     textBody => $textpart,
     htmlBody => $htmlpart,
@@ -409,11 +410,18 @@ sub _clean {
   return $text;
 }
 
+sub _body_str {
+  my $eml = shift;
+  my $str = eval { $eml->body_str() };
+  return $str if $str;
+  return Encode::decode('us-ascii', $eml->body_raw());
+}
+
 sub textpart {
   my $eml = shift;
   my $type = $eml->content_type() || 'text/plain';
   if ($type =~ m{^text/plain}i) {
-    return _clean($type, $eml->body_str());
+    return _clean($type, _body_str($eml));
   }
   foreach my $sub ($eml->subparts()) {
     my $res = textpart($sub);
@@ -426,7 +434,7 @@ sub htmlpart {
   my $eml = shift;
   my $type = $eml->content_type() || 'text/plain';
   if ($type =~ m{^text/html}i) {
-    return _clean($type, $eml->body_str());
+    return _clean($type, _body_str($eml));
   }
   foreach my $sub ($eml->subparts()) {
     my $res = htmlpart($sub);
@@ -447,11 +455,11 @@ sub preview {
   my $eml = shift;
   my $type = $eml->content_type() || 'text/plain';
   if ($type =~ m{text/plain}i) {
-    my $text = _clean($type, $eml->body_str());
+    my $text = _clean($type, _body_str($eml));
     return make_preview($text);
   }
   if ($type =~ m{text/html}i) {
-    my $text = _clean($type, $eml->body_str());
+    my $text = _clean($type, _body_str($eml));
     return make_preview(htmltotext($text));
   }
   foreach my $sub ($eml->subparts()) {

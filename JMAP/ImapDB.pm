@@ -223,7 +223,6 @@ sub sync_jmailboxes {
   my %seen;
   foreach my $folder (@$ifolders) {
     my $fname = $folder->[2];
-    warn " MAPPING $fname ($folder->[1])";
     $fname =~ s/^INBOX\.//;
     # check for roles first
     my @bits = split "[$folder->[1]]", $fname;
@@ -608,8 +607,9 @@ sub firstsync {
 sub calcmsgid {
   my $Self = shift;
   my $envelope = shift;
+  my $size = shift;
   my $json = JSON::XS->new->allow_nonref->canonical;
-  my $coded = $json->encode($envelope);
+  my $coded = $json->encode([$envelope, $size]);
   my $msgid = 's' . substr(sha1_hex($coded), 0, 11);
 
   my $replyto = lc($envelope->{'In-Reply-To'} || '');
@@ -666,7 +666,7 @@ sub do_folder {
     my $new = $res->{backfill}[1];
     $Self->{backfilling} = 1;
     foreach my $uid (sort { $a <=> $b } keys %$new) {
-      my ($msgid, $thrid) = $Self->calcmsgid($new->{$uid}{envelope});
+      my ($msgid, $thrid) = $Self->calcmsgid($new->{$uid}{envelope}, $new->{$uid}{'rfc822.size'});
       $didold++;
       $Self->new_record($ifolderid, $uid, $new->{$uid}{'flags'}, [$forcelabel], $new->{$uid}{envelope}, str2time($new->{$uid}{internaldate}), $msgid, $thrid, $new->{$uid}{'rfc822.size'});
     }
@@ -683,7 +683,7 @@ sub do_folder {
   if ($res->{new}) {
     my $new = $res->{new}[1];
     foreach my $uid (sort { $a <=> $b } keys %$new) {
-      my ($msgid, $thrid) = $Self->calcmsgid($new->{$uid}{envelope});
+      my ($msgid, $thrid) = $Self->calcmsgid($new->{$uid}{envelope}, $new->{$uid}{'rfc822.size'});
       $Self->new_record($ifolderid, $uid, $new->{$uid}{'flags'}, [$forcelabel], $new->{$uid}{envelope}, str2time($new->{$uid}{internaldate}), $msgid, $thrid, $new->{$uid}{'rfc822.size'});
     }
   }
@@ -939,9 +939,10 @@ sub fill_messages {
 
     my $res = $Self->backend_cmd('imap_fill', $imapname, $uidvalidity, $uids);
 
-    foreach my $uid (keys %{$res->{data}}) {
-      my $rfc822 = $res->{data}{$uid};
+    foreach my $uid (sort { $a <=> $b } keys %{$res->{data}}) {
       my $msgid = $uhash->{$uid};
+      next if $result{$msgid};
+      my $rfc822 = $res->{data}{$uid};
       next unless $rfc822;
       warn "ADDING RAW MESSAGE $imapname: $uid => $msgid\n";
       $result{$msgid} = $Self->add_raw_message($msgid, $rfc822);
