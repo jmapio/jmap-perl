@@ -66,6 +66,7 @@ sub getdb {
   }
   $db->{change_cb} = \&change_cb;
   $db->{watcher} = AnyEvent->timer(after => 30, interval => 30, cb => sub {
+    return if $db->in_transaction();
     # check if there's more work to do on the account...
     eval {
       $db->begin();
@@ -73,6 +74,16 @@ sub getdb {
       $db->commit();
     };
   });
+  $db->{calsync} = AnyEvent->timer(after => 10, interval => 300, cb => sub {
+    return if $db->in_transaction();
+    # check if there's more work to do on the account...
+    eval {
+      $db->begin();
+      $db->backfill();
+      $db->commit();
+    };
+  });
+
   return $db;
 }
 
@@ -217,7 +228,7 @@ sub mk_handler {
       $hdl->push_write(json => $res) if $res->[0];
       warn "HANDLED $cmd ($tag) => $res->[0] ($accountid)\n" ;
       if ($res->[0] eq 'error') {
-	warn Dumper($res);
+        warn Dumper($res);
       }
     }
     $hdl->push_read(json => mk_handler($db));

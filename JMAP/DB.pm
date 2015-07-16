@@ -62,6 +62,11 @@ sub dbh {
   return $Self->{dbh};
 }
 
+sub in_transaction {
+  my $Self = shift;
+  return $Self->{t} ? 1 : 0;
+}
+
 sub begin {
   my $Self = shift;
   confess("ALREADY IN TRANSACTION") if $Self->{t};
