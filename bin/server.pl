@@ -42,7 +42,7 @@ sub idler {
   my $accountid = shift;
   my $edgecb = shift;
 
-  send_backend_request($accountid, 'gettoken', $accountid, sub {
+  send_backend_request("$accountid:sync", 'gettoken', $accountid, sub {
     my ($data) = @_;
     if ($data) {
       my $imap = $data->[0] eq 'gmail' ? AnyEvent::Gmail->new(
@@ -78,6 +78,10 @@ sub idler {
       $imap->connect();
 
       $idler{$accountid}{idler} = $imap;
+
+      $idler{$accountid}{dav} = AnyEvent->timer(after => 1, interval => 300, sub {
+        send_backend_request("$accountid:dav", 'davsync', $accountid);
+      });
     }
     else {
       # clean up so next attempt will try again
@@ -581,16 +585,28 @@ sub HandleEventSource {
   });
 }
 
+sub prod_backfill {
+  my $force = shift;
+  return if $idler{$accountid}{backfilling};
+  $idler{$accountid}{backfilling} = 1;
+    
+  send_backend_request("$accountid:backfill", 'backfill', $accountid, sub {
+    prod_backfill(@_);
+  });
+}
+
 sub prod_idler {
   my $accountid = shift;
 
   unless ($idler{$accountid}) {
     idler($accountid,
       sub {
-        send_backend_request($accountid, 'sync', $accountid);
+        send_backend_request("$accountid:sync", 'sync', $accountid);
       },
     );
   }
+
+  prod_backfill();
 
   $idler{$accountid}{lastused} = time();
 }
@@ -629,7 +645,7 @@ sub ShutdownPushChannel {
 
 sub ShutdownHandle {
   my ($Handle, $Msg) = @_;
-  $Handle->push_write($Msg);
+  $Handle->push_write($Msg) if $Msg;
   $Handle->on_drain(sub { $Handle->destroy(); });
 }
 
@@ -644,8 +660,10 @@ sub HandleKeepAlive {
     next if $PushMap{$accountid}; # nothing to do
     if ($idler{$accountid}{lastused} < $Now - KEEPIDLE_TIME) {
       my $old = $idler{$accountid}{idler};
+      my $sync = delete $backends{"$accountid:sync"};
       delete $idler{$accountid};
       eval { $old->disconnect() };
+      eval { ShutdownHandle($sync) };
     }
   }
 }

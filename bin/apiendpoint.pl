@@ -39,6 +39,7 @@ $0 = '[jmap proxy]';
 sub set_accountid {
   $accountid = shift;
   $0 = "[jmap proxy] $accountid";
+  $accountid =~ s/:.*//; # strip section splitter
 }
 
 sub handle_getinfo {
@@ -46,13 +47,6 @@ sub handle_getinfo {
   my ($email, $type) = $dbh->selectrow_array("SELECT email,type FROM accounts WHERE accountid = ?", {}, $accountid);
   die "NO SUCH ACCOUNT\n" unless $email;
   return ['info', [$email, $type]];
-}
-
-sub do_backfill {
-  # check if there's more work to do on the account...
-  return 0;
-  my $did = $db->in_transaction ? 1 : eval { $db->backfill() };
-  $db->{backfiller} = $did ? AnyEvent->timer(after => 5, cb => sub { do_backfill() }) : undef;
 }
 
 sub getdb {
@@ -72,15 +66,6 @@ sub getdb {
     die "Weird type $type";
   }
   $db->{change_cb} = \&change_cb;
-  $db->{backfiller} = AnyEvent->timer(after => 2, cb => sub { do_backfill() });
-  $db->{calsync} = AnyEvent->timer(after => 10, interval => 100, cb => sub {
-    # check if there's more work to do on the account...
-    return if $db->in_transaction();
-    eval {
-      $db->sync_calendars();
-      $db->sync_addressbooks();
-    };
-  });
   return $db;
 }
 
@@ -221,6 +206,12 @@ sub mk_handler {
       if ($cmd eq 'sync') {
         return handle_sync(getdb(), $args, $tag);
       }
+      if ($cmd eq 'davsync') {
+        return handle_davsync(getdb(), $args, $tag);
+      }
+      if ($cmd eq 'backfill') {
+        return handle_backfill(getdb(), $args, $tag);
+      }
       if ($cmd eq 'getinfo') {
         return handle_getinfo();
       }
@@ -243,15 +234,21 @@ sub mk_handler {
 
 sub handle_sync {
   my $db = shift;
-  $db->sync_imap('sync');
+  $db->sync_imap();
   return ['sync', $JSON::true];
+}
+
+sub handle_backfill {
+  my $db = shift;
+  my $res = $db->backfill();
+  return ['sync', $res ? $JSON::true : $JSON::false];
 }
 
 sub handle_davsync {
   my $db = shift;
   $db->sync_calendars();
   $db->sync_addressbooks();
-  return ['sync', $JSON::true];
+  return ['davsync', $JSON::true];
 }
 
 sub accountsdb {

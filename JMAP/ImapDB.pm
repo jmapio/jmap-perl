@@ -574,8 +574,6 @@ sub firstsync {
   my $Self = shift;
 
   $Self->sync_folders();
-  $Self->sync_calendars();
-  $Self->sync_addressbooks();
 
   my $labels = $Self->labels();
 
