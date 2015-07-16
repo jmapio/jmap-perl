@@ -9,21 +9,21 @@ use Mail::IMAPTalk qw(:trace);
 use AnyEvent;
 use AnyEvent::Handle;
 use JSON::XS qw(encode_json decode_json);
-use Net::Server::PreFork;
+use Net::Server::Fork;
 use JMAP::Sync::Gmail;
 use JMAP::Sync::ICloud;
 use JMAP::Sync::Fastmail;
 use EV;
 use Data::Dumper;
 
-use base qw(Net::Server::PreFork);
+use base qw(Net::Server::Fork);
 
 # we love globals
 my $hdl;
 my $id;
 my $backend;
 
-$0 = '[jmap proxy imapsync]';
+$0 = '[jmap proxy syncserver]';
 
 sub setup {
   my $config = shift;
@@ -37,7 +37,7 @@ sub setup {
     die "UNKNOWN ID $id ($config->{hostname})";
   }
   warn "$$ Connected $id";
-  $0 = "[jmap proxy imapsync] $id";
+  $0 = "[jmap proxy syncserver] $id";
   $hdl->push_write(json => [ 'setup', $id ]);
   $hdl->push_write("\n");
   return 1;
@@ -53,16 +53,19 @@ sub process_request {
     on_error => sub {
       my ($hdl, $fatal, $msg) = @_;
       warn "CLOSING ON ERROR $id";
-      $hdl->destroy;
-      undef $hdl;
-      EV::unloop;
+      eval { $backend->disconnect() };
+      exit 0;
     },
     on_disconnect => sub {
       my ($hdl, $fatal, $msg) = @_;
       warn "CLOSING ON DISCONNECT $id";
-      $hdl->destroy;
-      undef $hdl;
-      EV::unloop;
+      eval { $backend->disconnect() };
+      exit 0;
+    },
+    on_shutdown => sub {
+      warn "CLOSING DOWN ON SHUTDOWN";
+      eval { $backend->disconnect() };
+      exit 0;
     },
   );
 
@@ -84,7 +87,6 @@ sub process_request {
 
   warn "STARTING UP";
   EV::run;
-  warn "CLOSING DOWN";
   exit 0;
 }
 

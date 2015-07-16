@@ -24,9 +24,9 @@ use AnyEvent::HTTP;
 use EV;
 use JSON::XS qw(encode_json decode_json);
 
-use Net::Server::PreFork;
+use Net::Server::Fork;
 
-use base qw(Net::Server::PreFork);
+use base qw(Net::Server::Fork);
 
 # we love globals
 my $hdl;
@@ -53,7 +53,7 @@ sub getdb {
   die "no accountid" unless $accountid;
   $dbh ||= accountsdb();
   my ($email, $type) = $dbh->selectrow_array("SELECT email,type FROM accounts WHERE accountid = ?", {}, $accountid);
-  die "no type" unless $type;
+  die "no type for $accountid" unless $type;
   warn "CONNECTING: $email $type\n";
   if ($type eq 'gmail') {
     $db = JMAP::GmailDB->new($accountid);
