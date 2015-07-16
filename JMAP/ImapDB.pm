@@ -80,9 +80,6 @@ sub async_cmd {
   my $cmd = shift;
   my @args = @_;
 
-  # release the transaction for the duration
-  $Self->commit();
-
   my $w = AnyEvent->condvar;
 
   my $action = sub {
@@ -142,7 +139,6 @@ sub async_cmd {
   die "Failed to get a $backend" unless $Self->{$backend};
 
   my $res = $w->recv;
-  $Self->begin();
   if ($res->[0] eq 'error') {
     warn Dumper ($cmd, \@args, $res);
     die "$res->[1]";
@@ -155,9 +151,11 @@ sub async_cmd {
 sub sync_folders {
   my $Self = shift;
 
+  my $folders = $Self->async_cmd('sync', 'folders', []);
+
+  $Self->begin();
   my $dbh = $Self->dbh();
 
-  my $folders = $Self->async_cmd('sync', 'folders', []);
   my $ifolders = $dbh->selectall_arrayref("SELECT ifolderid, sep, uidvalidity, imapname, label FROM ifolders");
   my %ibylabel = map { $_->[4] => $_ } @$ifolders;
   my %seen;
@@ -182,8 +180,17 @@ sub sync_folders {
     }
   }
 
+  foreach my $folder (@$ifolders) {
+    my $id = $folder->[0];
+    next if $seen{$id};
+    $dbh->do("DELETE FROM ifolders WHERE ifolderid = ?", {}, $id);
+  }
+
+  $Self->commit();
+
   if (keys %getstatus) {
     my $data = $Self->async_cmd('sync', 'imap_status', [keys %getstatus]);
+    $Self->begin();
     foreach my $name (keys %$data) {
       my $status = $data->{$name};
       $Self->dmaybeupdate('ifolders', {
@@ -193,12 +200,7 @@ sub sync_folders {
         highestmodseq => $status->{highestmodseq},
       }, {ifolderid => $getstatus{$name}});
     }
-  }
-
-  foreach my $folder (@$ifolders) {
-    my $id = $folder->[0];
-    next if $seen{$id};
-    $dbh->do("DELETE FROM ifolders WHERE ifolderid = ?", {}, $id);
+    $Self->commit();
   }
 
   $Self->sync_jmailboxes();
@@ -208,6 +210,7 @@ sub sync_folders {
 # call in transaction
 sub sync_jmailboxes {
   my $Self = shift;
+  $Self->begin();
   my $dbh = $Self->dbh();
   my $ifolders = $dbh->selectall_arrayref("SELECT ifolderid, sep, imapname, label, jmailboxid FROM ifolders");
   my $jmailboxes = $dbh->selectall_arrayref("SELECT jmailboxid, name, parentid, role, active FROM jmailboxes");
@@ -293,16 +296,18 @@ sub sync_jmailboxes {
     next if $seen{$id};
     $Self->dupdate('jmailboxes', {active => 0}, {jmailboxid => $id});
   }
+  $Self->commit();
 }
 
 # synchronise list from CalDAV server to local folder cache
-# call in transaction
 sub sync_calendars {
   my $Self = shift;
 
+  my $calendars = $Self->async_cmd('dav', 'calendars', []);
+
+  $Self->begin();
   my $dbh = $Self->dbh();
 
-  my $calendars = $Self->async_cmd('dav', 'calendars', []);
   return unless $calendars;
   my $icalendars = $dbh->selectall_arrayref("SELECT icalendarid, href, name, isReadOnly, colour, syncToken FROM icalendars");
   my %byhref = map { $_->[1] => $_ } @$icalendars;
@@ -339,6 +344,8 @@ sub sync_calendars {
     $dbh->do("DELETE FROM icalendars WHERE icalendarid = ?", {}, $id);
   }
 
+  $Self->commit();
+
   $Self->sync_jcalendars();
 
   foreach my $id (@todo) {
@@ -350,6 +357,7 @@ sub sync_calendars {
 # call in transaction
 sub sync_jcalendars {
   my $Self = shift;
+  $Self->begin();
   my $dbh = $Self->dbh();
   my $icalendars = $dbh->selectall_arrayref("SELECT icalendarid, name, colour, jcalendarid FROM icalendars");
   my $jcalendars = $dbh->selectall_arrayref("SELECT jcalendarid, name, colour, active FROM jcalendars");
@@ -389,6 +397,7 @@ sub sync_jcalendars {
     next if $seen{$id};
     $Self->dupdate('jcalendars', {active => 0}, {jcalendarid => $id});
   }
+  $Self->commit();
 }
 
 sub do_calendar {
@@ -398,10 +407,11 @@ sub do_calendar {
   my $dbh = $Self->dbh();
 
   my ($href, $jcalendarid) = $dbh->selectrow_array("SELECT href, jcalendarid FROM icalendars WHERE icalendarid = ?", {}, $calendarid);
+  my $events = $Self->async_cmd('dav', 'events', {href => $href});
+
+  $Self->begin();
   my $exists = $dbh->selectall_arrayref("SELECT ieventid, resource, content FROM ievents WHERE icalendarid = ?", {}, $calendarid);
   my %res = map { $_->[1] => $_ } @$exists;
-
-  my $events = $Self->async_cmd('dav', 'events', {href => $href});
 
   foreach my $resource (keys %$events) {
     my $data = delete $res{$resource};
@@ -425,6 +435,8 @@ sub do_calendar {
     my $event = $Self->parse_event($data->[2]);
     $Self->delete_event($jcalendarid, $event->{uid});
   }
+
+  $Self->commit();
 }
 
 # synchronise list from CardDAV server to local folder cache
@@ -432,10 +444,12 @@ sub do_calendar {
 sub sync_addressbooks {
   my $Self = shift;
 
-  my $dbh = $Self->dbh();
-
   my $addressbooks = $Self->async_cmd('dav', 'addressbooks', []);
   return unless $addressbooks;
+
+  $Self->begin();
+  my $dbh = $Self->dbh();
+
   my $iaddressbooks = $dbh->selectall_arrayref("SELECT iaddressbookid, href, name, isReadOnly, syncToken FROM iaddressbooks");
   my %byhref = map { $_->[1] => $_ } @$iaddressbooks;
 
@@ -469,6 +483,8 @@ sub sync_addressbooks {
     $dbh->do("DELETE FROM iaddressbooks WHERE iaddressbookid = ?", {}, $id);
   }
 
+  $Self->commit();
+
   $Self->sync_jaddressbooks();
 
   foreach my $id (@todo) {
@@ -480,6 +496,7 @@ sub sync_addressbooks {
 # call in transaction
 sub sync_jaddressbooks {
   my $Self = shift;
+  $Self->begin();
   my $dbh = $Self->dbh();
   my $iaddressbooks = $dbh->selectall_arrayref("SELECT iaddressbookid, name, jaddressbookid FROM iaddressbooks");
   my $jaddressbooks = $dbh->selectall_arrayref("SELECT jaddressbookid, name, active FROM jaddressbooks");
@@ -517,6 +534,7 @@ sub sync_jaddressbooks {
     next if $seen{$id};
     $Self->dupdate('jaddressbooks', {active => 0}, {jaddressbookid => $id});
   }
+  $Self->commit();
 }
 
 sub do_addressbook {
@@ -526,10 +544,12 @@ sub do_addressbook {
   my $dbh = $Self->dbh();
 
   my ($href, $jaddressbookid) = $dbh->selectrow_array("SELECT href, jaddressbookid FROM iaddressbooks WHERE iaddressbookid = ?", {}, $addressbookid);
+  my $cards = $Self->async_cmd('dav', 'cards', {href => $href});
+
+  $Self->begin();
+
   my $exists = $dbh->selectall_arrayref("SELECT icardid, resource, content FROM icards WHERE iaddressbookid = ?", {}, $addressbookid);
   my %res = map { $_->[1] => $_ } @$exists;
-
-  my $cards = $Self->async_cmd('dav', 'cards', {href => $href});
 
   foreach my $resource (keys %$cards) {
     my $data = delete $res{$resource};
@@ -553,6 +573,7 @@ sub do_addressbook {
     my $card = $Self->parse_card($data->[2]);
     $Self->delete_card($jaddressbookid, $card->{uid}, $card->{kind});
   }
+  $Self->commit();
 }
 
 sub labels {
@@ -634,7 +655,7 @@ sub do_folder {
   my $batchsize = shift;
 
   Carp::confess("NO FOLDERID") unless $ifolderid;
-  my $imap = $Self->{imap};
+  $Self->begin();
   my $dbh = $Self->dbh();
 
   my ($imapname, $uidfirst, $uidnext, $uidvalidity, $highestmodseq) =
@@ -653,6 +674,8 @@ sub do_folder {
     warn "BACKFILLING $imapname: $uidfirst:$end ($uidnext)\n";
   }
 
+  $Self->commit();
+
   my $res = $Self->async_cmd($syncname, 'imap_fetch', $imapname, {
     uidvalidity => $uidvalidity,
     highestmodseq => $highestmodseq,
@@ -663,6 +686,8 @@ sub do_folder {
     # going to want to nuke everything for the existing folder and create this - but for now, just die
     die "UIDVALIDITY CHANGED $imapname: $uidvalidity => $res->{newstate}{uidvalidity}";
   }
+
+  $Self->begin();
 
   my $didold = 0;
   if ($res->{backfill}) {
@@ -709,6 +734,8 @@ sub do_folder {
   }
 
   $Self->dupdate('ifolders', {highestmodseq => $res->{newstate}{highestmodseq}, uidfirst => $uidfirst, uidnext => $res->{newstate}{uidnext}}, {ifolderid => $ifolderid});
+
+  $Self->commit();
 
   return $didold;
 }
@@ -943,6 +970,8 @@ sub fill_messages {
 
     my $res = $Self->async_cmd($synctype, 'imap_fill', $imapname, $uidvalidity, $uids);
 
+    $Self->begin();
+
     foreach my $uid (sort { $a <=> $b } keys %{$res->{data}}) {
       my $msgid = $uhash->{$uid};
       next if $result{$msgid};
@@ -951,6 +980,8 @@ sub fill_messages {
       warn "ADDING RAW MESSAGE $imapname: $uid => $msgid\n";
       $result{$msgid} = $Self->add_raw_message($msgid, $rfc822);
     }
+
+    $Self->commit();
   }
 
   my @stillneed = grep { not $result{$_} } @ids;

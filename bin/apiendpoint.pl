@@ -68,19 +68,15 @@ sub getdb {
   $db->{watcher} = AnyEvent->timer(after => 30, interval => 30, cb => sub {
     # check if there's more work to do on the account...
     eval {
-      $db->begin();
       $db->backfill();
-      $db->commit();
     };
   });
   $db->{calsync} = AnyEvent->timer(after => 10, interval => 100, cb => sub {
     # check if there's more work to do on the account...
     warn "DAV SYNC running $accountid";
     eval {
-      $db->begin();
       $db->sync_calendars();
       $db->sync_addressbooks();
-      $db->commit();
     };
   });
   return $db;
@@ -151,9 +147,7 @@ sub handle_getstate {
   my $db = shift;
   my $cmd = shift;
 
-  $db->begin();
   my $user = $db->get_user();
-  $db->commit();
   die "Failed to get user" unless $user;
   my $state = "$user->{jhighestmodseq}";
 
@@ -242,18 +236,14 @@ sub mk_handler {
 
 sub handle_sync {
   my $db = shift;
-  $db->begin();
   $db->sync_imap('sync');
-  $db->commit();
   return ['sync', $JSON::true];
 }
 
 sub handle_davsync {
   my $db = shift;
-  $db->begin();
   $db->sync_calendars();
   $db->sync_addressbooks();
-  $db->commit();
   return ['sync', $JSON::true];
 }
 
@@ -300,12 +290,8 @@ sub handle_cb_google {
   }
 
   getdb();
-  $db->begin();
   $db->setuser($email, $gmaildata->{refresh_token}, $data->{name}, $data->{picture});
-  $db->commit();
-  $db->begin();
   $db->firstsync();
-  $db->commit();
 
   return ['registered', [$accountid, $email]];
 }
@@ -337,12 +323,8 @@ sub handle_signup {
     $dbh->do("INSERT INTO accounts (email, accountid, type) VALUES (?, ?, ?)", {}, $detail->[1], $accountid, 'imap');
   }
   getdb();
-  $db->begin();
   $db->setuser(@$detail);
-  $db->commit();
-  $db->begin();
   $db->firstsync();
-  $db->commit();
 
   return ['signedup', [$accountid, $detail->[1]]];
 }
@@ -366,10 +348,8 @@ sub handle_upload {
   my ($db, $req) = @_;
   my ($type, $content) = @$req;
 
-  $db->begin();
   my $api = JMAP::API->new($db);
   my ($res) = $api->uploadFile($type, $content);
-  $db->commit();
 
   return ['upload', $res];
 }
@@ -377,10 +357,8 @@ sub handle_upload {
 sub handle_download {
   my ($db, $id) = @_;
 
-  $db->begin();
   my $api = JMAP::API->new($db);
   my ($type, $content) = $api->downloadFile($id);
-  $db->commit();
 
   return ['download', [$type, $content]];
 }
@@ -388,10 +366,8 @@ sub handle_download {
 sub handle_raw {
   my ($db, $req) = @_;
 
-  $db->begin();
   my $api = JMAP::API->new($db);
   my ($type, $content, $filename) = $api->getRawMessage($req);
-  $db->commit();
 
   return ['raw', [$type, $content, $filename]];
 }
@@ -407,16 +383,7 @@ sub handle_jmap {
     my @items;
     my $FuncRef = $api->can($command);
     if ($FuncRef) {
-      $db->begin();
-      my $res = eval { @items = $api->$command($args, $tag); return 1 };
-      if ($res) {
-        $db->commit();
-      }
-      else {
-        my $error = $@;
-        @items = ['error', { type => 'serverError', description => $error }];
-        $db->rollback();
-      }
+      @items = $api->$command($args, $tag);
     }
     else {
       @items = ['error', { type => 'unknownMethod' }];

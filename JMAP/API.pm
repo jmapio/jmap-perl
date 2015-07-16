@@ -28,9 +28,9 @@ sub getAccounts {
   my $Self = shift;
   my $args = shift;
 
-  my $dbh = $Self->{db}->dbh();
-
+  $Self->begin();
   my $user = $Self->{db}->get_user();
+  $Self->commit();
 
   my @list;
   push @list, {
@@ -53,9 +53,9 @@ sub getPreferences {
   my $Self = shift;
   my $args = shift;
 
-  my $dbh = $Self->{db}->dbh();
-
+  $Self->begin();
   my $user = $Self->{db}->get_user();
+  $Self->commit();
 
   my @list;
 
@@ -68,9 +68,9 @@ sub getSavedSearches {
   my $Self = shift;
   my $args = shift;
 
-  my $dbh = $Self->{db}->dbh();
-
+  $Self->begin();
   my $user = $Self->{db}->get_user();
+  $Self->commit();
 
   my @list;
 
@@ -84,9 +84,9 @@ sub getPersonalities {
   my $Self = shift;
   my $args = shift;
 
-  my $dbh = $Self->{db}->dbh();
-
+  $Self->begin();
   my $user = $Self->{db}->get_user();
+  $Self->commit();
 
   my @list;
   push @list, {
@@ -125,6 +125,8 @@ sub getMailboxes {
   my $Self = shift;
   my $args = shift;
 
+  # XXX - ideally this is transacted inside the DB
+  $Self->begin();
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
@@ -202,6 +204,8 @@ sub getMailboxes {
   }
   my %missingids = %ids;
 
+  $Self->commit();
+
   return ['mailboxes', {
     list => \@list,
     accountId => $accountid,
@@ -214,8 +218,10 @@ sub getIdentities {
   my $Self = shift;
   my $args = shift;
 
+  $Self->begin();
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
+  $Self->commit();
 
   return ['identities', {
     accountId => $accountid,
@@ -235,6 +241,7 @@ sub getMailboxUpdates {
   my $args = shift;
   my $dbh = $Self->{db}->dbh();
 
+  $Self->begin();
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
   return ['error', {type => 'accountNotFound'}]
@@ -270,6 +277,8 @@ sub getMailboxUpdates {
       }
     }
   }
+
+  $Self->commit();
 
   my @res = (['mailboxUpdates', {
     accountId => $accountid,
@@ -407,6 +416,7 @@ sub getMessageList {
   my $Self = shift;
   my $args = shift;
 
+  $Self->begin();
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
@@ -444,6 +454,9 @@ sub getMessageList {
   }
 
 gotit:
+
+  $Self->commit();
+
   my $end = $args->{limit} ? $start + $args->{limit} - 1 : $#$data;
   $end = $#$data if $end > $#$data;
 
@@ -485,6 +498,7 @@ sub getMessageListUpdates {
   my $Self = shift;
   my $args = shift;
 
+  $Self->begin();
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
@@ -614,6 +628,8 @@ sub getMessageListUpdates {
     }
   }
 
+  $Self->commit();
+
   my @res;
   push @res, ['messageListUpdates', {
     accountId => $accountid,
@@ -634,6 +650,7 @@ sub getMessages {
   my $Self = shift;
   my $args = shift;
 
+  $Self->begin();
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
@@ -722,6 +739,8 @@ sub getMessages {
     push @list, $item;
   }
 
+  $Self->commit();
+
   # need to load messages from the server
   if ($need_content) {
     my $content = $Self->{db}->fill_messages('interactive', map { $_->{id} } @list);
@@ -791,6 +810,7 @@ sub getRawMessage {
     $filename = $2;
   }
 
+  # skipping transactions here
   my $dbh = $Self->{db}->dbh();
   my ($content) = $dbh->selectrow_array("SELECT rfc822 FROM jrawmessage WHERE msgid = ?", {}, $msgid);
   return unless $content;
@@ -819,6 +839,8 @@ sub downloadFile {
 sub getMessageUpdates {
   my $Self = shift;
   my $args = shift;
+
+  $Self->begin();
 
   my $dbh = $Self->{db}->dbh();
 
@@ -852,6 +874,8 @@ sub getMessageUpdates {
     }
   }
 
+  $Self->commit();
+
   my @res;
   push @res, ['messageUpdates', {
     accountId => $accountid,
@@ -876,10 +900,14 @@ sub setMessages {
   my $Self = shift;
   my $args = shift;
 
+  $Self->begin();
+
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
   return ['error', {type => 'accountNotFound'}]
     if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  $Self->commit();
 
   my $create = $args->{create} || {};
   my $update = $args->{update} || {};
@@ -919,6 +947,8 @@ sub importMessage {
   my $Self = shift;
   my $args = shift;
 
+  $Self->begin();
+
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
   return ['error', {type => 'accountNotFound'}]
@@ -932,6 +962,8 @@ sub importMessage {
   my ($type, $message) = $Self->get_file($args->{file});
   return ['error', {type => 'notFound'}]
     if (not $type or $type ne 'message/rfc822');
+
+  $Self->commit();
 
   # import to a normal mailbox (or boxes)
   my ($msgid, $thrid) = $Self->import_message($message, $args->{mailboxIds},
@@ -959,6 +991,8 @@ sub reportMessages {
   my $Self = shift;
   my $args = shift;
 
+  $Self->begin();
+
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
   return ['error', {type => 'accountNotFound'}]
@@ -969,6 +1003,8 @@ sub reportMessages {
 
   return ['error', {type => 'invalidArguments'}]
     if not exists $args->{asSpam};
+
+  $Self->commit();
 
   my ($reported, $notfound) = $Self->report_messages($args->{messageIds}, $args->{asSpam});
 
@@ -987,6 +1023,7 @@ sub getThreads {
   my $Self = shift;
   my $args = shift;
 
+  $Self->begin();
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
@@ -1037,6 +1074,8 @@ sub getThreads {
     push @allmsgs, @msgs;
   }
 
+  $Self->commit();
+
   my @res;
   push @res, ['threads', {
     list => \@list,
@@ -1059,6 +1098,8 @@ sub getThreads {
 sub getThreadUpdates {
   my $Self = shift;
   my $args = shift;
+
+  $Self->begin();
 
   my $dbh = $Self->{db}->dbh();
 
@@ -1102,6 +1143,8 @@ sub getThreadUpdates {
 
   my @changed = keys %threads;
 
+  $Self->commit();
+
   my @res;
   push @res, ['threadUpdates', {
     accountId => $accountid,
@@ -1134,6 +1177,7 @@ sub getCalendars {
   my $Self = shift;
   my $args = shift;
 
+  $Self->begin();
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
@@ -1178,6 +1222,8 @@ sub getCalendars {
   }
   my %missingids = %ids;
 
+  $Self->commit();
+
   return ['calendars', {
     list => \@list,
     accountId => $accountid,
@@ -1189,6 +1235,9 @@ sub getCalendars {
 sub getCalendarUpdates {
   my $Self = shift;
   my $args = shift;
+
+  $Self->begin();
+
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
@@ -1226,6 +1275,8 @@ sub getCalendarUpdates {
       }
     }
   }
+
+  $Self->commit();
 
   my @res = (['calendarUpdates', {
     accountId => $accountid,
@@ -1278,6 +1329,7 @@ sub getCalendarEventList {
   my $Self = shift;
   my $args = shift;
 
+  $Self->begin();
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
@@ -1296,6 +1348,8 @@ sub getCalendarEventList {
   $end = $#$data if $end > $#$data;
 
   my @result = map { $data->[$_][0] } $start..$end;
+
+  $Self->commit();
 
   my @res;
   push @res, ['calendarEventList', {
@@ -1321,6 +1375,7 @@ sub getCalendarEvents {
   my $Self = shift;
   my $args = shift;
 
+  $Self->begin();
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
@@ -1355,6 +1410,8 @@ sub getCalendarEvents {
     push @list, $item;
   }
 
+  $Self->commit();
+
   return ['calendarEvents', {
     list => \@list,
     accountId => $accountid,
@@ -1366,6 +1423,8 @@ sub getCalendarEvents {
 sub getCalendarEventUpdates {
   my $Self = shift;
   my $args = shift;
+
+  $Self->begin();
 
   my $dbh = $Self->{db}->dbh();
 
@@ -1386,6 +1445,8 @@ sub getCalendarEventUpdates {
   if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
     return ['error', {type => 'tooManyChanges'}];
   }
+
+  $Self->commit();
 
   my @changed;
   my @removed;
@@ -1423,6 +1484,7 @@ sub getAddressbooks {
   my $Self = shift;
   my $args = shift;
 
+  $Self->begin();
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
@@ -1464,6 +1526,8 @@ sub getAddressbooks {
     push @list, \%rec;
   }
   my %missingids = %ids;
+ 
+  $Self->commit();
 
   return ['addressbooks', {
     list => \@list,
@@ -1476,6 +1540,8 @@ sub getAddressbooks {
 sub getAddressbookUpdates {
   my $Self = shift;
   my $args = shift;
+
+  $Self->begin();
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
@@ -1513,6 +1579,8 @@ sub getAddressbookUpdates {
       }
     }
   }
+
+  $Self->commit();
 
   my @res = (['addressbookUpdates', {
     accountId => $accountid,
@@ -1565,6 +1633,7 @@ sub getContactList {
   my $Self = shift;
   my $args = shift;
 
+  $Self->begin();
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
@@ -1583,6 +1652,8 @@ sub getContactList {
   $end = $#$data if $end > $#$data;
 
   my @result = map { $data->[$_][0] } $start..$end;
+
+  $Self->commit();
 
   my @res;
   push @res, ['contactList', {
@@ -1608,6 +1679,7 @@ sub getContacts {
   my $Self = shift;
   my $args = shift;
 
+  $Self->begin();
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
@@ -1642,6 +1714,7 @@ sub getContacts {
 
     push @list, $item;
   }
+  $Self->commit();
 
   return ['contacts', {
     list => \@list,
@@ -1655,6 +1728,7 @@ sub getContactUpdates {
   my $Self = shift;
   my $args = shift;
 
+  $Self->begin();
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
@@ -1674,6 +1748,7 @@ sub getContactUpdates {
   if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
     return ['error', {type => 'tooManyChanges'}];
   }
+  $Self->commit();
 
   my @changed;
   my @removed;
@@ -1711,6 +1786,7 @@ sub getContactGroups {
   my $Self = shift;
   my $args = shift;
 
+  $Self->begin();
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
@@ -1749,6 +1825,7 @@ sub getContactGroups {
 
     push @list, $item;
   }
+  $Self->commit();
 
   return ['contactGroups', {
     list => \@list,
@@ -1762,6 +1839,7 @@ sub getContactGroupUpdates {
   my $Self = shift;
   my $args = shift;
 
+  $Self->begin();
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
@@ -1793,6 +1871,7 @@ sub getContactGroupUpdates {
       push @removed, $row->[0];
     }
   }
+  $Self->commit();
 
   my @res;
   push @res, ['contactGroupUpdates', {
