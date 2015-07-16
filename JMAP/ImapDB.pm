@@ -691,6 +691,8 @@ sub do_folder {
   my ($count) = $dbh->selectrow_array("SELECT COUNT(*) FROM imessages WHERE ifolderid = ?", {}, $ifolderid);
   # if we don't know everything, we have to ALWAYS check or moves break
   if ($uidfirst != 1 or $count != $res->{newstate}{exists}) {
+    # welcome to the future
+    $uidnext = $res->{newstate}{uidnext};
     my $to = $uidnext - 1;
     $Self->log('debug', "COUNTING $imapname: $uidfirst:$to (something deleted)");
     my $res = $Self->backend_cmd('imap_count', $imapname, $uidvalidity, "$uidfirst:$to");
@@ -829,14 +831,12 @@ sub deleted_record {
   my $Self = shift;
   my ($folder, $uid) = @_;
 
-  my ($msgid) = $Self->{dbh}->selectrow_array("SELECT msgid FROM imessages WHERE ifolderid = ? AND uid = ?", {}, $folder, $uid);
+  my ($msgid, $jmailboxid) = $Self->{dbh}->selectrow_array("SELECT msgid, jmailboxid FROM imessages WHERE ifolderid = ? AND uid = ?", {}, $folder, $uid);
+  return unless $msgid;
 
   $Self->ddelete('imessages', {ifolderid => $folder, uid => $uid});
 
-  # NOT FOR GMAIL
-  my ($labels) = $Self->{dbh}->selectcol_arrayref("SELECT label FROM jmessagemap JOIN ifolders USING (jmailboxid) WHERE msgid = ? AND ifolderid != ? AND active = 1", {}, $msgid, $folder);
-
-  $Self->apply_data($msgid, [], $labels);
+  $Self->delete_message_from_mailbox($msgid, $jmailboxid);
 }
 
 sub new_record {
