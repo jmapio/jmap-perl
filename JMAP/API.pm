@@ -1738,12 +1738,12 @@ sub getContactGroups {
     my $item = {};
     $item->{id} = $id;
 
-    if (_prop_wanted('name', $args)) {
-      $item->{name} = $data->{name};
+    if (_prop_wanted($args, 'name')) {
+      $item->{name} = $data->{$id}{name};
     }
 
-    if (_prop_wanted('contactIds', $args)) {
-      my $ids = $dbh->selectcol_arrayref("SELECT contactuid FROM jgroupmap WHERE groupuid = ?", {}, $id);
+    if (_prop_wanted($args, 'contactIds')) {
+      my $ids = $dbh->selectcol_arrayref("SELECT contactuid FROM jcontactgroupmap WHERE groupuid = ?", {}, $id);
       $item->{contactIds} = $ids;
     }
 

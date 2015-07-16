@@ -37,6 +37,7 @@ sub setup {
   $0 = "[jmap proxy imapsync] $id";
   $hdl->push_write(json => [ 'setup', $id ]);
   $hdl->push_write("\n");
+  return 1;
 }
 
 sub process_request {
@@ -67,8 +68,15 @@ sub process_request {
     my $handle = shift;
     my $json = shift;
     $id = $json->{username};
-    setup($json);
-    $handle->push_read(json => mk_handler());
+    if (eval { setup($json) }) {
+      $handle->push_read(json => mk_handler());
+    }
+    else {
+      $handle->push_write(json => ['error', "$@"]);
+      $handle->push_shutdown();
+      undef $hdl;
+      EV::unloop;
+    }
   });
 
   warn "STARTING UP";

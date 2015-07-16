@@ -127,9 +127,14 @@ sub backend_cmd {
       $handle->push_read(json => sub {
         my $hdl = shift;
         my $json = shift;
-        die "Failed to setup " . Dumper($json) unless $json->[0] eq 'setup';
-        $action->($handle);
-        $h->send($handle);
+        if ($json->[0] eq 'setup') {
+          $action->($handle);
+          $h->send($handle);
+        }
+        else {
+          warn "FAILED $json->[1]";
+          $h->send(undef);
+        }
       });
       # XXX - handle destroy correctly
       # handle backend going away, etc
@@ -138,6 +143,8 @@ sub backend_cmd {
     # synchronous startup to avoid race condition on setting up channel
     $Self->{backend} = $h->recv;
   }
+
+  die "Failed to get a backend" unless $Self->{backend};
 
   return if $cb; # async usage
 
@@ -320,9 +327,6 @@ sub sync_calendars {
       if ($token ne $calendar->{syncToken}) {
         push @todo, $id;
         $Self->dmaybeupdate('icalendars', $data, {icalendarid => $id});
-      }
-      else {
-        warn "match $token $calendar->{syncToken}\n";
       }
     }
     else {
@@ -646,6 +650,7 @@ sub do_folder {
     $uidfirst -= $batchsize;
     $uidfirst = 1 if $uidfirst < 1;
     $fetches{backfill} = [$uidfirst, $end, [qw(internaldate envelope rfc822.size)]];
+    warn "BACKFILLING $imapname: $uidfirst:$end ($uidnext)\n";
   }
 
   my $res = $Self->backend_cmd('imap_fetch', $imapname, {

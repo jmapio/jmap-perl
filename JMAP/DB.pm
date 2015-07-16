@@ -51,7 +51,7 @@ sub log {
   }
   else {
     my ($level, @items) = @_;
-    #return if $level eq 'debug';
+    return if $level eq 'debug';
     my $time = time() - $Self->{start};
     warn "[$level $time]: @items\n";
   }
