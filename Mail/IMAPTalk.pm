@@ -196,7 +196,7 @@ internal methods will always 'die' if they encounter any errors.
 
 =item INTERNAL SOCKET FUNCTIONS
 
-These are functions used internally by the C<Mail::IMAPTalk> object
+These are functions used internally by the C<Mail::IMAPTalk> object 
 to read/write data to/from the IMAP connection socket. The class does
 its own buffering so if you want to read/write to the IMAP socket, you
 should use these functions.
@@ -428,6 +428,13 @@ If supplied and true, and a socket is supplied via the C<Socket>
 option, checks that a greeting line is supplied by the server
 and reads the greeting line.
 
+=item B<PreserveINBOX>
+
+For historical reasons, the special name "INBOX" is rewritten as
+Inbox because it looks nicer on the way out, and back on the way
+in.  If you want to preserve the name INBOX on the outside, set
+this flag to true.
+
 =back
 
 =item B<Login Options>
@@ -470,13 +477,8 @@ method for more details.
 
 =item B<Separator>
 
-If supplied, sets the folder name text string separator character.
+If supplied, sets the folder name text string separator character. 
 Passed as the second parameter to the C<set_root_folder()> method.
-
-=item B<CaseInsensitive>
-
-If supplied, passed along with RootFolder to the C<set_root_folder()>
-method.
 
 =item B<AltRootRegexp>
 
@@ -488,20 +490,19 @@ method.
 Examples:
 
   $imap = Mail::IMAPTalk->new(
-            Server          => 'foo.com',
-            Port            => 143,
-            Username        => 'joebloggs',
-            Password        => 'mypassword',
-            Separator       => '.',
-            RootFolder      => 'inbox',
-            CaseInsensitive => 1)
-          || die "Connection to foo.com failed. Reason: $@";
+    Server          => 'foo.com',
+    Port            => 143,
+    Username        => 'joebloggs',
+    Password        => 'mypassword',
+    Separator       => '.',
+    RootFolder      => 'INBOX',
+  ) || die "Connection to foo.com failed. Reason: $@";
 
   $imap = Mail::IMAPTalk->new(
-            Socket => $SSLSocket,
-            State  => Mail::IMAPTalk::Authenticated,
-            Uid    => 0)
-          || die "Could not query on existing socket. Reason: $@";
+    Socket => $SSLSocket,
+    State  => Mail::IMAPTalk::Authenticated,
+    Uid    => 0
+  ) || die "Could not query on existing socket. Reason: $@";
 
 =cut
 sub new {
@@ -572,6 +573,7 @@ sub new {
   $Self->{LocalFD} = fileno($Socket);
   $Self->{UseBlocking} = $Args{UseBlocking};
   $Self->{Pedantic} = $Args{Pedantic};
+  $Self->{PreserveINBOX} = $Args{PreserveINBOX};
 
   # Do this now, so we trace greeting line as well
   $Self->set_tracing($AlwaysTrace);
@@ -600,7 +602,7 @@ sub new {
 
   # Set root folder and separator (if supplied)
   $Self->set_root_folder(
-    $Args{RootFolder}, $Args{Separator}, $Args{CaseInsensitive}, $Args{AltRootRegexp});
+    $Args{RootFolder}, $Args{Separator}, $Args{AltRootRegexp});
 
   return $Self;
 }
@@ -829,20 +831,17 @@ sub is_open {
 
 }
 
-=item I<set_root_folder($RootFolder, $Separator, optional $CaseInsensitive, $AltRootRegexp)>
+=item I<set_root_folder($RootFolder, $Separator, $AltRootRegexp)>
 
 Change the root folder prefix. Some IMAP servers require that all user
 folders/mailboxes live under a root folder prefix (current versions of
 B<cyrus> for example use 'INBOX' for personal folders and 'user' for other
 users folders). If no value is specified, it sets it to ''. You might
 want to use the B<namespace()> method to find out what roots are
-available. The $CaseInsensitive argument is a flag that determines
-whether the root folder should be matched in a case sensitive or
-insensitive way. See below.
+available.
 
 Setting this affects all commands that take a folder argument. Basically
-if the foldername begins with root folder prefix (case sensitive or
-insensitive based on the second argument), it's left as is,
+if the foldername begins with root folder prefix, it's left as is,
 otherwise the root folder prefix and separator char are prefixed to the
 folder name.
 
@@ -853,43 +852,40 @@ other namespaces in your IMAP server.
 Examples:
 
   # This is what cyrus uses
-  $IMAP->set_root_folder('inbox', '.', 1, 'user');
+  $IMAP->set_root_folder('INBOX', '.', qr/^user/);
 
   # Selects 'Inbox' (because 'Inbox' eq 'inbox' case insensitive)
   $IMAP->select('Inbox');
-  # Selects 'inbox.blah'
+  # Selects 'INBOX.blah'
   $IMAP->select('blah');
-  # Selects 'INBOX.fred' (because 'INBOX' eq 'inbox' case insensitive)
-  #IMAP->select('INBOX.fred'); # Selects 'INBOX.fred'
+  # Selects 'INBOX.Inbox.fred'
+  #IMAP->select('Inbox.fred');
   # Selects 'user.john' (because 'user' is alt root)
   #IMAP->select('user.john'); # Selects 'user.john'
 
 =cut
 sub set_root_folder {
-  my ($Self, $RootFolder, $Separator, $CaseInsensitive, $AltRootRegexp) = @_;
+  my ($Self, $RootFolder, $Separator, $AltRootRegexp) = @_;
 
   $RootFolder = '' if !defined($RootFolder);
-  $Separator = '' if !defined($Separator);
-  $AltRootRegexp = '' if !defined($AltRootRegexp);
+  $Separator = '.' if !defined($Separator);
 
-  # Strip of the Separator, if the IMAP-Server already appended it
+  # Strip off the Separator, if the IMAP-Server already appended it
   $RootFolder =~ s/\Q$Separator\E$//;
 
   $Self->{RootFolder} = $RootFolder;
   $Self->{AltRootRegexp} = $AltRootRegexp;
   $Self->{Separator} = $Separator;
-  $Self->{CaseInsensitive} = $CaseInsensitive;
 
-  # A little tricky. We want to promote INBOX.blah -> blah, but
-  # we have to be careful not to loose things like INBOX.inbox
-  # which we leave alone
+  # We map canonical IMAP INBOX to nicer looking Inbox,
+  #  but have to be careful if the root is INBOX as well
 
-  # INBOX             -> INBOX
+  # INBOX             -> Inbox (done in _fix_folder_name)
   # INBOX.blah        -> blah
   # INBOX.inbox       -> INBOX.inbox
-  # INBOX.INBOX       -> INBOX.INBOX
+  # INBOX.Inbox       -> INBOX.Inbox
   # INBOX.inbox.inbox -> INBOX.inbox.inbox
-  # INBOX.inbox.blah  -> INBOX.blah
+  # INBOX.Inbox.blah  -> Inbox.blah
   # user.xyz          -> user.xyz
 
   # RootFolderMatch
@@ -900,26 +896,21 @@ sub set_root_folder {
   # If folder returned matches this, strip $RootFolder . $Separator
   # eg strip inbox. if folder /^inbox\.(?!inbox(\.inbox)*)/
 
-  my ($RootFolderMatch, $UnrootFolderMatch, $RootFolderNormalise);
+  my ($RootFolderMatch, $UnrootFolderMatch);
   if ($RootFolder) {
-    if ($CaseInsensitive) {
-      $RootFolderMatch = qr/\Q${RootFolder}\E(?i:\Q${Separator}${RootFolder}\E)*/i;
-      $UnrootFolderMatch = qr/^\Q${RootFolder}${Separator}\E(?!${RootFolderMatch}$)/i;
-      $RootFolderNormalise = qr/^\Q${RootFolder}\E(\Q${Separator}\E|$)/i;
-    } else {
-      $RootFolderMatch = qr/\Q${RootFolder}\E(?:\Q${Separator}${RootFolder}\E)*/;
-      $UnrootFolderMatch = qr/^\Q${RootFolder}${Separator}\E(?!${RootFolderMatch}$)/;
-      $RootFolderNormalise = qr/^\Q${RootFolder}(?:\Q${Separator}\E|$)/;
-    }
+    # Note the /i on the end to make this case-insensitive
+    $RootFolderMatch = qr/\Q${RootFolder}\E(?:\Q${Separator}${RootFolder}\E)*/i;
+    $UnrootFolderMatch = qr/^\Q${RootFolder}${Separator}\E(?!${RootFolderMatch}$)/;
 
-    $RootFolderMatch = qr/^${RootFolderMatch}$/;
     if ($AltRootRegexp) {
-      $RootFolderMatch = qr/$RootFolderMatch|^(?:${AltRootRegexp})$|^(?:${AltRootRegexp})\Q${Separator}\E/;
+      $RootFolderMatch = qr/^${RootFolderMatch}$|^(?:${AltRootRegexp}(?:\Q${Separator}\E|$))/;
+    } else {
+      $RootFolderMatch = qr/^${RootFolderMatch}$/;
     }
-
   }
-  @$Self{qw(RootFolderMatch UnrootFolderMatch RootFolderNormalise)}
-    = ($RootFolderMatch, $UnrootFolderMatch, $RootFolderNormalise);
+
+  @$Self{qw(RootFolderMatch UnrootFolderMatch)}
+    = ($RootFolderMatch, $UnrootFolderMatch);
 
   return 1;
 }
@@ -932,12 +923,11 @@ Separator.
 
 =cut
 sub _set_separator {
-  my ($Self,$Separator) = @_;
+  my ($Self, $Separator) = @_;
 
   #Nothing to do, if we have the same Separator as before
   return 1 if (defined($Separator) && ($Self->{Separator} eq $Separator));
-  return $Self->set_root_folder($Self->{RootFolder}, $Separator,
-                                $Self->{CaseInsensitive}, $Self->{AltRootRegexp});
+  return $Self->set_root_folder($Self->{RootFolder}, $Separator, $Self->{AltRootRegexp});
 }
 
 =item I<literal_handle_control(optional $FileHandle)>
@@ -1009,7 +999,7 @@ sub get_last_error {
 
 Returns the last completion response to the tagged command.
 
-This is either the string "ok", "no" or "bad" (always lower case)
+This is either the string "ok", "no" or "bad" (always lower case) 
 
 =cut
 sub get_last_completion_response {
@@ -1217,7 +1207,7 @@ sub unicode_folders {
 
 =head1 IMAP FOLDER COMMAND METHODS
 
-B<Note:> In all cases where a folder name is used,
+B<Note:> In all cases where a folder name is used, 
 the folder name is first manipulated according to the current root folder
 prefix as described in C<set_root_folder()>.
 
@@ -1227,7 +1217,7 @@ prefix as described in C<set_root_folder()>.
 =item I<select($FolderName, @Opts)>
 
 Perform the standard IMAP 'select' command to select a folder for
-retrieving/moving/adding messages. If $Opts{ReadOnly} is true, the
+retrieving/moving/adding messages. If $Opts{ReadOnly} is true, the 
 IMAP EXAMINE verb is used instead of SELECT.
 
 Mail::IMAPTalk will cache the currently selected folder, and if you
@@ -1673,7 +1663,7 @@ details of a folder/mailbox and possible root quota as well.
 See RFC 2087 for details of the IMAP
 quota extension. The result of this command is a little complex.
 Unfortunately it doesn't map really easily into any structure
-since there are several different responses.
+since there are several different responses. 
 
 Basically it's a hash reference. The 'quotaroot' item is the
 response which lists the root quotas that apply to the given
@@ -1813,7 +1803,6 @@ sub getannotation {
   return $Self->_imap_cmd("getannotation", 0, "annotation", $Self->_fix_folder_name(+shift, 1), { Quote => $_[0] }, { Quote => $_[1] });
 }
 
-
 =item I<getmetadata($FolderName, [ \%Options ], @Entries)>
 
 Perform the IMAP 'getmetadata' command to get the metadata items
@@ -1854,6 +1843,43 @@ sub getmetadata {
   return $Self->_imap_cmd("getmetadata", 0, "metadata", @Args, { Quote => [ @_ ] });
 }
 
+=item I<multigetmetadata(\@Entries, @FolderNames)>
+
+Performs many IMAP 'getmetadata' commands on a list of folders. Sends
+all the commands at once and wait for responses. This speeds up latency
+issues.
+
+Returns a hash ref of folder name => metadata results.
+
+If an error occurs, the annotation result is a scalar ref to the completion
+response string (eg 'bad', 'no', etc)
+
+=cut
+sub multigetmetadata {
+  my ($Self, $Entries, @FolderList) = @_;
+  $Self->_require_capability('metadata') || return undef;
+
+  # Send all commands at once
+  my $FirstId = $Self->{CmdId};
+  for (@FolderList) {
+    $Self->_send_cmd("getmetadata", $Self->_fix_folder_name($_, 1), { Quote => ref($Entries) ? $Entries : [ $Entries ] });
+    $Self->{CmdId}++;
+  }
+
+  # Parse responses
+  my %Resp;
+  $Self->{CmdId} = $FirstId;
+  for (@FolderList) {
+    my ($CompletionResp, $DataResp) = $Self->_parse_response("metadata");
+    $Resp{$_} = ref($DataResp) ?
+      (ref($Entries) ? $DataResp->{$_} : $DataResp->{$_}->{$Entries}) :
+      \$CompletionResp;
+    $Self->{CmdId}++;
+  }
+
+  return \%Resp;
+}
+
 =item I<setannotation($FolderName, $Entry, [ $Attribute, $Value ])>
 
 Perform the IMAP 'setannotation' command to get the annotation(s)
@@ -1885,40 +1911,6 @@ sub setmetadata {
   my $Self = shift;
   $Self->_require_capability('metadata') || return undef;
   return $Self->_imap_cmd("setmetadata", 0, "metadata", $Self->_fix_folder_name(+shift, 1), { Quote => [ @_ ] });
-}
-
-=item I<multigetannotation($Entry, $Attribute, @FolderNames)>
-
-Performs many IMAP 'getannotation' commands on a list of folders. Sends
-all the commands at once and wait for responses. This speeds up latency
-issues.
-
-Returns a hash ref of folder name => annotation results.
-
-If an error occurs, the annotation result is a scalar ref to the completion
-response string (eg 'bad', 'no', etc)
-
-=cut
-sub multigetannotation {
-  my ($Self, $Entry, $Attribute, @FolderList) = @_;
-
-  # Send all commands at once
-  my $FirstId = $Self->{CmdId};
-  for (@FolderList) {
-    $Self->_send_cmd("getannotation", $Self->_fix_folder_name($_, 1), { Quote => $Entry }, { Quote => $Attribute });
-    $Self->{CmdId}++;
-  }
-
-  # Parse responses
-  my %Resp;
-  $Self->{CmdId} = $FirstId;
-  for (@FolderList) {
-    my ($CompletionResp, $DataResp) = $Self->_parse_response("annotation");
-    $Resp{$_} = ref($DataResp) ? $DataResp->{$_}->{$Entry}->{$Attribute} : \$CompletionResp;
-    $Self->{CmdId}++;
-  }
-
-  return \%Resp;
 }
 
 =item I<close()>
@@ -2386,6 +2378,14 @@ sub fetch_meta {
   return \%FetchRes;
 }
 
+sub move {
+  my $Self = shift;
+  my $Uids = _fix_message_ids(+shift);
+  my $FolderName = $Self->_fix_folder_name(+shift);
+  $Self->cb_folder_changed($FolderName);
+  return $Self->_imap_cmd("move", 1, "", $Uids, $FolderName, @_);
+}
+
 sub xmove {
   my $Self = shift;
   my $Uids = _fix_message_ids(+shift);
@@ -2401,7 +2401,7 @@ sub xmove {
 
 Methods provided by extensions to the cyrus IMAP server
 
-B<Note:> In all cases where a folder name is used,
+B<Note:> In all cases where a folder name is used, 
 the folder name is first manipulated according to the current root folder
 prefix as described in C<set_root_folder()>.
 
@@ -2518,13 +2518,13 @@ sub xconvmeta {
         }
         elsif (lc($Item) eq 'folderexists') {
           my %FolderExists = @{$Res->{$Item}};
-          $ResHash{folderexists} = { map {
+          $ResHash{folderexists} = { map { 
              $Self->_unfix_folder_name($_) => int($FolderExists{$_})
           } keys %FolderExists };
         }
         elsif (lc($Item) eq 'folderunseen') {
           my %FolderUnseen = @{$Res->{$Item}};
-          $ResHash{folderunseen} = { map {
+          $ResHash{folderunseen} = { map { 
              $Self->_unfix_folder_name($_) => int($FolderUnseen{$_})
           } keys %FolderUnseen };
         }
@@ -2594,7 +2594,7 @@ messages
 =cut
 sub xconvupdates {
   my ($Self, $Sort, $Window, @Search) = @_;
-
+ 
   my %Results;
 
   my %Callbacks = (
@@ -2831,7 +2831,7 @@ Examples:
   # Parse further to find message components
   my $MC = $IMAP->find_message($BS);
   $MC = { 'plain' => ... text body struct ref part ...,
-          'html' => ... html body struct ref part (if present) ...
+          'html' => ... html body struct ref part (if present) ... 
           'htmllist' => [ ... html body struct ref parts (if present) ... ] };
 
   # Now get the text part of the message
@@ -2841,7 +2841,11 @@ Examples:
 sub find_message {
   my (%MsgComponents);
 
-  my %KnownTextParts = map { $_ => 1 } qw(plain html text enriched);
+  my %KnownTextParts = (
+    plain => 'text', text => 'text', enriched => 'text',
+    html => 'html',
+    'application/octet-stream' => 'text'
+  );
 
   my @PartList = ([ undef, $_[0], 0, '', \(my $Tmp = '') ]);
 
@@ -2850,6 +2854,7 @@ sub find_message {
     my ($Parent, $BS, $Pos, $InMultiList, $MultiTypeRef) = @$Part;
 
     my $InsideAlt = $InMultiList =~ /\balternative\b/ ? 1 : 0;
+    my $InsideEnc = $InMultiList =~ /\bencrypted\b/ ? 1 : 0;
 
     # Pull out common MIME fields we'll look at
     my ($MTT, $MT, $ST, $SP) = @$BS{qw(MIME-TxtType MIME-Type MIME-Subtype MIME-Subparts)};
@@ -2858,57 +2863,62 @@ sub find_message {
     #  with "$DT ne 'attachment'", rather than "$DT eq 'inline'"
     my ($DT, $CD) = @$BS{qw(Disposition-Type Content-Disposition)};
 
-    # Yay, found text component that ins't an attachment or has a filename
-    if ($MT eq 'text' && ($DT ne 'attachment' && !$CD->{filename} && !$CD->{'filename*'})) {
+    # Parts we want to treat as "text"
+    my $IsInline = 0;
+    # Text component of type we understand that isn't an attachment or has a filename
+    $IsInline = 1 if $MT eq 'text' &&
+                     $KnownTextParts{$ST} &&
+                     $DT ne 'attachment' &&
+                     !$CD->{filename} &&
+                     !$CD->{'filename*'};
+    # Bah, PGP has application/octet-stream inside an application/pgp-encrypted part
+    $IsInline = 1 if $MTT eq 'application/octet-stream' &&
+                     $InsideEnc &&
+                     $CD->{filename} =~ /encrypted/;
 
-      # See if it's a sub-type we understand/want
-      if ($KnownTextParts{$ST}) {
+    if ($IsInline) {
+      # Map to just text or html type
+      my $UT = $KnownTextParts{$MTT} // $KnownTextParts{$ST};
 
-        # Map plain, text, enriched -> text
-        my $UT = $ST;
-        $UT = 'text' if $ST eq 'plain' || $ST eq 'enriched';
+      # Found it if not already found one of this type
+      if ( !exists $MsgComponents{$UT} ) {
 
-        # Found it if not already found one of this type
-        if ( !exists $MsgComponents{$UT} ) {
-
-          # Don't treat html parts in a multipart/mixed as an
-          #  alternative representation unless the first part
-          if ( $ST eq 'html'
-            && $Parent
-            && $Parent->{'MIME-Subtype'} eq 'mixed'
-            && $Pos > 0 )
-          {
-          }
-          else {
-            $MsgComponents{$UT} ||= $BS;
-          }
-
-        }
-
-        # Override existing part if old part is <= 10 bytes (eg 5 blank
-        # lines), and new part is > 10 bytes.  Or if old part has
-        # 0 lines and new part has some lines
-        elsif ( ( $MsgComponents{$UT}->{'Size'} <= 10 && $BS->{'Size'} > 10 )
-          || ( $MsgComponents{$UT}->{Lines} < 1 && $BS->{Lines} > 0 ) )
+        # Don't treat html parts in a multipart/mixed as an
+        #  alternative representation unless the first part
+        if ( $ST eq 'html'
+          && $Parent
+          && $Parent->{'MIME-Subtype'} eq 'mixed'
+          && $Pos > 0 )
         {
-          $MsgComponents{$UT} = $BS;
+        }
+        else {
+          $MsgComponents{$UT} ||= $BS;
         }
 
-        # Add to textlist/htmllist if not in alternative part
-        #  or best part type if we are
-        if ($UT eq 'text' || !$InsideAlt) {
-          push @{$MsgComponents{'textlist'}}, $BS;
-          $$MultiTypeRef ||= $UT;
-        }
-        if ($UT eq 'html' || !$InsideAlt) {
-          push @{$MsgComponents{'htmllist'}}, $BS;
-          $$MultiTypeRef ||= $UT;
-        }
-
-        # Ok got a known part, move to next
-        next;
       }
-      # Wasn't a known text type, will add as an attachment
+
+      # Override existing part if old part is <= 10 bytes (eg 5 blank
+      # lines), and new part is > 10 bytes.  Or if old part has
+      # 0 lines and new part has some lines
+      elsif ( ( $MsgComponents{$UT}->{'Size'} <= 10 && $BS->{'Size'} > 10 )
+        || ( $MsgComponents{$UT}->{Lines} < 1 && $BS->{Lines} > 0 ) )
+      {
+        $MsgComponents{$UT} = $BS;
+      }
+
+      # Add to textlist/htmllist if not in alternative part
+      #  or best part type if we are
+      if ($UT eq 'text' || !$InsideAlt) {
+        push @{$MsgComponents{'textlist'}}, $BS;
+        $$MultiTypeRef ||= $UT;
+      }
+      if ($UT eq 'html' || !$InsideAlt) {
+        push @{$MsgComponents{'htmllist'}}, $BS;
+        $$MultiTypeRef ||= $UT;
+      }
+
+      # Ok got a known part, move to next
+      next;
 
     } elsif ($MT eq 'image') {
 
@@ -2961,7 +2971,11 @@ sub find_message {
     };
   }
 
-  delete $MsgComponents{htmllist} if !$MsgComponents{html};
+  # If there's no simple text or html bit, remove any
+  #  corresponding list versions as well
+  for (qw(text html)) {
+    $MsgComponents{$_} || delete $MsgComponents{$_ . "list"};
+  }
 
   return \%MsgComponents;
 }
@@ -3166,7 +3180,7 @@ The result in response will look like this:
 
 A couple of points to note:
 
-=over
+=over 
 
 =item 1.
 
@@ -3430,7 +3444,7 @@ Would have the result:
       }
     }
   }
-
+         
 =cut
 
 =head1 INTERNAL METHODS
@@ -3649,7 +3663,7 @@ sub _send_data {
     # Handle non-literals
     if (!$IsLiteral) {
       $Arg = _quote(ref($Arg) ? $$Arg : $Arg) if $IsQuote;
-
+      
       # Must be a scalar reference for a non-literal
       $LineBuffer .= ($AddSpace ? " " : "") . (ref($Arg) ? $$Arg : $Arg);
 
@@ -3903,7 +3917,8 @@ sub _parse_response {
     } elsif ($Res1 eq 'metadata') {
       my ($Name, $Bits) = @{$Self->_remaining_atoms()};
       $Name = ($UnfixCache{$Name} ||= $Self->_unfix_folder_name($Name));
-      $DataResp{metadata}->{$Name}->{$Bits->[0]} = $Bits->[1];
+      my %Hash = @$Bits;
+      $DataResp{metadata}->{$Name}->{$_} = $Hash{$_} for keys %Hash;
 
     } elsif (($Res1 eq 'bye') && ($Self->{LastCmd} ne 'logout')) {
       $Self->{Cache}->{bye} = $Self->_remaining_line();
@@ -3958,7 +3973,7 @@ sub _trace {
   my ($Self, $Line) = @_;
   $Line =~ s/\015\012/\n/;
   my $Trace = $Self->{Trace};
-
+  
   if (ref($Trace) eq 'GLOB') {
     print $Trace $Line;
   } elsif (ref($Trace) eq 'CODE') {
@@ -4067,7 +4082,7 @@ sub _next_atom {
         $$AtomRef = $CurAtom;
       }
     }
-
+    
     # Bracket?
     elsif ($Line =~ m/\G\(/gc) {
       # Begin a new sub-array
@@ -4365,7 +4380,7 @@ otherwise the function will 'die' with an error if it runs out of data.
 
 If $NBytes is not specified (undef), the function will attempt to
 seek to the end of the file to find the size of the file.
-
+ 
 =cut
 sub _copy_handle_to_handle {
   my ($Self, $InHandle, $OutHandle, $NBytes) = @_;
@@ -4407,7 +4422,7 @@ have to copy the contents of our buffer first.
 
 The number of bytes specified must be available on the IMAP socket,
 if the function runs out of data it will 'die' with an error.
-
+ 
 =cut
 sub _copy_imap_socket_to_handle {
   my ($Self, $OutHandle, $NBytes) = @_;
@@ -4436,12 +4451,12 @@ sub _copy_imap_socket_to_handle {
   # Done
   return 1;
 }
-
+  
 =item I<_quote($String)>
 
 Returns an IMAP quoted version of a string. This place "..." around the
 string, and replaces any internal " with \".
-
+ 
 =cut
 sub _quote {
   # Replace " and \ with \" and \\ and surround with "..."
@@ -4508,13 +4523,12 @@ sub _fix_folder_name {
 
   return '' if $FolderName eq '';
 
+  # Map nicer looking Inbox to canonical INBOX
+  return 'INBOX' if ($FolderName eq 'Inbox' and not $Self->{PreserveINBOX});
+
   $FolderName = $Self->_fix_folder_encoding($FolderName);
 
   return $FolderName if $WildCard && $FolderName =~ /[\*\%]/;
-
-  # XXX - make more general/configurable
-  return $FolderName if $FolderName =~ m{^DELETED\.user\.};
-  return $FolderName if $FolderName =~ m{^RESTORED\.};
 
   my $RootFolderMatch = $Self->{RootFolderMatch}
     || return $FolderName;
@@ -4552,12 +4566,11 @@ with the C<set_root_prefix()> call.
 sub _unfix_folder_name {
   my ($Self, $FolderName) = @_;
 
-  # Normalise root folder part
-  my $RFN = $Self->{RootFolderNormalise};
-  $FolderName =~ s/^$RFN/$Self->{RootFolder}$1/ if $RFN;
-
   my $UFM = $Self->{UnrootFolderMatch};
   $FolderName =~ s/^$UFM// if $UFM;
+
+  # Map canonical INBOX to nicer looking Inbox
+  $FolderName = "Inbox" if ($FolderName eq "INBOX" && not $Self->{PreserveINBOX});
 
   my $UnicodeFolders = $Self->unicode_folders();
   if ( $UnicodeFolders && ( $FolderName =~ m{&} ) )
@@ -4641,7 +4654,7 @@ from an IMAP fetch (envelope) call into a single RFC 822 email string
 finally return to the user.
 
 This is used to parse an envelope structure returned from a fetch call.
-
+  
 See the documentation section 'FETCH RESULTS' for more information.
 
 =cut
@@ -4849,7 +4862,7 @@ sub _parse_bodystructure {
 =item I<_parse_fetch_annotation($AnnotateItem)>
 
 Takes the result from a single IMAP annotation item
-into a Perl friendly structure.
+into a Perl friendly structure. 
 
 See the documentation section 'FETCH RESULTS' from more information.
 
@@ -4867,7 +4880,7 @@ sub _parse_fetch_annotation {
 =item I<_parse_fetch_result($FetchResult)>
 
 Takes the result from a single IMAP fetch response line and parses it
-into a Perl friendly structure.
+into a Perl friendly structure. 
 
 See the documentation section 'FETCH RESULTS' from more information.
 
@@ -5010,7 +5023,7 @@ sub DESTROY {
 
   # If socket exists, and connection is open and authenticated or
   #   selected, do a logout
-  if ($Self->{Socket} &&
+  if ($Self->{Socket} && 
         ($Self->state() == Authenticated || $Self->state() == Selected) &&
         $Self->is_open()) {
     $Self->logout();
