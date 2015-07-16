@@ -131,6 +131,14 @@ sub commit {
   $Self->{db}->commit();
 }
 
+sub _transError {
+  my $Self = shift;
+  if ($Self->{db}->in_transaction()) {
+    $Self->{db}->rollback();
+  }
+  return @_;
+}
+
 sub getMailboxes {
   my $Self = shift;
   my $args = shift;
@@ -141,7 +149,7 @@ sub getMailboxes {
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
-  return ['error', {type => 'accountNotFound'}]
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
   my $data = $dbh->selectall_arrayref("SELECT jmailboxid, parentid, name, role, precedence, mustBeOnly, mayDelete, mayRename, mayAdd, mayRemove, mayChild, mayRead FROM jmailboxes WHERE active = 1");
@@ -254,13 +262,13 @@ sub getMailboxUpdates {
   $Self->begin();
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
-  return ['error', {type => 'accountNotFound'}]
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
   my $sinceState = $args->{sinceState};
-  return ['error', {type => 'invalidArguments'}]
+  return $Self->_transError(['error', {type => 'invalidArguments'}])
     if not $args->{sinceState};
-  return ['error', {type => 'cannotCalculateChanges'}]
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges'}])
     if ($user->{jdeletedmodseq} and $sinceState <= $user->{jdeletedmodseq});
 
   my $data = $dbh->selectall_arrayref("SELECT jmailboxid, jmodseq, jcountsmodseq, active FROM jmailboxes ORDER BY jmailboxid");
@@ -431,20 +439,20 @@ sub getMessageList {
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
-  return ['error', {type => 'accountNotFound'}]
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  return ['error', {type => 'invalidArguments'}]
+  return $Self->_transError(['error', {type => 'invalidArguments'}])
     if (exists $args->{position} and exists $args->{anchor});
-  return ['error', {type => 'invalidArguments'}]
+  return $Self->_transError(['error', {type => 'invalidArguments'}])
     if (not exists $args->{position} and not exists $args->{anchor});
-  return ['error', {type => 'invalidArguments'}]
+  return $Self->_transError(['error', {type => 'invalidArguments'}])
     if (exists $args->{anchor} and not exists $args->{anchorOffset});
-  return ['error', {type => 'invalidArguments'}]
+  return $Self->_transError(['error', {type => 'invalidArguments'}])
     if (not exists $args->{anchor} and exists $args->{anchorOffset});
 
   my $start = $args->{position} || 0;
-  return ['error', {type => 'invalidArguments'}] if $start < 0;
+  return $Self->_transError(['error', {type => 'invalidArguments'}]) if $start < 0;
 
   my $sort = $Self->_build_sort($args->{sort});
   my $data = $dbh->selectall_arrayref("SELECT DISTINCT msgid,thrid FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmessages.active = 1 AND jmessagemap.active = 1 ORDER BY $sort");
@@ -460,7 +468,7 @@ sub getMessageList {
       $start = 0 if $start < 0;
       goto gotit;
     }
-    return ['error', {type => 'anchorNotFound'}];
+    return $Self->_transError(['error', {type => 'anchorNotFound'}]);
   }
 
 gotit:
@@ -513,16 +521,17 @@ sub getMessageListUpdates {
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
-  return ['error', {type => 'accountNotFound'}]
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  return ['error', {type => 'invalidArguments'}]
+  return $Self->_transError(['error', {type => 'invalidArguments'}])
     if not $args->{sinceState};
-  return ['error', {type => 'cannotCalculateChanges'}]
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges'}])
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
 
   my $start = $args->{position} || 0;
-  return ['error', {type => 'invalidArguments'}] if $start < 0;
+  return $Self->_transError(['error', {type => 'invalidArguments'}])
+    if $start < 0;
 
   my $sort = $Self->_build_sort($args->{sort});
   my $data = $dbh->selectall_arrayref("SELECT msgid,thrid,jmodseq,active FROM jmessages ORDER BY $sort");
@@ -591,7 +600,7 @@ sub getMessageListUpdates {
       }
 
       if ($args->{maxChanges} and $changes > $args->{maxChanges}) {
-        return ['error', {type => 'tooManyChanges'}];
+        return $Self->_transError(['error', {type => 'tooManyChanges'}]);
       }
 
       if ($args->{upToMessageId} and $args->{upToMessageId} eq $msgid) {
@@ -628,7 +637,7 @@ sub getMessageListUpdates {
       }
 
       if ($args->{maxChanges} and $changes > $args->{maxChanges}) {
-        return ['error', {type => 'tooManyChanges'}];
+        return $Self->_transError(['error', {type => 'tooManyChanges'}]);
       }
 
       if ($args->{upToMessageId} and $args->{upToMessageId} eq $msgid) {
@@ -665,10 +674,11 @@ sub getMessages {
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
-  return ['error', {type => 'accountNotFound'}]
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  return ['error', {type => 'invalidArguments'}] unless $args->{ids};
+  return $Self->_transError(['error', {type => 'invalidArguments'}])
+    unless $args->{ids};
   #properties: String[] A list of properties to fetch for each message.
 
   # XXX - lots to do about properties here
@@ -856,12 +866,12 @@ sub getMessageUpdates {
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
-  return ['error', {type => 'accountNotFound'}]
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  return ['error', {type => 'invalidArguments'}]
+  return $Self->_transError(['error', {type => 'invalidArguments'}])
     if not $args->{sinceState};
-  return ['error', {type => 'cannotCalculateChanges'}]
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges'}])
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
 
   my $sql = "SELECT msgid,active FROM jmessages WHERE jmodseq > ?";
@@ -869,7 +879,7 @@ sub getMessageUpdates {
   my $data = $dbh->selectall_arrayref($sql, {}, $args->{sinceState});
 
   if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
-    return ['error', {type => 'tooManyChanges'}];
+    return $Self->_transError(['error', {type => 'tooManyChanges'}]);
   }
 
   my @changed;
@@ -914,7 +924,7 @@ sub setMessages {
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
-  return ['error', {type => 'accountNotFound'}]
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
   $Self->commit();
@@ -961,16 +971,16 @@ sub importMessage {
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
-  return ['error', {type => 'accountNotFound'}]
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  return ['error', {type => 'invalidArguments'}]
+  return $Self->_transError(['error', {type => 'invalidArguments'}])
     if not $args->{file};
-  return ['error', {type => 'invalidArguments'}]
+  return $Self->_transError(['error', {type => 'invalidArguments'}])
     if not $args->{mailboxIds};
 
   my ($type, $message) = $Self->get_file($args->{file});
-  return ['error', {type => 'notFound'}]
+  return $Self->_transError(['error', {type => 'notFound'}])
     if (not $type or $type ne 'message/rfc822');
 
   $Self->commit();
@@ -994,7 +1004,7 @@ sub importMessage {
 
 sub copyMessages {
   my $Self = shift;
-  return ['error', {type => 'notImplemented'}];
+  return $Self->_transError(['error', {type => 'notImplemented'}]);
 }
 
 sub reportMessages {
@@ -1005,13 +1015,13 @@ sub reportMessages {
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
-  return ['error', {type => 'accountNotFound'}]
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  return ['error', {type => 'invalidArguments'}]
+  return $Self->_transError(['error', {type => 'invalidArguments'}])
     if not $args->{messageIds};
 
-  return ['error', {type => 'invalidArguments'}]
+  return $Self->_transError(['error', {type => 'invalidArguments'}])
     if not exists $args->{asSpam};
 
   $Self->commit();
@@ -1038,7 +1048,7 @@ sub getThreads {
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
-  return ['error', {type => 'accountNotFound'}]
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
   # XXX - error if no IDs
@@ -1115,12 +1125,12 @@ sub getThreadUpdates {
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
-  return ['error', {type => 'accountNotFound'}]
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  return ['error', {type => 'invalidArguments'}]
+  return $Self->_transError(['error', {type => 'invalidArguments'}])
     if not $args->{sinceState};
-  return ['error', {type => 'cannotCalculateChanges'}]
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges'}])
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
 
   my $sql = "SELECT thrid,active FROM jmessages WHERE jmodseq > ?";
@@ -1132,7 +1142,7 @@ sub getThreadUpdates {
   my $data = $dbh->selectall_arrayref($sql, {}, $args->{sinceState});
 
   if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
-    return ['error', {type => 'tooManyChanges'}];
+    return $Self->_transError(['error', {type => 'tooManyChanges'}]);
   }
 
   my %threads;
@@ -1192,7 +1202,7 @@ sub getCalendars {
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
-  return ['error', {type => 'accountNotFound'}]
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
   my $data = $dbh->selectall_arrayref("SELECT jcalendarid, name, colour, isVisible, mayReadFreeBusy, mayReadItems, mayAddItems, mayModifyItems, mayRemoveItems, mayDelete, mayRename FROM jcalendars WHERE active = 1");
@@ -1252,13 +1262,13 @@ sub getCalendarUpdates {
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
-  return ['error', {type => 'accountNotFound'}]
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
   my $sinceState = $args->{sinceState};
-  return ['error', {type => 'invalidArguments'}]
+  return $Self->_transError(['error', {type => 'invalidArguments'}])
     if not $args->{sinceState};
-  return ['error', {type => 'cannotCalculateChanges'}]
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges'}])
     if ($user->{jdeletedmodseq} and $sinceState <= $user->{jdeletedmodseq});
 
   my $data = $dbh->selectall_arrayref("SELECT jcalendarid, jmodseq, active FROM jcalendars ORDER BY jcalendarid");
@@ -1344,11 +1354,12 @@ sub getCalendarEventList {
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
-  return ['error', {type => 'accountNotFound'}]
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
   my $start = $args->{position} || 0;
-  return ['error', {type => 'invalidArguments'}] if $start < 0;
+  return $Self->_transError(['error', {type => 'invalidArguments'}])
+    if $start < 0;
 
   my $data = $dbh->selectall_arrayref("SELECT eventuid,jcalendarid FROM jevents WHERE active = 1 ORDER BY eventuid");
 
@@ -1390,10 +1401,11 @@ sub getCalendarEvents {
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
-  return ['error', {type => 'accountNotFound'}]
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  return ['error', {type => 'invalidArguments'}] unless $args->{ids};
+  return $Self->_transError(['error', {type => 'invalidArguments'}])
+    unless $args->{ids};
   #properties: String[] A list of properties to fetch for each message.
 
   my %seenids;
@@ -1440,12 +1452,12 @@ sub getCalendarEventUpdates {
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
-  return ['error', {type => 'accountNotFound'}]
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  return ['error', {type => 'invalidArguments'}]
+  return $Self->_transError(['error', {type => 'invalidArguments'}])
     if not $args->{sinceState};
-  return ['error', {type => 'cannotCalculateChanges'}]
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges'}])
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
 
   my $sql = "SELECT eventuid,active FROM jevents WHERE jmodseq > ?";
@@ -1453,7 +1465,7 @@ sub getCalendarEventUpdates {
   my $data = $dbh->selectall_arrayref($sql, {}, $args->{sinceState});
 
   if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
-    return ['error', {type => 'tooManyChanges'}];
+    return $Self->_transError(['error', {type => 'tooManyChanges'}]);
   }
 
   $Self->commit();
@@ -1499,7 +1511,7 @@ sub getAddressbooks {
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
-  return ['error', {type => 'accountNotFound'}]
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
   my $data = $dbh->selectall_arrayref("SELECT jaddressbookid, name, isVisible, mayReadItems, mayAddItems, mayModifyItems, mayRemoveItems, mayDelete, mayRename FROM jaddressbooks WHERE active = 1");
@@ -1556,13 +1568,13 @@ sub getAddressbookUpdates {
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
-  return ['error', {type => 'accountNotFound'}]
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
   my $sinceState = $args->{sinceState};
-  return ['error', {type => 'invalidArguments'}]
+  return $Self->_transError(['error', {type => 'invalidArguments'}])
     if not $args->{sinceState};
-  return ['error', {type => 'cannotCalculateChanges'}]
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges'}])
     if ($user->{jdeletedmodseq} and $sinceState <= $user->{jdeletedmodseq});
 
   my $data = $dbh->selectall_arrayref("SELECT jaddressbookid, jmodseq, active FROM jaddressbooks ORDER BY jaddressbookid");
@@ -1648,11 +1660,12 @@ sub getContactList {
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
-  return ['error', {type => 'accountNotFound'}]
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
   my $start = $args->{position} || 0;
-  return ['error', {type => 'invalidArguments'}] if $start < 0;
+  return $Self->_transError(['error', {type => 'invalidArguments'}])
+    if $start < 0;
 
   my $data = $dbh->selectall_arrayref("SELECT contactuid,jaddressbookid FROM jcontacts WHERE active = 1 ORDER BY contactuid");
 
@@ -1694,7 +1707,7 @@ sub getContacts {
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
-  return ['error', {type => 'accountNotFound'}]
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
   #properties: String[] A list of properties to fetch for each message.
@@ -1743,12 +1756,12 @@ sub getContactUpdates {
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
-  return ['error', {type => 'accountNotFound'}]
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  return ['error', {type => 'invalidArguments'}]
+  return $Self->_transError(['error', {type => 'invalidArguments'}])
     if not $args->{sinceState};
-  return ['error', {type => 'cannotCalculateChanges'}]
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges'}])
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
 
   my $sql = "SELECT contactuid,active FROM jcontacts WHERE jmodseq > ?";
@@ -1756,7 +1769,7 @@ sub getContactUpdates {
   my $data = $dbh->selectall_arrayref($sql, {}, $args->{sinceState});
 
   if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
-    return ['error', {type => 'tooManyChanges'}];
+    return $Self->_transError(['error', {type => 'tooManyChanges'}]);
   }
   $Self->commit();
 
@@ -1801,7 +1814,7 @@ sub getContactGroups {
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
-  return ['error', {type => 'accountNotFound'}]
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
   #properties: String[] A list of properties to fetch for each message.
@@ -1854,12 +1867,12 @@ sub getContactGroupUpdates {
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
-  return ['error', {type => 'accountNotFound'}]
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  return ['error', {type => 'invalidArguments'}]
+  return $Self->_transError(['error', {type => 'invalidArguments'}])
     if not $args->{sinceState};
-  return ['error', {type => 'cannotCalculateChanges'}]
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges'}])
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
 
   my $sql = "SELECT groupuid,active FROM jcontactgroups WHERE jmodseq > ?";
@@ -1867,7 +1880,7 @@ sub getContactGroupUpdates {
   my $data = $dbh->selectall_arrayref($sql, {}, $args->{sinceState});
 
   if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
-    return ['error', {type => 'tooManyChanges'}];
+    return $Self->_transError(['error', {type => 'tooManyChanges'}]);
   }
 
   my @changed;
