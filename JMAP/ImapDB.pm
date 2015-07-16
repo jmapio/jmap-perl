@@ -831,7 +831,7 @@ sub deleted_record {
   my $Self = shift;
   my ($folder, $uid) = @_;
 
-  my ($msgid, $jmailboxid) = $Self->{dbh}->selectrow_array("SELECT msgid, jmailboxid FROM imessages WHERE ifolderid = ? AND uid = ?", {}, $folder, $uid);
+  my ($msgid, $jmailboxid) = $Self->{dbh}->selectrow_array("SELECT msgid, jmailboxid FROM imessages JOIN ifolders USING (ifolderid) WHERE imessages.ifolderid = ? AND uid = ?", {}, $folder, $uid);
   return unless $msgid;
 
   $Self->ddelete('imessages', {ifolderid => $folder, uid => $uid});
