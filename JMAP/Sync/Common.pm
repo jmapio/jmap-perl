@@ -25,6 +25,15 @@ sub DESTROY {
   my $Self = shift;
   if ($Self->{imap}) {
     $Self->{imap}->logout();
+    delete $Self->{imap};
+  }
+}
+
+sub disconnect {
+  my $Self = shift;
+  if ($Self->{imap}) {
+    $Self->{imap}->logout();
+    delete $Self->{imap};
   }
 }
 

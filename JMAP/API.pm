@@ -447,7 +447,7 @@ sub getMessageList {
   return ['error', {type => 'invalidArguments'}] if $start < 0;
 
   my $sort = $Self->_build_sort($args->{sort});
-  my $data = $dbh->selectall_arrayref("SELECT msgid,thrid FROM jmessages WHERE active = 1 ORDER BY $sort");
+  my $data = $dbh->selectall_arrayref("SELECT DISTINCT msgid,thrid FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmessages.active = 1 AND jmessagemap.active = 1 ORDER BY $sort");
 
   $data = $Self->_filter($data, $args->{filter}, {}) if $args->{filter};
   $data = $Self->_collapse($data) if $args->{collapseThreads};
@@ -1144,7 +1144,7 @@ sub getThreadUpdates {
 
   my @removed;
   foreach my $key (keys %delcheck) {
-    my ($exists) = $dbh->selectrow_array("SELECT COUNT(*) FROM jmessages WHERE thrid = ? AND active = 1", {}, $key);
+    my ($exists) = $dbh->selectrow_array("SELECT COUNT(DISTINCT msgid) FROM jmessages JOIN jmessagemap WHERE thrid = ? AND jmessages.active = 1 AND jmessagemap.active = 1", {}, $key);
     unless ($exists) {
       delete $threads{$key};
       push @removed, $key;

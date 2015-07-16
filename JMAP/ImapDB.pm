@@ -841,6 +841,7 @@ sub delete_messages {
     my ($ifolderid, $uid) = $dbh->selectrow_array("SELECT ifolderid, uid FROM imessages WHERE msgid = ?", {}, $msgid);
     if ($ifolderid and $uid) {
       $deletemap{$ifolderid}{$uid} = $msgid;
+    }
     else {
       $notdeleted{$msgid} = "No such message on server";
     }
