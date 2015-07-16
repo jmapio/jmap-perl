@@ -17,6 +17,9 @@ use Digest::SHA qw(sha1_hex);
 use AnyEvent;
 use AnyEvent::Socket;
 use Data::Dumper;
+use JMAP::Sync::Gmail;
+use JMAP::Sync::ICloud;
+use JMAP::Sync::Fastmail;
 
 our $TAG = 1;
 
@@ -89,19 +92,19 @@ sub backend_cmd {
     my $config = { hostname => $auth->[0], username => $auth->[1], password => $auth->[2] };
     my $backend;
     if ($config->{hostname} eq 'gmail') {
-      $backend = JMAP::Sync::Gmail->new($config) || die "failed to setup $id";
+      $backend = JMAP::Sync::Gmail->new($config) || die "failed to setup $auth->[1]";
     } elsif ($config->{hostname} eq 'imap.mail.me.com') {
-      $backend = JMAP::Sync::ICloud->new($config) || die "failed to setup $id";
+      $backend = JMAP::Sync::ICloud->new($config) || die "failed to setup $auth->[1]";
     } elsif ($config->{hostname} eq 'mail.messagingengine.com') {
-      $backend = JMAP::Sync::Fastmail->new($config) || die "failed to setup $id";
+      $backend = JMAP::Sync::Fastmail->new($config) || die "failed to setup $auth->[1]";
     } else {
-      die "UNKNOWN ID $id ($config->{hostname})";
+      die "UNKNOWN ID $config->{username} ($config->{hostname})";
     }
     $Self->{backend} = $backend;
   }
 
-  die "No such command $cmd" unless $backend->can($cmd);
-  return $backend->$cmd(@args);
+  die "No such command $cmd" unless $Self->{backend}->can($cmd);
+  return $Self->{backend}->$cmd(@args);
 }
 
 # synchronise list from IMAP server to local folder cache
@@ -551,7 +554,7 @@ sub sync_imap {
   foreach my $row (@$data) {
     # XXX - better handling of UIDvalidity change?
     next if ($status->{$row->[1]}{uidvalidity} == $row->[2] and $status->{$row->[1]}{highestmodseq} and $status->{$row->[1]}{highestmodseq} == $row->[3]);
-    $Self->do_folder($syncname, $row->[0], $row->[4]);
+    $Self->do_folder($row->[0], $row->[4]);
   }
 }
 
@@ -561,7 +564,7 @@ sub backfill {
   return unless @$data;
   my $rest = 50;
   foreach my $row (@$data) {
-    $rest -= $Self->do_folder('backfill', @$row, $rest);
+    $rest -= $Self->do_folder(@$row, $rest);
     last if $rest < 10;
   }
   return 1;
@@ -577,7 +580,7 @@ sub firstsync {
   my $labels = $Self->labels();
 
   my $ifolderid = $labels->{"inbox"}[0];
-  $Self->do_folder('sync', $ifolderid, "inbox", 50);
+  $Self->do_folder($ifolderid, "inbox", 50);
 
   my $msgids = $Self->dbh->selectcol_arrayref("SELECT msgid FROM imessages WHERE ifolderid = ? ORDER BY uid DESC LIMIT 50", {}, $ifolderid);
 
@@ -609,7 +612,6 @@ sub calcmsgid {
 
 sub do_folder {
   my $Self = shift;
-  my $syncname = shift;
   my $ifolderid = shift;
   my $forcelabel = shift;
   my $batchsize = shift;
