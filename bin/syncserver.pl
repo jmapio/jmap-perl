@@ -12,6 +12,7 @@ use JSON::XS qw(encode_json decode_json);
 use Net::Server::PreFork;
 use JMAP::Sync::Gmail;
 use JMAP::Sync::ICloud;
+use JMAP::Sync::Fastmail;
 use EV;
 use Data::Dumper;
 
@@ -30,6 +31,8 @@ sub setup {
     $backend = JMAP::Sync::Gmail->new($config) || die "failed to setup $id";
   } elsif ($config->{hostname} eq 'imap.mail.me.com') {
     $backend = JMAP::Sync::ICloud->new($config) || die "failed to setup $id";
+  } elsif ($config->{hostname} eq 'mail.messagingengine.com') {
+    $backend = JMAP::Sync::Fastmail->new($config) || die "failed to setup $id";
   } else {
     die "UNKNOWN ID $id ($config->{hostname})";
   }
