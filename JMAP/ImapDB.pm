@@ -77,11 +77,6 @@ sub access_token {
 sub backend_cmd {
   my $Self = shift;
   my $cmd = shift;
-  my $cb;
-  if (ref($cmd)) {
-    $cb = $cmd;
-    $cmd = shift; 
-  }
   my @args = @_;
 
   # release the transaction for the duration
@@ -98,14 +93,10 @@ sub backend_cmd {
       my $hdl = shift;
       my $json = shift;
       die "INVALID RESPONSE" unless $json->[2] eq $tag;
-      if ($cb) {
-        $cb->($json);
-      }
-      else {
-        $w->send($json);
-      }
+      $w->send($json);
     });
   };
+
   if ($Self->{backend}) {
     $action->($Self->{backend});
   }
@@ -148,8 +139,6 @@ sub backend_cmd {
   }
 
   die "Failed to get a backend" unless $Self->{backend};
-
-  return if $cb; # async usage
 
   my $res = $w->recv;
   $Self->begin();
@@ -621,7 +610,7 @@ sub calcmsgid {
   my $envelope = shift;
   my $json = JSON::XS->new->allow_nonref->canonical;
   my $coded = $json->encode($envelope);
-  my $msgid = sha1_hex($coded);
+  my $msgid = 's' . substr(sha1_hex($coded), 0, 11);
 
   my $replyto = lc($envelope->{'In-Reply-To'} || '');
   my $messageid = lc($envelope->{'Message-ID'} || '');
@@ -665,7 +654,7 @@ sub do_folder {
     uidvalidity => $uidvalidity,
     highestmodseq => $highestmodseq,
     uidnext => $uidnext,
-  },\%fetches);
+  }, \%fetches);
 
   if ($res->{newstate}{uidvalidity} != $uidvalidity) {
     # going to want to nuke everything for the existing folder and create this - but for now, just die
@@ -954,6 +943,7 @@ sub fill_messages {
       my $rfc822 = $res->{data}{$uid};
       my $msgid = $uhash->{$uid};
       next unless $rfc822;
+      warn "ADDING RAW MESSAGE $imapname: $uid => $msgid\n";
       $result{$msgid} = $Self->add_raw_message($msgid, $rfc822);
     }
   }
