@@ -41,6 +41,7 @@ my %ROLE_MAP = (
 sub setuser {
   my $Self = shift;
   my ($hostname, $username, $password) = @_;
+  $Self->begin();
   my $data = $Self->dbh->selectrow_arrayref("SELECT hostname, username, password FROM iserver");
   if ($data and $data->[0]) {
     $Self->dmaybeupdate('iserver', {hostname => $hostname, username => $username, password => $password}, {hostname => $data->[0]});
@@ -63,6 +64,7 @@ sub setuser {
       jhighestmodseq => 1,
     });
   }
+  $Self->commit();
 }
 
 sub access_token {
@@ -81,6 +83,9 @@ sub async_cmd {
   my @args = @_;
 
   my $w = AnyEvent->condvar;
+
+  use Carp;
+  Carp::confess("in transaction") if $Self->in_transaction();
 
   my $action = sub {
     my $handle = shift;
@@ -304,11 +309,11 @@ sub sync_calendars {
   my $Self = shift;
 
   my $calendars = $Self->async_cmd('dav', 'calendars', []);
+  return unless $calendars;
 
   $Self->begin();
   my $dbh = $Self->dbh();
 
-  return unless $calendars;
   my $icalendars = $dbh->selectall_arrayref("SELECT icalendarid, href, name, isReadOnly, colour, syncToken FROM icalendars");
   my %byhref = map { $_->[1] => $_ } @$icalendars;
 
@@ -578,11 +583,11 @@ sub do_addressbook {
 
 sub labels {
   my $Self = shift;
-  unless ($Self->{t}{labels}) {
+  unless ($Self->{labels}) {
     my $data = $Self->dbh->selectall_arrayref("SELECT label, ifolderid, jmailboxid, imapname FROM ifolders");
-    $Self->{t}{labels} = { map { lc $_->[0] => [$_->[1], $_->[2], $_->[3]] } @$data };
+    $Self->{labels} = { map { lc $_->[0] => [$_->[1], $_->[2], $_->[3]] } @$data };
   }
-  return $Self->{t}{labels};
+  return $Self->{labels};
 }
 
 sub sync_imap {
@@ -716,6 +721,10 @@ sub do_folder {
     }
   }
 
+  $Self->dupdate('ifolders', {highestmodseq => $res->{newstate}{highestmodseq}, uidfirst => $uidfirst, uidnext => $res->{newstate}{uidnext}}, {ifolderid => $ifolderid});
+
+  $Self->commit();
+
   # need to make changes before counting
   if ($uidfirst == 1) {
     my ($count) = $dbh->selectrow_array("SELECT COUNT(*) FROM imessages WHERE ifolderid = ?", {}, $ifolderid);
@@ -723,6 +732,7 @@ sub do_folder {
       my $to = $uidnext - 1;
       $Self->log('debug', "COUNTING $imapname: $uidfirst:$to (something deleted)");
       my $res = $Self->async_cmd($syncname, 'imap_count', $imapname, $uidvalidity, "$uidfirst:$to");
+      $Self->begin();
       my $uids = $res->{data};
       my $data = $dbh->selectcol_arrayref("SELECT uid FROM imessages WHERE ifolderid = ?", {}, $ifolderid);
       my %exists = map { $_ => 1 } @$uids;
@@ -730,12 +740,9 @@ sub do_folder {
         next if $exists{$uid};
         $Self->deleted_record($ifolderid, $uid);
       }
+      $Self->commit();
     }
   }
-
-  $Self->dupdate('ifolders', {highestmodseq => $res->{newstate}{highestmodseq}, uidfirst => $uidfirst, uidnext => $res->{newstate}{uidnext}}, {ifolderid => $ifolderid});
-
-  $Self->commit();
 
   return $didold;
 }

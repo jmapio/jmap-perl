@@ -121,6 +121,16 @@ sub getPersonalities {
   }];
 }
 
+sub begin {
+  my $Self = shift;
+  $Self->{db}->begin();
+}
+
+sub commit {
+  my $Self = shift;
+  $Self->{db}->commit();
+}
+
 sub getMailboxes {
   my $Self = shift;
   my $args = shift;

@@ -103,6 +103,10 @@ sub process_request {
       undef $hdl;
       EV::unloop;
     },
+    on_shutdown => sub {
+      undef $hdl;
+      EV::unloop;
+    }
   );
 
   # send some request line
@@ -147,9 +151,11 @@ sub handle_getstate {
   my $db = shift;
   my $cmd = shift;
 
+  $db->begin();
   my $user = $db->get_user();
   die "Failed to get user" unless $user;
   my $state = "$user->{jhighestmodseq}";
+  $db->commit();
 
   my $data = {
     clientId => undef,
@@ -222,15 +228,17 @@ sub mk_handler {
     unless ($res) {
       $res = ['error', "$@"]
     }
-    if ($res->[0]) {
-      $res->[2] = $tag;
-      $hdl->push_write(json => $res) if $res->[0];
-      warn "HANDLED $cmd ($tag) => $res->[0] ($accountid)\n" ;
-      if ($res->[0] eq 'error') {
-        warn Dumper($res);
-      }
+    $res->[2] = $tag;
+    $hdl->push_write(json => $res) if $res->[0];
+    warn "HANDLED $cmd ($tag) => $res->[0] ($accountid)\n" ;
+    if ($res->[0] eq 'error') {
+      warn Dumper($res);
+      # this process won't handle any more connections
+      $hdl->push_shutdown();
     }
-    $hdl->push_read(json => mk_handler($db));
+    else {
+      $hdl->push_read(json => mk_handler($db));
+    }
   };
 }
 
@@ -383,7 +391,11 @@ sub handle_jmap {
     my @items;
     my $FuncRef = $api->can($command);
     if ($FuncRef) {
-      @items = $api->$command($args, $tag);
+      @items = eval { $api->$command($args, $tag) };
+      if ($@) {
+        @items = ['error', { type => "serverError", message => "$@" }];
+	eval { $api->rollback() };
+      }
     }
     else {
       @items = ['error', { type => 'unknownMethod' }];
