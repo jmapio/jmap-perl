@@ -10,6 +10,7 @@ use strict;
 use warnings;
 use AnyEvent;
 use AnyEvent::Gmail;
+use Mail::IMAPTalk;
 use Data::Dumper;
 use AnyEvent::HTTPD;
 use JMAP::GmailDB;
