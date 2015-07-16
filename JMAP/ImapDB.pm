@@ -89,7 +89,7 @@ sub async_cmd {
 
   my $action = sub {
     my $handle = shift;
-    my $tag = "T" . $TAG++;
+    my $tag = "$backend" . $TAG++;
     $handle->push_write(json => [$cmd, \@args, $tag]); # whatever
     $handle->push_write("\012");
     $handle->push_read(json => sub {
@@ -640,7 +640,7 @@ sub calcmsgid {
   my $data = shift;
   my $envelope = $data->{envelope};
   my $json = JSON::XS->new->allow_nonref->canonical;
-  my $coded = $json->encode([$imapname, $uid, $data]);
+  my $coded = $json->encode([$envelope, $data->{'rfc822.size'}]);
   my $msgid = 's' . substr(sha1_hex($coded), 0, 11);
 
   my $replyto = lc($envelope->{'In-Reply-To'} || '');
@@ -880,7 +880,10 @@ sub deleted_record {
 
   $Self->ddelete('imessages', {ifolderid => $folder, uid => $uid});
 
-  $Self->apply_data($msgid, [], []);
+  # NOT FOR GMAIL
+  my ($labels) = $Self->{dbh}->selectcol_arrayref("SELECT label FROM jmessagemap JOIN ifolders USING (jmailboxid) WHERE msgid = ? AND ifolderid != ? AND active = 1", {}, $msgid, $folder);
+
+  $Self->apply_data($msgid, [], $labels);
 }
 
 sub new_record {
@@ -911,6 +914,9 @@ sub new_record {
 sub apply_data {
   my $Self = shift;
   my ($msgid, $flaglist, $labellist) = @_;
+
+  # spurious temporary old message during move
+  return if grep { lc $_ eq '\\deleted' } @$flaglist;
 
   my %flagdata = (
     isUnread => 1,
