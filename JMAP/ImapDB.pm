@@ -637,6 +637,7 @@ sub calcmsgid {
   my $imapname = shift;
   my $uid = shift;
   my $data = shift;
+  my $envelope = $data->{envelope};
   my $json = JSON::XS->new->allow_nonref->canonical;
   my $coded = $json->encode([$imapname, $uid, $data]);
   my $msgid = 's' . substr(sha1_hex($coded), 0, 11);
@@ -769,16 +770,21 @@ sub update_messages {
   my $dbh = $Self->{dbh};
 
   my %updatemap;
+  my %notchanged;
   foreach my $msgid (keys %$changes) {
     my ($ifolderid, $uid) = $dbh->selectrow_array("SELECT ifolderid, uid FROM imessages WHERE msgid = ?", {}, $msgid);
-    $updatemap{$ifolderid}{$uid} = $msgid;
+    if ($ifolderid and $uid) {
+      $updatemap{$ifolderid}{$uid} = $msgid;
+    }
+    else {
+      $notchanged{$msgid} = "No such message on server";
+    }
   }
 
   my $folderdata = $dbh->selectall_arrayref("SELECT ifolderid, imapname, uidvalidity, label, jmailboxid FROM ifolders");
   my %foldermap = map { $_->[0] => $_ } @$folderdata;
   my %jmailmap = map { $_->[4] => $_ } @$folderdata;
 
-  my %notchanged;
   my @changed;
   foreach my $ifolderid (keys %updatemap) {
     # XXX - merge similar actions?
@@ -830,16 +836,21 @@ sub delete_messages {
   my $dbh = $Self->{dbh};
 
   my %deletemap;
+  my %notdeleted;
   foreach my $msgid (@$ids) {
     my ($ifolderid, $uid) = $dbh->selectrow_array("SELECT ifolderid, uid FROM imessages WHERE msgid = ?", {}, $msgid);
-    $deletemap{$ifolderid}{$uid} = $msgid;
+    if ($ifolderid and $uid) {
+      $deletemap{$ifolderid}{$uid} = $msgid;
+    else {
+      $notdeleted{$msgid} = "No such message on server";
+    }
   }
 
   my $folderdata = $dbh->selectall_arrayref("SELECT ifolderid, imapname, uidvalidity, label, jmailboxid FROM ifolders");
   my %foldermap = map { $_->[0] => $_ } @$folderdata;
   my %jmailmap = map { $_->[4] => $_ } grep { $_->[4] } @$folderdata;
 
-  my (@deleted, %notdeleted);
+  my @deleted;
   foreach my $ifolderid (keys %deletemap) {
     # XXX - merge similar actions?
     my $imapname = $foldermap{$ifolderid}[1];
