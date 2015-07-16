@@ -170,7 +170,6 @@ sub sync_folders {
     my $sep = $folders->{$name}[0];
     my $role = $ROLE_MAP{lc $folders->{$name}[1]};
     my $label = $role || $folders->{$name}[1];
-    warn "FOUND $name => $label";
     my $id = $ibylabel{$label}[0];
     if ($id) {
       $Self->dmaybeupdate('ifolders', {sep => $sep, imapname => $name}, {ifolderid => $id});
@@ -607,11 +606,13 @@ sub sync_imap {
 sub backfill {
   my $Self = shift;
   my $data = $Self->dbh->selectall_arrayref("SELECT ifolderid,label FROM ifolders WHERE uidnext > 1 AND uidfirst > 1 ORDER BY mtime");
-  my $rest = 500;
+  return unless @$data;
+  my $rest = 50;
   foreach my $row (@$data) {
     $rest -= $Self->do_folder('backfill', @$row, $rest);
     last if $rest < 10;
   }
+  return 1;
 }
 
 sub firstsync {
@@ -670,18 +671,23 @@ sub do_folder {
   die "NO SUCH FOLDER $ifolderid" unless $imapname;
 
   my %fetches;
-  $fetches{new} = [$uidnext, '*', [qw(internaldate envelope rfc822.size)]];
-  $fetches{update} = [$uidfirst, $uidnext - 1, [], $highestmodseq];
 
-  if ($uidfirst > 1 and $batchsize) {
-    my $end = $uidfirst - 1;
-    $uidfirst -= $batchsize;
-    $uidfirst = 1 if $uidfirst < 1;
-    $fetches{backfill} = [$uidfirst, $end, [qw(internaldate envelope rfc822.size)]];
-    warn "BACKFILLING $imapname: $uidfirst:$end ($uidnext)\n";
+  if ($batchsize) {
+    if ($uidfirst > 1) {
+      my $end = $uidfirst - 1;
+      $uidfirst -= $batchsize;
+      $uidfirst = 1 if $uidfirst < 1;
+      $fetches{backfill} = [$uidfirst, $end, [qw(internaldate envelope rfc822.size)]];
+    }
+  }
+  else {
+    $fetches{new} = [$uidnext, '*', [qw(internaldate envelope rfc822.size)]];
+    $fetches{update} = [$uidfirst, $uidnext - 1, [], $highestmodseq];
   }
 
   $Self->commit();
+
+  return unless keys %fetches;
 
   my $res = $Self->async_cmd($syncname, 'imap_fetch', $imapname, {
     uidvalidity => $uidvalidity,
@@ -997,7 +1003,6 @@ sub fill_messages {
       next if $result{$msgid};
       my $rfc822 = $res->{data}{$uid};
       next unless $rfc822;
-      warn "ADDING RAW MESSAGE $imapname: $uid => $msgid\n";
       $result{$msgid} = $Self->add_raw_message($msgid, $rfc822);
     }
 

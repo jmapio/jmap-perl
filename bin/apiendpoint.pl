@@ -48,6 +48,12 @@ sub handle_getinfo {
   return ['info', [$email, $type]];
 }
 
+sub do_backfill {
+  # check if there's more work to do on the account...
+  my $did = $db->in_transaction ? 1 : eval { $db->backfill() };
+  $db->{backfiller} = $did ? AnyEvent->timer(after => 2, cb => sub { do_backfill() }) : undef;
+}
+
 sub getdb {
   return $db if $db;
   die "no accountid" unless $accountid;
@@ -65,15 +71,10 @@ sub getdb {
     die "Weird type $type";
   }
   $db->{change_cb} = \&change_cb;
-  $db->{watcher} = AnyEvent->timer(after => 30, interval => 30, cb => sub {
-    # check if there's more work to do on the account...
-    eval {
-      $db->backfill();
-    };
-  });
+  $db->{backfiller} = AnyEvent->timer(after => 2, cb => sub { do_backfill() });
   $db->{calsync} = AnyEvent->timer(after => 10, interval => 100, cb => sub {
     # check if there's more work to do on the account...
-    warn "DAV SYNC running $accountid";
+    return if $db->in_transaction();
     eval {
       $db->sync_calendars();
       $db->sync_addressbooks();
@@ -114,12 +115,10 @@ sub process_request {
     my $handle = shift;
     set_accountid(shift);
     warn "Connected $accountid\n";
-    $handle->push_read(json => mk_handler($accountid));
+    $handle->push_read(json => mk_handler($accountid, 1));
   });
 
-  warn "STARTING LOOP";
   EV::run;
-  warn "ENDING LOOP";
   exit 0;
 }
 
@@ -170,7 +169,7 @@ sub handle_getstate {
 }
 
 sub mk_handler {
-  my ($db) = @_;
+  my ($db, $n) = @_;
 
   $hdl->{killer} = AnyEvent->timer(after => 600, cb => sub {
     warn "SHUTTING DOWN $accountid ON TIMEOUT\n";
@@ -182,6 +181,7 @@ sub mk_handler {
 
   return sub {
     my ($hdl, $json) = @_;
+    $hdl->push_read(json => mk_handler($db, $n+1));
 
     # make sure we have a connection
 
@@ -233,11 +233,9 @@ sub mk_handler {
     warn "HANDLED $cmd ($tag) => $res->[0] ($accountid)\n" ;
     if ($res->[0] eq 'error') {
       warn Dumper($res);
+      warn "DIED AFTER COMMAND $n";
       # this process won't handle any more connections
       $hdl->push_shutdown();
-    }
-    else {
-      $hdl->push_read(json => mk_handler($db));
     }
   };
 }
