@@ -326,8 +326,8 @@ sub sync_calendars {
       }
     }
     else {
-      push @todo, $id;
       $id = $Self->dinsert('icalendars', $data);
+      push @todo, $id;
     }
     $seen{$id} = 1;
   }
@@ -456,8 +456,8 @@ sub sync_addressbooks {
       }
     }
     else {
-      push @todo, $id;
       $id = $Self->dinsert('iaddressbooks', $data);
+      push @todo, $id;
     }
     $seen{$id} = 1;
   }
