@@ -66,7 +66,6 @@ sub getdb {
   }
   $db->{change_cb} = \&change_cb;
   $db->{watcher} = AnyEvent->timer(after => 30, interval => 30, cb => sub {
-    return if $db->in_transaction();
     # check if there's more work to do on the account...
     eval {
       $db->begin();
@@ -75,7 +74,6 @@ sub getdb {
     };
   });
   $db->{calsync} = AnyEvent->timer(after => 10, interval => 100, cb => sub {
-    return if $db->in_transaction();
     # check if there's more work to do on the account...
     warn "DAV SYNC running $accountid";
     eval {
