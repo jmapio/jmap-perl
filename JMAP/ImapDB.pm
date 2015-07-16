@@ -84,6 +84,9 @@ sub backend_cmd {
   }
   my @args = @_;
 
+  # release the transaction for the duration
+  $Self->commit();
+
   my $w = AnyEvent->condvar;
 
   my $action = sub {
@@ -96,10 +99,10 @@ sub backend_cmd {
       my $json = shift;
       die "INVALID RESPONSE" unless $json->[2] eq $tag;
       if ($cb) {
-        $cb->($json->[1]);
+        $cb->($json);
       }
       else {
-        $w->send($json->[1]);
+        $w->send($json);
       }
     });
   };
@@ -149,8 +152,12 @@ sub backend_cmd {
   return if $cb; # async usage
 
   my $res = $w->recv;
-  #warn Dumper ($cmd, \@args, $res);
-  return $res;
+  $Self->begin();
+  if ($res->[0] eq 'error') {
+    warn Dumper ($cmd, \@args, $res);
+    die "$res->[1]";
+  }
+  return $res->[1];
 }
 
 # synchronise list from IMAP server to local folder cache
@@ -170,6 +177,7 @@ sub sync_folders {
     my $sep = $folders->{$name}[0];
     my $role = $ROLE_MAP{lc $folders->{$name}[1]};
     my $label = $role || $folders->{$name}[1];
+    warn "FOUND $name => $label";
     my $id = $ibylabel{$label}[0];
     if ($id) {
       $Self->dmaybeupdate('ifolders', {sep => $sep, imapname => $name}, {ifolderid => $id});
@@ -313,7 +321,7 @@ sub sync_calendars {
   my %seen;
   my @todo;
   foreach my $calendar (@$calendars) {
-    my $id = $byhref{$calendar->{href}}[0];
+    my $id = $calendar->{href} ? $byhref{$calendar->{href}}[0] : 0;
     my $data = {
       isReadOnly => $calendar->{isReadOnly},
       href => $calendar->{href},
@@ -376,7 +384,7 @@ sub sync_jcalendars {
       mayDelete => 0,
       mayRename => 0,
     };
-    if ($jbyid{$calendar->[3]}) {
+    if ($calendar->[3] && $jbyid{$calendar->[3]}) {
       $Self->dmaybeupdate('jcalendars', $data, {jcalendarid => $calendar->[3]});
       $seen{$calendar->[3]} = 1;
     }
@@ -504,7 +512,7 @@ sub sync_jaddressbooks {
       mayDelete => 0,
       mayRename => 0,
     };
-    if ($jbyid{$addressbook->[2]}) {
+    if ($addressbook->[2] && $jbyid{$addressbook->[2]}) {
       $Self->dmaybeupdate('jaddressbooks', $data, {jaddressbookid => $addressbook->[2]});
       $seen{$addressbook->[2]} = 1;
     }
@@ -933,16 +941,19 @@ sub fill_messages {
   }
 
   foreach my $ifolderid (sort keys %udata) {
-    my ($imapname, $uidvalidity) = $Self->dbh->selectrow_array("SELECT imapname, uidvalidity FROM ifolders WHERE ifolderid = ?", {}, $ifolderid);
     my $uhash = $udata{$ifolderid};
+    my $uids = join(',', sort { $a <=> $b } grep { not $result{$uhash->{$_}} } keys %$uhash);
+    next unless $uids;
 
-    my $uids = join(',', sort { $a <=> $b } keys %$uhash);
+    my ($imapname, $uidvalidity) = $Self->dbh->selectrow_array("SELECT imapname, uidvalidity FROM ifolders WHERE ifolderid = ?", {}, $ifolderid);
+    next unless $imapname;
+
     my $res = $Self->backend_cmd('imap_fill', $imapname, $uidvalidity, $uids);
 
     foreach my $uid (keys %{$res->{data}}) {
-      warn "FETCHED BODY FOR $uid\n";
       my $rfc822 = $res->{data}{$uid};
       my $msgid = $uhash->{$uid};
+      next unless $rfc822;
       $result{$msgid} = $Self->add_raw_message($msgid, $rfc822);
     }
   }

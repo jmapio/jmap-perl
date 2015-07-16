@@ -28,6 +28,7 @@ sub connect_calendars {
     user => $Self->{auth}{username},
     access_token => $Self->{auth}{access_token},
     url => "https://apidata.googleusercontent.com/caldav/v2",
+    is_google => 1,
     expandurl => 1,
   );
 

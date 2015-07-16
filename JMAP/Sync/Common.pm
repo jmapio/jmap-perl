@@ -44,6 +44,7 @@ sub get_events {
   my $talk = $Self->connect_calendars();
   return unless $talk;
 
+  $Args->{href} =~ s{/$}{};
   my $data = $talk->GetEvents($Args->{href}, Full => 1);
 
   my %res;
@@ -70,6 +71,7 @@ sub get_cards {
   my $talk = $Self->connect_contacts();
   return unless $talk;
 
+  $Args->{href} =~ s{/$}{};
   my $data = $talk->GetContacts($Args->{href});
 
   my %res;

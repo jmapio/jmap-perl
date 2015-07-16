@@ -78,6 +78,8 @@ sub connect_imap {
     );
     next unless $Self->{imap};
     $Self->{lastused} = time();
+    my $namespace = $Self->{imap}->namespace();
+    my $prefix = $namespace->[0][0][0];
     my $list = $Self->{imap}->capability()->{xlist} ? 'xlist' : 'list';
     my @folders = $Self->{imap}->$list('', '*');
 
@@ -86,7 +88,12 @@ sub connect_imap {
     foreach my $folder (@folders) {
       my ($role) = grep { not $KNOWN_SPECIALS{lc $_} } @{$folder->[0]};
       my $name = $folder->[2];
-      my $label = $role || $folder->[2];
+      my $label = $role;
+      unless ($label) {
+        $label = $folder->[2];
+        $label =~ s{^$prefix}{};
+        $label =~ s{^[$folder->[1]]}{}; # just in case prefix was missing sep
+      }
       $Self->{folders}{$name} = [$folder->[1], $label];
       $Self->{labels}{$label} = $name;
     }
