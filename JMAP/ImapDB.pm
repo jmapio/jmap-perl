@@ -688,22 +688,21 @@ sub do_folder {
   $Self->commit();
 
   # need to make changes before counting
-  if ($uidfirst == 1) {
-    my ($count) = $dbh->selectrow_array("SELECT COUNT(*) FROM imessages WHERE ifolderid = ?", {}, $ifolderid);
-    if ($count != $res->{newstate}{exists}) {
-      my $to = $uidnext - 1;
-      $Self->log('debug', "COUNTING $imapname: $uidfirst:$to (something deleted)");
-      my $res = $Self->backend_cmd('imap_count', $imapname, $uidvalidity, "$uidfirst:$to");
-      $Self->begin();
-      my $uids = $res->{data};
-      my $data = $dbh->selectcol_arrayref("SELECT uid FROM imessages WHERE ifolderid = ?", {}, $ifolderid);
-      my %exists = map { $_ => 1 } @$uids;
-      foreach my $uid (@$data) {
-        next if $exists{$uid};
-        $Self->deleted_record($ifolderid, $uid);
-      }
-      $Self->commit();
+  my ($count) = $dbh->selectrow_array("SELECT COUNT(*) FROM imessages WHERE ifolderid = ?", {}, $ifolderid);
+  # if we don't know everything, we have to ALWAYS check or moves break
+  if ($uidfirst != 1 or $count != $res->{newstate}{exists}) {
+    my $to = $uidnext - 1;
+    $Self->log('debug', "COUNTING $imapname: $uidfirst:$to (something deleted)");
+    my $res = $Self->backend_cmd('imap_count', $imapname, $uidvalidity, "$uidfirst:$to");
+    $Self->begin();
+    my $uids = $res->{data};
+    my $data = $dbh->selectcol_arrayref("SELECT uid FROM imessages WHERE ifolderid = ?", {}, $ifolderid);
+    my %exists = map { $_ => 1 } @$uids;
+    foreach my $uid (@$data) {
+      next if $exists{$uid};
+      $Self->deleted_record($ifolderid, $uid);
     }
+    $Self->commit();
   }
 
   return $didold;
