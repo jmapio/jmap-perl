@@ -50,8 +50,9 @@ sub handle_getinfo {
 
 sub do_backfill {
   # check if there's more work to do on the account...
+  return 0;
   my $did = $db->in_transaction ? 1 : eval { $db->backfill() };
-  $db->{backfiller} = $did ? AnyEvent->timer(after => 20, cb => sub { do_backfill() }) : undef;
+  $db->{backfiller} = $did ? AnyEvent->timer(after => 5, cb => sub { do_backfill() }) : undef;
 }
 
 sub getdb {
