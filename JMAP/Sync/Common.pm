@@ -257,14 +257,14 @@ sub imap_move {
 
   if ($newname) {
     # move
-    #if ($imap->capability->{move}) {
-      #my $res = $imap->move($uids, $newname);
-      #unless ($res) {
-        #$res{notMoved} = $uids;
-        #return \%res;
-      #}
-    #}
-    #else {
+    if ($imap->capability->{move}) {
+      my $res = $imap->move($uids, $newname);
+      unless ($res) {
+        $res{notMoved} = $uids;
+        return \%res;
+      }
+    }
+    else {
       my $res = $imap->copy($uids, $newname);
       unless ($res) {
         $res{notMoved} = $uids;
@@ -272,7 +272,7 @@ sub imap_move {
       }
       $imap->store($uids, "+flags", "(\\seen \\deleted)");
       $imap->uidexpunge($uids);
-    #}
+    }
   }
   else {
     $imap->store($uids, "+flags", "(\\seen \\deleted)");
