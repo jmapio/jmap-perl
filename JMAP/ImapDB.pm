@@ -321,6 +321,9 @@ sub sync_calendars {
         push @todo, $id;
         $Self->dmaybeupdate('icalendars', $data, {icalendarid => $id});
       }
+      else {
+        warn "match $token $calendar->{syncToken}\n";
+      }
     }
     else {
       $id = $Self->dinsert('icalendars', $data);

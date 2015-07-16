@@ -96,12 +96,16 @@ sub process_request {
     fh => $server->{server}{client},
     on_error => sub {
       my ($hdl, $fatal, $msg) = @_;
+      warn "SHUTDOWN ON ERROR $accountid";
       $hdl->destroy;
+      undef $hdl;
       EV::unloop;
     },
     on_disconnect => sub {
       my ($hdl, $fatal, $msg) = @_;
+      warn "SHUTDOWN ON DISCONNECT $accountid";
       $hdl->destroy;
+      undef $hdl;
       EV::unloop;
     },
   );
@@ -114,7 +118,9 @@ sub process_request {
     $handle->push_read(json => mk_handler($accountid));
   });
 
+  warn "STARTING LOOP";
   EV::run;
+  warn "ENDING LOOP";
   exit 0;
 }
 

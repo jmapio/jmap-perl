@@ -48,12 +48,16 @@ sub process_request {
     fh => $server->{server}{client},
     on_error => sub {
       my ($hdl, $fatal, $msg) = @_;
+      warn "CLOSING ON ERROR $id";
       $hdl->destroy;
+      undef $hdl;
       EV::unloop;
     },
     on_disconnect => sub {
       my ($hdl, $fatal, $msg) = @_;
+      warn "CLOSING ON DISCONNECT $id";
       $hdl->destroy;
+      undef $hdl;
       EV::unloop;
     },
   );
@@ -67,7 +71,9 @@ sub process_request {
     $handle->push_read(json => mk_handler());
   });
 
+  warn "STARTING UP";
   EV::run;
+  warn "CLOSING DOWN";
   exit 0;
 }
 

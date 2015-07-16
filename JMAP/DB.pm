@@ -695,7 +695,7 @@ sub set_card {
       jaddressbookid => $jaddressbookid,
       name => $card->{name},
     });
-    $Self->ddelete('jcontactgroups', {groupuid => $carduid});
+    $Self->ddelete('jcontactgroupmap', {groupuid => $carduid});
     foreach my $item (@{$card->{members}}) {
       $Self->dinsert('jcontactgroupmap', {
         groupuid => $carduid,
