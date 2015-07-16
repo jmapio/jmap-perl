@@ -938,7 +938,7 @@ sub setMessages {
   my ($updated, $notUpdated) = $Self->{db}->update_messages($update);
   my ($deleted, $notDeleted) = $Self->{db}->delete_messages($delete);
 
-  $Self->{db}->sync_imap('interactive');
+  $Self->{db}->sync_imap();
 
   foreach my $cid (sort keys %$created) {
     my $msgid = $created->{$cid}{id};
