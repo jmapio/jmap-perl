@@ -152,7 +152,7 @@ sub getMailboxes {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  my $data = $dbh->selectall_arrayref("SELECT jmailboxid, parentId, name, role, sortOrder, mustBeOnly, mayDelete, mayRename, mayAdd, mayRemove, mayChild, mayRead FROM jmailboxes WHERE active = 1");
+  my $data = $dbh->selectall_arrayref("SELECT jmailboxid, parentId, name, role, sortOrder, mustBeOnlyMailbox, mayReadItems, mayAddItems, mayRemoveItems, mayCreateChild, mayRename, mayDelete FROM jmailboxes WHERE active = 1");
 
   my %ids;
   if ($args->{ids}) {
@@ -178,12 +178,12 @@ sub getMailboxes {
       role => $item->[3],
       sortOrder => $item->[4],
       mustBeOnlyMailbox => $item->[5] ? $JSON::true : $JSON::false,
-      mayDeleteMailbox => $item->[6] ? $JSON::true : $JSON::false,
-      mayRenameMailbox => $item->[7] ? $JSON::true : $JSON::false,
-      mayAddMessages => $item->[8] ? $JSON::true : $JSON::false,
-      mayRemoveMessages => $item->[9] ? $JSON::true : $JSON::false,
-      mayCreateChild => $item->[10] ? $JSON::true : $JSON::false,
-      mayReadMessageList => $item->[11] ? $JSON::true : $JSON::false,
+      mayReadItems => $item->[6] ? $JSON::true : $JSON::false,
+      mayAddItems => $item->[7] ? $JSON::true : $JSON::false,
+      mayRemoveItems => $item->[8] ? $JSON::true : $JSON::false,
+      mayCreateChild => $item->[9] ? $JSON::true : $JSON::false,
+      mayRename => $item->[10] ? $JSON::true : $JSON::false,
+      mayDelete => $item->[11] ? $JSON::true : $JSON::false,
     );
 
     foreach my $key (keys %rec) {
