@@ -94,12 +94,10 @@ sub setup_examine {
   my $edgecb = shift;
   my $imap = shift;
 
-  $imap->send_cmd('ENABLE CONDSTORE', sub {
-    $imap->send_cmd('SELECT "INBOX"', sub {
-      $edgecb->("initial");
+  $imap->send_cmd('SELECT "INBOX"', sub {
+    $edgecb->("initial");
 
-      setup_idle($edgecb, $imap);
-    });
+    setup_idle($edgecb, $imap);
   });
 }
 

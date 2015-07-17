@@ -312,8 +312,6 @@ sub handle_signup {
   my $capa = $imap->capability();
   $imap->logout();
 
-  die "THIS PROXY REQUIRES A SERVER THAT SUPPORTS CONDSTORE: $detail->[0]" unless $capa->{condstore};
-
   my $dbh = accountsdb();
   my ($existing, $type) = $dbh->selectrow_array("SELECT accountid, type FROM accounts WHERE email = ?", {}, $detail->[1]);
   if ($existing) {
