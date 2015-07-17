@@ -9,6 +9,7 @@ use Data::Dumper;
 use DBI;
 use Carp qw(confess);
 
+use IO::LockedFile;
 use JSON::XS qw(encode_json decode_json);
 use Email::MIME;
 # seriously, it's parsable, get over it
@@ -70,8 +71,10 @@ sub in_transaction {
 sub begin {
   my $Self = shift;
   confess("ALREADY IN TRANSACTION") if $Self->{t};
-  $Self->dbh->begin_work();
+  my $accountid = $Self->accountid();
   $Self->{t} = {};
+  $Self->{t}{lock} = IO::LockedFile->new(">/home/jmap/data/$accountid.lock");
+  $Self->dbh->begin_work();
 }
 
 sub commit {

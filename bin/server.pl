@@ -79,8 +79,8 @@ sub idler {
 
       $idler{$accountid}{idler} = $imap;
 
-      $idler{$accountid}{dav} = AnyEvent->timer(after => 1, interval => 300, sub {
-        send_backend_request("$accountid:dav", 'davsync', $accountid);
+      $idler{$accountid}{dav} = AnyEvent->timer(after => 1, interval => 300, cb => sub {
+        send_backend_request("$accountid:dav", 'davsync', $accountid, sub { });
       });
     }
     else {
@@ -223,6 +223,7 @@ sub send_backend_request {
   my $errcb = shift;
   my $backend = get_backend($accountid);
   my $cmd = "#" . $backend->[1]++;
+  warn "SENDING $accountid $request\n";
   $waiting{$accountid}{$cmd} = [$cb || sub {return 1}, $errcb || sub {return 1}];
   $backend->[0]->push_write(json => [$request, $args, $cmd]);
 }
@@ -586,12 +587,13 @@ sub HandleEventSource {
 }
 
 sub prod_backfill {
+  my $accountid = shift;
   my $force = shift;
-  return if $idler{$accountid}{backfilling};
+  return if (not $force and $idler{$accountid}{backfilling});
   $idler{$accountid}{backfilling} = 1;
     
   send_backend_request("$accountid:backfill", 'backfill', $accountid, sub {
-    prod_backfill(@_);
+    prod_backfill($accountid, @_);
   });
 }
 
@@ -606,7 +608,7 @@ sub prod_idler {
     );
   }
 
-  prod_backfill();
+  prod_backfill($accountid);
 
   $idler{$accountid}{lastused} = time();
 }
@@ -660,10 +662,14 @@ sub HandleKeepAlive {
     next if $PushMap{$accountid}; # nothing to do
     if ($idler{$accountid}{lastused} < $Now - KEEPIDLE_TIME) {
       my $old = $idler{$accountid}{idler};
-      my $sync = delete $backends{"$accountid:sync"};
+      my $sync = delete $backend{"$accountid:sync"};
+      my $dav = delete $backend{"$accountid:dav"};
+      my $backfill = delete $backend{"$accountid:backfill"};
       delete $idler{$accountid};
       eval { $old->disconnect() };
       eval { ShutdownHandle($sync) };
+      eval { ShutdownHandle($dav) };
+      eval { ShutdownHandle($backfill) };
     }
   }
 }
