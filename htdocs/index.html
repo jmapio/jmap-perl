@@ -15,11 +15,11 @@ $SESSIONS
 
 <p>The JMAP proxy is a work in a progress. It is currently stable enough to test out and get a feel for JMAP in action. Not all methods are implemented yet; see below for what is and isn't available.</p>
 
-<p>The eventual goal is to have a proxy you can stick in front of any IMAP server and get a usable JMAP out the other end. For now, the proxy only supports Gmail as it makes use of some of their custom additions to IMAP to provide thread ids and immutable message ids. Source code will be available soon on <a href="https://github.com/jmapio">GitHub</a> and will be MIT licensed.</p>
+<p>The eventual goal is to have a proxy you can stick in front of any IMAP server and get a usable JMAP out the other end. The proxy supports Gmail and modern IMAP implementations (it MUST implement CONDSTORE). Source code is available on <a href="https://github.com/jmapio">GitHub</a> and is MIT licensed.</p>
 
-<p>The web client hooked up for this demo is the <a href="https://www.fastmail.com">FastMail</a> web interface. For now, this is not open source, however we anticipate open sourcing at least the data-model library for other projects to use. The code is unminified, so takes much longer to initially load than the normal FastMail UI, but can be viewed with standard web-dev tools. These can also show the data exchanges being made to load the data and get delta updates.</p>
+<p>The web client hooked up for this demo is a simple example (no compose, contacts, calendars). It will be open-sourced very soon. The code is unminified, so takes much longer to initially load than it would in a production setting, but can be viewed with standard web-dev tools. These can also show the data exchanges being made to load the data and get delta updates.</p>
 
-<p>HTML email is not currently being sanitised in any way, and the service is not running with all of the security measures employed on a production site such as FastMail, so DO NOT USE THIS PROXY FOR ACCOUNTS WITH SENSITIVE DATA.</p>
+<p>The service is not running with all of the security measures employed on a production site such as FastMail, so DO NOT USE THIS PROXY FOR ACCOUNTS WITH SENSITIVE DATA.</p>
 
 <p>When you create your account, the most recent 50 emails will be downloaded in their entirety, so the first page should be snappy immediately.  After that, you are redirected to the landing page.  A background task will continue to pull in batches of messages and add them to your account, so you will see older messages appear while you are using the interface.</p>
 
