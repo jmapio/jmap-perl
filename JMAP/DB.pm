@@ -908,7 +908,7 @@ CREATE TABLE IF NOT EXISTS jmailboxes (
   parentid INTEGER,
   role TEXT,
   name TEXT,
-  precedence INTEGER,
+  order INTEGER,
   mustBeOnly BOOLEAN,
   mayDelete BOOLEAN,
   mayRename BOOLEAN,
@@ -972,7 +972,7 @@ EOF
 CREATE TABLE IF NOT EXISTS jcalendars (
   jcalendarid INTEGER PRIMARY KEY,
   name TEXT,
-  colour TEXT,
+  color TEXT,
   isVisible BOOLEAN,
   mayReadFreeBusy BOOLEAN,
   mayReadItems BOOLEAN,

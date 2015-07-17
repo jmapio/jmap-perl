@@ -253,9 +253,9 @@ sub sync_jmailboxes {
     my $id = 0;
     my $parentid = 0;
     my $name;
-    my $precedence = 3;
-    $precedence = 2 if $role;
-    $precedence = 1 if ($role||'') eq 'inbox';
+    my $order = 3;
+    $order = 2 if $role;
+    $order = 1 if ($role||'') eq 'inbox';
     while (my $item = shift @bits) {
       $seen{$id} = 1 if $id;
       $name = $item;
@@ -265,7 +265,7 @@ sub sync_jmailboxes {
         if (@bits) {
           # need to create intermediate folder ...
           # XXX  - label noselect?
-          $id = $Self->dmake('jmailboxes', {name => $name, precedence => 4, parentid => $parentid});
+          $id = $Self->dmake('jmailboxes', {name => $name, order => 4, parentid => $parentid});
           $byname{$parentid}{$name} = $id;
         }
       }
@@ -274,7 +274,7 @@ sub sync_jmailboxes {
     my %details = (
       name => $name,
       parentid => $parentid,
-      precedence => $precedence,
+      order => $order,
       mustBeOnly => $ONLY_MAILBOXES{$role||''},
       mayDelete => (not $PROTECTED_MAILBOXES{$role||''}),
       mayRename => (not $NO_RENAME{$role||''}),
@@ -326,7 +326,7 @@ sub sync_calendars {
 
   my $calendars = $Self->backend_cmd('calendars', []);
   return unless $calendars;
-  my $icalendars = $dbh->selectall_arrayref("SELECT icalendarid, href, name, isReadOnly, colour, syncToken FROM icalendars");
+  my $icalendars = $dbh->selectall_arrayref("SELECT icalendarid, href, name, isReadOnly, color, syncToken FROM icalendars");
   my %byhref = map { $_->[1] => $_ } @$icalendars;
 
   my %seen;
@@ -336,7 +336,7 @@ sub sync_calendars {
     my $data = {
       isReadOnly => $calendar->{isReadOnly},
       href => $calendar->{href},
-      colour => $calendar->{colour},
+      color => $calendar->{color},
       name => $calendar->{name},
       syncToken => $calendar->{syncToken},
     };
@@ -372,8 +372,8 @@ sub sync_calendars {
 sub sync_jcalendars {
   my $Self = shift;
   my $dbh = $Self->dbh();
-  my $icalendars = $dbh->selectall_arrayref("SELECT icalendarid, name, colour, jcalendarid FROM icalendars");
-  my $jcalendars = $dbh->selectall_arrayref("SELECT jcalendarid, name, colour, active FROM jcalendars");
+  my $icalendars = $dbh->selectall_arrayref("SELECT icalendarid, name, color, jcalendarid FROM icalendars");
+  my $jcalendars = $dbh->selectall_arrayref("SELECT jcalendarid, name, color, active FROM jcalendars");
 
   my %jbyid;
   foreach my $calendar (@$jcalendars) {
@@ -384,7 +384,7 @@ sub sync_jcalendars {
   foreach my $calendar (@$icalendars) {
     my $data = {
       name => $calendar->[1],
-      colour => $calendar->[2],
+      color => $calendar->[2],
       isVisible => 1,
       mayReadFreeBusy => 1,
       mayReadItems => 1,
@@ -1029,7 +1029,7 @@ CREATE TABLE IF NOT EXISTS icalendars (
   href TEXT,
   name TEXT,
   isReadOnly INTEGER,
-  colour TEXT,
+  color TEXT,
   syncToken TEXT,
   jcalendarid INTEGER,
   mtime DATE NOT NULL

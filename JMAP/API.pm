@@ -152,7 +152,7 @@ sub getMailboxes {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  my $data = $dbh->selectall_arrayref("SELECT jmailboxid, parentid, name, role, precedence, mustBeOnly, mayDelete, mayRename, mayAdd, mayRemove, mayChild, mayRead FROM jmailboxes WHERE active = 1");
+  my $data = $dbh->selectall_arrayref("SELECT jmailboxid, parentid, name, role, order, mustBeOnly, mayDelete, mayRename, mayAdd, mayRemove, mayChild, mayRead FROM jmailboxes WHERE active = 1");
 
   my %ids;
   if ($args->{ids}) {
@@ -176,7 +176,7 @@ sub getMailboxes {
       parentId => ($item->[1] ? "$item->[1]" : undef),
       name => $item->[2],
       role => $item->[3],
-      precedence => $item->[4],
+      order => $item->[4],
       mustBeOnlyMailbox => $item->[5] ? $JSON::true : $JSON::false,
       mayDeleteMailbox => $item->[6] ? $JSON::true : $JSON::false,
       mayRenameMailbox => $item->[7] ? $JSON::true : $JSON::false,
@@ -1205,7 +1205,7 @@ sub getCalendars {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  my $data = $dbh->selectall_arrayref("SELECT jcalendarid, name, colour, isVisible, mayReadFreeBusy, mayReadItems, mayAddItems, mayModifyItems, mayRemoveItems, mayDelete, mayRename FROM jcalendars WHERE active = 1");
+  my $data = $dbh->selectall_arrayref("SELECT jcalendarid, name, color, isVisible, mayReadFreeBusy, mayReadItems, mayAddItems, mayModifyItems, mayRemoveItems, mayDelete, mayRename FROM jcalendars WHERE active = 1");
 
   my %ids;
   if ($args->{ids}) {
@@ -1223,7 +1223,7 @@ sub getCalendars {
     my %rec = (
       id => "$item->[0]",
       name => $item->[1],
-      colour => $item->[2],
+      color => $item->[2],
       isVisible => $item->[3] ? $JSON::true : $JSON::false,
       mayReadFreeBusy => $item->[4] ? $JSON::true : $JSON::false,
       mayReadItems => $item->[5] ? $JSON::true : $JSON::false,

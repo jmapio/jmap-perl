@@ -112,16 +112,12 @@ JMAP::Backend->run(host => '127.0.0.1', port => 5000);
 
 sub change_cb {
   my $db = shift;
-  my $state = shift;
+  my $states = shift;
 
   my $data = {
     clientId => undef,
     accountStates => {
-      $db->accountid() => {
-        messages => "$state",
-        threads => "$state",
-        mailboxes => "$state",
-      },
+      $db->accountid() => $states,
     },
   };
 
