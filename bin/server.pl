@@ -586,14 +586,19 @@ sub HandleEventSource {
   });
 }
 
+
 sub prod_backfill {
   my $accountid = shift;
   my $force = shift;
   return if (not $force and $idler{$accountid}{backfilling});
   $idler{$accountid}{backfilling} = 1;
     
-  send_backend_request("$accountid:backfill", 'backfill', $accountid, sub {
-    prod_backfill($accountid, @_);
+  my $timer;
+  $timer = AnyEvent->timer(after => 5, cb => sub {
+    send_backend_request("$accountid:backfill", 'backfill', $accountid, sub {
+      $timer = undef;
+      prod_backfill($accountid, @_);
+    });
   });
 }
 
