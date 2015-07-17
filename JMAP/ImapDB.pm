@@ -21,6 +21,7 @@ use Data::Dumper;
 use JMAP::Sync::Gmail;
 use JMAP::Sync::ICloud;
 use JMAP::Sync::Fastmail;
+use JMAP::Sync::Yahoo;
 
 our $TAG = 1;
 
@@ -98,6 +99,8 @@ sub backend_cmd {
       $backend = JMAP::Sync::ICloud->new($config) || die "failed to setup $auth->[1]";
     } elsif ($config->{hostname} eq 'mail.messagingengine.com') {
       $backend = JMAP::Sync::Fastmail->new($config) || die "failed to setup $auth->[1]";
+    } elsif ($config->{hostname} eq 'imap.mail.yahoo.com') {
+      $backend = JMAP::Sync::Yahoo->new($config) || die "failed to setup $auth->[1]";
     } else {
       die "UNKNOWN ID $config->{username} ($config->{hostname})";
     }
