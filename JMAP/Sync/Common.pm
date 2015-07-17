@@ -125,10 +125,15 @@ sub imap_status {
 
   my $imap = $Self->connect_imap();
 
-  $imap->unselect();
+  if ($imap->capability->{unselect}) {
+    $imap->unselect();
+  }
+  else {
+    $imap->close();
+  }
 
   my @fields = qw(uidvalidity uidnext messages);
-  push @fields, "highestmodseq" if $imap->capability->{condstore};
+  push @fields, "highestmodseq" if ($imap->capability->{condstore} or $imap->capability->{xmyhighestmodseq});
   my $data = $imap->multistatus("(@fields)", @$folders);
 
   return $data;
@@ -327,7 +332,7 @@ sub imap_fetch {
     push @flags, @{$item->[2]} if $item->[2];
     next if ($highestmodseq and $item->[3] and $item->[3] == $highestmodseq);
     my @extra;
-    push @extra, "(changedsince $item->[3])" if $item->[3];
+    push @extra, "(changedsince $item->[3])" if ($item->[3] and $imap->capability->{condstore});
     my $data = $imap->fetch("$from:$to", "(@flags)", @extra) || {};
     $res{$key} = [$item, $data];
   }
