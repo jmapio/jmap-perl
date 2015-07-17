@@ -274,7 +274,7 @@ sub parse_emails {
   my $emails = shift;
 
   my @addrs = eval { Email::Address->parse($emails) };
-  return map { { name => Encode::decode_utf8($_->name()), email => $_->address() } } @addrs;
+  return map { { name => decode('MIME-Header', $_->name()), email => $_->address() } } @addrs;
 }
 
 sub parse_message {

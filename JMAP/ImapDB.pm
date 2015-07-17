@@ -11,8 +11,6 @@ use Date::Parse;
 use JSON::XS qw(encode_json decode_json);
 use Data::UUID::LibUUID;
 use OAuth2::Tiny;
-use Encode;
-use Encode::MIME::Header;
 use Digest::SHA qw(sha1_hex);
 use AnyEvent;
 use AnyEvent::Socket;
