@@ -138,7 +138,7 @@ sub get_mailboxes {
   my $Self = shift;
   confess("NOT IN TRANSACTION") unless $Self->{t};
   unless ($Self->{t}{mailboxes}) {
-    $Self->{t}{mailboxes} = $Self->dbh->selectall_hashref("SELECT jmailboxid, jmodseq, label, name, parentid, nummessages, numumessages, numthreads, numuthreads, active FROM jmailboxes", 'jmailboxid', {Slice => {}});
+    $Self->{t}{mailboxes} = $Self->dbh->selectall_hashref("SELECT jmailboxid, jmodseq, label, name, parentId, nummessages, numumessages, numthreads, numuthreads, active FROM jmailboxes", 'jmailboxid', {Slice => {}});
   }
   return $Self->{t}{mailboxes};
 }
@@ -151,16 +151,16 @@ sub get_mailbox {
 
 sub add_mailbox {
   my $Self = shift;
-  my ($name, $label, $parentid) = @_;
+  my ($name, $label, $parentId) = @_;
 
   my $mailboxes = $Self->get_mailboxes();
 
-  confess("ALREADY EXISTS $name in $parentid") if grep { $_->{name} eq $name and $_->{parentid} == $parentid } values %$mailboxes;
+  confess("ALREADY EXISTS $name in $parentId") if grep { $_->{name} eq $name and $_->{parentId} == $parentId } values %$mailboxes;
 
   my $data = {
     name => $name,
     label => $label,
-    parentid => $parentid,
+    parentId => $parentId,
     nummessages => 0,
     numthreads => 0,
     numumessages => 0,
@@ -906,17 +906,17 @@ EOF
   $dbh->do(<<EOF);
 CREATE TABLE IF NOT EXISTS jmailboxes (
   jmailboxid INTEGER PRIMARY KEY,
-  parentid INTEGER,
+  parentId INTEGER,
   role TEXT,
   name TEXT,
   sortOrder INTEGER,
-  mustBeOnly BOOLEAN,
-  mayDelete BOOLEAN,
+  mustBeOnlyMailbox BOOLEAN,
+  mayReadItems BOOLEAN,
+  mayAddItems BOOLEAN,
+  mayRemoveItems BOOLEAN,
+  mayCreateChild BOOLEAN,
   mayRename BOOLEAN,
-  mayAdd BOOLEAN,
-  mayRemove BOOLEAN,
-  mayChild BOOLEAN,
-  mayRead BOOLEAN,
+  mayDelete BOOLEAN,
   jmodseq INTEGER,
   jcountsmodseq INTEGER,
   mtime DATE,

@@ -231,7 +231,7 @@ sub sync_jmailboxes {
   my $Self = shift;
   my $dbh = $Self->dbh();
   my $ifolders = $dbh->selectall_arrayref("SELECT ifolderid, sep, imapname, label, jmailboxid FROM ifolders");
-  my $jmailboxes = $dbh->selectall_arrayref("SELECT jmailboxid, name, parentid, role, active FROM jmailboxes");
+  my $jmailboxes = $dbh->selectall_arrayref("SELECT jmailboxid, name, parentId, role, active FROM jmailboxes");
 
   my %jbyid;
   my %roletoid;
@@ -251,7 +251,7 @@ sub sync_jmailboxes {
     my @bits = split "[$folder->[1]]", $fname;
     my $role = $ROLE_MAP{lc $folder->[3]} || $ROLE_MAP{lc $fname};
     my $id = 0;
-    my $parentid = 0;
+    my $parentId = 0;
     my $name;
     my $sortOrder = 3;
     $sortOrder = 2 if $role;
@@ -259,21 +259,21 @@ sub sync_jmailboxes {
     while (my $item = shift @bits) {
       $seen{$id} = 1 if $id;
       $name = $item;
-      $parentid = $id;
-      $id = $byname{$parentid}{$name};
+      $parentId = $id;
+      $id = $byname{$parentId}{$name};
       unless ($id) {
         if (@bits) {
           # need to create intermediate folder ...
           # XXX  - label noselect?
-          $id = $Self->dmake('jmailboxes', {name => $name, sortOrder => 4, parentid => $parentid});
-          $byname{$parentid}{$name} = $id;
+          $id = $Self->dmake('jmailboxes', {name => $name, sortOrder => 4, parentId => $parentid});
+          $byname{$parentId}{$name} = $id;
         }
       }
     }
     next unless $name;
     my %details = (
       name => $name,
-      parentid => $parentid,
+      parentId => $parentid,
       sortOrder => $sortOrder,
       mustBeOnly => $ONLY_MAILBOXES{$role||''},
       mayDelete => (not $PROTECTED_MAILBOXES{$role||''}),
@@ -302,7 +302,7 @@ sub sync_jmailboxes {
       }
       else {
         $id = $Self->dmake('jmailboxes', {role => $role, %details});
-        $byname{$parentid}{$name} = $id;
+        $byname{$parentId}{$name} = $id;
         $roletoid{$role} = $id if $role;
       }
     }

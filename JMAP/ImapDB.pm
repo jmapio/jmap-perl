@@ -177,7 +177,7 @@ sub sync_jmailboxes {
   $Self->begin();
   my $dbh = $Self->dbh();
   my $ifolders = $dbh->selectall_arrayref("SELECT ifolderid, sep, imapname, label, jmailboxid FROM ifolders");
-  my $jmailboxes = $dbh->selectall_arrayref("SELECT jmailboxid, name, parentid, role, active FROM jmailboxes");
+  my $jmailboxes = $dbh->selectall_arrayref("SELECT jmailboxid, name, parentId, role, active FROM jmailboxes");
 
   my %jbyid;
   my %roletoid;
@@ -196,7 +196,7 @@ sub sync_jmailboxes {
     my @bits = split "[$folder->[1]]", $fname;
     my $role = $ROLE_MAP{lc $fname};
     my $id = 0;
-    my $parentid = 0;
+    my $parentId = 0;
     my $name;
     my $sortOrder = 3;
     $sortOrder = 2 if $role;
@@ -204,29 +204,31 @@ sub sync_jmailboxes {
     while (my $item = shift @bits) {
       $seen{$id} = 1 if $id;
       $name = $item;
-      $parentid = $id;
-      $id = $byname{$parentid}{$name};
+      $parentId = $id;
+      $id = $byname{$parentId}{$name};
       unless ($id) {
         if (@bits) {
           # need to create intermediate folder ...
           # XXX  - label noselect?
-          $id = $Self->dmake('jmailboxes', {name => $name, sortOrder => 4, parentid => $parentid});
-          $byname{$parentid}{$name} = $id;
+          $id = $Self->dmake('jmailboxes', {name => $name, sortOrder => 4, parentId => $parentId});
+          $byname{$parentId}{$name} = $id;
         }
       }
     }
     next unless $name;
     my %details = (
       name => $name,
-      parentid => $parentid,
+      parentId => $parentId,
       sortOrder => $sortOrder,
-      mustBeOnly => 1,
+      mustBeOnlyMailbox => 1,
       mayDelete => 0,
+      mayReadItems => 1,
+      mayAddItems => 1,
+      mayRemoveItems => 1,
+      mayCreateChild => 0,
+>>>>>>> WIP
       mayRename => 0,
-      mayAdd => 1,
-      mayRemove => 1,
-      mayChild => 0,
-      mayRead => 1,
+      mayDelete => 0,
     );
     if ($id) {
       if ($role and $roletoid{$role} and $roletoid{$role} != $id) {
@@ -247,7 +249,7 @@ sub sync_jmailboxes {
       }
       else {
         $id = $Self->dmake('jmailboxes', {role => $role, %details});
-        $byname{$parentid}{$name} = $id;
+        $byname{$parentId}{$name} = $id;
         $roletoid{$role} = $id if $role;
       }
     }
