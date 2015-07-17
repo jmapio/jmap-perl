@@ -344,15 +344,15 @@ sub imap_append {
 
   my $imap = $Self->connect_imap();
 
-  my $r = $imap->append($imapname, $flags, $internaldate, ['Literal', $rfc822]);
-  die "APPEND FAILED $r" unless lc($r) eq 'ok';
+  my $r = $imap->append($imapname, $flags, $internaldate, {'Literal' => $rfc822});
+  die "APPEND FAILED $r" unless (lc($r) eq 'ok' or lc($r) eq 'appenduid'); # what's with that??
 
   my $uid = $imap->get_response_code('appenduid');
 
   # XXX - fetch the x-gm-msgid or envelope from the server so we know the
   # the ID that the server gave this message
 
-  return ['append', $imapname, $uid];
+  return ['append', $imapname, @$uid];
 }
 
 1;
