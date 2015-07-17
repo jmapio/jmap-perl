@@ -741,6 +741,7 @@ sub import_message {
   push @flags, "\\Seen" unless $flags{isUnread};
   push @flags, "\\Answered" if $flags{isAnswered};
   push @flags, "\\Flagged" if $flags{isFlagged};
+  push @flags, "\\Draft" if $flags{isDraft};
 
   my $internaldate = time(); # XXX - allow setting?
   my $date = Date::Format::time2str('%e-%b-%Y %T %z', $internaldate);
@@ -751,7 +752,7 @@ sub import_message {
   my $uid = $data->[3];
 
   # make sure we're up to date: XXX - imap only
-  $Self->do_folder($jmailmap{$mailboxIds->[0]}[0], $mailboxIds->[0]);
+  $Self->do_folder($jmailmap{$mailboxIds->[0]}[0], $jmailmap{$mailboxIds->[0]}[2]);
 
   my ($msgid, $thrid) = $Self->dbh->selectrow_array("SELECT msgid, thrid FROM imessages WHERE ifolderid = ? AND uid = ?", {}, $jmailmap{$mailboxIds->[0]}[0], $uid);
 
