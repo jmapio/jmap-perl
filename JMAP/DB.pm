@@ -909,7 +909,7 @@ CREATE TABLE IF NOT EXISTS jmailboxes (
   parentid INTEGER,
   role TEXT,
   name TEXT,
-  order INTEGER,
+  sortOrder INTEGER,
   mustBeOnly BOOLEAN,
   mayDelete BOOLEAN,
   mayRename BOOLEAN,

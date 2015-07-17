@@ -194,9 +194,9 @@ sub sync_jmailboxes {
     my $id = 0;
     my $parentid = 0;
     my $name;
-    my $order = 3;
-    $order = 2 if $role;
-    $order = 1 if ($role||'') eq 'inbox';
+    my $sortOrder = 3;
+    $sortOrder = 2 if $role;
+    $sortOrder = 1 if ($role||'') eq 'inbox';
     while (my $item = shift @bits) {
       $seen{$id} = 1 if $id;
       $name = $item;
@@ -206,7 +206,7 @@ sub sync_jmailboxes {
         if (@bits) {
           # need to create intermediate folder ...
           # XXX  - label noselect?
-          $id = $Self->dmake('jmailboxes', {name => $name, order => 4, parentid => $parentid});
+          $id = $Self->dmake('jmailboxes', {name => $name, sortOrder => 4, parentid => $parentid});
           $byname{$parentid}{$name} = $id;
         }
       }
@@ -215,7 +215,7 @@ sub sync_jmailboxes {
     my %details = (
       name => $name,
       parentid => $parentid,
-      order => $order,
+      sortOrder => $sortOrder,
       mustBeOnly => 1,
       mayDelete => 0,
       mayRename => 0,

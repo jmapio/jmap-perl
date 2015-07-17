@@ -152,7 +152,7 @@ sub getMailboxes {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  my $data = $dbh->selectall_arrayref("SELECT jmailboxid, parentid, name, role, order, mustBeOnly, mayDelete, mayRename, mayAdd, mayRemove, mayChild, mayRead FROM jmailboxes WHERE active = 1");
+  my $data = $dbh->selectall_arrayref("SELECT jmailboxid, parentid, name, role, sortOrder, mustBeOnly, mayDelete, mayRename, mayAdd, mayRemove, mayChild, mayRead FROM jmailboxes WHERE active = 1");
 
   my %ids;
   if ($args->{ids}) {
@@ -176,7 +176,7 @@ sub getMailboxes {
       parentId => ($item->[1] ? "$item->[1]" : undef),
       name => $item->[2],
       role => $item->[3],
-      order => $item->[4],
+      sortOrder => $item->[4],
       mustBeOnlyMailbox => $item->[5] ? $JSON::true : $JSON::false,
       mayDeleteMailbox => $item->[6] ? $JSON::true : $JSON::false,
       mayRenameMailbox => $item->[7] ? $JSON::true : $JSON::false,
