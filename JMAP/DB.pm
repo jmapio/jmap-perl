@@ -603,7 +603,7 @@ sub update_messages {
   die "Virtual method";
 }
 
-sub delete_messages {
+sub destroy_messages {
   my $Self = shift;
   die "Virtual method";
 }

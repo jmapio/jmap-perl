@@ -935,12 +935,12 @@ sub setMessages {
 
   my $create = $args->{create} || {};
   my $update = $args->{update} || {};
-  my $delete = $args->{delete} || [];
+  my $destroy = $args->{destroy} || [];
 
   # XXX - idmap support
   my ($created, $notCreated) = $Self->{db}->create_messages($create);
   my ($updated, $notUpdated) = $Self->{db}->update_messages($update);
-  my ($deleted, $notDeleted) = $Self->{db}->delete_messages($delete);
+  my ($destroyed, $notDestroyed) = $Self->{db}->destroy_messages($destroy);
 
   $Self->{db}->sync_imap();
 
@@ -961,8 +961,8 @@ sub setMessages {
     notCreated => $notCreated,
     updated => $updated,
     notUpdated => $notUpdated,
-    deleted => $deleted,
-    notDeleted => $notDeleted,
+    destroyed => $destroyed,
+    notDestroyed => $notDestroyed,
   }];
 
   return @res;

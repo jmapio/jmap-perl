@@ -16,6 +16,7 @@ use Encode::MIME::Header;
 use Digest::SHA qw(sha1_hex);
 use AnyEvent;
 use AnyEvent::Socket;
+use Date::Format;
 use Data::Dumper;
 use JMAP::Sync::Gmail;
 use JMAP::Sync::ICloud;
@@ -712,7 +713,7 @@ sub changed_record {
   my $Self = shift;
   my ($folder, $uid, $flaglist, $labellist) = @_;
 
-  my $flags = encode_json([sort @$flaglist]);
+  my $flags = encode_json([grep { lc $_ ne '\\recent' } sort @$flaglist]);
   my $labels = encode_json([sort @$labellist]);
 
   my ($msgid) = $Self->{dbh}->selectrow_array("SELECT msgid FROM imessages WHERE ifolderid = ? AND uid = ?", {}, $folder, $uid);
@@ -720,6 +721,41 @@ sub changed_record {
   $Self->dmaybeupdate('imessages', {flags => $flags, labels => $labels}, {ifolderid => $folder, uid => $uid});
 
   $Self->apply_data($msgid, $flaglist, $labellist);
+}
+
+sub import_message {
+  my $Self = shift;
+  my $message = shift;
+  my $mailboxIds = shift;
+  my %flags = @_;
+
+  my $dbh = $Self->dbh();
+  my $folderdata = $dbh->selectall_arrayref("SELECT ifolderid, imapname, label, jmailboxid FROM ifolders");
+  my %foldermap = map { $_->[0] => $_ } @$folderdata;
+  my %jmailmap = map { $_->[3] => $_ } grep { $_->[3] } @$folderdata;
+
+  # store to the first named folder - we can use labels on gmail to add to other folders later.
+  my $imapname = $jmailmap{$mailboxIds->[0]}[1];
+
+  my @flags;
+  push @flags, "\\Seen" unless $flags{isUnread};
+  push @flags, "\\Answered" if $flags{isAnswered};
+  push @flags, "\\Flagged" if $flags{isFlagged};
+
+  my $internaldate = time(); # XXX - allow setting?
+  my $date = Date::Format::time2str('%e-%b-%Y %T %z', $internaldate);
+
+  my $data = $Self->backend_cmd('imap_append', $imapname, "(@flags)", $date, $message);
+  warn Dumper($data);
+  # XXX - compare $data->[2] with uidvalidity
+  my $uid = $data->[3];
+
+  # make sure we're up to date: XXX - imap only
+  $Self->do_folder($jmailmap{$mailboxIds->[0]}[0], $mailboxIds->[0]);
+
+  my ($msgid, $thrid) = $Self->dbh->selectrow_array("SELECT msgid, thrid FROM imessages WHERE ifolderid = ? AND uid = ?", {}, $jmailmap{$mailboxIds->[0]}[0], $uid);
+
+  return ($msgid, $thrid);
 }
 
 sub update_messages {
@@ -788,21 +824,21 @@ sub update_messages {
   return (\@changed, \%notchanged);
 }
 
-sub delete_messages {
+sub destroy_messages {
   my $Self = shift;
   my $ids = shift;
 
   my $dbh = $Self->{dbh};
 
-  my %deletemap;
-  my %notdeleted;
+  my %destroymap;
+  my %notdestroyed;
   foreach my $msgid (@$ids) {
     my ($ifolderid, $uid) = $dbh->selectrow_array("SELECT ifolderid, uid FROM imessages WHERE msgid = ?", {}, $msgid);
     if ($ifolderid and $uid) {
-      $deletemap{$ifolderid}{$uid} = $msgid;
+      $destroymap{$ifolderid}{$uid} = $msgid;
     }
     else {
-      $notdeleted{$msgid} = "No such message on server";
+      $notdestroyed{$msgid} = "No such message on server";
     }
   }
 
@@ -810,19 +846,19 @@ sub delete_messages {
   my %foldermap = map { $_->[0] => $_ } @$folderdata;
   my %jmailmap = map { $_->[4] => $_ } grep { $_->[4] } @$folderdata;
 
-  my @deleted;
-  foreach my $ifolderid (keys %deletemap) {
+  my @destroyed;
+  foreach my $ifolderid (keys %destroymap) {
     # XXX - merge similar actions?
     my $imapname = $foldermap{$ifolderid}[1];
     my $uidvalidity = $foldermap{$ifolderid}[2];
     unless ($imapname) {
-      $notdeleted{$_} = "No folder" for values %{$deletemap{$ifolderid}};
+      $notdestroyed{$_} = "No folder" for values %{$destroymap{$ifolderid}};
     }
-    my $uids = [sort keys %{$deletemap{$ifolderid}}];
+    my $uids = [sort keys %{$destroymap{$ifolderid}}];
     $Self->backend_cmd('imap_move', $imapname, $uidvalidity, $uids, undef); # no destination folder
-    push @deleted, values %{$deletemap{$ifolderid}};
+    push @destroyed, values %{$destroymap{$ifolderid}};
   }
-  return (\@deleted, \%notdeleted);
+  return (\@destroyed, \%notdestroyed);
 }
 
 sub deleted_record {
@@ -841,7 +877,7 @@ sub new_record {
   my $Self = shift;
   my ($ifolderid, $uid, $flaglist, $labellist, $envelope, $internaldate, $msgid, $thrid, $size) = @_;
 
-  my $flags = encode_json([sort @$flaglist]);
+  my $flags = encode_json([grep { lc $_ ne '\\recent' } sort @$flaglist]);
   my $labels = encode_json([sort @$labellist]);
 
   my $data = {
