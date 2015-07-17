@@ -265,7 +265,7 @@ sub sync_jmailboxes {
         if (@bits) {
           # need to create intermediate folder ...
           # XXX  - label noselect?
-          $id = $Self->dmake('jmailboxes', {name => $name, sortOrder => 4, parentId => $parentid});
+          $id = $Self->dmake('jmailboxes', {name => $name, sortOrder => 4, parentId => $parentId});
           $byname{$parentId}{$name} = $id;
         }
       }
@@ -273,7 +273,7 @@ sub sync_jmailboxes {
     next unless $name;
     my %details = (
       name => $name,
-      parentId => $parentid,
+      parentId => $parentId,
       sortOrder => $sortOrder,
       mustBeOnly => $ONLY_MAILBOXES{$role||''},
       mayDelete => (not $PROTECTED_MAILBOXES{$role||''}),
