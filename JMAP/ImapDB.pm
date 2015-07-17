@@ -226,7 +226,6 @@ sub sync_jmailboxes {
       mayAddItems => 1,
       mayRemoveItems => 1,
       mayCreateChild => 0,
->>>>>>> WIP
       mayRename => 0,
       mayDelete => 0,
     );
