@@ -395,7 +395,8 @@ sub attachments {
     push @res, {
       id => $id,
       type => $type,
-      blobId => "$message/$id";
+      url => "https://proxy.jmap.io/raw/$accountid/$messageid/$id/$filename", # XXX dep
+      blobId => "$messageid/$id",
       name => $filename,
       size => length($body),
       isInline => $isInline,
