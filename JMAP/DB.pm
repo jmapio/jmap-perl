@@ -335,7 +335,7 @@ sub find_part {
     $type =~ s/;.*//;
     return ($type, $sub->body()) if ($id eq $target);
     if ($type =~ m{^multipart/}) {
-      my @res = find_part($sub, $id);
+      my @res = find_part($sub, $target, $id);
       return @res if @res;
     }
   }
