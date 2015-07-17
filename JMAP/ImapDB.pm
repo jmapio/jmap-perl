@@ -12,6 +12,8 @@ use JSON::XS qw(encode_json decode_json);
 use Data::UUID::LibUUID;
 use OAuth2::Tiny;
 use Digest::SHA qw(sha1_hex);
+use Encode;
+use Encode::MIME::Header;
 use AnyEvent;
 use AnyEvent::Socket;
 use Date::Format;
@@ -26,13 +28,27 @@ our $TAG = 1;
 # special use or name magic
 my %ROLE_MAP = (
   'inbox' => 'inbox',
+
   'drafts' => 'drafts',
+  'draft' => 'drafts',
+  'draft messages' => 'drafts',
+
+  'bulk' => 'spam',
+  'bulk mail' => 'spam',
   'junk' => 'spam',
-  'deleted messages' => 'trash',
+  'junk mail' => 'spam',
+  'spam' => 'spam',
+  'spam mail' => 'spam',
+  'spam messages' => 'spam',
+
   'archive' => 'archive',
-  'sent messages' => 'sent',
+  'sent' => 'sent',
   'sent items' => 'sent',
+  'sent messages' => 'sent',
+
+  'deleted messages' => 'trash',
   'trash' => 'trash',
+
   '\\inbox' => 'inbox',
   '\\trash' => 'trash',
   '\\sent' => 'sent',
@@ -949,7 +965,7 @@ sub apply_data {
 sub _envelopedata {
   my $data = shift;
   my $envelope = decode_json($data);
-  my $encsub = decode('MIME-Header', $envelope->{Subject});
+  my $encsub = Encode::decode('MIME-Header', $envelope->{Subject});
   return (
     msgsubject => $encsub,
     msgfrom => $envelope->{From},

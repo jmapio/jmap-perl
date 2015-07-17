@@ -73,6 +73,7 @@ sub begin {
   confess("ALREADY IN TRANSACTION") if $Self->{t};
   my $accountid = $Self->accountid();
   $Self->{t} = {};
+  # we need this because sqlite locking isn't as robust as you might hope
   $Self->{t}{lock} = IO::LockedFile->new(">/home/jmap/data/$accountid.lock");
   $Self->dbh->begin_work();
 }
@@ -274,7 +275,7 @@ sub parse_emails {
   my $emails = shift;
 
   my @addrs = eval { Email::Address->parse($emails) };
-  return map { { name => decode('MIME-Header', $_->name()), email => $_->address() } } @addrs;
+  return map { { name => Encode::decode('MIME-Header', $_->name()), email => $_->address() } } @addrs;
 }
 
 sub parse_message {
