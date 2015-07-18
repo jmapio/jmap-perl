@@ -212,12 +212,13 @@ sub getMailboxes {
     if (_prop_wanted($args, 'unreadThreads')) {
       my $folderlimit = '';
       if ($ONLY_MAILBOXES{$item->[0]}) {
-        $folderlimit = "AND jmessagemap.jmailboxid = $item->[0]";
+        $folderlimit = "AND jmessagemap.jmailboxid = " . $dbh->quote($item->[0]);
       } else {
         my @ids = grep { $ONLY_MAILBOXES{$_} } sort keys %ONLY_MAILBOXES;
-        $folderlimit = "AND jmessagemap.jmailboxid NOT IN (" . join(',', @ids) . ")" if @ids;
+        $folderlimit = "AND jmessagemap.jmailboxid NOT IN (" . join(',', map { $dbh->quote($_) } @ids) . ")" if @ids;
       }
-      ($rec{unreadThreads}) = $dbh->selectrow_array("SELECT COUNT(DISTINCT thrid) FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmailboxid = $item->[0] AND jmessages.active = 1 AND jmessagemap.active = 1 AND thrid IN (SELECT thrid FROM jmessages JOIN jmessagemap USING (msgid) WHERE isUnread = 1 AND jmessages.active = 1 AND jmessagemap.active = 1 $folderlimit)");
+      my $sql ="SELECT COUNT(DISTINCT thrid) FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmailboxid = ? AND jmessages.active = 1 AND jmessagemap.active = 1 AND thrid IN (SELECT thrid FROM jmessages JOIN jmessagemap USING (msgid) WHERE isUnread = 1 AND jmessages.active = 1 AND jmessagemap.active = 1 $folderlimit)";
+      ($rec{unreadThreads}) = $dbh->selectrow_array($sql, {}, $item->[0]);
       $rec{unreadThreads} += 0;
     }
 

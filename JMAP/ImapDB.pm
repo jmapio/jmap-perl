@@ -1073,7 +1073,7 @@ sub create_mailboxes {
   # we can't use ids as referenes...)
   $Self->sync_folders();
 
-  my %createdmap;
+  my %createmap;
   foreach my $imapname (keys %idmap) {
     my $cid = $idmap{$imapname};
     my ($jid) = $dbh->selectrow_array("SELECT jmailboxid FROM ifolders WHERE imapname = ?", {}, $imapname);
@@ -1108,7 +1108,7 @@ sub update_mailboxes {
     my ($oldname) = $dbh->selectrow_array("SELECT imapname FROM ifolders WHERE jmailboxid = ?", {}, $id);
 
     $Self->backend_cmd('rename_mailbox', $oldname, $imapname);
-    push @updated, $uid;
+    push @updated, $id;
   }
 
   return (\@updated, \%notupdated);
@@ -1126,7 +1126,7 @@ sub destroy_mailboxes {
     my ($oldname) = $dbh->selectrow_array("SELECT imapname FROM ifolders WHERE jmailboxid = ?", {}, $id);
 
     $Self->backend_cmd('delete_mailbox', $oldname);
-    push @destroyed, $uid;
+    push @destroyed, $id;
   }
 
   return (\@destroyed, \%notdestroyed);
