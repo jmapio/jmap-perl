@@ -64,6 +64,43 @@ sub get_events {
   return \%res;
 }
 
+sub new_event {
+  my $Self = shift;
+  my $href = shift;
+  my $event = shift;
+  $href =~ s{/$}{};
+
+  my $talk = $Self->connect_calendars();
+  return unless $talk;
+
+  $talk->NewEvent($href, $event);
+}
+
+sub update_event {
+  my $Self = shift;
+  my $href = shift;
+  my $resource = shift;
+  my $event = shift;
+  $href =~ s{/$}{};
+
+  my $talk = $Self->connect_calendars();
+  return unless $talk;
+
+  $talk->NewEvent("$href/$resource", $event);
+}
+
+sub delete_event {
+  my $Self = shift;
+  my $href = shift;
+  my $resource = shift;
+  $href =~ s{/$}{};
+
+  my $talk = $Self->connect_calendars();
+  return unless $talk;
+
+  $talk->DeleteEvent({href => "$href/$resource"});
+}
+
 sub get_addressbooks {
   my $Self = shift;
   my $talk = $Self->connect_contacts();
@@ -89,6 +126,43 @@ sub get_cards {
   }
 
   return \%res;
+}
+
+sub new_card {
+  my $Self = shift;
+  my $href = shift;
+  my $card = shift;
+  $href =~ s{/$}{};
+
+  my $talk = $Self->connect_contacts();
+  return unless $talk;
+
+  $talk->NewContact($href, $card);
+}
+
+sub update_card {
+  my $Self = shift;
+  my $href = shift;
+  my $resource = shift;
+  my $card = shift;
+  $href =~ s{/$}{};
+
+  my $talk = $Self->connect_contacts();
+  return unless $talk;
+
+  $talk->UpdateContact("$href/$resource", $card);
+}
+
+sub delete_card {
+  my $Self = shift;
+  my $href = shift;
+  my $resource = shift;
+  $href =~ s{/$}{};
+
+  my $talk = $Self->connect_contacts();
+  return unless $talk;
+
+  $talk->DeleteContact("$href/$resource");
 }
 
 # read folder list from the server

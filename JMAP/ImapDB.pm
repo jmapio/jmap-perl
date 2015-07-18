@@ -1040,7 +1040,7 @@ sub create_calendar_events {
     my $calendar = $new->{$cid};
     my ($href) = $dbh->selectrow_array("SELECT href FROM icalendars WHERE icalendarid = ?", {}, $calendar->{calendarId});
     unless ($href) {
-      $notcreated{$msgid} = "No such calendar on server";
+      $notcreated{$cid} = "No such calendar on server";
       next;
     }
     my $uid = new_uuid_string();
@@ -1061,10 +1061,10 @@ sub update_calendar_events {
   my @updated;
   my %notupdated;
   foreach my $uid (keys %$update) {
-    my $calendar = $updated->{$uid};
-    my ($href) = $dbh->selectrow_array("SELECT href, resource FROM ievents JOIN icalendars USING (icalendarid) WHERE uid = ?", {}, $uuid);
-    unless ($href) {
-      $notcreated{$uid} = "No such calendar on server";
+    my $calendar = $update->{$uid};
+    my ($href, $resource) = $dbh->selectrow_array("SELECT href, resource FROM ievents JOIN icalendars USING (icalendarid) WHERE uid = ?", {}, $uid);
+    unless ($href and $resource) {
+      $notupdated{$uid} = "No such event on server";
       next;
     }
 
@@ -1083,63 +1083,15 @@ sub destroy_calendar_events {
 
   my @destroyed;
   my %notdestroyed;
-  foreach my $uid (@$destroy);
-    my ($href) = $dbh->selectrow_array("SELECT href, resource FROM ievents JOIN icalendars USING (icalendarid) WHERE uid = ?", {}, $uuid);
-    unless ($href) {
-      $notdestroyed{$uid} = "No such calendar on server";
+  foreach my $uid (@$destroy) {
+    my ($href, $resource) = $dbh->selectrow_array("SELECT href, resource FROM ievents JOIN icalendars USING (icalendarid) WHERE uid = ?", {}, $uid);
+    unless ($href and $resource) {
+      $notdestroyed{$uid} = "No such event on server";
       next;
     }
 
     $Self->backend_cmd('delete_event', $href, $resource);
     push @destroyed, $uid;
-  }
-
-  return (\@destroyed, \%notdestroyed);
-}
-
-sub update_contact_groups {
-  my $Self = shift;
-  my $changes = shift;
-
-  my $dbh = $Self->{dbh};
-
-  my @updated;
-  my %notchanged;
-  foreach my $carduid (keys %$changes) {
-    my $contact = $changes->{$carduid};
-    my ($href, $resource, $content) = $dbh->selectrow_array("SELECT href, resource, content FROM icards JOIN iaddresses USING (iaddressbookid) WHERE uid = ?", {}, $carduid);
-    unless ($href and $resource) {
-      $notchanged{$msgid} = "No such card on server";
-      next;
-    }
-    my ($card) = Net::CardDAVTalk::VCard->new_fromstring($content);
-    $card->VKind('group');
-    $card->VName($contact->{name}) if exists $contact->{name};
-    $card->VGroupContactUIDs($contact->{memberIds}) if exists $contact->{memberIds};
-
-    $Self->backend_cmd('set_card', $href, $resource, $card);
-    push @updated, $carduid;
-  }
-
-  return (\@updated, \%notchanged);
-}
-
-sub destroy_contact_groups {
-  my $Self = shift;
-  my $destroy = shift;
-
-  my $dbh = $Self->{dbh};
-
-  my @destroyed;
-  my %notdestroyed;
-  foreach my $carduid (@$destroy) {
-    my ($href, $resource, $content) = $dbh->selectrow_array("SELECT href, resource, content FROM icards JOIN iaddresses USING (iaddressbookid) WHERE uid = ?", {}, $carduid);
-    unless ($href and $resource) {
-      $notdestroyed{$msgid} = "No such card on server";
-      next;
-    }
-    $Self->backend_cmd('set_card', $href, $resource, undef);
-    push @destroyed, $carduid;
   }
 
   return (\@destroyed, \%notdestroyed);
@@ -1157,11 +1109,12 @@ sub create_contact_groups {
     my $contact = $new->{$cid};
     my ($href) = $dbh->selectrow_array("SELECT href FROM iaddresses WHERE iaddressbookid = ?", {}, $contact->{addressbookId});
     unless ($href) {
-      $notcreated{$msgid} = "No such addressbook on server";
+      $notcreated{$cid} = "No such addressbook on server";
       next;
     }
     my ($card) = Net::CardDAVTalk::VCard->new();
     my $uid = new_uuid_string();
+    my $resource = "$uid.vcf";
     $card->uid($uid);
     $card->VKind('group');
     $card->VName($contact->{name}) if exists $contact->{name};
@@ -1186,7 +1139,7 @@ sub update_contact_groups {
     my $contact = $changes->{$carduid};
     my ($href, $resource, $content) = $dbh->selectrow_array("SELECT href, resource, content FROM icards JOIN iaddresses USING (iaddressbookid) WHERE uid = ?", {}, $carduid);
     unless ($href and $resource) {
-      $notchanged{$msgid} = "No such card on server";
+      $notchanged{$carduid} = "No such card on server";
       next;
     }
     my ($card) = Net::CardDAVTalk::VCard->new_fromstring($content);
@@ -1212,7 +1165,7 @@ sub destroy_contact_groups {
   foreach my $carduid (@$destroy) {
     my ($href, $resource, $content) = $dbh->selectrow_array("SELECT href, resource, content FROM icards JOIN iaddresses USING (iaddressbookid) WHERE uid = ?", {}, $carduid);
     unless ($href and $resource) {
-      $notdestroyed{$msgid} = "No such card on server";
+      $notdestroyed{$carduid} = "No such card on server";
       next;
     }
     $Self->backend_cmd('set_card', $href, $resource, undef);
@@ -1234,11 +1187,12 @@ sub create_contacts {
     my $contact = $new->{$cid};
     my ($href) = $dbh->selectrow_array("SELECT href FROM iaddresses WHERE iaddressbookid = ?", {}, $contact->{addressbookId});
     unless ($href) {
-      $notcreated{$msgid} = "No such addressbook on server";
+      $notcreated{$cid} = "No such addressbook on server";
       next;
     }
     my ($card) = Net::CardDAVTalk::VCard->new();
     my $uid = new_uuid_string();
+    my $resource = "$uid.vcf";
     $card->uid($uid);
     $card->VLastName($contact->{lastName}) if exists $contact->{lastName};
     $card->VFirstName($contact->{firstName}) if exists $contact->{firstName};
@@ -1275,7 +1229,7 @@ sub update_contacts {
     my $contact = $changes->{$carduid};
     my ($href, $resource, $content) = $dbh->selectrow_array("SELECT href, resource, content FROM icards JOIN iaddresses USING (iaddressbookid) WHERE uid = ?", {}, $carduid);
     unless ($href and $resource) {
-      $notchanged{$msgid} = "No such card on server";
+      $notchanged{$carduid} = "No such card on server";
       next;
     }
     my ($card) = Net::CardDAVTalk::VCard->new_fromstring($content);
@@ -1313,7 +1267,7 @@ sub destroy_contacts {
   foreach my $carduid (@$destroy) {
     my ($href, $resource, $content) = $dbh->selectrow_array("SELECT href, resource, content FROM icards JOIN iaddresses USING (iaddressbookid) WHERE uid = ?", {}, $carduid);
     unless ($href and $resource) {
-      $notdestroyed{$msgid} = "No such card on server";
+      $notdestroyed{$carduid} = "No such card on server";
       next;
     }
     $Self->backend_cmd('set_card', $href, $resource, undef);
@@ -1322,10 +1276,6 @@ sub destroy_contacts {
 
   return (\@destroyed, \%notdestroyed);
 }
-
-sub _initdb {
-  my $Self = shift;
-  my $dbh = shift;
 
 sub _initdb {
   my $Self = shift;
