@@ -23,6 +23,7 @@ use DateTime;
 use Date::Parse;
 use Net::CalDAVTalk;
 use Net::CardDAVTalk::VCard;
+use MIME::Base64 qw(encode_base64);
 
 sub new {
   my $class = shift;
@@ -549,26 +550,100 @@ sub _mkemail {
 sub _makemsg {
   my $Self = shift;
   my $args = shift;
+  my $isDraft = shift;
 
   my %replyHeaders;
   if ($args->{inReplyToMessageId}) {
     # XXX - get replyheaders
   }
 
-  my $MIME = Email::Simple->create(
-    header => [
-      From => _mkone($args->{from}),
-      To => _mkemail($args->{to}),
-      Cc => _mkemail($args->{cc}),
-      Bcc => _mkemail($args->{bcc}),
-      Subject => $args->{subject},
-      %{$args->{headers} || {}},
-    ],
-    body => $args->{textBody} || $args->{htmlBody},
-  );
-  # XXX - attachments
+  my $header = [
+    From => _mkone($args->{from}),
+    To => _mkemail($args->{to}),
+    Cc => _mkemail($args->{cc}),
+    Bcc => _mkemail($args->{bcc}),
+    Subject => $args->{subject},
+    %{$args->{headers} || {}},
+  ];
 
-  return $MIME->as_string();
+  # massive switch
+  my $MIME;
+  my $htmlpart;
+  my $text = $args->{textBody} ? $args->{textBody} : JMAP::DB::htmltotext($args->{htmlBody});
+  my $textpart = Email::MIME->create(
+    attributes => {
+      content_type => 'text/plain',
+      charset => 'UTF-8',
+    },
+    body => $text,
+  );
+  if ($args->{htmlBody}) {
+    $htmlpart = Email::MIME->create(
+      attributes => {
+        content_type => 'text/html',
+        charset => 'UTF-8',
+      },
+      body => $args->{htmlBody},
+    );
+  }
+
+  my @attachments = $args->{attachments} ? @{$args->{attachments}} : ();
+
+  if (@attachments and not $isDraft) {
+    my $encoded = encode_base64(@attachments, '');
+    push @$header, "X-JMAP-Draft-Attachments" => $encoded;
+    @attachments = ();
+  }
+
+  if (@attachments) {
+    # most complex case
+    if ($htmlpart) {
+      my $msgparts = Email::MIME->create(
+        attributes => {
+          content_type => 'multipart/alternative'
+        },
+        parts => [$textpart, $htmlpart],
+      );
+      # XXX - attachments
+      $MIME = Email::MIME->create(
+        header_str => [@$header, 'Content-Type' => 'multipart/mixed'],
+	parts => [$msgparts],
+      );
+    }
+    else {
+      # XXX - attachments
+      $MIME = Email::MIME->create(
+        header_str => [@$header, 'Content-Type' => 'multipart/mixed'],
+	parts => [$textpart],
+      );
+    }
+  }
+  else {
+    if ($htmlpart) {
+      $MIME = Email::MIME->create(
+        attributes => {
+          content_type => 'multipart/alternative',
+        },
+        header_str => $header,
+	parts => [$textpart, $htmlpart],
+      );
+    }
+    else {
+      $MIME = Email::MIME->create(
+        attributes => {
+          content_type => 'text/plain',
+          charset => 'UTF-8',
+        },
+        header_str => $header,
+	body => $args->{textBody},
+      );
+    }
+  }
+
+  my $res = $MIME->as_string();
+  $res =~ s/\r?\n/\r\n/gs;
+
+  return $res;
 }
 
 # NOTE: this can ONLY be used to create draft messages

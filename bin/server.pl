@@ -596,6 +596,8 @@ sub prod_backfill {
     send_backend_request("$accountid:backfill", 'backfill', $accountid, sub {
       $timer = undef;
       prod_backfill($accountid, @_);
+      # keep the idler running while we're backfilling
+      $idler{$accountid}{lastused} = time();
     });
   });
 }

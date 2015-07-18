@@ -801,6 +801,7 @@ sub update_messages {
   my $folderdata = $dbh->selectall_arrayref("SELECT ifolderid, imapname, uidvalidity, label, jmailboxid FROM ifolders");
   my %foldermap = map { $_->[0] => $_ } @$folderdata;
   my %jmailmap = map { $_->[4] => $_ } @$folderdata;
+  my %labelmap = map { $_->[3] => $_ } @$folderdata;
 
   my @changed;
   foreach my $ifolderid (keys %updatemap) {
@@ -835,7 +836,10 @@ sub update_messages {
       }
       if (exists $action->{mailboxIds}) {
         my $id = $action->{mailboxIds}->[0]; # there can be only one
-        my $newfolder = $foldermap{$id}[1];
+        if ($id eq 'outbox') {
+          $id = $labelmap{'sent'}[3];
+        }
+        my $newfolder = $jmailmap{$id}[1];
         $Self->backend_cmd('imap_move', $imapname, $uidvalidity, $uid, $newfolder);
       }
       # XXX - handle errors from backend commands
