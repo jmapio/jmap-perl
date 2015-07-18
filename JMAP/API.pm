@@ -329,7 +329,42 @@ sub getMailboxUpdates {
 
 sub setMailboxes {
   my $Self = shift;
-  return ['error', {type => 'notImplemented'}];
+  my $args = shift;
+
+  $Self->begin();
+
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  $Self->commit();
+
+  my $create = $args->{create} || {};
+  my $update = $args->{update} || {};
+  my $destroy = $args->{destroy} || [];
+
+  # XXX - idmap support
+  my ($created, $notCreated) = $Self->{db}->create_mailboxes($create);
+  my ($updated, $notUpdated) = $Self->{db}->update_mailboxes($update);
+  my ($destroyed, $notDestroyed) = $Self->{db}->destroy_mailboxes($destroy);
+
+  $Self->{db}->sync();
+
+  my @res;
+  push @res, ['mailboxesSet', {
+    accountId => $accountid,
+    oldState => undef, # proxy can't guarantee the old state
+    newState => undef, # or give a new state
+    created => $created,
+    notCreated => $notCreated,
+    updated => $updated,
+    notUpdated => $notUpdated,
+    destroyed => $destroyed,
+    notDestroyed => $notDestroyed,
+  }];
+
+  return @res;
 }
 
 sub _build_sort {

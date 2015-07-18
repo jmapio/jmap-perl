@@ -837,11 +837,19 @@ sub update_messages {
       if (exists $action->{mailboxIds}) {
         my $id = $action->{mailboxIds}->[0]; # there can be only one
         if ($id eq 'outbox') {
-          $id = $labelmap{'sent'}[3];
-          
+          my $sentid = $labelmap{'sent'}[3];
+          my $newfolder = $jmailmap{$id}[1];
+          my $res = $Self->backend_cmd('imap_fill', $imapname, $uidvalidity, $uid);
+          my $msg = $res->{data}{$uid};
+          $Self->backend_cmd('send_email', $msg);
+          # strip the \Draft flag
+          $Self->backend_cmd('imap_update', $imapname, $uidvalidity, $uid, 0, ["\\draft"]);
+          $Self->backend_cmd('imap_move', $imapname, $uidvalidity, $uid, $newfolder);
         }
-        my $newfolder = $jmailmap{$id}[1];
-        $Self->backend_cmd('imap_move', $imapname, $uidvalidity, $uid, $newfolder);
+        else {
+          my $newfolder = $jmailmap{$id}[1];
+          $Self->backend_cmd('imap_move', $imapname, $uidvalidity, $uid, $newfolder);
+        }
       }
       # XXX - handle errors from backend commands
       push @changed, $msgid;
@@ -1032,6 +1040,96 @@ sub fill_messages {
   my @stillneed = grep { not $result{$_} } @ids;
 
   return \%result;
+}
+
+sub create_mailboxes {
+  my $Self = shift;
+  my $new = shift;
+
+  my $dbh = $Self->{dbh};
+
+  my %idmap;
+  my %notcreated;
+  foreach my $cid (keys %$new) {
+    my $mailbox = $new->{$cid};
+
+    my $imapname = $mailbox->{name};
+    if ($mailbox->{parentId}) {
+      my ($parentName, $sep) = $dbh->selectrow_array("SELECT imapname, sep FROM ifolders WHERE jmailboxid = ?", {}, $mailbox->{parentId});
+      # XXX - errors
+      $imapname = "$parentName$sep$imapname";
+    }
+    else {
+      my ($prefix) = $dbh->selectrow_array("SELECT prefix FROM iserver");
+      $imapname = "$prefix$imapname";
+    }
+
+    my $res = $Self->backend_cmd('create_mailbox', $imapname);
+    # XXX - handle errors...
+    $idmap{$imapname} = $cid; # need to resolve this after the sync
+  }
+
+  # (in theory we could save this until the end and resolve the names in after the renames and deletes... but it does mean
+  # we can't use ids as referenes...)
+  $Self->sync_folders();
+
+  my %createdmap;
+  foreach my $imapname (keys %idmap) {
+    my $cid = $idmap{$imapname};
+    my ($jid) = $dbh->selectrow_array("SELECT jmailboxid FROM ifolders WHERE imapname = ?", {}, $imapname);
+    $createmap{$cid} = $jid;
+  }
+
+  return (\%createmap, \%notcreated);
+}
+
+sub update_mailboxes {
+  my $Self = shift;
+  my $update = shift;
+
+  my $dbh = $Self->{dbh};
+
+  my @updated;
+  my %notupdated;
+  # XXX - reorder the crap out of this if renaming multiple mailboxes due to deep rename
+  foreach my $id (keys %$update) {
+    my $mailbox = $update->{$id};
+    my $imapname = $mailbox->{name};
+    if ($mailbox->{parentId}) {
+      my ($parentName, $sep) = $dbh->selectrow_array("SELECT imapname, sep FROM ifolders WHERE jmailboxid = ?", {}, $mailbox->{parentId});
+      # XXX - errors
+      $imapname = "$parentName$sep$imapname";
+    }
+    else {
+      my ($prefix) = $dbh->selectrow_array("SELECT prefix FROM iserver");
+      $imapname = "$prefix$imapname";
+    }
+
+    my ($oldname) = $dbh->selectrow_array("SELECT imapname FROM ifolders WHERE jmailboxid = ?", {}, $id);
+
+    $Self->backend_cmd('rename_mailbox', $oldname, $imapname);
+    push @updated, $uid;
+  }
+
+  return (\@updated, \%notupdated);
+}
+
+sub destroy_mailboxes {
+  my $Self = shift;
+  my $destroy = shift;
+
+  my $dbh = $Self->{dbh};
+
+  my @destroyed;
+  my %notdestroyed;
+  foreach my $id (@$destroy) {
+    my ($oldname) = $dbh->selectrow_array("SELECT imapname FROM ifolders WHERE jmailboxid = ?", {}, $id);
+
+    $Self->backend_cmd('delete_mailbox', $oldname);
+    push @destroyed, $uid;
+  }
+
+  return (\@destroyed, \%notdestroyed);
 }
 
 sub create_calendar_events {
