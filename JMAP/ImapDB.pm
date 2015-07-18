@@ -838,6 +838,7 @@ sub update_messages {
         my $id = $action->{mailboxIds}->[0]; # there can be only one
         if ($id eq 'outbox') {
           $id = $labelmap{'sent'}[3];
+          
         }
         my $newfolder = $jmailmap{$id}[1];
         $Self->backend_cmd('imap_move', $imapname, $uidvalidity, $uid, $newfolder);
