@@ -1357,7 +1357,7 @@ CREATE TABLE IF NOT EXISTS ievents (
 );
 EOF
 
-  $dbh->do("CREATE INDEX ieventuid ON ievents (uid)");
+  $dbh->do("CREATE INDEX IF NOT EXISTS ieventuid ON ievents (uid)");
 
   $dbh->do(<<EOF);
 CREATE TABLE IF NOT EXISTS iaddressbooks (
@@ -1382,7 +1382,7 @@ CREATE TABLE IF NOT EXISTS icards (
 );
 EOF
 
-  $dbh->do("CREATE INDEX icarduid ON icards (uid)");
+  $dbh->do("CREATE INDEX IF NOT EXISTS icarduid ON icards (uid)");
 
 }
 

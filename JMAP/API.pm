@@ -1196,6 +1196,29 @@ sub _prop_wanted {
   return 0;
 }
 
+sub getCalendarPreferences {
+  return ['calendarPreferences', {
+    autoAddCalendarId         => '',
+    autoAddInvitations        => JSON::false,
+    autoAddGroupId            => JSON::null,
+    autoRSVPGroupId           => JSON::null,
+    autoRSVP                  => JSON::false,
+    autoUpdate                => JSON::false,
+    birthdaysAreVisible       => JSON::false,
+    defaultAlerts             => [],
+    defaultAllDayAlerts       => [],
+    defaultCalendarId         => '',
+    firstDayOfWeek            => 1,
+    markReadAndFileAutoAdd    => JSON::false,
+    markReadAndFileAutoUpdate => JSON::false,
+    onlyAutoAddIfInGroup      => JSON::false,
+    onlyAutoRSVPIfInGroup     => JSON::false,
+    showWeekNumbers           => JSON::false,
+    timeZone                  => JSON::null,
+    useTimeZones              => JSON::false,
+  }];
+}
+
 sub getCalendars {
   my $Self = shift;
   my $args = shift;
