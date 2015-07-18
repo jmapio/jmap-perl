@@ -86,7 +86,11 @@ sub commit {
 
   # push an update if anything to tell..
   if ($t->{modseq} and $Self->{change_cb}) {
-    $Self->{change_cb}->($Self, "$t->{modseq}"); # aka stateString
+    $Self->{change_cb}->($Self, {
+      Mailbox => "$t->{modseq}",
+      Thread => "$t->{modseq}",
+      Message => "$t->{modseq}",
+    });
   }
 }
 

@@ -115,8 +115,7 @@ sub change_cb {
   my $states = shift;
 
   my $data = {
-    clientId => undef,
-    accountStates => {
+    changed => {
       $db->accountid() => $states,
     },
   };
@@ -139,10 +138,11 @@ sub handle_getstate {
   $db->commit();
 
   my $data = {
-    clientId => undef,
-    accountStates => {
+    changed => {
       $db->accountid() => {
-        mailState => "$state",
+        Mailbox => "$state",
+        Thread => "$state",
+        Message => "$state",
       },
     },
   };

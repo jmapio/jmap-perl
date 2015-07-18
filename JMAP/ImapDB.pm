@@ -22,6 +22,7 @@ use JMAP::Sync::Gmail;
 use JMAP::Sync::ICloud;
 use JMAP::Sync::Fastmail;
 use JMAP::Sync::Yahoo;
+use JMAP::Sync::Standard;
 
 our $TAG = 1;
 
@@ -116,7 +117,7 @@ sub backend_cmd {
     } elsif ($config->{hostname} eq 'imap.mail.yahoo.com') {
       $backend = JMAP::Sync::Yahoo->new($config) || die "failed to setup $auth->[1]";
     } else {
-      die "UNKNOWN ID $config->{username} ($config->{hostname})";
+      $backend = JMAP::Sync::Standard->new($config) || die "failed to setup $auth->[1]";
     }
     $Self->{backend} = $backend;
   }

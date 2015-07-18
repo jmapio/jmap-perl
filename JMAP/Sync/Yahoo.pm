@@ -38,7 +38,7 @@ sub new {
     addressbookurl => 'https://carddav.address.yahoo.com',
     %$auth,
   );
-  return JMAP::Sync::Standard->new(\%a);
+  return $class->SUPER::new(\%a);
 }
 
 1;

@@ -954,9 +954,7 @@ sub setMessages {
   push @res, ['messagesSet', {
     accountId => $accountid,
     oldState => undef, # proxy can't guarantee the old state
-    # this is actually the state BEFORE the changes, so the client will get a spurious duplicate of the change, but there's
-    # no nice way to avoid that...
-    newState => "$user->{jhighestmodseq}",
+    newState => undef, # or give a new state
     created => $created,
     notCreated => $notCreated,
     updated => $updated,
@@ -1917,6 +1915,166 @@ sub getContactGroupUpdates {
       properties => $args->{fetchRecordProperties},
     }) if @changed;
   }
+
+  return @res;
+}
+
+sub setContactGroups {
+  my $Self = shift;
+  my $args = shift;
+
+  $Self->begin();
+
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  $Self->commit();
+
+  my $create = $args->{create} || {};
+  my $update = $args->{update} || {};
+  my $destroy = $args->{destroy} || [];
+
+  # XXX - idmap support
+  my ($created, $notCreated) = $Self->{db}->create_contact_groups($create);
+  my ($updated, $notUpdated) = $Self->{db}->update_contact_groups($update);
+  my ($destroyed, $notDestroyed) = $Self->{db}->destroy_contact_groups($destroy);
+
+  $Self->{db}->sync_addressbooks();
+
+  my @res;
+  push @res, ['contactGroupsSet', {
+    accountId => $accountid,
+    oldState => undef, # proxy can't guarantee the old state
+    newState => undef, # or give a new state
+    created => $created,
+    notCreated => $notCreated,
+    updated => $updated,
+    notUpdated => $notUpdated,
+    destroyed => $destroyed,
+    notDestroyed => $notDestroyed,
+  }];
+
+  return @res;
+}
+
+sub setContacts {
+  my $Self = shift;
+  my $args = shift;
+
+  $Self->begin();
+
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  $Self->commit();
+
+  my $create = $args->{create} || {};
+  my $update = $args->{update} || {};
+  my $destroy = $args->{destroy} || [];
+
+  # XXX - idmap support
+  my ($created, $notCreated) = $Self->{db}->create_contacts($create);
+  my ($updated, $notUpdated) = $Self->{db}->update_contacts($update);
+  my ($destroyed, $notDestroyed) = $Self->{db}->destroy_contacts($destroy);
+
+  $Self->{db}->sync_addressbooks();
+
+  my @res;
+  push @res, ['contactsSet', {
+    accountId => $accountid,
+    oldState => undef, # proxy can't guarantee the old state
+    newState => undef, # or give a new state
+    created => $created,
+    notCreated => $notCreated,
+    updated => $updated,
+    notUpdated => $notUpdated,
+    destroyed => $destroyed,
+    notDestroyed => $notDestroyed,
+  }];
+
+  return @res;
+}
+
+sub setCalendarEvents {
+  my $Self = shift;
+  my $args = shift;
+
+  $Self->begin();
+
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  $Self->commit();
+
+  my $create = $args->{create} || {};
+  my $update = $args->{update} || {};
+  my $destroy = $args->{destroy} || [];
+
+  # XXX - idmap support
+  my ($created, $notCreated) = $Self->{db}->create_calendar_events($create);
+  my ($updated, $notUpdated) = $Self->{db}->update_calendar_events($update);
+  my ($destroyed, $notDestroyed) = $Self->{db}->destroy_calendar_events($destroy);
+
+  $Self->{db}->sync_calendars();
+
+  my @res;
+  push @res, ['calendarEventsSet', {
+    accountId => $accountid,
+    oldState => undef, # proxy can't guarantee the old state
+    newState => undef, # or give a new state
+    created => $created,
+    notCreated => $notCreated,
+    updated => $updated,
+    notUpdated => $notUpdated,
+    destroyed => $destroyed,
+    notDestroyed => $notDestroyed,
+  }];
+
+  return @res;
+}
+
+sub setCalendars {
+  my $Self = shift;
+  my $args = shift;
+
+  $Self->begin();
+
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  $Self->commit();
+
+  my $create = $args->{create} || {};
+  my $update = $args->{update} || {};
+  my $destroy = $args->{destroy} || [];
+
+  # XXX - idmap support
+  my ($created, $notCreated) = $Self->{db}->create_calendars($create);
+  my ($updated, $notUpdated) = $Self->{db}->update_calendars($update);
+  my ($destroyed, $notDestroyed) = $Self->{db}->destroy_calendars($destroy);
+
+  $Self->{db}->sync_calendars();
+
+  my @res;
+  push @res, ['calendarsSet', {
+    accountId => $accountid,
+    oldState => undef, # proxy can't guarantee the old state
+    newState => undef, # or give a new state
+    created => $created,
+    notCreated => $notCreated,
+    updated => $updated,
+    notUpdated => $notUpdated,
+    destroyed => $destroyed,
+    notDestroyed => $notDestroyed,
+  }];
 
   return @res;
 }
