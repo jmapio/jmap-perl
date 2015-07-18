@@ -1063,8 +1063,8 @@ sub getThreads {
   foreach my $thrid (@{$args->{ids}}) {
     next if $seenids{$thrid};
     $seenids{$thrid} = 1;
-    my $data = $dbh->selectall_arrayref("SELECT msgid,isDraft,msgmessageid,msginreplyto FROM jmessages WHERE thrid = ? ORDER BY internaldate", {}, $thrid);
-    unless ($data) {
+    my $data = $dbh->selectall_arrayref("SELECT msgid,isDraft,msgmessageid,msginreplyto FROM jmessages WHERE thrid = ? AND active = 1 ORDER BY internaldate", {}, $thrid);
+    unless (@$data) {
       $missingids{$thrid} = 1;
       next;
     }
@@ -1073,6 +1073,7 @@ sub getThreads {
     my %seenmsgs;
     foreach my $item (@$data) {
       next unless $item->[1];
+      next unless $item->[3];  # push the rest of the drafts to the end
       push @{$drafts{$item->[3]}}, $item->[0];
     }
     foreach my $item (@$data) {
