@@ -154,6 +154,9 @@ sub getMailboxes {
 
   my $data = $dbh->selectall_arrayref("SELECT jmailboxid, parentId, name, role, sortOrder, mustBeOnlyMailbox, mayReadItems, mayAddItems, mayRemoveItems, mayCreateChild, mayRename, mayDelete FROM jmailboxes WHERE active = 1");
 
+  # outbox - magic
+  push @$data, [ 'outbox', 0, "Outbox", 'outbox', 1, 1, 1, 1, 1, 0, 0, 0 ];
+
   my %ids;
   if ($args->{ids}) {
     %ids = map { $_ => 1 } @{$args->{ids}};
