@@ -728,7 +728,7 @@ sub delete_card {
   my $carduid = shift;
   my $kind = shift;
   if ($kind eq 'contact') {
-    $Self->dupdate('jcontactgroups', {active => 0}, {carduid => $carduid, jaddressbookid => $jaddressbookid});
+    $Self->dupdate('jcontacts', {active => 0}, {carduid => $carduid, jaddressbookid => $jaddressbookid});
   }
   else {
     $Self->dupdate('jcontactgroupmap', {active => 0}, {carduid => $carduid, jaddressbookid => $jaddressbookid});
