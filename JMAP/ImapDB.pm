@@ -355,11 +355,11 @@ sub sync_jcalendars {
       isVisible => 1,
       mayReadFreeBusy => 1,
       mayReadItems => 1,
-      mayAddItems => 0,
-      mayModifyItems => 0,
-      mayRemoveItems => 0,
-      mayDelete => 0,
-      mayRename => 0,
+      mayAddItems => 1,
+      mayModifyItems => 1,
+      mayRemoveItems => 1,
+      mayDelete => 1,
+      mayRename => 1,
     };
     if ($calendar->[3] && $jbyid{$calendar->[3]}) {
       $Self->dmaybeupdate('jcalendars', $data, {jcalendarid => $calendar->[3]});
@@ -396,15 +396,16 @@ sub do_calendar {
   foreach my $resource (keys %$events) {
     my $data = delete $res{$resource};
     my $raw = $events->{$resource};
+    my $event = $Self->parse_event($raw);
+    my $uid = $event->{uid};
     if ($data) {
       my $id = $data->[0];
       next if $raw eq $data->[2];
-      $Self->dmaybeupdate('ievents', {content => $raw, resource => $resource}, {ieventid => $id});
+      $Self->dmaybeupdate('ievents', {uid => $uid, content => $raw, resource => $resource}, {ieventid => $id});
     }
     else {
-      $Self->dinsert('ievents', {content => $raw, resource => $resource});
+      $Self->dinsert('ievents', {uid => $uid, content => $raw, resource => $resource});
     }
-    my $event = $Self->parse_event($raw);
     $Self->set_event($jcalendarid, $event);
   }
 
@@ -492,9 +493,9 @@ sub sync_jaddressbooks {
       name => $addressbook->[1],
       isVisible => 1,
       mayReadItems => 1,
-      mayAddItems => 0,
-      mayModifyItems => 0,
-      mayRemoveItems => 0,
+      mayAddItems => 1,
+      mayModifyItems => 1,
+      mayRemoveItems => 1,
       mayDelete => 0,
       mayRename => 0,
     };
@@ -534,15 +535,16 @@ sub do_addressbook {
   foreach my $resource (keys %$cards) {
     my $data = delete $res{$resource};
     my $raw = $cards->{$resource};
+    my $card = $Self->parse_card($raw);
+    my $uid = $card->{uid};
     if ($data) {
       my $id = $data->[0];
       next if $raw eq $data->[2];
-      $Self->dmaybeupdate('icards', {content => $raw, resource => $resource}, {icardid => $id});
+      $Self->dmaybeupdate('icards', {uid => $uid, content => $raw, resource => $resource}, {icardid => $id});
     }
     else {
-      $Self->dinsert('icards', {content => $raw, resource => $resource});
+      $Self->dinsert('icards', {uid => $uid, content => $raw, resource => $resource});
     }
-    my $card = $Self->parse_card($raw);
     $Self->set_card($jaddressbookid, $card);
   }
 
@@ -1026,6 +1028,305 @@ sub fill_messages {
   return \%result;
 }
 
+sub create_calendar_events {
+  my $Self = shift;
+  my $new = shift;
+
+  my $dbh = $Self->{dbh};
+
+  my %createmap;
+  my %notcreated;
+  foreach my $cid (keys %$new) {
+    my $calendar = $new->{$cid};
+    my ($href) = $dbh->selectrow_array("SELECT href FROM icalendars WHERE icalendarid = ?", {}, $calendar->{calendarId});
+    unless ($href) {
+      $notcreated{$msgid} = "No such calendar on server";
+      next;
+    }
+    my $uid = new_uuid_string();
+
+    $Self->backend_cmd('new_event', $href, {%$calendar, uid => $uid});
+    $createmap{$cid} = { id => $uid };
+  }
+
+  return (\%createmap, \%notcreated);
+}
+
+sub update_calendar_events {
+  my $Self = shift;
+  my $update = shift;
+
+  my $dbh = $Self->{dbh};
+
+  my @updated;
+  my %notupdated;
+  foreach my $uid (keys %$update) {
+    my $calendar = $updated->{$uid};
+    my ($href) = $dbh->selectrow_array("SELECT href, resource FROM ievents JOIN icalendars USING (icalendarid) WHERE uid = ?", {}, $uuid);
+    unless ($href) {
+      $notcreated{$uid} = "No such calendar on server";
+      next;
+    }
+
+    $Self->backend_cmd('update_event', $href, $resource, $calendar);
+    push @updated, $uid;
+  }
+
+  return (\@updated, \%notupdated);
+}
+
+sub destroy_calendar_events {
+  my $Self = shift;
+  my $destroy = shift;
+
+  my $dbh = $Self->{dbh};
+
+  my @destroyed;
+  my %notdestroyed;
+  foreach my $uid (@$destroy);
+    my ($href) = $dbh->selectrow_array("SELECT href, resource FROM ievents JOIN icalendars USING (icalendarid) WHERE uid = ?", {}, $uuid);
+    unless ($href) {
+      $notdestroyed{$uid} = "No such calendar on server";
+      next;
+    }
+
+    $Self->backend_cmd('delete_event', $href, $resource);
+    push @destroyed, $uid;
+  }
+
+  return (\@destroyed, \%notdestroyed);
+}
+
+sub update_contact_groups {
+  my $Self = shift;
+  my $changes = shift;
+
+  my $dbh = $Self->{dbh};
+
+  my @updated;
+  my %notchanged;
+  foreach my $carduid (keys %$changes) {
+    my $contact = $changes->{$carduid};
+    my ($href, $resource, $content) = $dbh->selectrow_array("SELECT href, resource, content FROM icards JOIN iaddresses USING (iaddressbookid) WHERE uid = ?", {}, $carduid);
+    unless ($href and $resource) {
+      $notchanged{$msgid} = "No such card on server";
+      next;
+    }
+    my ($card) = Net::CardDAVTalk::VCard->new_fromstring($content);
+    $card->VKind('group');
+    $card->VName($contact->{name}) if exists $contact->{name};
+    $card->VGroupContactUIDs($contact->{memberIds}) if exists $contact->{memberIds};
+
+    $Self->backend_cmd('set_card', $href, $resource, $card);
+    push @updated, $carduid;
+  }
+
+  return (\@updated, \%notchanged);
+}
+
+sub destroy_contact_groups {
+  my $Self = shift;
+  my $destroy = shift;
+
+  my $dbh = $Self->{dbh};
+
+  my @destroyed;
+  my %notdestroyed;
+  foreach my $carduid (@$destroy) {
+    my ($href, $resource, $content) = $dbh->selectrow_array("SELECT href, resource, content FROM icards JOIN iaddresses USING (iaddressbookid) WHERE uid = ?", {}, $carduid);
+    unless ($href and $resource) {
+      $notdestroyed{$msgid} = "No such card on server";
+      next;
+    }
+    $Self->backend_cmd('set_card', $href, $resource, undef);
+    push @destroyed, $carduid;
+  }
+
+  return (\@destroyed, \%notdestroyed);
+}
+
+sub create_contact_groups {
+  my $Self = shift;
+  my $new = shift;
+
+  my $dbh = $Self->{dbh};
+
+  my %createmap;
+  my %notcreated;
+  foreach my $cid (keys %$new) {
+    my $contact = $new->{$cid};
+    my ($href) = $dbh->selectrow_array("SELECT href FROM iaddresses WHERE iaddressbookid = ?", {}, $contact->{addressbookId});
+    unless ($href) {
+      $notcreated{$msgid} = "No such addressbook on server";
+      next;
+    }
+    my ($card) = Net::CardDAVTalk::VCard->new();
+    my $uid = new_uuid_string();
+    $card->uid($uid);
+    $card->VKind('group');
+    $card->VName($contact->{name}) if exists $contact->{name};
+    $card->VGroupContactUIDs($contact->{memberIds}) if exists $contact->{memberIds};
+
+    $Self->backend_cmd('set_card', $href, $resource, $card);
+    $createmap{$cid} = { id => $uid };
+  }
+
+  return (\%createmap, \%notcreated);
+}
+
+sub update_contact_groups {
+  my $Self = shift;
+  my $changes = shift;
+
+  my $dbh = $Self->{dbh};
+
+  my @updated;
+  my %notchanged;
+  foreach my $carduid (keys %$changes) {
+    my $contact = $changes->{$carduid};
+    my ($href, $resource, $content) = $dbh->selectrow_array("SELECT href, resource, content FROM icards JOIN iaddresses USING (iaddressbookid) WHERE uid = ?", {}, $carduid);
+    unless ($href and $resource) {
+      $notchanged{$msgid} = "No such card on server";
+      next;
+    }
+    my ($card) = Net::CardDAVTalk::VCard->new_fromstring($content);
+    $card->VKind('group');
+    $card->VName($contact->{name}) if exists $contact->{name};
+    $card->VGroupContactUIDs($contact->{memberIds}) if exists $contact->{memberIds};
+
+    $Self->backend_cmd('set_card', $href, $resource, $card);
+    push @updated, $carduid;
+  }
+
+  return (\@updated, \%notchanged);
+}
+
+sub destroy_contact_groups {
+  my $Self = shift;
+  my $destroy = shift;
+
+  my $dbh = $Self->{dbh};
+
+  my @destroyed;
+  my %notdestroyed;
+  foreach my $carduid (@$destroy) {
+    my ($href, $resource, $content) = $dbh->selectrow_array("SELECT href, resource, content FROM icards JOIN iaddresses USING (iaddressbookid) WHERE uid = ?", {}, $carduid);
+    unless ($href and $resource) {
+      $notdestroyed{$msgid} = "No such card on server";
+      next;
+    }
+    $Self->backend_cmd('set_card', $href, $resource, undef);
+    push @destroyed, $carduid;
+  }
+
+  return (\@destroyed, \%notdestroyed);
+}
+
+sub create_contacts {
+  my $Self = shift;
+  my $new = shift;
+
+  my $dbh = $Self->{dbh};
+
+  my %createmap;
+  my %notcreated;
+  foreach my $cid (keys %$new) {
+    my $contact = $new->{$cid};
+    my ($href) = $dbh->selectrow_array("SELECT href FROM iaddresses WHERE iaddressbookid = ?", {}, $contact->{addressbookId});
+    unless ($href) {
+      $notcreated{$msgid} = "No such addressbook on server";
+      next;
+    }
+    my ($card) = Net::CardDAVTalk::VCard->new();
+    my $uid = new_uuid_string();
+    $card->uid($uid);
+    $card->VLastName($contact->{lastName}) if exists $contact->{lastName};
+    $card->VFirstName($contact->{firstName}) if exists $contact->{firstName};
+    $card->VTitle($contact->{prefix}) if exists $contact->{prefix};
+
+    $card->VCompany($contact->{company}) if exists $contact->{company};
+    $card->VDepartment($contact->{department}) if exists $contact->{department};
+
+    $card->VEmails($contact->{emails}) if exists $contact->{emails};
+    $card->VAddresses($contact->{addresses}) if exists $contact->{addresses};
+    $card->VPhones($contact->{phones}) if exists $contact->{phones};
+    $card->VOnline($contact->{online}) if exists $contact->{online};
+
+    $card->VOnline($contact->{nickname}) if exists $contact->{nickname};
+    $card->VBirthday($contact->{birthday}) if exists $contact->{birthday};
+    $card->VNotes($contact->{notes}) if exists $contact->{notes};
+
+    $Self->backend_cmd('set_card', $href, $resource, $card);
+    $createmap{$cid} = { id => $uid };
+  }
+
+  return (\%createmap, \%notcreated);
+}
+
+sub update_contacts {
+  my $Self = shift;
+  my $changes = shift;
+
+  my $dbh = $Self->{dbh};
+
+  my @updated;
+  my %notchanged;
+  foreach my $carduid (keys %$changes) {
+    my $contact = $changes->{$carduid};
+    my ($href, $resource, $content) = $dbh->selectrow_array("SELECT href, resource, content FROM icards JOIN iaddresses USING (iaddressbookid) WHERE uid = ?", {}, $carduid);
+    unless ($href and $resource) {
+      $notchanged{$msgid} = "No such card on server";
+      next;
+    }
+    my ($card) = Net::CardDAVTalk::VCard->new_fromstring($content);
+    $card->VLastName($contact->{lastName}) if exists $contact->{lastName};
+    $card->VFirstName($contact->{firstName}) if exists $contact->{firstName};
+    $card->VTitle($contact->{prefix}) if exists $contact->{prefix};
+
+    $card->VCompany($contact->{company}) if exists $contact->{company};
+    $card->VDepartment($contact->{department}) if exists $contact->{department};
+
+    $card->VEmails($contact->{emails}) if exists $contact->{emails};
+    $card->VAddresses($contact->{addresses}) if exists $contact->{addresses};
+    $card->VPhones($contact->{phones}) if exists $contact->{phones};
+    $card->VOnline($contact->{online}) if exists $contact->{online};
+
+    $card->VOnline($contact->{nickname}) if exists $contact->{nickname};
+    $card->VBirthday($contact->{birthday}) if exists $contact->{birthday};
+    $card->VNotes($contact->{notes}) if exists $contact->{notes};
+
+    $Self->backend_cmd('set_card', $href, $resource, $card);
+    push @updated, $carduid;
+  }
+
+  return (\@updated, \%notchanged);
+}
+
+sub destroy_contacts {
+  my $Self = shift;
+  my $destroy = shift;
+
+  my $dbh = $Self->{dbh};
+
+  my @destroyed;
+  my %notdestroyed;
+  foreach my $carduid (@$destroy) {
+    my ($href, $resource, $content) = $dbh->selectrow_array("SELECT href, resource, content FROM icards JOIN iaddresses USING (iaddressbookid) WHERE uid = ?", {}, $carduid);
+    unless ($href and $resource) {
+      $notdestroyed{$msgid} = "No such card on server";
+      next;
+    }
+    $Self->backend_cmd('set_card', $href, $resource, undef);
+    push @destroyed, $carduid;
+  }
+
+  return (\@destroyed, \%notdestroyed);
+}
+
+sub _initdb {
+  my $Self = shift;
+  my $dbh = shift;
+
 sub _initdb {
   my $Self = shift;
   my $dbh = shift;
@@ -1100,10 +1401,13 @@ CREATE TABLE IF NOT EXISTS ievents (
   ieventid INTEGER PRIMARY KEY NOT NULL,
   icalendarid INTEGER,
   resource TEXT,
+  uid TEXT,
   content TEXT,
   mtime DATE NOT NULL
 );
 EOF
+
+  $dbh->do("CREATE INDEX ieventuid ON ievents (uid)");
 
   $dbh->do(<<EOF);
 CREATE TABLE IF NOT EXISTS iaddressbooks (
@@ -1122,10 +1426,13 @@ CREATE TABLE IF NOT EXISTS icards (
   icardid INTEGER PRIMARY KEY NOT NULL,
   iaddressbookid INTEGER,
   resource TEXT,
+  uid TEXT,
   content TEXT,
   mtime DATE NOT NULL
 );
 EOF
+
+  $dbh->do("CREATE INDEX icarduid ON icards (uid)");
 
 }
 
