@@ -801,7 +801,9 @@ sub update_messages {
   my $folderdata = $dbh->selectall_arrayref("SELECT ifolderid, imapname, uidvalidity, label, jmailboxid FROM ifolders");
   my %foldermap = map { $_->[0] => $_ } @$folderdata;
   my %jmailmap = map { $_->[4] => $_ } @$folderdata;
-  my %labelmap = map { $_->[3] => $_ } @$folderdata;
+  my $jmapdata = $dbh->selectall_arrayref("SELECT jmailboxid, role FROM jmailboxes");
+  my %jidmap = map { $_->[0] => $_->[1] } @$jmapdata;
+  my %jrolemap = map { $_->[1] => $_->[0] } @$jmapdata;
 
   my @changed;
   foreach my $ifolderid (keys %updatemap) {
@@ -836,13 +838,14 @@ sub update_messages {
       }
       if (exists $action->{mailboxIds}) {
         my $id = $action->{mailboxIds}->[0]; # there can be only one
-        my $label = $jmailmap{$id}[3];
+        my $label = $jidmap{$id};
         if ($label eq 'outbox') {
-          my $newfolder = $labelmap{'sent'}[1];
+          my $newfolder = $jmailmap{$jrolemap{'sent'}}[1];
           my $res = $Self->backend_cmd('imap_fill', $imapname, $uidvalidity, $uid);
           my $msg = $res->{data}{$uid};
           $Self->backend_cmd('send_email', $msg);
           # strip the \Draft flag
+          warn "SENDING $imapname $uidvalidity and moving to $newfolder";
           $Self->backend_cmd('imap_update', $imapname, $uidvalidity, $uid, 0, ["\\draft"]);
           $Self->backend_cmd('imap_move', $imapname, $uidvalidity, $uid, $newfolder);
         }
