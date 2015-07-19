@@ -426,4 +426,33 @@ sub imap_append {
   return ['append', $imapname, @$uid];
 }
 
+sub imap_search {
+  my $Self = shift;
+  my $folders = shift;
+  my @expr = @_;
+
+  my $imap = $Self->connect_imap();
+
+  my %data;
+  foreach my $imapname (@$folders) {
+    my $r = $imap->examine($imapname);
+    die "EXAMINE FAILED $imapname" unless $r;
+
+    # XXX - check uidvalidity
+    my $uidvalidity = $imap->get_response_code('uidvalidity') + 0;
+    my $uidnext = $imap->get_response_code('uidnext') + 0;
+    my $highestmodseq = $imap->get_response_code('highestmodseq') || 0;
+    my $exists = $imap->get_response_code('exists') || 0;
+
+    if ($imap->capability->{'search=fuzzy'}) {
+      @expr = ('fuzzy', [@expr]);
+    }
+
+    my $uids = $imap->search('charset', 'utf-8', @expr);
+    $data{$imapname} = [$uidvalidity, $uids];
+  }
+
+  return \%data;
+}
+
 1;
