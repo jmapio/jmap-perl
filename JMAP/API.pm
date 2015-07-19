@@ -161,41 +161,48 @@ sub getMailboxes {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  my $data = $dbh->selectall_arrayref("SELECT jmailboxid, parentId, name, role, sortOrder, mustBeOnlyMailbox, mayReadItems, mayAddItems, mayRemoveItems, mayCreateChild, mayRename, mayDelete FROM jmailboxes WHERE active = 1");
+  my $data = $dbh->selectall_arrayref("SELECT * FROM jmailboxes WHERE active = 1", {Slice => {}});
 
   # outbox - magic
-  push @$data, [ 'outbox', 0, "Outbox", 'outbox', 1, 1, 1, 1, 1, 0, 0, 0 ];
+  push @$data, {
+    jmailboxid => 'outbox',
+    parentId => 0,
+    name => 'Outbox',
+    role => 'outbox',
+    sortOrder => 1,
+    mustBeOnlyMailbox => 1,
+    mayReadItems => 1,
+    mayAddItems => 1,
+    mayRemoveItems => 1,
+    mayCreateChild => 0,
+    mayRename => 0,
+    mayDelete => 0,
+  };
 
   my %ids;
   if ($args->{ids}) {
     %ids = map { $_ => 1 } @{$args->{ids}};
   }
   else {
-    %ids = map { $_->[0] => 1 } @$data;
+    %ids = map { $_->{jmailboxid} => 1 } @$data;
   }
 
-  my %byrole = map { $_->[3] => $_->[0] } grep { $_->[3] } @$data;
+  my %byrole = map { $_->{role} => $_->{jmailboxid} } grep { $_->{role} } @$data;
 
   my @list;
 
   my %ONLY_MAILBOXES;
   foreach my $item (@$data) {
-    next unless delete $ids{$item->[0]};
-    $ONLY_MAILBOXES{$item->[0]} = $item->[5];
+    next unless delete $ids{$item->{jmailboxid}};
+    $ONLY_MAILBOXES{$item->{jmailboxid}} = $item->{mustBeOnlyMailbox};
 
     my %rec = (
-      id => "$item->[0]",
-      parentId => ($item->[1] ? "$item->[1]" : undef),
-      name => $item->[2],
-      role => $item->[3],
-      sortOrder => $item->[4],
-      mustBeOnlyMailbox => $item->[5] ? $JSON::true : $JSON::false,
-      mayReadItems => $item->[6] ? $JSON::true : $JSON::false,
-      mayAddItems => $item->[7] ? $JSON::true : $JSON::false,
-      mayRemoveItems => $item->[8] ? $JSON::true : $JSON::false,
-      mayCreateChild => $item->[9] ? $JSON::true : $JSON::false,
-      mayRename => $item->[10] ? $JSON::true : $JSON::false,
-      mayDelete => $item->[11] ? $JSON::true : $JSON::false,
+      id => "$item->{jmailboxid}",
+      parentId => ($item->{parentId} ? "$item->{parentId}" : undef),
+      name => $item->{name},
+      role => $item->{role},
+      sortOrder => $item->{sortOrder},
+      (map { $_ => ($item->{$_} ? $JSON::true : $JSON::false) } qw(mustBeOnlyMailbox mayReadItems mayAddItems mayRemoveItems mayCreateChild mayRename mayDelete)),
     );
 
     foreach my $key (keys %rec) {
@@ -203,16 +210,16 @@ sub getMailboxes {
     }
 
     if (_prop_wanted($args, 'totalMessages')) {
-      ($rec{totalMessages}) = $dbh->selectrow_array("SELECT COUNT(DISTINCT msgid) FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmailboxid = ? AND jmessages.active = 1 AND jmessagemap.active = 1", {}, $item->[0]);
+      ($rec{totalMessages}) = $dbh->selectrow_array("SELECT COUNT(DISTINCT msgid) FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmailboxid = ? AND jmessages.active = 1 AND jmessagemap.active = 1", {}, $item->{jmailboxid});
       $rec{totalMessages} += 0;
     }
     if (_prop_wanted($args, 'unreadMessages')) {
-      ($rec{unreadMessages}) = $dbh->selectrow_array("SELECT COUNT(DISTINCT msgid) FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmailboxid = ? AND jmessages.isUnread = 1 AND jmessages.active = 1 AND jmessagemap.active = 1", {}, $item->[0]);
+      ($rec{unreadMessages}) = $dbh->selectrow_array("SELECT COUNT(DISTINCT msgid) FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmailboxid = ? AND jmessages.isUnread = 1 AND jmessages.active = 1 AND jmessagemap.active = 1", {}, $item->{jmailboxid});
       $rec{unreadMessages} += 0;
     }
 
     if (_prop_wanted($args, 'totalThreads')) {
-      ($rec{totalThreads}) = $dbh->selectrow_array("SELECT COUNT(DISTINCT thrid) FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmailboxid = ? AND jmessages.active = 1 AND jmessagemap.active = 1", {}, $item->[0]);
+      ($rec{totalThreads}) = $dbh->selectrow_array("SELECT COUNT(DISTINCT thrid) FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmailboxid = ? AND jmessages.active = 1 AND jmessagemap.active = 1", {}, $item->{jmailboxid});
       $rec{totalThreads} += 0;
     }
 
@@ -220,14 +227,14 @@ sub getMailboxes {
     # so long as they aren't in an ONLY_MAILBOXES folder
     if (_prop_wanted($args, 'unreadThreads')) {
       my $folderlimit = '';
-      if ($ONLY_MAILBOXES{$item->[0]}) {
-        $folderlimit = "AND jmessagemap.jmailboxid = " . $dbh->quote($item->[0]);
+      if ($ONLY_MAILBOXES{$item->{jmailboxid}}) {
+        $folderlimit = "AND jmessagemap.jmailboxid = " . $dbh->quote($item->{jmailboxid});
       } else {
         my @ids = grep { $ONLY_MAILBOXES{$_} } sort keys %ONLY_MAILBOXES;
         $folderlimit = "AND jmessagemap.jmailboxid NOT IN (" . join(',', map { $dbh->quote($_) } @ids) . ")" if @ids;
       }
       my $sql ="SELECT COUNT(DISTINCT thrid) FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmailboxid = ? AND jmessages.active = 1 AND jmessagemap.active = 1 AND thrid IN (SELECT thrid FROM jmessages JOIN jmessagemap USING (msgid) WHERE isUnread = 1 AND jmessages.active = 1 AND jmessagemap.active = 1 $folderlimit)";
-      ($rec{unreadThreads}) = $dbh->selectrow_array($sql, {}, $item->[0]);
+      ($rec{unreadThreads}) = $dbh->selectrow_array($sql, {}, $item->{jmailboxid});
       $rec{unreadThreads} += 0;
     }
 
@@ -284,28 +291,18 @@ sub getMailboxUpdates {
   return $Self->_transError(['error', {type => 'cannotCalculateChanges'}])
     if ($user->{jdeletedmodseq} and $sinceState <= $user->{jdeletedmodseq});
 
-  my $data = $dbh->selectall_arrayref("SELECT jmailboxid, jmodseq, jcountsmodseq, active FROM jmailboxes ORDER BY jmailboxid");
+  my $data = $dbh->selectall_arrayref("SELECT * FROM jmailboxes WHERE jmodseq > ?1 OR jcountsmodseq > ?1", {Slice => {}}, $sinceState);
 
   my @changed;
   my @removed;
   my $onlyCounts = 1;
   foreach my $item (@$data) {
-    if ($item->[1] > $sinceState) {
-      if ($item->[3]) {
-        push @changed, $item->[0];
-        $onlyCounts = 0;
-      }
-      else {
-        push @removed, $item->[0];
-      }
+    if ($item->{active}) {
+      push @changed, $item->{jmailboxid};
+      $onlyCounts = 0 if $item->{jmodseq} > $sinceState;
     }
-    elsif (($item->[2] || 0) > $sinceState) {
-      if ($item->[3]) {
-        push @changed, $item->[0];
-      }
-      else {
-        push @removed, $item->[0];
-      }
+    else {
+      push @removed, $item->{jmailboxid};
     }
   }
 

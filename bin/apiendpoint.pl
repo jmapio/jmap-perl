@@ -106,7 +106,7 @@ sub process_request {
     my $handle = shift;
     set_accountid(shift);
     warn "Connected $accountid\n";
-    $handle->push_read(json => mk_handler($accountid, 1));
+    $handle->push_read(json => mk_handler(1));
   });
 
   EV::run;
@@ -160,7 +160,7 @@ sub handle_getstate {
 }
 
 sub mk_handler {
-  my ($db, $n) = @_;
+  my ($n) = @_;
 
   $hdl->{killer} = AnyEvent->timer(after => 600, cb => sub {
     warn "SHUTTING DOWN $accountid ON TIMEOUT\n";
@@ -172,7 +172,7 @@ sub mk_handler {
 
   return sub {
     my ($hdl, $json) = @_;
-    $hdl->push_read(json => mk_handler($db, $n+1));
+    $hdl->push_read(json => mk_handler($n+1));
 
     # make sure we have a connection
 
@@ -224,6 +224,9 @@ sub mk_handler {
     };
     unless ($res) {
       $res = ['error', "$@"]
+    }
+    if ($db and $db->in_transaction()) {
+      $res = ['error', "STILL IN TRANSACTION " . Dumper($res, $args, $tag)]
     }
     $res->[2] = $tag;
     $hdl->push_write(json => $res) if $res->[0];

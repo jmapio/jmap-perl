@@ -166,7 +166,7 @@ sub sync_folders {
     $dbh->do("DELETE FROM ifolders WHERE ifolderid = ?", {}, $id);
   }
 
-  $Self->dmaybeupdate('iserver', {prefix => $prefix, lastfolderupdate => time()});
+  $Self->dmaybeupdate('iserver', {prefix => $prefix, lastfoldersync => time()});
 
   $Self->commit();
 
@@ -239,13 +239,12 @@ sub sync_jmailboxes {
       parentId => $parentId,
       sortOrder => $sortOrder,
       mustBeOnlyMailbox => 1,
-      mayDelete => 0,
       mayReadItems => 1,
       mayAddItems => 1,
       mayRemoveItems => 1,
-      mayCreateChild => 0,
-      mayRename => 0,
-      mayDelete => 0,
+      mayCreateChild => 1,
+      mayRename => $role ? 1 : 0,
+      mayDelete => $role ? 1 : 0,
     );
     if ($id) {
       if ($role and $roletoid{$role} and $roletoid{$role} != $id) {
@@ -1135,7 +1134,7 @@ sub update_mailboxes {
 
     my ($oldname) = $dbh->selectrow_array("SELECT imapname FROM ifolders WHERE jmailboxid = ?", {}, $id);
 
-    $Self->backend_cmd('rename_mailbox', $oldname, $imapname);
+    $Self->backend_cmd('rename_mailbox', $oldname, $imapname) if $oldname ne $imapname;
     push @updated, $id;
   }
 
