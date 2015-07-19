@@ -79,7 +79,7 @@ sub connect_imap {
     next unless $Self->{imap};
     $Self->{lastused} = time();
     my $namespace = $Self->{imap}->namespace();
-    my $prefix = $namespace->[0][0][0];
+    my $prefix = $Self->{prefix} = $namespace->[0][0][0];
     my $list = $Self->{imap}->capability()->{xlist} ? 'xlist' : 'list';
     my @folders = $Self->{imap}->$list('', '*');
 

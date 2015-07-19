@@ -64,7 +64,7 @@ sub setuser {
   $Self->begin();
   my $data = $Self->dbh->selectrow_arrayref("SELECT hostname, username, password FROM iserver");
   if ($data and $data->[0]) {
-    $Self->dmaybeupdate('iserver', {hostname => $hostname, username => $username, password => $password}, {hostname => $data->[0]});
+    $Self->dmaybeupdate('iserver', {hostname => $hostname, username => $username, password => $password});
   }
   else {
     $Self->dinsert('iserver', {
@@ -75,7 +75,7 @@ sub setuser {
   }
   my $user = $Self->dbh->selectrow_arrayref("SELECT email FROM account");
   if ($user and $user->[0]) {
-    $Self->dmaybeupdate('account', {email => $username}, {email => $username});
+    $Self->dmaybeupdate('account', {email => $username});
   }
   else {
     $Self->dinsert('account', {
@@ -131,7 +131,8 @@ sub backend_cmd {
 sub sync_folders {
   my $Self = shift;
 
-  my $folders = $Self->backend_cmd('folders', []);
+  my $data = $Self->backend_cmd('folders', []);
+  my ($prefix, $folders) = @$data;
 
   $Self->begin();
   my $dbh = $Self->dbh();
@@ -164,6 +165,8 @@ sub sync_folders {
     next if $seen{$id};
     $dbh->do("DELETE FROM ifolders WHERE ifolderid = ?", {}, $id);
   }
+
+  $Self->dmaybeupdate('iserver', {prefix => $prefix, lastfolderupdate => time()});
 
   $Self->commit();
 
@@ -1417,6 +1420,7 @@ CREATE TABLE IF NOT EXISTS iserver (
   username TEXT PRIMARY KEY,
   password TEXT,
   hostname TEXT,
+  prefix TEXT,
   lastfoldersync DATE,
   mtime DATE NOT NULL
 );

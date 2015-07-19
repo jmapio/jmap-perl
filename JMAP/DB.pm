@@ -884,7 +884,7 @@ sub dupdate {
   $values->{mtime} = time();
 
   my @keys = sort keys %$values;
-  my @lkeys = sort keys %$limit;
+  my @lkeys = $limit ? sort keys %$limit : ();
 
   my $sql = "UPDATE $table SET " . join (', ', map { "$_ = ?" } @keys);
   $sql .= " WHERE " . join(' AND ', map { "$_ = ?" } @lkeys) if @lkeys;
@@ -898,13 +898,14 @@ sub filter_values {
   my $Self = shift;
   my ($table, $values, $limit) = @_;
 
-  # copy so we don't edit the original
-  my %values = %$values;
+  # copy so we don't edit the originals
+  my %values = $values ? %$values : ();
 
-  my @keys = sort keys %$values;
-  my @lkeys = sort keys %$limit;
+  my @keys = sort keys %values;
+  my @lkeys = $limit ? sort keys %$limit : ();
 
-  my $sql = "SELECT " . join(', ', @keys) . " FROM $table WHERE " . join(' AND ', map { "$_ = ?" } @lkeys);
+  my $sql = "SELECT " . join(', ', @keys) . " FROM $table";
+  $sql .= " WHERE " . join(' AND ', map { "$_ = ?" } @lkeys) if @lkeys;
   my $data = $Self->dbh->selectrow_hashref($sql, {}, map { $limit->{$_} } @lkeys);
   foreach my $key (@keys) {
     delete $values{$key} if $limit->{$key}; # in the limit, no point setting again

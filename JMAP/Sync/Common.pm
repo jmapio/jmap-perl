@@ -161,7 +161,7 @@ sub delete_card {
 sub folders {
   my $Self = shift;
   $Self->connect_imap();
-  return $Self->{folders};
+  return [$Self->{prefix}, $Self->{folders}];
 }
 
 sub capability {
