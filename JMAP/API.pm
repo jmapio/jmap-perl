@@ -507,7 +507,7 @@ sub _match {
   if ($condition->{header}) {
     my $cond = $condition->{header};
     $cond->[1] = '' if @$cond == 1;
-    $storage->{headersearch}{"@$cond"} ||= $Self->{db}->imap_search('header', @$cond)
+    $storage->{headersearch}{"@$cond"} ||= $Self->{db}->imap_search('header', @$cond);
     return 0 unless $storage->{headersearch}{"@$cond"}{$item->{msgid}};
   }
 
@@ -693,7 +693,7 @@ sub getMessageListUpdates {
       next if $finished{$item->{thrid}};
 
       # deleted is the same as not in filter for our purposes
-      my $isin = $active ? ($args->{filter} ? $Self->_match($item, $args->{filter}, $storage) : 1) : 0;
+      my $isin = $item->{active} ? ($args->{filter} ? $Self->_match($item, $args->{filter}, $storage) : 1) : 0;
 
       # only exemplars count for the total - we need to know total even if not telling any more
       if ($isin and not $exemplar{$item->{thrid}}) {
@@ -703,7 +703,7 @@ sub getMessageListUpdates {
       next unless $tell;
 
       # jmodseq greater than sinceState is a change
-      my $changed = ($jmodseq > $args->{sinceState});
+      my $changed = ($item->{jmodseq} > $args->{sinceState});
 
       if ($changed) {
         # if it's in AND it's the exemplar, it's been added
@@ -744,14 +744,14 @@ sub getMessageListUpdates {
   else {
     foreach my $item (@$data) {
       # deleted is the same as not in filter for our purposes
-      my $isin = $active ? ($args->{filter} ? $Self->_match($item, $args->{filter}, $storage) : 1) : 0;
+      my $isin = $item->{active} ? ($args->{filter} ? $Self->_match($item, $args->{filter}, $storage) : 1) : 0;
 
       # all active messages count for the total
       $total++ if $isin;
       next unless $tell;
 
       # jmodseq greater than sinceState is a change
-      my $changed = ($jmodseq > $args->{sinceState});
+      my $changed = ($item->{jmodseq} > $args->{sinceState});
 
       if ($changed) {
         if ($isin) {
