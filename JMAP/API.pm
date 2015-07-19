@@ -49,6 +49,15 @@ sub getAccounts {
   }];
 }
 
+sub refreshSyncedCalendars {
+  my $Self = shift;
+
+  $Self->{db}->sync_calendars();
+  
+  # no response
+  return ();
+}
+
 sub getPreferences {
   my $Self = shift;
   my $args = shift;
@@ -552,9 +561,9 @@ sub _collapse {
   my @res;
   my %seen;
   foreach my $item (@$data) {
-    next if $seen{$item->[1]};
+    next if $seen{$item->{thrid}};
     push @res, $item;
-    $seen{$item->[1]} = 1;
+    $seen{$item->{thrid}} = 1;
   }
   return \@res;
 }
@@ -608,8 +617,8 @@ gotit:
   my $end = $args->{limit} ? $start + $args->{limit} - 1 : $#$data;
   $end = $#$data if $end > $#$data;
 
-  my @result = map { $data->[$_][0] } $start..$end;
-  my @thrid = map { $data->[$_][1] } $start..$end;
+  my @result = map { $data->[$_]{msgid} } $start..$end;
+  my @thrid = map { $data->[$_]{thrid} } $start..$end;
 
   my @res;
   push @res, ['messageList', {
