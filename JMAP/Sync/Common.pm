@@ -418,7 +418,7 @@ sub imap_append {
   my $r = $imap->append($imapname, $flags, $internaldate, {'Literal' => $rfc822});
   die "APPEND FAILED $r" unless (lc($r) eq 'ok' or lc($r) eq 'appenduid'); # what's with that??
 
-  my $uid = $imap->get_response_code('appenduid');
+  my $uid = $imap->get_response_code('appenduid'); # returns [uidvalidity uid]
 
   # XXX - fetch the x-gm-msgid or envelope from the server so we know the
   # the ID that the server gave this message
@@ -428,31 +428,27 @@ sub imap_append {
 
 sub imap_search {
   my $Self = shift;
-  my $folders = shift;
+  my $imapname = shift;
   my @expr = @_;
 
   my $imap = $Self->connect_imap();
 
-  my %data;
-  foreach my $imapname (@$folders) {
-    my $r = $imap->examine($imapname);
-    die "EXAMINE FAILED $imapname" unless $r;
+  my $r = $imap->examine($imapname);
+  die "EXAMINE FAILED $imapname" unless $r;
 
-    # XXX - check uidvalidity
-    my $uidvalidity = $imap->get_response_code('uidvalidity') + 0;
-    my $uidnext = $imap->get_response_code('uidnext') + 0;
-    my $highestmodseq = $imap->get_response_code('highestmodseq') || 0;
-    my $exists = $imap->get_response_code('exists') || 0;
+  # XXX - check uidvalidity
+  my $uidvalidity = $imap->get_response_code('uidvalidity') + 0;
+  my $uidnext = $imap->get_response_code('uidnext') + 0;
+  my $highestmodseq = $imap->get_response_code('highestmodseq') || 0;
+  my $exists = $imap->get_response_code('exists') || 0;
 
-    if ($imap->capability->{'search=fuzzy'}) {
-      @expr = ('fuzzy', [@expr]);
-    }
-
-    my $uids = $imap->search('charset', 'utf-8', @expr);
-    $data{$imapname} = [$uidvalidity, $uids];
+  if ($imap->capability->{'search=fuzzy'}) {
+    @expr = ('fuzzy', [@expr]);
   }
 
-  return \%data;
+  my $uids = $imap->search('charset', 'utf-8', @expr);
+
+  return ['search', $imapname, $uidvalidity, $uids];
 }
 
 1;

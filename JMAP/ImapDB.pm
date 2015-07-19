@@ -730,6 +730,29 @@ sub do_folder {
   return $didold;
 }
 
+sub imap_search {
+  my $Self = shift;
+  my @search = @_;
+
+  my $dbh = $Self->dbh();
+  my $data = $dbh->selectall_arrayref("SELECT * FROM ifolders", {Slice => {}});
+
+  my %matches;
+  foreach my $item (@$data) {
+    my $from = $item->{uidfirst};
+    my $to = $item->{uidnext}-1;
+    my $res = $Self->backend_cmd('imap_search', $item->{imapname}, 'uid', "$from:$to", @search);
+    # XXX - uidvaldity changed
+    next unless $res->[2] == $item->{uidvalidity};
+    foreach my $uid (@{$res->[3]}) {
+      my ($msgid) = $dbh->selectrow_array("SELECT msgid FROM imessages WHERE ifolderid = ? and uid = ?", {}, $item->{ifolderid}, $uid);
+      $matches{$msgid} = 1;
+    }
+  }
+
+  return \%matches;
+}
+
 sub changed_record {
   my $Self = shift;
   my ($folder, $uid, $flaglist, $labellist) = @_;

@@ -408,17 +408,107 @@ sub _match {
 
   # XXX - condition handling code
   if ($condition->{inMailboxes}) {
-    my $match = 0;
+    my $inall = 1;
     foreach my $id (@{$condition->{inMailboxes}}) {
       $storage->{mailbox}{$id} ||= $Self->_load_mailbox($id);
-      next unless $storage->{mailbox}{$id}{$item->[0]}[2]; #active
-      $match = 1;
+      next if $storage->{mailbox}{$id}{$item->{msgid}}[2]; #active
+      $inall = 0;
     }
-    return 0 unless $match;
+    return 0 unless $inall;
+  }
+
+  if ($condition->{notInMailboxes}) {
+    my $inany = 0;
+    foreach my $id (@{$condition->{notInMailboxes}}) {
+      $storage->{mailbox}{$id} ||= $Self->_load_mailbox($id);
+      next unless $storage->{mailbox}{$id}{$item->{msgid}}[2]; #active
+      $inany = 1;
+    }
+    return 0 if $inany;
+  }
+
+  if ($condition->{before}) {
+    my $time = str2time($condition->{before})->epoch();
+    return 0 unless $time < $item->{internaldate};
+  }
+
+  if ($condition->{after}) {
+    my $time = str2time($condition->{before})->epoch();
+    return 0 unless $time >= $item->{internaldate};
+  }
+
+  if ($condition->{minSize}) {
+    return 0 unless $item->{msgsize} >= $condition->{minSize};
+  }
+
+  if ($condition->{maxSize}) {
+    return 0 unless $item->{msgsize} < $condition->{maxSize};
+  }
+
+  if ($condition->{isFlagged}) {
+    # XXX - threaded versions?
+    return 0 unless $item->{isFlagged};
   }
 
   if ($condition->{isUnseen}) {
     # XXX - threaded versions?
+    return 0 unless $item->{isUnseen};
+  }
+
+  if ($condition->{isAnswered}) {
+    # XXX - threaded versions?
+    return 0 unless $item->{isAnswered};
+  }
+
+  if ($condition->{isDraft}) {
+    # XXX - threaded versions?
+    return 0 unless $item->{isDraft};
+  }
+
+  if ($condition->{hasAttachment}) {
+    # XXX - hasAttachment
+  }
+
+  if ($condition->{text}) {
+    $storage->{textsearch}{$condition->{text}} ||= $Self->{db}->imap_search('text', $condition->{text});
+    return 0 unless $storage->{textsearch}{$condition->{text}}{$item->{msgid}};
+  }
+
+  if ($condition->{from}) {
+    $storage->{fromsearch}{$condition->{from}} ||= $Self->{db}->imap_search('from', $condition->{from});
+    return 0 unless $storage->{fromsearch}{$condition->{from}}{$item->{msgid}};
+  }
+
+  if ($condition->{to}) {
+    $storage->{tosearch}{$condition->{to}} ||= $Self->{db}->imap_search('to', $condition->{to});
+    return 0 unless $storage->{tosearch}{$condition->{to}}{$item->{msgid}};
+  }
+
+  if ($condition->{cc}) {
+    $storage->{ccsearch}{$condition->{cc}} ||= $Self->{db}->imap_search('cc', $condition->{cc});
+    return 0 unless $storage->{ccsearch}{$condition->{cc}}{$item->{msgid}};
+  }
+
+  if ($condition->{bcc}) {
+    $storage->{bccsearch}{$condition->{bcc}} ||= $Self->{db}->imap_search('bcc', $condition->{bcc});
+    return 0 unless $storage->{bccsearch}{$condition->{bcc}}{$item->{msgid}};
+  }
+
+  if ($condition->{subject}) {
+    $storage->{subjectsearch}{$condition->{subject}} ||= $Self->{db}->imap_search('subject', $condition->{subject});
+    return 0 unless $storage->{subjectsearch}{$condition->{subject}}{$item->{msgid}};
+  }
+
+  if ($condition->{body}) {
+    $storage->{bodysearch}{$condition->{body}} ||= $Self->{db}->imap_search('body', $condition->{body});
+    return 0 unless $storage->{bodysearch}{$condition->{body}}{$item->{msgid}};
+  }
+
+  if ($condition->{header}) {
+    my $cond = $condition->{header};
+    $cond->[1] = '' if @$cond == 1;
+    $storage->{headersearch}{"@$cond"} ||= $Self->{db}->imap_search('header', @$cond)
+    return 0 unless $storage->{headersearch}{"@$cond"}{$item->{msgid}};
   }
 
   return 1;
@@ -494,7 +584,10 @@ sub getMessageList {
   return $Self->_transError(['error', {type => 'invalidArguments'}]) if $start < 0;
 
   my $sort = $Self->_build_sort($args->{sort});
-  my $data = $dbh->selectall_arrayref("SELECT DISTINCT msgid,thrid FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmessages.active = 1 AND jmessagemap.active = 1 ORDER BY $sort");
+  my $data = $dbh->selectall_arrayref("SELECT * FROM jmessages WHERE active = 1 ORDER BY $sort", {Slice => {}});
+
+  # commit before applying the filter, because it might call out for searches
+  $Self->commit();
 
   $data = $Self->_filter($data, $args->{filter}, {}) if $args->{filter};
   $data = $Self->_collapse($data) if $args->{collapseThreads};
@@ -511,8 +604,6 @@ sub getMessageList {
   }
 
 gotit:
-
-  $Self->commit();
 
   my $end = $args->{limit} ? $start + $args->{limit} - 1 : $#$data;
   $end = $#$data if $end > $#$data;
@@ -573,7 +664,9 @@ sub getMessageListUpdates {
     if $start < 0;
 
   my $sort = $Self->_build_sort($args->{sort});
-  my $data = $dbh->selectall_arrayref("SELECT msgid,thrid,jmodseq,active FROM jmessages ORDER BY $sort");
+  my $data = $dbh->selectall_arrayref("SELECT * FROM jmessages ORDER BY $sort", {Slice => {}});
+
+  $Self->commit();
 
   # now we have the same sorted data set.  What we DON'T have is knowing that a message used to be in the filter,
   # but no longer is (aka isUnseen).  There's no good way to do this :(  So we have to assume that every message
@@ -596,18 +689,16 @@ sub getMessageListUpdates {
     # non-deleted, unchanged message)
     my %finished;
     foreach my $item (@$data) {
-      my ($msgid, $thrid, $jmodseq, $active) = @$item;
-
       # we don't have to tell anything about finished threads, not even check them for membership in the search
-      next if $finished{$thrid};
+      next if $finished{$item->{thrid}};
 
       # deleted is the same as not in filter for our purposes
       my $isin = $active ? ($args->{filter} ? $Self->_match($item, $args->{filter}, $storage) : 1) : 0;
 
       # only exemplars count for the total - we need to know total even if not telling any more
-      if ($isin and not $exemplar{$thrid}) {
+      if ($isin and not $exemplar{$item->{thrid}}) {
         $total++;
-        $exemplar{$thrid} = $msgid;
+        $exemplar{$item->{thrid}} = $item->{msgid};
       }
       next unless $tell;
 
@@ -616,33 +707,33 @@ sub getMessageListUpdates {
 
       if ($changed) {
         # if it's in AND it's the exemplar, it's been added
-        if ($isin and $exemplar{$thrid} eq $msgid) {
-          push @added, {messageId => "$msgid", threadId => "$thrid", index => $total-1};
-          push @removed, {messageId => "$msgid", threadId => "$thrid"};
+        if ($isin and $exemplar{$item->{thrid}} eq $item->{msgid}) {
+          push @added, {messageId => "$item->{msgid}", threadId => "$item->{thrid}", index => $total-1};
+          push @removed, {messageId => "$item->{msgid}", threadId => "$item->{thrid}"};
           $changes++;
         }
         # otherwise it's removed
         else {
-          push @removed, {messageId => "$msgid", threadId => "$thrid"};
+          push @removed, {messageId => "$item->{msgid}", threadId => "$item->{thrid}"};
           $changes++;
         }
       }
       # unchanged and isin, final candidate for old exemplar!
       elsif ($isin) {
         # remove it unless it's also the current exemplar
-        if ($exemplar{$thrid} ne $msgid) {
-          push @removed, {messageId => "$msgid", threadId => "$thrid"};
+        if ($exemplar{$item->{thrid}} ne $item->{msgid}) {
+          push @removed, {messageId => "$item->{msgid}", threadId => "$item->{thrid}"};
           $changes++;
         }
         # and we're done
-        $finished{$thrid} = 1;
+        $finished{$item->{thrid}} = 1;
       }
 
       if ($args->{maxChanges} and $changes > $args->{maxChanges}) {
         return $Self->_transError(['error', {type => 'tooManyChanges'}]);
       }
 
-      if ($args->{upToMessageId} and $args->{upToMessageId} eq $msgid) {
+      if ($args->{upToMessageId} and $args->{upToMessageId} eq $item->{msgid}) {
         # stop mentioning changes
         $tell = 0;
       }
@@ -652,7 +743,6 @@ sub getMessageListUpdates {
   # non-collapsed case
   else {
     foreach my $item (@$data) {
-      my ($msgid, $thrid, $jmodseq, $active) = @$item;
       # deleted is the same as not in filter for our purposes
       my $isin = $active ? ($args->{filter} ? $Self->_match($item, $args->{filter}, $storage) : 1) : 0;
 
@@ -665,12 +755,12 @@ sub getMessageListUpdates {
 
       if ($changed) {
         if ($isin) {
-          push @added, {messageId => "$msgid", threadId => "$thrid", index => $total-1};
-          push @removed, {messageId => "$msgid", threadId => "$thrid"};
+          push @added, {messageId => "$item->{msgid}", threadId => "$item->{thrid}", index => $total-1};
+          push @removed, {messageId => "$item->{msgid}", threadId => "$item->{thrid}"};
           $changes++;
         }
         else {
-          push @removed, {messageId => "$msgid", threadId => "$thrid"};
+          push @removed, {messageId => "$item->{msgid}", threadId => "$item->{thrid}"};
           $changes++;
         }
       }
@@ -679,14 +769,12 @@ sub getMessageListUpdates {
         return $Self->_transError(['error', {type => 'tooManyChanges'}]);
       }
 
-      if ($args->{upToMessageId} and $args->{upToMessageId} eq $msgid) {
+      if ($args->{upToMessageId} and $args->{upToMessageId} eq $item->{msgid}) {
         # stop mentioning changes
         $tell = 0;
       }
     }
   }
-
-  $Self->commit();
 
   my @res;
   push @res, ['messageListUpdates', {
@@ -1102,7 +1190,7 @@ sub getThreads {
   foreach my $thrid (@{$args->{ids}}) {
     next if $seenids{$thrid};
     $seenids{$thrid} = 1;
-    my $data = $dbh->selectall_arrayref("SELECT msgid,isDraft,msgmessageid,msginreplyto FROM jmessages WHERE thrid = ? AND active = 1 ORDER BY internaldate", {}, $thrid);
+    my $data = $dbh->selectall_arrayref("SELECT * FROM jmessages WHERE thrid = ? AND active = 1 ORDER BY internaldate", {Slice => {}}, $thrid);
     unless (@$data) {
       $missingids{$thrid} = 1;
       next;
@@ -1111,24 +1199,24 @@ sub getThreads {
     my @msgs;
     my %seenmsgs;
     foreach my $item (@$data) {
-      next unless $item->[1];
-      next unless $item->[3];  # push the rest of the drafts to the end
-      push @{$drafts{$item->[3]}}, $item->[0];
+      next unless $item->{isDraft};
+      next unless $item->{msginreplyto};  # push the rest of the drafts to the end
+      push @{$drafts{$item->{msginreplyto}}}, $item->{msgid};
     }
     foreach my $item (@$data) {
-      next if $item->[1];
-      push @msgs, $item->[0];
-      $seenmsgs{$item->[0]} = 1;
-      if (my $draftmsgs = $drafts{$item->[2]}) {
+      next if $item->{isDraft};
+      push @msgs, $item->{msgid};
+      $seenmsgs{$item->{msgid}} = 1;
+      if (my $draftmsgs = $drafts{$item->{msgmessageid}}) {
         push @msgs, @$draftmsgs;
         $seenmsgs{$_} = 1 for @$draftmsgs;
       }
     }
     # make sure unlinked drafts aren't forgotten!
     foreach my $item (@$data) {
-      next if $seenmsgs{$item->[0]};
-      push @msgs, $item->[0];
-      $seenmsgs{$item->[0]} = 1;
+      next if $seenmsgs{$item->{msgid}};
+      push @msgs, $item->{msgid};
+      $seenmsgs{$item->{msgid}} = 1;
     }
     push @list, {
       id => "$thrid",
@@ -1176,13 +1264,13 @@ sub getThreadUpdates {
   return $Self->_transError(['error', {type => 'cannotCalculateChanges'}])
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
 
-  my $sql = "SELECT thrid,active FROM jmessages WHERE jmodseq > ?";
+  my $sql = "SELECT * FROM jmessages WHERE jmodseq > ?";
 
   if ($args->{maxChanges}) {
     $sql .= " LIMIT " . (int($args->{maxChanges}) + 1);
   }
 
-  my $data = $dbh->selectall_arrayref($sql, {}, $args->{sinceState});
+  my $data = $dbh->selectall_arrayref($sql, {Slice => {}}, $args->{sinceState});
 
   if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
     return $Self->_transError(['error', {type => 'tooManyChanges'}]);
@@ -1191,8 +1279,8 @@ sub getThreadUpdates {
   my %threads;
   my %delcheck;
   foreach my $row (@$data) {
-    $threads{$row->[0]} = 1;
-    $delcheck{$row->[0]} = 1 unless $row->[1];
+    $threads{$row->{msgid}} = 1;
+    $delcheck{$row->{msgid}} = 1 unless $row->{active};
   }
 
   my @removed;
