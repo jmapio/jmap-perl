@@ -838,8 +838,7 @@ sub update_messages {
       }
       if (exists $action->{mailboxIds}) {
         my $id = $action->{mailboxIds}->[0]; # there can be only one
-        my $label = $jidmap{$id};
-        if ($label eq 'outbox') {
+        if ($id eq 'outbox') {
           my $newfolder = $jmailmap{$jrolemap{'sent'}}[1];
           my $res = $Self->backend_cmd('imap_fill', $imapname, $uidvalidity, $uid);
           my $msg = $res->{data}{$uid};
