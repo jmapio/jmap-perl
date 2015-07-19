@@ -39,8 +39,8 @@ sub getAccounts {
     isPrimary => $JSON::true,
     isReadOnly => $JSON::false,
     hasMail => $JSON::true,
-    hasContacts => $JSON::false,
-    hasCalendars => $JSON::false,
+    hasContacts => $JSON::true,
+    hasCalendars => $JSON::true,
   };
 
   return ['accounts', {
@@ -96,7 +96,7 @@ sub getPersonalities {
     email => $user->{email},
     name => $user->{displayname} || $user->{email},
     textSignature => "-- \ntext sig",
-    textSignature => "-- \n<b>html sig</b>",
+    htmlSignature => "-- \n<b>html sig</b>",
     replyTo => $user->{email},
     autoBcc => "",
     addBccOnSMTP => $JSON::false,
