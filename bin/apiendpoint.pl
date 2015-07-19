@@ -5,6 +5,11 @@ package JMAP::Backend;
 
 use Mail::IMAPTalk qw(:trace);
 
+# stuff complains otherwise - twice for luck
+use IO::Socket::SSL;
+$IO::Socket::SSL::DEBUG = 0;
+$IO::Socket::SSL::DEBUG = 0;
+
 use Carp qw(verbose);
 use strict;
 use warnings;
