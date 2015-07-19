@@ -87,10 +87,15 @@ sub commit {
 
   # push an update if anything to tell..
   if ($t->{modseq} and $Self->{change_cb}) {
+    my $state = $t->{modseq};
     $Self->{change_cb}->($Self, {
-      Mailbox => "$t->{modseq}",
-      Thread => "$t->{modseq}",
-      Message => "$t->{modseq}",
+      Mailbox => "$state",
+      Thread => "$state",
+      Message => "$state",
+      Contact => "$state",
+      ContactGroup => "$state",
+      Calendar => "$state",
+      CalendarEvent => "$state",
     });
   }
 }

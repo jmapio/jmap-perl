@@ -148,6 +148,10 @@ sub handle_getstate {
         Mailbox => "$state",
         Thread => "$state",
         Message => "$state",
+        Contact => "$state",
+        ContactGroup => "$state",
+        Calendar => "$state",
+        CalendarEvent => "$state",
       },
     },
   };
