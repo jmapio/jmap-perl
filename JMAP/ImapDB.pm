@@ -618,12 +618,13 @@ sub calcmsgid {
   my $envelope = $data->{envelope};
   my $json = JSON::XS->new->allow_nonref->canonical;
   my $coded = $json->encode([$envelope, $data->{'rfc822.size'}]);
-  my $msgid = 's' . substr(sha1_hex($coded), 0, 11);
+  my $base = substr(sha1_hex($coded), 0, 9);
+  my $msgid = "m$base";
 
   my $replyto = lc($envelope->{'In-Reply-To'} || '');
   my $messageid = lc($envelope->{'Message-ID'} || '');
   my ($thrid) = $Self->dbh->selectrow_array("SELECT DISTINCT thrid FROM ithread WHERE messageid IN (?, ?)", {}, $replyto, $messageid);
-  $thrid ||= $msgid;
+  $thrid ||= "t$base";
   foreach my $id ($replyto, $messageid) {
     next if $id eq '';
     $Self->dbh->do("INSERT OR IGNORE INTO ithread (messageid, thrid) VALUES (?, ?)", {}, $id, $thrid);
