@@ -843,7 +843,7 @@ sub getSearchSnippets {
 
   my @terms = _extract_terms($args->{filter});
   my $str = join("|", @terms);
-  my $tag = 'b'; # XXX - wrap
+  my $tag = 'mark';
   foreach my $item (@{$messages->[1]{list}}) {
     $item->{messageId} = delete $item->{id};
     my $text = delete $item->{textBody};
