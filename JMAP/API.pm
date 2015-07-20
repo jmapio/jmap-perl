@@ -417,8 +417,9 @@ sub _load_mailbox {
 
 sub _load_hasatt {
   my $Self = shift;
-  my $data = $Self->{db}->dbh->selectcol_arrayref("SELECT msgid FROM jrawmessage WHERE hasAttachment = 1");
-  return { map { $_ => 1 } @$data };
+  my $data = $Self->{db}->dbh->selectall_arrayref("SELECT msgid, parsed FROM jrawmessage");
+  my %parsed = map { $_->[0] => decode_json($_->[1]) } @$data;
+  return { map { $_ => 1 } grep { $parsed{$_}{hasAttachment} } keys %parsed };
 }
 
 sub _match {
