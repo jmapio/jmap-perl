@@ -1126,6 +1126,7 @@ sub update_mailboxes {
   foreach my $id (keys %$update) {
     my $mailbox = $update->{$id};
     my $imapname = $mailbox->{name};
+    next unless (defined $imapname and $imapname ne '');
     if ($mailbox->{parentId}) {
       my $parentId = $idmap->($mailbox->{parentId});
       my ($parentName, $sep) = $dbh->selectrow_array("SELECT imapname, sep FROM ifolders WHERE jmailboxid = ?", {}, $parentId);

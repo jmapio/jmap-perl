@@ -451,4 +451,38 @@ sub imap_search {
   return ['search', $imapname, $uidvalidity, $uids];
 }
 
+sub create_mailbox {
+  my $Self = shift;
+  my $imapname = shift;
+
+  my $imap = $Self->connect_imap();
+
+  $imap->create($imapname);
+
+  return [];
+}
+
+sub rename_mailbox {
+  my $Self = shift;
+  my $oldname = shift;
+  my $imapname = shift;
+
+  my $imap = $Self->connect_imap();
+
+  $imap->rename($oldname, $imapname);
+
+  return [];
+}
+
+sub delete_mailbox {
+  my $Self = shift;
+  my $imapname = shift;
+
+  my $imap = $Self->connect_imap();
+
+  $imap->delete($imapname);
+
+  return [];
+}
+
 1;
