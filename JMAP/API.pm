@@ -19,10 +19,13 @@ sub idmap {
   my $Self = shift;
   my $key = shift;
   if (@_) {
-    $Self->{idmap}{$key} = shift;
+    my $val = shift;
+    warn "SET $key = $val";
+    $Self->{idmap}{$key} = $val;
   }
-  return $Self->{idmap} unless $key;
-  return exists $Self->{idmap}{$key} ? $Self->{idmap}{$key} : $key;
+  my $val = exists $Self->{idmap}{$key} ? $Self->{idmap}{$key} : $key;
+  warn "GET $key = $val";
+  return $val;
 }
 
 sub getAccounts {

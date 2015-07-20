@@ -392,6 +392,7 @@ sub handle_jmap {
     my ($command, $args, $tag) = @$item;
     my @items;
     my $FuncRef = $api->can($command);
+    warn "JMAP CMD $command";
     if ($FuncRef) {
       @items = eval { $api->$command($args, $tag) };
       if ($@) {

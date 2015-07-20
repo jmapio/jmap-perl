@@ -810,7 +810,7 @@ sub delete_card {
     $Self->dupdate('jcontacts', {active => 0}, {contactuid => $carduid, jaddressbookid => $jaddressbookid});
   }
   else {
-    $Self->dupdate('jcontactgroupmap', {active => 0}, {groupuid => $carduid, jaddressbookid => $jaddressbookid});
+    $Self->dupdate('jcontactgroups', {active => 0}, {groupuid => $carduid, jaddressbookid => $jaddressbookid});
   }
 }
 
