@@ -1134,6 +1134,7 @@ sub update_mailboxes {
     }
     else {
       my ($prefix) = $dbh->selectrow_array("SELECT prefix FROM iserver");
+      $prefix = '' unless $prefix;
       $imapname = "$prefix$imapname";
     }
 

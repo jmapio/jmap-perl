@@ -1216,6 +1216,7 @@ sub getThreads {
       next if $item->{isDraft};
       push @msgs, $item->{msgid};
       $seenmsgs{$item->{msgid}} = 1;
+      next unless $item->{msgmessageid};
       if (my $draftmsgs = $drafts{$item->{msgmessageid}}) {
         push @msgs, @$draftmsgs;
         $seenmsgs{$_} = 1 for @$draftmsgs;
