@@ -20,11 +20,9 @@ sub idmap {
   my $key = shift;
   if (@_) {
     my $val = shift;
-    warn "SET $key = $val";
-    $Self->{idmap}{$key} = $val;
+    $Self->{idmap}{"#$key"} = $val;
   }
   my $val = exists $Self->{idmap}{$key} ? $Self->{idmap}{$key} : $key;
-  warn "GET $key = $val";
   return $val;
 }
 
@@ -1986,7 +1984,7 @@ sub getContactGroups {
 
   #properties: String[] A list of properties to fetch for each message.
 
-  my $data = $dbh->selectall_hashref("SELECT * FROM jcontactgroups", 'groupuid', {Slice => {}});
+  my $data = $dbh->selectall_hashref("SELECT * FROM jcontactgroups WHERE active = 1", 'groupuid', {Slice => {}});
 
   my %want;
   if ($args->{ids}) {
