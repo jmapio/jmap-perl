@@ -97,10 +97,9 @@ sub begin {
 sub commit {
   my $Self = shift;
   confess("NOT IN TRANSACTION") unless $Self->{t};
-  $Self->dbh->commit();
-  my $t = delete $Self->{t};
 
   # push an update if anything to tell..
+  my $t = $Self->{t};
   if ($t->{modseq} and $Self->{change_cb}) {
     my %map;
     my %dbdata = (jhighestmodseq => $t->{modseq});
@@ -115,6 +114,9 @@ sub commit {
     $Self->dupdate('account', \%dbdata);
     $Self->{change_cb}->($Self, \%map);
   }
+
+  $Self->dbh->commit();
+  delete $Self->{t};
 }
 
 sub rollback {
