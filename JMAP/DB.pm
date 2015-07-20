@@ -25,6 +25,21 @@ use Date::Parse;
 use Net::CalDAVTalk;
 use Net::CardDAVTalk::VCard;
 use MIME::Base64 qw(encode_base64);
+
+my %TABLE2GROUPS = (
+  jmessages => ['Messages', 'Threads'],
+  jmailboxes => ['Mailboxes'],
+  jmessagemap => ['Mailboxes'],
+  jrawmessage => [],
+  jfiles => [], # for now
+  jcalendars => ['Calendars'],
+  jevents => ['CalendarEvents'],
+  jaddressbooks => [], # not directly
+  jcontactgroups => ['ContactGroups'],
+  jcontactgroupmap => ['ContactGroups'],
+  jcontacts => ['Contacts'],
+)
+
 sub new {
   my $class = shift;
   my $accountid = shift || die;
@@ -87,16 +102,14 @@ sub commit {
 
   # push an update if anything to tell..
   if ($t->{modseq} and $Self->{change_cb}) {
+    my %map;
     my $state = $t->{modseq};
-    $Self->{change_cb}->($Self, {
-      Mailbox => "$state",
-      Thread => "$state",
-      Message => "$state",
-      Contact => "$state",
-      ContactGroup => "$state",
-      Calendar => "$state",
-      CalendarEvent => "$state",
-    });
+    foreach my $table (keys %{$t->{tables}}) {
+      foreach my $group (@{$TABLE2GROUPS{$table}}) {
+        $map{$group} = state;
+      }
+    }
+    $Self->{change_cb}->($Self, \%map);
   }
 }
 
@@ -117,6 +130,7 @@ sub reset {
 
 sub dirty {
   my $Self = shift;
+  my $table = shift || die 'need to have a table to dirty';
   confess("NOT IN TRANSACTION") unless $Self->{t};
   unless ($Self->{t}{modseq}) {
     my $user = $Self->get_user();
@@ -125,6 +139,7 @@ sub dirty {
     $Self->{t}{modseq} = $user->{jhighestmodseq};
     $Self->log('debug', "dirty at $user->{jhighestmodseq}");
   }
+  $Self->{t}{tables}{$table} = $Self->{t}{modseq};
   return $Self->{t}{modseq};
 }
 
@@ -878,7 +893,7 @@ sub dinsert {
 sub dmake {
   my $Self = shift;
   my ($table, $values, $backfilling) = @_;
-  $values->{jmodseq} = $backfilling ? 1 : $Self->dirty();
+  $values->{jmodseq} = $backfilling ? 1 : $Self->dirty($table);
   $values->{active} = 1;
   return $Self->dinsert($table, $values);
 }
@@ -937,7 +952,7 @@ sub dmaybeupdate {
 sub ddirty {
   my $Self = shift;
   my ($table, $values, $limit) = @_;
-  $values->{jmodseq} = $Self->dirty();
+  $values->{jmodseq} = $Self->dirty($table);
   return $Self->dupdate($table, $values, $limit);
 }
 
@@ -948,7 +963,7 @@ sub dmaybedirty {
   my $filtered = $Self->filter_values($table, $values, $limit);
   return unless %$filtered;
 
-  $filtered->{jmodseq} = $values->{jmodseq} = $Self->dirty();
+  $filtered->{jmodseq} = $values->{jmodseq} = $Self->dirty($table);
   return $Self->dupdate($table, $filtered, $limit);
 }
 
