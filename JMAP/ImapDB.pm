@@ -879,9 +879,22 @@ sub update_messages {
           $Self->backend_cmd('send_email', $rfc822);
           # strip the \Draft flag
           warn "SENDING $imapname $uidvalidity and moving to $newfolder";
-          $Self->backend_cmd('imap_update', $imapname, $uidvalidity, $uid, 0, ["\\draft"]);
+          $Self->backend_cmd('imap_update', $imapname, $uidvalidity, $uid, 0, ["\\Draft"]);
           $Self->backend_cmd('imap_move', $imapname, $uidvalidity, $uid, $newfolder);
           $dirty{$newfolder} = 1;
+
+          # add the \Answered flag
+          my ($updateid) = $dbh->selectrow_array("SELECT msginreplyto FROM jmessages WHERE msgid = ?", {}, $msgid);
+          next unless $updateid;
+          my ($updatemsgid) = $dbh->selectrow_array("SELECT msgid FROM jmessages WHERE msgmessageid = ?", {}, $updateid);
+          next unless $updatemsgid;
+          my ($ifolderid, $updateuid) = $dbh->selectrow_array("SELECT ifolderid, uid FROM imessages WHERE msgid = ?", {}, $updatemsgid);
+	  next unless $ifolderid;
+          my $updatename = $foldermap{$ifolderid}[1];
+          my $updatevalidity = $foldermap{$ifolderid}[2];
+          next unless $updatename;
+          $Self->backend_cmd('imap_update', $updatename, $updatevalidity, $updateuid, 1, ["\\Answered"]);
+          $dirty{$updatename} = 1;
         }
         else {
           my $newfolder = $jmailmap{$id}[1];
