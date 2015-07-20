@@ -470,9 +470,9 @@ sub _match {
     return 0 unless $item->{isFlagged};
   }
 
-  if ($condition->{isUnseen}) {
+  if ($condition->{isUnread}) {
     # XXX - threaded versions?
-    return 0 unless $item->{isUnseen};
+    return 0 unless $item->{isUnread};
   }
 
   if ($condition->{isAnswered}) {
@@ -691,7 +691,7 @@ sub getMessageListUpdates {
   $Self->commit();
 
   # now we have the same sorted data set.  What we DON'T have is knowing that a message used to be in the filter,
-  # but no longer is (aka isUnseen).  There's no good way to do this :(  So we have to assume that every message
+  # but no longer is (aka isUnread).  There's no good way to do this :(  So we have to assume that every message
   # which is changed and NOT in the dataset used to be...
 
   # we also have to assume that it MIGHT have been the exemplar...
