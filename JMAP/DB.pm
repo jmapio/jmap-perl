@@ -9,6 +9,7 @@ use Data::Dumper;
 use DBI;
 use Carp qw(confess);
 
+use Data::UUID::LibUUID;
 use IO::LockedFile;
 use JSON::XS qw(encode_json decode_json);
 use Email::MIME;
@@ -24,7 +25,6 @@ use Date::Parse;
 use Net::CalDAVTalk;
 use Net::CardDAVTalk::VCard;
 use MIME::Base64 qw(encode_base64);
-
 sub new {
   my $class = shift;
   my $accountid = shift || die;
