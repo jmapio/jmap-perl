@@ -243,8 +243,8 @@ sub sync_jmailboxes {
       mayAddItems => 1,
       mayRemoveItems => 1,
       mayCreateChild => 1,
-      mayRename => $role ? 1 : 0,
-      mayDelete => $role ? 1 : 0,
+      mayRename => $role ? 0 : 1,
+      mayDelete => $role ? 0 : 1,
     );
     if ($id) {
       if ($role and $roletoid{$role} and $roletoid{$role} != $id) {
