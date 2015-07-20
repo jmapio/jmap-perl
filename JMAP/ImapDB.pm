@@ -802,10 +802,12 @@ sub import_message {
   # make sure we're up to date: XXX - imap only
   $Self->do_folder($jmailmap{$mailboxIds->[0]}[0], $jmailmap{$mailboxIds->[0]}[2]);
 
+  $Self->begin();
   my ($msgid, $thrid) = $Self->dbh->selectrow_array("SELECT msgid, thrid FROM imessages WHERE ifolderid = ? AND uid = ?", {}, $jmailmap{$mailboxIds->[0]}[0], $uid);
 
   # save us having to download it again
   $Self->add_raw_message($msgid, $rfc822);
+  $Self->commit();
 
   return ($msgid, $thrid);
 }
