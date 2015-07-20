@@ -556,11 +556,6 @@ sub _makemsg {
   my $args = shift;
   my $isDraft = shift;
 
-  my %replyHeaders;
-  if ($args->{inReplyToMessageId}) {
-    # XXX - get replyheaders
-  }
-
   my $header = [
     From => _mkone($args->{from}),
     To => _mkemail($args->{to}),
@@ -666,6 +661,16 @@ sub create_messages {
 
   foreach my $cid (keys %$args) {
     my $item = $args->{$cid};
+    if ($args->{inReplyToMessageId}) {
+      my ($replymessageid) = $dbh->selectrow_array("SELECT msgmessageid FROM jmessages WHERE msgid = ?", {}, $args->{inReplyToMessageId});
+      unless ($replymessageid) {
+        $notCreated{$cid} = 'inReplyToNotFound';
+        next;
+      }
+      $args->{headers}{'In-Reply-To'} = $replymessageid;
+      $args->{headers}{'References'} = $replymessageid;
+      # XXX - references
+    }
     $item->{msgdate} = time();
     $item->{msgmessageid} = new_uuid_string() . '@proxy.jmap.io';
     my $message = $Self->_makemsg($item);
