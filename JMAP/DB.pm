@@ -996,6 +996,7 @@ CREATE TABLE IF NOT EXISTS jmessages (
 EOF
 
   $dbh->do("CREATE INDEX IF NOT EXISTS jthrid ON jmessages (thrid)");
+  $dbh->do("CREATE INDEX IF NOT EXISTS jmsgmessageid ON jmessages (msgmessageid)");
 
   $dbh->do(<<EOF);
 CREATE TABLE IF NOT EXISTS jmailboxes (
