@@ -1256,8 +1256,8 @@ sub create_contact_groups {
     $card->uid($uid);
     $card->VKind('group');
     $card->VName($contact->{name}) if exists $contact->{name};
-    if (exists $contact->{memberIds}) {
-      my @ids = @{$contact->{memberIds}};
+    if (exists $contact->{contactIds}) {
+      my @ids = @{$contact->{contactIds}};
       $card->VGroupContactUIDs(\@ids);
     }
 
@@ -1286,9 +1286,9 @@ sub update_contact_groups {
     }
     my ($card) = Net::CardDAVTalk::VCard->new_fromstring($content);
     $card->VKind('group');
-    $card->VName($contact->{name}) if exists $contact->{name};
-    if (exists $contact->{memberIds}) {
-      my @ids = map { $idmap->($_) } @{$contact->{memberIds}};
+    $card->VFN($contact->{name}) if exists $contact->{name};
+    if (exists $contact->{contactIds}) {
+      my @ids = map { $idmap->($_) } @{$contact->{contactIds}};
       $card->VGroupContactUIDs(\@ids);
     }
 

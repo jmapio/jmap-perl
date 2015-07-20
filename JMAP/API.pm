@@ -1876,7 +1876,7 @@ sub getContacts {
 
   #properties: String[] A list of properties to fetch for each message.
 
-  my $data = $dbh->selectall_hashref("SELECT * FROM jcontacts", 'contactuid', {Slice => {}});
+  my $data = $dbh->selectall_hashref("SELECT * FROM jcontacts WHERE active = 1", 'contactuid', {Slice => {}});
 
   my %want;
   if ($args->{ids}) {
