@@ -273,8 +273,7 @@ sub parse_date {
 
 sub isodate {
   my $Selft = shift;
-  my $epoch = shift;
-  return unless $epoch; # no 1970, punk
+  my $epoch = shift || time();
 
   my $date = DateTime->from_epoch( epoch => $epoch );
   return $date->iso8601();
