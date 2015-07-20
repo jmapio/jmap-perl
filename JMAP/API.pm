@@ -389,6 +389,9 @@ sub _build_sort {
     size => 'msgsize',
     isflagged => 'isFlagged',
     isunread => 'isUnread',
+    subject => 'msgsubject',
+    from => 'msgfrom',
+    to => 'msgto',
   );
   my @items;
   $sortargs = [$sortargs] unless ref $sortargs;
