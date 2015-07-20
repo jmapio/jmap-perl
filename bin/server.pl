@@ -622,6 +622,7 @@ sub prod_idler {
 sub PushToHandle {
   my $Handle = shift;
   my %vals = @_;
+  print "PUSH EVENT $Handle " . encode_json(\%vals) . "\n";
   my @Lines = map { "$_: " . (ref($vals{$_}) ? encode_json($vals{$_}) : $vals{$_}) } keys %vals;
   $Handle->push_write(join("\r\n", @Lines) . "\r\n\r\n");
 }
@@ -630,9 +631,7 @@ sub PushEvent {
   my $Channel = shift;
   $Channel =~ s/:.*//;
   my %vals = @_;
-  print "PUSH EVENT $Channel " . encode_json(\%vals) . "\n";
   foreach my $Fd (keys %{$PushMap{$Channel}{handles}}) {
-    warn " - to $Fd\n";
     my $ToHandle = $PushMap{$Channel}{handles}{$Fd};
     PushToHandle($ToHandle, %vals);
   }
