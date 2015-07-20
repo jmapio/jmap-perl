@@ -809,6 +809,7 @@ sub import_message {
 sub update_messages {
   my $Self = shift;
   my $changes = shift;
+  my $idmap = shift;
 
   my $dbh = $Self->{dbh};
 
@@ -863,7 +864,8 @@ sub update_messages {
         $Self->backend_cmd('imap_update', $imapname, $uidvalidity, $uid, $bool, \@flags);
       }
       if (exists $action->{mailboxIds}) {
-        my $id = $action->{mailboxIds}->[0]; # there can be only one
+        my @mboxes = map { $idmap->($_) } @{$action->{mailboxIds}};
+        my $id = $mboxes[0]; # there can be only one
         if ($id eq 'outbox') {
           my $newfolder = $jmailmap{$jrolemap{'sent'}}[1];
           my $res = $Self->backend_cmd('imap_fill', $imapname, $uidvalidity, $uid);
@@ -1114,6 +1116,7 @@ sub create_mailboxes {
 sub update_mailboxes {
   my $Self = shift;
   my $update = shift;
+  my $idmap = shift;
 
   my $dbh = $Self->{dbh};
 
@@ -1124,7 +1127,8 @@ sub update_mailboxes {
     my $mailbox = $update->{$id};
     my $imapname = $mailbox->{name};
     if ($mailbox->{parentId}) {
-      my ($parentName, $sep) = $dbh->selectrow_array("SELECT imapname, sep FROM ifolders WHERE jmailboxid = ?", {}, $mailbox->{parentId});
+      my $parentId = $idmap->($mailbox->{parentId});
+      my ($parentName, $sep) = $dbh->selectrow_array("SELECT imapname, sep FROM ifolders WHERE jmailboxid = ?", {}, $parentId);
       # XXX - errors
       $imapname = "$parentName$sep$imapname";
     }
@@ -1187,6 +1191,7 @@ sub create_calendar_events {
 sub update_calendar_events {
   my $Self = shift;
   my $update = shift;
+  my $idmap = shift;
 
   my $dbh = $Self->{dbh};
 
@@ -1250,7 +1255,10 @@ sub create_contact_groups {
     $card->uid($uid);
     $card->VKind('group');
     $card->VName($contact->{name}) if exists $contact->{name};
-    $card->VGroupContactUIDs($contact->{memberIds}) if exists $contact->{memberIds};
+    if (exists $contact->{memberIds}) {
+      my @ids = @{$contact->{memberIds}};
+      $card->VGroupContactUIDs(\@ids);
+    }
 
     $Self->backend_cmd('new_card', $href, $card);
     $createmap{$cid} = { id => $uid };
@@ -1262,6 +1270,7 @@ sub create_contact_groups {
 sub update_contact_groups {
   my $Self = shift;
   my $changes = shift;
+  my $idmap = shift;
 
   my $dbh = $Self->{dbh};
 
@@ -1277,7 +1286,10 @@ sub update_contact_groups {
     my ($card) = Net::CardDAVTalk::VCard->new_fromstring($content);
     $card->VKind('group');
     $card->VName($contact->{name}) if exists $contact->{name};
-    $card->VGroupContactUIDs($contact->{memberIds}) if exists $contact->{memberIds};
+    if (exists $contact->{memberIds}) {
+      my @ids = map { $idmap->($_) } @{$contact->{memberIds}};
+      $card->VGroupContactUIDs(\@ids);
+    }
 
     $Self->backend_cmd('update_card', $resource, $card);
     push @updated, $carduid;
@@ -1351,6 +1363,7 @@ sub create_contacts {
 sub update_contacts {
   my $Self = shift;
   my $changes = shift;
+  my $idmap = shift;
 
   my $dbh = $Self->{dbh};
 

@@ -21,6 +21,7 @@ sub idmap {
   if (@_) {
     $Self->{idmap}{$key} = shift;
   }
+  return $Self->{idmap} unless $key;
   return exists $Self->{idmap}{$key} ? $Self->{idmap}{$key} : $key;
 }
 
@@ -181,7 +182,7 @@ sub getMailboxes {
 
   my %ids;
   if ($args->{ids}) {
-    %ids = map { $_ => 1 } @{$args->{ids}};
+    %ids = map { $Self->idmap($_) => 1 } @{$args->{ids}};
   }
   else {
     %ids = map { $_->{jmailboxid} => 1 } @$data;
@@ -351,9 +352,9 @@ sub setMailboxes {
   my $update = $args->{update} || {};
   my $destroy = $args->{destroy} || [];
 
-  # XXX - idmap support
   my ($created, $notCreated) = $Self->{db}->create_mailboxes($create);
-  my ($updated, $notUpdated) = $Self->{db}->update_mailboxes($update);
+  $Self->idmap($_, $created->{$_}{id}) for keys %$created;
+  my ($updated, $notUpdated) = $Self->{db}->update_mailboxes($update, sub { $Self->idmap(shift) });
   my ($destroyed, $notDestroyed) = $Self->{db}->destroy_mailboxes($destroy);
 
   $Self->{db}->sync();
@@ -415,7 +416,7 @@ sub _match {
   # XXX - condition handling code
   if ($condition->{inMailboxes}) {
     my $inall = 1;
-    foreach my $id (@{$condition->{inMailboxes}}) {
+    foreach my $id (map { $Self->idmap($_) } @{$condition->{inMailboxes}}) {
       $storage->{mailbox}{$id} ||= $Self->_load_mailbox($id);
       next if $storage->{mailbox}{$id}{$item->{msgid}}[2]; #active
       $inall = 0;
@@ -425,7 +426,7 @@ sub _match {
 
   if ($condition->{notInMailboxes}) {
     my $inany = 0;
-    foreach my $id (@{$condition->{notInMailboxes}}) {
+    foreach my $id (map { $Self->idmap($_) } @{$condition->{notInMailboxes}}) {
       $storage->{mailbox}{$id} ||= $Self->_load_mailbox($id);
       next unless $storage->{mailbox}{$id}{$item->{msgid}}[2]; #active
       $inany = 1;
@@ -824,7 +825,7 @@ sub getMessages {
   }
   $need_content = 1 if ($args->{properties} and grep { m/^headers\./ } @{$args->{properties}});
   my %msgidmap;
-  foreach my $msgid (@{$args->{ids}}) {
+  foreach my $msgid (map { $Self->idmap($_) } @{$args->{ids}}) {
     next if $seenids{$msgid};
     $seenids{$msgid} = 1;
     my $data = $dbh->selectrow_hashref("SELECT * FROM jmessages WHERE msgid = ?", {}, $msgid);
@@ -1070,9 +1071,9 @@ sub setMessages {
   my $update = $args->{update} || {};
   my $destroy = $args->{destroy} || [];
 
-  # XXX - idmap support
   my ($created, $notCreated) = $Self->{db}->create_messages($create);
-  my ($updated, $notUpdated) = $Self->{db}->update_messages($update);
+  $Self->idmap($_, $created->{$_}{id}) for keys %$created;
+  my ($updated, $notUpdated) = $Self->{db}->update_messages($update, sub { $Self->idmap(shift) });
   my ($destroyed, $notDestroyed) = $Self->{db}->destroy_messages($destroy);
 
   $Self->{db}->sync_imap();
@@ -1122,7 +1123,8 @@ sub importMessage {
   $Self->commit();
 
   # import to a normal mailbox (or boxes)
-  my ($msgid, $thrid) = $Self->import_message($message, $args->{mailboxIds},
+  my @ids = map { $Self->idmap($_) } @{$args->{mailboxIds}};
+  my ($msgid, $thrid) = $Self->import_message($message, \@ids,
     isUnread => $args->{isUnread},
     isFlagged => $args->{isFlagged},
     isAnswered => $args->{isAnswered},
@@ -1162,7 +1164,8 @@ sub reportMessages {
 
   $Self->commit();
 
-  my ($reported, $notfound) = $Self->report_messages($args->{messageIds}, $args->{asSpam});
+  my @ids = map { $Self->idmap($_) } @{$args->{messageIds}};
+  my ($reported, $notfound) = $Self->report_messages(\@ids, $args->{asSpam});
 
   my @res;
   push @res, ['messagesReported', {
@@ -1193,7 +1196,7 @@ sub getThreads {
   my %seenids;
   my %missingids;
   my @allmsgs;
-  foreach my $thrid (@{$args->{ids}}) {
+  foreach my $thrid (map { $Self->idmap($_) } @{$args->{ids}}) {
     next if $seenids{$thrid};
     $seenids{$thrid} = 1;
     my $data = $dbh->selectall_arrayref("SELECT * FROM jmessages WHERE thrid = ? AND active = 1 ORDER BY internaldate", {Slice => {}}, $thrid);
@@ -1369,7 +1372,7 @@ sub getCalendars {
 
   my %ids;
   if ($args->{ids}) {
-    %ids = map { $_ => 1 } @{$args->{ids}};
+    %ids = map { $Self->idmap($_) => 1 } @{$args->{ids}};
   }
   else {
     %ids = map { $_->[0] => 1 } @$data;
@@ -1571,7 +1574,7 @@ sub getCalendarEvents {
   my %seenids;
   my %missingids;
   my @list;
-  foreach my $eventid (@{$args->{ids}}) {
+  foreach my $eventid (map { $Self->idmap($_) } @{$args->{ids}}) {
     next if $seenids{$eventid};
     $seenids{$eventid} = 1;
     my $data = $dbh->selectrow_hashref("SELECT * FROM jevents WHERE eventuid = ?", {}, $eventid);
@@ -1678,7 +1681,7 @@ sub getAddressbooks {
 
   my %ids;
   if ($args->{ids}) {
-    %ids = map { $_ => 1 } @{$args->{ids}};
+    %ids = map { $Self->($_) => 1 } @{$args->{ids}};
   }
   else {
     %ids = map { $_->[0] => 1 } @$data;
@@ -1876,7 +1879,7 @@ sub getContacts {
 
   my %want;
   if ($args->{ids}) {
-    %want = map { $_ => 1 } @{$args->{ids}};
+    %want = map { $Self->idmap($_) => 1 } @{$args->{ids}};
   }
   else {
     %want = %$data;
@@ -1983,7 +1986,7 @@ sub getContactGroups {
 
   my %want;
   if ($args->{ids}) {
-    %want = map { $_ => 1 } @{$args->{ids}};
+    %want = map { $Self->idmap($_) => 1 } @{$args->{ids}};
   }
   else {
     %want = %$data;
@@ -2093,9 +2096,9 @@ sub setContactGroups {
   my $update = $args->{update} || {};
   my $destroy = $args->{destroy} || [];
 
-  # XXX - idmap support
   my ($created, $notCreated) = $Self->{db}->create_contact_groups($create);
-  my ($updated, $notUpdated) = $Self->{db}->update_contact_groups($update);
+  $Self->idmap($_, $created->{$_}{id}) for keys %$created;
+  my ($updated, $notUpdated) = $Self->{db}->update_contact_groups($update, sub { $Self->idmap(shift) });
   my ($destroyed, $notDestroyed) = $Self->{db}->destroy_contact_groups($destroy);
 
   $Self->{db}->sync_addressbooks();
@@ -2133,9 +2136,9 @@ sub setContacts {
   my $update = $args->{update} || {};
   my $destroy = $args->{destroy} || [];
 
-  # XXX - idmap support
   my ($created, $notCreated) = $Self->{db}->create_contacts($create);
-  my ($updated, $notUpdated) = $Self->{db}->update_contacts($update);
+  $Self->idmap($_, $created->{$_}{id}) for keys %$created;
+  my ($updated, $notUpdated) = $Self->{db}->update_contacts($update, sub { $Self->idmap(shift) });
   my ($destroyed, $notDestroyed) = $Self->{db}->destroy_contacts($destroy);
 
   $Self->{db}->sync_addressbooks();
@@ -2173,9 +2176,9 @@ sub setCalendarEvents {
   my $update = $args->{update} || {};
   my $destroy = $args->{destroy} || [];
 
-  # XXX - idmap support
   my ($created, $notCreated) = $Self->{db}->create_calendar_events($create);
-  my ($updated, $notUpdated) = $Self->{db}->update_calendar_events($update);
+  $Self->idmap($_, $created->{$_}{id}) for keys %$created;
+  my ($updated, $notUpdated) = $Self->{db}->update_calendar_events($update, sub { $Self->idmap(shift) });
   my ($destroyed, $notDestroyed) = $Self->{db}->destroy_calendar_events($destroy);
 
   $Self->{db}->sync_calendars();
@@ -2215,7 +2218,8 @@ sub setCalendars {
 
   # XXX - idmap support
   my ($created, $notCreated) = $Self->{db}->create_calendars($create);
-  my ($updated, $notUpdated) = $Self->{db}->update_calendars($update);
+  $Self->idmap($_, $created->{$_}{id}) for keys %$created;
+  my ($updated, $notUpdated) = $Self->{db}->update_calendars($update, sub { $Self->idmap(shift) });
   my ($destroyed, $notDestroyed) = $Self->{db}->destroy_calendars($destroy);
 
   $Self->{db}->sync_calendars();
