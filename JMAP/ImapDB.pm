@@ -1127,8 +1127,11 @@ sub update_mailboxes {
     my $mailbox = $update->{$id};
     my $imapname = $mailbox->{name};
     next unless (defined $imapname and $imapname ne '');
-    if ($mailbox->{parentId}) {
-      my $parentId = $idmap->($mailbox->{parentId});
+    my $parentId = $mailbox->{parentId};
+    ($parentId) = $dbh->selectrow_array("SELECT parentId FROM jmailboxes WHERE jmailboxid = ?", {}, $id)
+      unless exists $mailbox->{parentId};
+    if ($parentId) {
+      $parentId = $idmap->($parentId);
       my ($parentName, $sep) = $dbh->selectrow_array("SELECT imapname, sep FROM ifolders WHERE jmailboxid = ?", {}, $parentId);
       # XXX - errors
       $imapname = "$parentName$sep$imapname";
@@ -1164,6 +1167,8 @@ sub destroy_mailboxes {
     $Self->backend_cmd('delete_mailbox', $oldname);
     push @destroyed, $id;
   }
+
+  $Self->sync_folders() if @destroyed;
 
   return (\@destroyed, \%notdestroyed);
 }
