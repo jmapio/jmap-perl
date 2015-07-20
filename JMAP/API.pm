@@ -415,12 +415,17 @@ sub _load_mailbox {
   return { map { $_->[0] => $_ } @$data };
 }
 
+sub _load_hasatt {
+  my $Self = shift;
+  my $data = $Self->{db}->dbh->selectcol_arrayref("SELECT msgid FROM jrawmessage WHERE hasAttachment = 1");
+  return { map { $_ => 1 } @$data };
+}
+
 sub _match {
   my $Self = shift;
   my ($item, $condition, $storage) = @_;
   return $Self->_match_operator($item, $condition, $storage) if $condition->{operator};
 
-  # XXX - condition handling code
   if ($condition->{inMailboxes}) {
     my $inall = 1;
     foreach my $id (map { $Self->idmap($_) } @{$condition->{inMailboxes}}) {
@@ -480,6 +485,8 @@ sub _match {
   }
 
   if ($condition->{hasAttachment}) {
+    $storage->{hasatt} ||= $Self->_load_hasatt();
+    return 0 unless $storage->{hasatt}{$item->{msgid}};
     # XXX - hasAttachment
   }
 
