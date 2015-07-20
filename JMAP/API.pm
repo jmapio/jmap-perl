@@ -839,6 +839,7 @@ sub getSearchSnippets {
   $messages->[0] = 'searchSnippets';
   delete $messages->[1]{state};
   $messages->[1]{filter} = $args->{filter};
+  $messages->[1]{collapseThreads} = $args->{collapseThreads}, # work around client bug
 
   my @terms = _extract_terms($args->{filter});
   my $str = join("|", @terms);
