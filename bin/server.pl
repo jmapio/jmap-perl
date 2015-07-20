@@ -438,6 +438,7 @@ sub client_page {
     my $data = shift;
 
     prod_idler($accountid);
+    send_backend_request($accountid, 'syncall');
 
     open(FH, "/home/jmap/jmap-perl/htdocs/landing.html");
     local $/ = undef;

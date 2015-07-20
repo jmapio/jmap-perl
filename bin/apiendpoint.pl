@@ -211,6 +211,9 @@ sub mk_handler {
       if ($cmd eq 'sync') {
         return handle_sync(getdb(), $args, $tag);
       }
+      if ($cmd eq 'syncall') {
+        return handle_syncall(getdb(), $args, $tag);
+      }
       if ($cmd eq 'davsync') {
         return handle_davsync(getdb(), $args, $tag);
       }
@@ -244,6 +247,15 @@ sub handle_sync {
   my $db = shift;
   $db->sync_imap();
   return ['sync', $JSON::true];
+}
+
+sub handle_syncall {
+  my $db = shift;
+  $db->sync_folders();
+  $db->sync_imap();
+  $db->sync_addressbooks();
+  $db->sync_calendars();
+  return ['syncall', $JSON::true];
 }
 
 sub handle_backfill {
