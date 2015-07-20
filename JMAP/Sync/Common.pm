@@ -160,20 +160,35 @@ sub delete_card {
 # read folder list from the server
 sub folders {
   my $Self = shift;
-  $Self->connect_imap(1);
-  return [$Self->{prefix}, $Self->{folders}];
+  my $force = shift;
+
+  my $imap = $Self->connect_imap();
+
+  my $namespace = $imap->namespace();
+  my $prefix = $namespace->[0][0][0];
+  my $listcmd = $imap->capability()->{xlist} ? 'xlist' : 'list';
+  my @folders = $imap->$listcmd('', '*');
+
+  my %folders;
+  foreach my $folder (@folders) {
+    my ($role) = grep { not $KNOWN_SPECIALS{lc $_} } @{$folder->[0]};
+    my $name = $folder->[2];
+    my $label = $role;
+    unless ($label) {
+      $label = $folder->[2];
+      $label =~ s{^$prefix}{};
+      $label =~ s{^[$folder->[1]]}{}; # just in case prefix was missing sep
+    }
+    $folders{$name} = [$folder->[1], $label];
+  }
+
+  return [$prefix, \%folders];
 }
 
 sub capability {
   my $Self = shift;
   my $imap = $Self->connect_imap();
   return $imap->capability();
-}
-
-sub labels {
-  my $Self = shift;
-  $Self->connect_imap();
-  return $Self->{labels};
 }
 
 sub imap_noop {
