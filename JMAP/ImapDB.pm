@@ -907,8 +907,6 @@ sub update_messages {
     }
   }
 
-  $Self->do_folder($_) for keys %dirty;
-
   return (\@changed, \%notchanged);
 }
 
