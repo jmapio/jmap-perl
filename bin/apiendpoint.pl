@@ -142,17 +142,15 @@ sub handle_getstate {
   my $state = "$user->{jhighestmodseq}";
   $db->commit();
 
+  my %map;
+  foreach my $key (keys %$user) {
+    next unless $key =~ m/^jstate(.*)/;
+    $map{$1} = $user->{$key} || "1";
+  }
+
   my $data = {
     changed => {
-      $db->accountid() => {
-        Mailbox => "$state",
-        Thread => "$state",
-        Message => "$state",
-        Contact => "$state",
-        ContactGroup => "$state",
-        Calendar => "$state",
-        CalendarEvent => "$state",
-      },
+      $db->accountid() => \%map,
     },
   };
 

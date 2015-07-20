@@ -103,12 +103,16 @@ sub commit {
   # push an update if anything to tell..
   if ($t->{modseq} and $Self->{change_cb}) {
     my %map;
+    my %dbdata = (jhighestmodseq => $t->{modseq});
     my $state = "$t->{modseq}";
     foreach my $table (keys %{$t->{tables}}) {
       foreach my $group (@{$TABLE2GROUPS{$table}}) {
         $map{$group} = $state;
+        $dbdata{"jstate$group"} = $state;
       }
     }
+     
+    $Self->dupdate('account', \%dbdata);
     $Self->{change_cb}->($Self, \%map);
   }
 }
@@ -135,7 +139,6 @@ sub dirty {
   unless ($Self->{t}{modseq}) {
     my $user = $Self->get_user();
     $user->{jhighestmodseq}++;
-    $Self->dbh->do("UPDATE account SET jhighestmodseq = ?", {}, $user->{jhighestmodseq});
     $Self->{t}{modseq} = $user->{jhighestmodseq};
     $Self->log('debug', "dirty at $user->{jhighestmodseq}");
   }
@@ -147,7 +150,7 @@ sub get_user {
   my $Self = shift;
   confess("NOT IN TRANSACTION") unless $Self->{t};
   unless ($Self->{t}{user}) {
-    $Self->{t}{user} = $Self->dbh->selectrow_hashref("SELECT email,displayname,picture,jhighestmodseq,jdeletedmodseq FROM account");
+    $Self->{t}{user} = $Self->dbh->selectrow_hashref("SELECT * FROM account");
   }
   # bootstrap
   unless ($Self->{t}{user}) {
