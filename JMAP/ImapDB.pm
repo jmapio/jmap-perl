@@ -773,7 +773,7 @@ sub changed_record {
 
 sub import_message {
   my $Self = shift;
-  my $message = shift;
+  my $rfc822 = shift;
   my $mailboxIds = shift;
   my %flags = @_;
 
@@ -794,7 +794,7 @@ sub import_message {
   my $internaldate = time(); # XXX - allow setting?
   my $date = Date::Format::time2str('%e-%b-%Y %T %z', $internaldate);
 
-  my $data = $Self->backend_cmd('imap_append', $imapname, "(@flags)", $date, $message);
+  my $data = $Self->backend_cmd('imap_append', $imapname, "(@flags)", $date, $rfc822);
   warn Dumper($data);
   # XXX - compare $data->[2] with uidvalidity
   my $uid = $data->[3];
@@ -803,6 +803,9 @@ sub import_message {
   $Self->do_folder($jmailmap{$mailboxIds->[0]}[0], $jmailmap{$mailboxIds->[0]}[2]);
 
   my ($msgid, $thrid) = $Self->dbh->selectrow_array("SELECT msgid, thrid FROM imessages WHERE ifolderid = ? AND uid = ?", {}, $jmailmap{$mailboxIds->[0]}[0], $uid);
+
+  # save us having to download it again
+  $Self->add_raw_message($msgid, $rfc822);
 
   return ($msgid, $thrid);
 }
@@ -834,6 +837,7 @@ sub update_messages {
   my %jrolemap = map { $_->[1] => $_->[0] } grep { $_-> [1] } @$jmapdata;
 
   my @changed;
+  my %dirty;
   foreach my $ifolderid (keys %updatemap) {
     # XXX - merge similar actions?
     my $imapname = $foldermap{$ifolderid}[1];
@@ -846,6 +850,7 @@ sub update_messages {
         $notchanged{$msgid} = "No folder found";
         next;
       }
+      $dirty{$imapname} = 1;
       if (exists $action->{isUnread}) {
         my $bool = !$action->{isUnread};
         my @flags = ("\\Seen");
@@ -869,23 +874,27 @@ sub update_messages {
         my $id = $mboxes[0]; # there can be only one
         if ($id eq 'outbox') {
           my $newfolder = $jmailmap{$jrolemap{'sent'}}[1];
-          my $res = $Self->backend_cmd('imap_fill', $imapname, $uidvalidity, $uid);
-          my $msg = $res->{data}{$uid};
-          $Self->backend_cmd('send_email', $msg);
+          $Self->fill_messages($msgid);
+          my ($rfc822) = $dbh->selectrow_array("SELECT rfc822 FROM jrawmessage WHERE msgid = ?", {}, $msgid);
+          $Self->backend_cmd('send_email', $rfc822);
           # strip the \Draft flag
           warn "SENDING $imapname $uidvalidity and moving to $newfolder";
           $Self->backend_cmd('imap_update', $imapname, $uidvalidity, $uid, 0, ["\\draft"]);
           $Self->backend_cmd('imap_move', $imapname, $uidvalidity, $uid, $newfolder);
+          $dirty{$newfolder} = 1;
         }
         else {
           my $newfolder = $jmailmap{$id}[1];
           $Self->backend_cmd('imap_move', $imapname, $uidvalidity, $uid, $newfolder);
+          $dirty{$newfolder} = 1;
         }
       }
       # XXX - handle errors from backend commands
       push @changed, $msgid;
     }
   }
+
+  $Self->do_folder($_) for keys %dirty;
 
   return (\@changed, \%notchanged);
 }

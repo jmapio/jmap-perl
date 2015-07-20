@@ -29,6 +29,16 @@ sub DESTROY {
   }
 }
 
+sub _unselect {
+  my $imap = shift;
+  if ($imap->capability->{unselect}) {
+    $imap->unselect();
+  }
+  else {
+    $imap->close();
+  }
+}
+
 sub disconnect {
   my $Self = shift;
   if ($Self->{imap}) {
@@ -206,13 +216,6 @@ sub imap_status {
 
   my $imap = $Self->connect_imap();
 
-  if ($imap->capability->{unselect}) {
-    $imap->unselect();
-  }
-  else {
-    $imap->close();
-  }
-
   my @fields = qw(uidvalidity uidnext messages);
   push @fields, "highestmodseq" if ($imap->capability->{condstore} or $imap->capability->{xymhighestmodseq});
   my $data = $imap->multistatus("(@fields)", @$folders);
@@ -247,6 +250,7 @@ sub imap_update {
   }
 
   $imap->store($uids, $isAdd ? "+flags" : "-flags", "(@$flags)");
+  _unselect($imap);
 
   $res{updated} = $uids;
 
@@ -277,6 +281,7 @@ sub imap_fill {
   }
 
   my $data = $imap->fetch($uids, "rfc822");
+  _unselect($imap);
 
   my %ids;
   foreach my $uid (keys %$data) {
@@ -310,6 +315,7 @@ sub imap_count {
   }
 
   my $data = $imap->fetch($uids, "UID");
+  _unselect($imap);
 
   $res{data} = [sort { $a <=> $b } keys %$data];
   return \%res;
@@ -364,6 +370,7 @@ sub imap_move {
     $imap->store($uids, "+flags", "(\\seen \\deleted)");
     $imap->uidexpunge($uids);
   }
+  _unselect($imap);
 
   $res{moved} = $uids;
 
@@ -417,6 +424,7 @@ sub imap_fetch {
     my $data = $imap->fetch("$from:$to", "(@flags)", @extra) || {};
     $res{$key} = [$item, $data];
   }
+  _unselect($imap);
 
   return \%res;
 }
@@ -462,6 +470,7 @@ sub imap_search {
   }
 
   my $uids = $imap->search('charset', 'utf-8', @expr);
+  _unselect($imap);
 
   return ['search', $imapname, $uidvalidity, $uids];
 }
