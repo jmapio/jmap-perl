@@ -803,6 +803,48 @@ sub getMessageListUpdates {
   return @res;
 }
 
+sub _extract_terms {
+  my $filter = shift;
+  return () unless $filter;
+  my @list;
+  push @list, _extract_terms($filter->{conditions});
+  push @list, $filter->{body} if $filter->{body};
+  push @list, $filter->{text} if $filter->{text};
+  push @list, $filter->{subject} if $filter->{subject};
+  return @list;
+}
+
+sub getSearchSnippets {
+  my $Self = shift;
+  my $args = shift;
+
+  my $messages = $Self->getMessages({
+    accountId => $args->{accountId},
+    ids => $args->{messageIds},
+    properties => ['subject', 'textBody', 'preview'];
+  }
+
+  return $messages unless $messages->[0] eq 'messages';
+  $messages->[0] = 'searchSnippets';
+  delete $messages->[1]{state};
+  $messages->[1]{filter} = $args->{filter};
+
+  my @terms = _extract_terms($args->{filter});
+  my $str = '\\b(\\Q' . join('\\E|\\Q', @terms) . '\\E)\\b';
+  my $tag = 'b'; # XXX - wrap
+  foreach my $item (@{$messages->[1]{list}}) {
+    $item->{messageId} = delete $item->{id};
+    $item->{subject} =~ s{$str}{<$tag>$1</$tag>}gs;
+    my $text = delete $item->{textBody};
+    if ($text =~ m{(.{,20}$str.*)}) {
+      $item->{preview} = $1;
+      $item->{preview} =~ s{$str}{<$tag>$1</$tag>}gs;
+    }
+  }
+
+  return $messages;
+}
+
 sub getMessages {
   my $Self = shift;
   my $args = shift;
