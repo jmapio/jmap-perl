@@ -661,14 +661,14 @@ sub create_messages {
 
   foreach my $cid (keys %$args) {
     my $item = $args->{$cid};
-    if ($args->{inReplyToMessageId}) {
-      my ($replymessageid) = $dbh->selectrow_array("SELECT msgmessageid FROM jmessages WHERE msgid = ?", {}, $args->{inReplyToMessageId});
+    if ($item->{inReplyToMessageId}) {
+      my ($replymessageid) = $dbh->selectrow_array("SELECT msgmessageid FROM jmessages WHERE msgid = ?", {}, $item->{inReplyToMessageId});
       unless ($replymessageid) {
         $notCreated{$cid} = 'inReplyToNotFound';
         next;
       }
-      $args->{headers}{'In-Reply-To'} = $replymessageid;
-      $args->{headers}{'References'} = $replymessageid;
+      $item->{headers}{'In-Reply-To'} = $replymessageid;
+      $item->{headers}{'References'} = $replymessageid;
       # XXX - references
     }
     $item->{msgdate} = time();
