@@ -7,6 +7,7 @@ use JSON;
 use strict;
 use warnings;
 use Encode;
+use HTML::GenerateUtil qw(escape_html);
 
 sub new {
   my $class = shift;
@@ -110,7 +111,7 @@ sub getPersonalities {
     email => $user->{email},
     name => $user->{displayname} || $user->{email},
     textSignature => "-- \ntext sig",
-    htmlSignature => "-- \n<b>html sig</b>",
+    htmlSignature => "-- <br><b>html sig</b>",
     replyTo => $user->{email},
     autoBcc => "",
     addBccOnSMTP => $JSON::false,
@@ -832,15 +833,23 @@ sub getSearchSnippets {
   $messages->[1]{filter} = $args->{filter};
 
   my @terms = _extract_terms($args->{filter});
-  my $str = '\\b(\\Q' . join('\\E|\\Q', @terms) . '\\E)\\b';
+  my $str = join("|", @terms);
   my $tag = 'b'; # XXX - wrap
   foreach my $item (@{$messages->[1]{list}}) {
     $item->{messageId} = delete $item->{id};
-    $item->{subject} =~ s{$str}{<$tag>$1</$tag>}gs;
     my $text = delete $item->{textBody};
-    if ($text =~ m{(.{,20}$str.*)}) {
-      $item->{preview} = $1;
-      $item->{preview} =~ s{$str}{<$tag>$1</$tag>}gs;
+    $item->{subject} = escape_html($item->{subject});
+    $item->{preview} = escape_html($item->{preview});
+    next unless @terms;
+    $item->{subject} =~ s{\b($str)\b}{<$tag>$1</$tag>}gsi;
+    if ($text =~ m{(.{0,20}\b(?:$str)\b.*)}gsi) {
+      $item->{preview} = substr($1, 0, 200);
+      $item->{preview} =~ s{^\s+}{}gs;
+      $item->{preview} =~ s{\s+$}{}gs;
+      $item->{preview} =~ s{[\r\n]+}{ -- }gs;
+      $item->{preview} =~ s{\s+}{ }gs;
+      $item->{preview} = escape_html($item->{preview});
+      $item->{preview} =~ s{\b($str)\b}{<$tag>$1</$tag>}gsi;
     }
   }
 
