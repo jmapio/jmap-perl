@@ -823,8 +823,8 @@ sub getSearchSnippets {
   my $messages = $Self->getMessages({
     accountId => $args->{accountId},
     ids => $args->{messageIds},
-    properties => ['subject', 'textBody', 'preview'];
-  }
+    properties => ['subject', 'textBody', 'preview'],
+  });
 
   return $messages unless $messages->[0] eq 'messages';
   $messages->[0] = 'searchSnippets';
