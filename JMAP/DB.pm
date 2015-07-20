@@ -567,6 +567,7 @@ sub _makemsg {
     Cc => _mkemail($args->{cc}),
     Bcc => _mkemail($args->{bcc}),
     Subject => $args->{subject},
+    Date => Date::Format::time2str("%a, %d %b %Y %H:%M:%S %z", $args->{msgdate}),
     'Message-Id' => $args->{msgmessageid},
     %{$args->{headers} || {}},
   ];
@@ -665,6 +666,7 @@ sub create_messages {
 
   foreach my $cid (keys %$args) {
     my $item = $args->{$cid};
+    $item->{msgdate} = time();
     $item->{msgmessageid} = new_uuid_string() . '@proxy.jmap.io';
     my $message = $Self->_makemsg($item);
     # XXX - let's just assume goodness for now - lots of error handling to add
