@@ -567,6 +567,7 @@ sub _makemsg {
     Cc => _mkemail($args->{cc}),
     Bcc => _mkemail($args->{bcc}),
     Subject => $args->{subject},
+    'Message-Id' => $args->{msgmessageid},
     %{$args->{headers} || {}},
   ];
 
@@ -664,6 +665,7 @@ sub create_messages {
 
   foreach my $cid (keys %$args) {
     my $item = $args->{$cid};
+    $item->{msgmessageid} = new_uuid_string() . '@proxy.jmap.io';
     my $message = $Self->_makemsg($item);
     # XXX - let's just assume goodness for now - lots of error handling to add
     my ($msgid, $thrid) = $Self->import_message($message, [$draftid],
