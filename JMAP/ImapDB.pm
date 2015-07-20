@@ -275,6 +275,7 @@ sub sync_jmailboxes {
 
   foreach my $mailbox (@$jmailboxes) {
     my $id = $mailbox->[0];
+    next unless $mailbox->[4];
     next if $seen{$id};
     $Self->dupdate('jmailboxes', {active => 0}, {jmailboxid => $id});
   }
