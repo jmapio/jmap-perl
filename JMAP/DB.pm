@@ -27,17 +27,17 @@ use Net::CardDAVTalk::VCard;
 use MIME::Base64 qw(encode_base64);
 
 my %TABLE2GROUPS = (
-  jmessages => ['Messages', 'Threads'],
-  jmailboxes => ['Mailboxes'],
-  jmessagemap => ['Mailboxes'],
+  jmessages => ['Message', 'Thread'],
+  jmailboxes => ['Mailbox'],
+  jmessagemap => ['Mailbox'],
   jrawmessage => [],
   jfiles => [], # for now
-  jcalendars => ['Calendars'],
-  jevents => ['CalendarEvents'],
+  jcalendars => ['Calendar'],
+  jevents => ['CalendarEvent'],
   jaddressbooks => [], # not directly
-  jcontactgroups => ['ContactGroups'],
-  jcontactgroupmap => ['ContactGroups'],
-  jcontacts => ['Contacts'],
+  jcontactgroups => ['ContactGroup'],
+  jcontactgroupmap => ['ContactGroup'],
+  jcontacts => ['Contact'],
 );
 
 sub new {
@@ -1059,13 +1059,13 @@ CREATE TABLE IF NOT EXISTS account (
   picture TEXT,
   jdeletedmodseq INTEGER,
   jhighestmodseq INTEGER,
-  jstateMailboxes TEXT,
-  jstateThreads TEXT,
-  jstateMessages TEXT,
-  jstateContacts TEXT,
-  jstateContactGroups TEXT,
-  jstateCalendars TEXT,
-  jstateCalendarEvents TEXT,
+  jstateMailbox TEXT,
+  jstateThread TEXT,
+  jstateMessage TEXT,
+  jstateContact TEXT,
+  jstateContactGroup TEXT,
+  jstateCalendar TEXT,
+  jstateCalendarEvent TEXT,
   mtime DATE
 );
 EOF
