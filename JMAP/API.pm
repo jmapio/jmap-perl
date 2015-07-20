@@ -15,13 +15,16 @@ sub new {
   return bless {db => $db}, ref($class) || $class;
 }
 
+sub setid {
+  my $Self = shift;
+  my $key = shift;
+  my $val = shift;
+  $Self->{idmap}{"#$key"} = $val;
+}
+
 sub idmap {
   my $Self = shift;
   my $key = shift;
-  if (@_) {
-    my $val = shift;
-    $Self->{idmap}{"#$key"} = $val;
-  }
   my $val = exists $Self->{idmap}{$key} ? $Self->{idmap}{$key} : $key;
   return $val;
 }
@@ -354,7 +357,7 @@ sub setMailboxes {
   my $destroy = $args->{destroy} || [];
 
   my ($created, $notCreated) = $Self->{db}->create_mailboxes($create);
-  $Self->idmap($_, $created->{$_}{id}) for keys %$created;
+  $Self->setid($_, $created->{$_}{id}) for keys %$created;
   my ($updated, $notUpdated) = $Self->{db}->update_mailboxes($update, sub { $Self->idmap(shift) });
   my ($destroyed, $notDestroyed) = $Self->{db}->destroy_mailboxes($destroy);
 
@@ -1073,7 +1076,7 @@ sub setMessages {
   my $destroy = $args->{destroy} || [];
 
   my ($created, $notCreated) = $Self->{db}->create_messages($create);
-  $Self->idmap($_, $created->{$_}{id}) for keys %$created;
+  $Self->setid($_, $created->{$_}{id}) for keys %$created;
   my ($updated, $notUpdated) = $Self->{db}->update_messages($update, sub { $Self->idmap(shift) });
   my ($destroyed, $notDestroyed) = $Self->{db}->destroy_messages($destroy);
 
@@ -2099,7 +2102,7 @@ sub setContactGroups {
   my $destroy = $args->{destroy} || [];
 
   my ($created, $notCreated) = $Self->{db}->create_contact_groups($create);
-  $Self->idmap($_, $created->{$_}{id}) for keys %$created;
+  $Self->setid($_, $created->{$_}{id}) for keys %$created;
   my ($updated, $notUpdated) = $Self->{db}->update_contact_groups($update, sub { $Self->idmap(shift) });
   my ($destroyed, $notDestroyed) = $Self->{db}->destroy_contact_groups($destroy);
 
@@ -2139,7 +2142,7 @@ sub setContacts {
   my $destroy = $args->{destroy} || [];
 
   my ($created, $notCreated) = $Self->{db}->create_contacts($create);
-  $Self->idmap($_, $created->{$_}{id}) for keys %$created;
+  $Self->setid($_, $created->{$_}{id}) for keys %$created;
   my ($updated, $notUpdated) = $Self->{db}->update_contacts($update, sub { $Self->idmap(shift) });
   my ($destroyed, $notDestroyed) = $Self->{db}->destroy_contacts($destroy);
 
@@ -2179,7 +2182,7 @@ sub setCalendarEvents {
   my $destroy = $args->{destroy} || [];
 
   my ($created, $notCreated) = $Self->{db}->create_calendar_events($create);
-  $Self->idmap($_, $created->{$_}{id}) for keys %$created;
+  $Self->setid($_, $created->{$_}{id}) for keys %$created;
   my ($updated, $notUpdated) = $Self->{db}->update_calendar_events($update, sub { $Self->idmap(shift) });
   my ($destroyed, $notDestroyed) = $Self->{db}->destroy_calendar_events($destroy);
 
@@ -2218,9 +2221,8 @@ sub setCalendars {
   my $update = $args->{update} || {};
   my $destroy = $args->{destroy} || [];
 
-  # XXX - idmap support
   my ($created, $notCreated) = $Self->{db}->create_calendars($create);
-  $Self->idmap($_, $created->{$_}{id}) for keys %$created;
+  $Self->setid($_, $created->{$_}{id}) for keys %$created;
   my ($updated, $notUpdated) = $Self->{db}->update_calendars($update, sub { $Self->idmap(shift) });
   my ($destroyed, $notDestroyed) = $Self->{db}->destroy_calendars($destroy);
 
