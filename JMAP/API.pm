@@ -860,6 +860,7 @@ sub getSearchSnippets {
       $item->{preview} = escape_html($item->{preview});
       $item->{preview} =~ s{\b($str)\b}{<$tag>$1</$tag>}gsi;
     }
+    $item->{body} = $item->{preview}; # work around client bug
   }
 
   return $messages;

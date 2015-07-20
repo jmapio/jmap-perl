@@ -611,6 +611,14 @@ sub firstsync {
   $Self->fill_messages(@$msgids);
 }
 
+sub _trimh {
+  my $val = shift;
+  return '' unless defined $val;
+  $val =~ s{\s+$}{};
+  $val =~ s{^\s+}{};
+  return $val;
+}
+
 sub calcmsgid {
   my $Self = shift;
   my $imapname = shift;
@@ -622,8 +630,8 @@ sub calcmsgid {
   my $base = substr(sha1_hex($coded), 0, 9);
   my $msgid = "m$base";
 
-  my $replyto = lc($envelope->{'In-Reply-To'} || '');
-  my $messageid = lc($envelope->{'Message-ID'} || '');
+  my $replyto = _trimh($envelope->{'In-Reply-To'});
+  my $messageid = _trimh($envelope->{'Message-ID'});
   my ($thrid) = $Self->dbh->selectrow_array("SELECT DISTINCT thrid FROM ithread WHERE messageid IN (?, ?)", {}, $replyto, $messageid);
   $thrid ||= "t$base";
   foreach my $id ($replyto, $messageid) {
@@ -878,23 +886,28 @@ sub update_messages {
           my $newfolder = $jmailmap{$jrolemap{'sent'}}[1];
           $Self->fill_messages($msgid);
           my ($rfc822) = $dbh->selectrow_array("SELECT rfc822 FROM jrawmessage WHERE msgid = ?", {}, $msgid);
+          warn "SENDING $imapname $uidvalidity and moving to $newfolder";
           $Self->backend_cmd('send_email', $rfc822);
           # strip the \Draft flag
-          warn "SENDING $imapname $uidvalidity and moving to $newfolder";
           $Self->backend_cmd('imap_update', $imapname, $uidvalidity, $uid, 0, ["\\Draft"]);
           $Self->backend_cmd('imap_move', $imapname, $uidvalidity, $uid, $newfolder);
           $dirty{$newfolder} = 1;
+          warn "LOOKING FOR message to update";
 
           # add the \Answered flag
           my ($updateid) = $dbh->selectrow_array("SELECT msginreplyto FROM jmessages WHERE msgid = ?", {}, $msgid);
-          next unless $updateid;
+          goto done unless $updateid;
+          warn "FOUND ($updateid)";
           my ($updatemsgid) = $dbh->selectrow_array("SELECT msgid FROM jmessages WHERE msgmessageid = ?", {}, $updateid);
-          next unless $updatemsgid;
+          warn "MAPPED TO $updatemsgid";
+          goto done unless $updatemsgid;
           my ($ifolderid, $updateuid) = $dbh->selectrow_array("SELECT ifolderid, uid FROM imessages WHERE msgid = ?", {}, $updatemsgid);
-	  next unless $ifolderid;
+          warn "MAPPED TO $ifolderid ($updateuid)";
+	  goto done unless $ifolderid;
           my $updatename = $foldermap{$ifolderid}[1];
           my $updatevalidity = $foldermap{$ifolderid}[2];
-          next unless $updatename;
+          goto done unless $updatename;
+          warn "MARKING $updatename $updatevalidity $updateuid as Answered";
           $Self->backend_cmd('imap_update', $updatename, $updatevalidity, $updateuid, 1, ["\\Answered"]);
           $dirty{$updatename} = 1;
         }
@@ -903,6 +916,7 @@ sub update_messages {
           $Self->backend_cmd('imap_move', $imapname, $uidvalidity, $uid, $newfolder);
           $dirty{$newfolder} = 1;
         }
+        done:
       }
       # XXX - handle errors from backend commands
       push @changed, $msgid;
@@ -1043,8 +1057,8 @@ sub _envelopedata {
     msgcc => $envelope->{Cc},
     msgbcc => $envelope->{Bcc},
     msgdate => str2time($envelope->{Date}),
-    msginreplyto => $envelope->{'In-Reply-To'},
-    msgmessageid => $envelope->{'Message-ID'},
+    msginreplyto => _trimh($envelope->{'In-Reply-To'}),
+    msgmessageid => _trimh($envelope->{'Message-ID'}),
   );
 }
 
