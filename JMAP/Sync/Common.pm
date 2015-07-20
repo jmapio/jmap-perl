@@ -160,7 +160,7 @@ sub delete_card {
 # read folder list from the server
 sub folders {
   my $Self = shift;
-  $Self->connect_imap();
+  $Self->connect_imap(1);
   return [$Self->{prefix}, $Self->{folders}];
 }
 

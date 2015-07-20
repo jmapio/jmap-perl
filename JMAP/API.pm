@@ -361,7 +361,7 @@ sub setMailboxes {
   my ($updated, $notUpdated) = $Self->{db}->update_mailboxes($update, sub { $Self->idmap(shift) });
   my ($destroyed, $notDestroyed) = $Self->{db}->destroy_mailboxes($destroy);
 
-  $Self->{db}->sync();
+  $Self->{db}->sync_imap();
 
   my @res;
   push @res, ['mailboxesSet', {

@@ -58,11 +58,15 @@ sub connect_contacts {
 
 sub connect_imap {
   my $Self = shift;
+  my $force = shift;
 
-  if ($Self->{imap}) {
+  if ($Self->{imap} and not $force) {
     $Self->{lastused} = time();
     return $Self->{imap};
   }
+
+  $Self->{imap}->disconnect() if $Self->{imap};
+  delete $Self->{imap};
 
   for (1..3) {
     my $port = 993;

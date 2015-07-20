@@ -130,8 +130,9 @@ sub backend_cmd {
 # call in transaction
 sub sync_folders {
   my $Self = shift;
+  my $force = shift;
 
-  my $data = $Self->backend_cmd('folders', []);
+  my $data = $Self->backend_cmd('folders', $force);
   my ($prefix, $folders) = @$data;
 
   $Self->begin();
@@ -1101,7 +1102,7 @@ sub create_mailboxes {
 
   # (in theory we could save this until the end and resolve the names in after the renames and deletes... but it does mean
   # we can't use ids as referenes...)
-  $Self->sync_folders();
+  $Self->sync_folders(1);
 
   my %createmap;
   foreach my $imapname (keys %idmap) {
