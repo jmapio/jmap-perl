@@ -157,6 +157,8 @@ sub getMailboxes {
   my $Self = shift;
   my $args = shift;
 
+  $Self->sync_folders();  # why not, on startup get data
+
   # XXX - ideally this is transacted inside the DB
   $Self->begin();
   my $dbh = $Self->{db}->dbh();
