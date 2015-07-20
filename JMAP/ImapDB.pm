@@ -829,7 +829,7 @@ sub update_messages {
   my %jmailmap = map { $_->[4] => $_ } @$folderdata;
   my $jmapdata = $dbh->selectall_arrayref("SELECT jmailboxid, role FROM jmailboxes");
   my %jidmap = map { $_->[0] => $_->[1] } @$jmapdata;
-  my %jrolemap = map { $_->[1] => $_->[0] } @$jmapdata;
+  my %jrolemap = map { $_->[1] => $_->[0] } grep { $_-> [1] } @$jmapdata;
 
   my @changed;
   foreach my $ifolderid (keys %updatemap) {
