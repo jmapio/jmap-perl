@@ -1101,7 +1101,7 @@ sub create_mailboxes {
 
   # (in theory we could save this until the end and resolve the names in after the renames and deletes... but it does mean
   # we can't use ids as referenes...)
-  $Self->sync_folders();
+  $Self->sync_folders() if keys %idmap;
 
   my %createmap;
   foreach my $imapname (keys %idmap) {
@@ -1144,6 +1144,8 @@ sub update_mailboxes {
     $Self->backend_cmd('rename_mailbox', $oldname, $imapname) if $oldname ne $imapname;
     push @updated, $id;
   }
+
+  $Self->sync_folders() if @updated;
 
   return (\@updated, \%notupdated);
 }
