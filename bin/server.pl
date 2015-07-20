@@ -628,6 +628,7 @@ sub PushToHandle {
 
 sub PushEvent {
   my $Channel = shift;
+  $Channel =~ s/:.*//;
   my %vals = @_;
   print "PUSH EVENT $Channel " . encode_json(\%vals) . "\n";
   foreach my $Fd (keys %{$PushMap{$Channel}{handles}}) {

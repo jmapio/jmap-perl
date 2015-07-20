@@ -38,7 +38,7 @@ my %TABLE2GROUPS = (
   jcontactgroups => ['ContactGroups'],
   jcontactgroupmap => ['ContactGroups'],
   jcontacts => ['Contacts'],
-)
+);
 
 sub new {
   my $class = shift;
@@ -103,10 +103,10 @@ sub commit {
   # push an update if anything to tell..
   if ($t->{modseq} and $Self->{change_cb}) {
     my %map;
-    my $state = $t->{modseq};
+    my $state = "$t->{modseq}";
     foreach my $table (keys %{$t->{tables}}) {
       foreach my $group (@{$TABLE2GROUPS{$table}}) {
-        $map{$group} = state;
+        $map{$group} = $state;
       }
     }
     $Self->{change_cb}->($Self, \%map);
@@ -1054,6 +1054,13 @@ CREATE TABLE IF NOT EXISTS account (
   picture TEXT,
   jdeletedmodseq INTEGER,
   jhighestmodseq INTEGER,
+  jstateMailboxes TEXT,
+  jstateThreads TEXT,
+  jstateMessages TEXT,
+  jstateContacts TEXT,
+  jstateContactGroups TEXT,
+  jstateCalendars TEXT,
+  jstateCalendarEvents TEXT,
   mtime DATE
 );
 EOF
