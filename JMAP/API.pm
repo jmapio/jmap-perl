@@ -402,8 +402,7 @@ sub _build_sort {
     die unless $fieldmap{$field};
     push @items, "$fieldmap{$field} $dir";
   }
-  # XXX - sort by the from/subject fields
-  # XXX - threads?
+  push @items, "msgid desc"; # guarantee stable
   return join(', ', @items);
 }
 
