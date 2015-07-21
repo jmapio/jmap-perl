@@ -312,7 +312,19 @@ sub handle_cb_google {
   }
 
   getdb();
-  $db->setuser($email, $gmaildata->{refresh_token}, $data->{name}, $data->{picture});
+  #$db->setuser(username => $email, password => $gmaildata->{refresh_token}, email => $data->{name}, picture => $data->{picture});
+  $db->setuser(
+    username => $email,
+    password => $gmaildata->{refresh_token},
+    imapHost => 'imap.gmail.com',
+    imapPort => '993',
+    imapSSL => 1,
+    smtpHost => 'smtp.gmail.com',
+    smtpPort => 465,
+    smtpSSL => 1,
+    caldavURL => "https://apidata.googleusercontent.com/caldav/v2",
+    carddavURL => "https://www.googleapis.com/.well-known/carddav",
+  );
   $db->firstsync();
 
   return ['registered', [$accountid, $email]];
@@ -343,7 +355,16 @@ sub handle_signup {
     $dbh->do("INSERT INTO accounts (email, accountid, type) VALUES (?, ?, ?)", {}, $detail->[1], $accountid, 'imap');
   }
   getdb();
-  $db->setuser(@$detail);
+  $db->setuser(
+    username => $detail->[1],
+    password => $detail->[2],
+    imapHost => $detail->[0],
+    imapPort => 993,
+    imapSSL => 1,
+    smtpHost => $detail->[0],
+    smtpPort => 465,
+    smtpSSL => 1,
+  );
   $db->firstsync();
 
   return ['signedup', [$accountid, $detail->[1]]];

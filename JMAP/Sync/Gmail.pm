@@ -125,3 +125,4 @@ sub send_email {
   });
 }
 
+1;

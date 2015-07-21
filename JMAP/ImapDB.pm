@@ -107,16 +107,16 @@ sub backend_cmd {
   unless ($Self->{backend}) {
     my $config = $Self->access_token();
     my $backend;
-    if ($config->{hostname} eq 'gmail') {
-      $backend = JMAP::Sync::Gmail->new($config) || die "failed to setup $auth->[1]";
-    } elsif ($config->{hostname} eq 'imap.mail.me.com') {
-      $backend = JMAP::Sync::ICloud->new($config) || die "failed to setup $auth->[1]";
-    } elsif ($config->{hostname} eq 'mail.messagingengine.com') {
-      $backend = JMAP::Sync::Fastmail->new($config) || die "failed to setup $auth->[1]";
-    } elsif ($config->{hostname} eq 'imap.mail.yahoo.com') {
-      $backend = JMAP::Sync::Yahoo->new($config) || die "failed to setup $auth->[1]";
+    if ($config->{imapHost} eq 'imap.gmail.com') {
+      $backend = JMAP::Sync::Gmail->new($config) || die "failed to setup $config->{username}";
+    } elsif ($config->{imapHost} eq 'imap.mail.me.com') {
+      $backend = JMAP::Sync::ICloud->new($config) || die "failed to setup $config->{username}";
+    } elsif ($config->{imapHost} eq 'mail.messagingengine.com') {
+      $backend = JMAP::Sync::Fastmail->new($config) || die "failed to setup $config->{username}";
+    } elsif ($config->{imapHost} eq 'imap.mail.yahoo.com') {
+      $backend = JMAP::Sync::Yahoo->new($config) || die "failed to setup $config->{username}";
     } else {
-      $backend = JMAP::Sync::Standard->new($config) || die "failed to setup $auth->[1]";
+      $backend = JMAP::Sync::Standard->new($config) || die "failed to setup $config->{username}";
     }
     $Self->{backend} = $backend;
   }
@@ -736,6 +736,7 @@ sub do_folder {
   if ($res->{new}) {
     my $new = $res->{new}[1];
     foreach my $uid (sort { $a <=> $b } keys %$new) {
+      my ($msgid, $thrid, @labels);
       if ($Self->{is_gmail}) {
         ($msgid, $thrid) = ($new->{"x-gm-msgid"}, $new->{"x-gm-thrid"});
         @labels = $forcelabel ? ($forcelabel) : @{$new->{"x-gm-labels"}};
