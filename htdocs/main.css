@@ -13,7 +13,7 @@ blockquote {
 html {
     background: #fff;
     color: #1f1f1f;
-    font: 15px/1.55 "Open Sans", "Helvetica Neue", Arial, sans-serif;
+    font: 16px/1.55 "Source Sans Pro", "Helvetica Neue", Arial, sans-serif;
 }
 table {
     margin: 10px 0 15px 0;
@@ -45,9 +45,9 @@ h3,
 h4,
 h5,
 h6 {
-    color: #404040;
-    line-height: 1.2;
     margin: 15px 0;
+    line-height: 1.2;
+    color: #404040;
 }
 h1 {
     border-bottom: 1px solid #eee;
@@ -76,24 +76,24 @@ li {
     margin: 5px 0;
 }
 blockquote {
-    padding: 13px 13px 21px 15px;
     margin-bottom: 18px;
+    padding: 13px 13px 21px 15px;
     font-family:georgia,serif;
     font-style: italic;
 }
 blockquote:before {
     content:"\201C";
-    font-size:40px;
     margin-left:-10px;
-    font-family:georgia,serif;
     color:#eee;
+    font-family:georgia,serif;
+    font-size:40px;
 }
 blockquote p {
-    font-size: 14px;
-    font-weight: 300;
-    line-height: 18px;
     margin-bottom: 0;
+    line-height: 18px;
+    font-size: 15px;
     font-style: italic;
+    font-weight: 300;
 }
 code, pre {
     font-family: Menlo, Monaco, Andale Mono, Courier New, monospace;
@@ -150,8 +150,8 @@ sup {
         top: 0;
         left: 0;
         right: 0;
-        height: 44px;
-        line-height: 44px;
+        height: 49px;
+        line-height: 49px;
         border-bottom: 1px solid #1f1f1f;
         background: #366683;
         color: #fff;
@@ -159,7 +159,7 @@ sup {
     #logo {
         padding: 0 30px;
         font-size: 32px;
-        font-weight: bold;
+        font-weight: 600;
     }
     #nav {
         position: absolute;
@@ -182,6 +182,7 @@ sup {
         margin: 0 3px;
         padding: 0 10px;
         color: #fff;
+        font-size: 17px;
         text-decoration: none;
     }
     .nav-link:hover {
@@ -198,14 +199,14 @@ sup {
     }
     #last-update {
         margin: -7px 0 15px;
-        font-size: 13px;
+        font-size: 14px;
         text-align: center;
     }
     /* Sidebar (Table of Contents) */
     aside {
         position: fixed;
         overflow: auto;
-        top: 45px;
+        top: 50px;
         bottom: 0;
         width: 229px;
         border-right: 1px solid #eee;
@@ -216,7 +217,7 @@ sup {
         margin: 0;
         padding: 15px 0;
         list-style: none;
-        font-size: 13px;
+        font-size: 14px;
     }
     .toc-selected {
         position: absolute;
