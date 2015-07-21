@@ -3,7 +3,6 @@
 package JMAP::API;
 
 use JMAP::DB;
-use JMAP::Config;
 use JSON;
 use strict;
 use warnings;

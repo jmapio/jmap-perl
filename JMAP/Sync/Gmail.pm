@@ -6,7 +6,6 @@ use warnings;
 package JMAP::Sync::Gmail;
 use base qw(JMAP::Sync::Common);
 
-use JMAP::Config;
 use Mail::GmailTalk;
 use JSON::XS qw(encode_json decode_json);
 use Email::Simple;

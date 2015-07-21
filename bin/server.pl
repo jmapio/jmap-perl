@@ -3,7 +3,6 @@
 use lib '/home/jmap/jmap-perl';
 
 #use Mail::IMAPTalk qw(:trace);
-use JMAP::Config;
 use HTML::GenerateUtil qw(escape_html escape_uri);
 use strict;
 use warnings;
