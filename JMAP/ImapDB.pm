@@ -143,7 +143,7 @@ sub sync_folders {
   my %getstatus;
   foreach my $name (sort keys %$folders) {
     my $sep = $folders->{$name}[0];
-    my $role = lc $ROLE_MAP{lc $folders->{$name}[4]};
+    my $role = $ROLE_MAP{$folders->{$name}[1]};
     my $label = $role || $folders->{$name}[1];
     my $id = $ibylabel{$label}[0];
     if ($id) {
@@ -211,7 +211,7 @@ sub sync_jmailboxes {
     $fname =~ s/^INBOX\.//;
     # check for roles first
     my @bits = split "[$folder->[1]]", $fname;
-    my $role = $ROLE_MAP{lc $fname};
+    my $role = $ROLE_MAP{lc $folder->[3]};
     my $id = 0;
     my $parentId = 0;
     my $name;

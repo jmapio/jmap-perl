@@ -61,6 +61,9 @@ sub connect_calendars {
 sub connect_contacts {
   my $Self = shift;
 
+  # XXX - until we fix it
+  return;
+
   if ($Self->{contacts}) {
     $Self->{lastused} = time();
     return $Self->{contacts};

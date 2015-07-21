@@ -183,13 +183,16 @@ sub folders {
   foreach my $folder (@folders) {
     my ($role) = grep { not $KNOWN_SPECIALS{lc $_} } @{$folder->[0]};
     my $name = $folder->[2];
-    my $label = $role;
-    unless ($label) {
+    my $label;
+    if ($role) {
+      $label = lc $role;
+    }
+    else {
       $label = $folder->[2];
       $label =~ s{^$prefix}{};
       $label =~ s{^[$folder->[1]]}{}; # just in case prefix was missing sep
     }
-    $folders{$name} = [$folder->[1], lc $label];
+    $folders{$name} = [$folder->[1], $label];
   }
 
   return [$prefix, \%folders];
