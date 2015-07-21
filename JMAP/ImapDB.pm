@@ -713,8 +713,8 @@ sub do_folder {
     foreach my $uid (sort { $a <=> $b } keys %$new) {
       my ($msgid, $thrid, @labels);
       if ($Self->{is_gmail}) {
-        ($msgid, $thrid) = ($new->{"x-gm-msgid"}, $new->{"x-gm-thrid"});
-        @labels = $forcelabel ? ($forcelabel) : @{$new->{"x-gm-labels"}};
+        ($msgid, $thrid) = ($new->{$uid}{"x-gm-msgid"}, $new->{$uid}{"x-gm-thrid"});
+        @labels = $forcelabel ? ($forcelabel) : @{$new->{$uid}{"x-gm-labels"}};
       }
       else {
         ($msgid, $thrid) = $Self->calcmsgid($imapname, $uid, $new->{$uid});
@@ -738,14 +738,14 @@ sub do_folder {
     foreach my $uid (sort { $a <=> $b } keys %$new) {
       my ($msgid, $thrid, @labels);
       if ($Self->{is_gmail}) {
-        ($msgid, $thrid) = ($new->{"x-gm-msgid"}, $new->{"x-gm-thrid"});
-        @labels = $forcelabel ? ($forcelabel) : @{$new->{"x-gm-labels"}};
+        ($msgid, $thrid) = ($new->{$uid}{"x-gm-msgid"}, $new->{$uid}{"x-gm-thrid"});
+        @labels = $forcelabel ? ($forcelabel) : @{$new->{$uid}{"x-gm-labels"}};
       }
       else {
         ($msgid, $thrid) = $Self->calcmsgid($imapname, $uid, $new->{$uid});
         @labels = ($forcelabel);
       }
-      $Self->new_record($ifolderid, $uid, $new->{$uid}{'flags'}, [$forcelabel], $new->{$uid}{envelope}, str2time($new->{$uid}{internaldate}), $msgid, $thrid, $new->{$uid}{'rfc822.size'});
+      $Self->new_record($ifolderid, $uid, $new->{$uid}{'flags'}, \@labels, $new->{$uid}{envelope}, str2time($new->{$uid}{internaldate}), $msgid, $thrid, $new->{$uid}{'rfc822.size'});
     }
   }
 
