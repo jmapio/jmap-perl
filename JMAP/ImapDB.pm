@@ -620,8 +620,9 @@ sub firstsync {
     $Self->do_folder($ifolderid, undef, 50);
   }
   else {
-    my $ifolderid = $labels->{"inbox"}[0];
-    $Self->do_folder($ifolderid, "inbox", 50);
+    my $data = $Self->dbh->selectall_arrayref("SELECT ifolderid, imapname FROM ifolders");
+    my ($folder) = grep { lc $_->[1] eq 'inbox' } @$data;
+    $Self->do_folder($folder->[0], "inbox", 50);
   }
 }
 

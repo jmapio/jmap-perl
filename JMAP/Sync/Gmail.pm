@@ -149,7 +149,7 @@ sub imap_labels {
     return \%res;
   }
 
-  $imap->store($uids, "x-gm-labels" "(@$labels)");
+  $imap->store($uids, "x-gm-labels", "(@$labels)");
   _unselect($imap);
 
   $res{updated} = $uids;
