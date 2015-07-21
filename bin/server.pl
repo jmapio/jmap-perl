@@ -18,7 +18,7 @@ use AnyEvent::Handle;
 use AnyEvent::Socket;
 use AnyEvent::Util;
 use AnyEvent::HTTP;
-use JMAP::GmailDB;
+use JMAP::Sync::Gmail;
 use JSON::XS qw(encode_json decode_json);
 use Encode qw(encode_utf8);
 
@@ -714,7 +714,7 @@ sub HandleKeepAlive {
 
 sub do_register {
   my ($httpd, $req) = @_;
-  my $O = JMAP::GmailDB::O();
+  my $O = JMAP::Sync::Gmail::O();
   $req->respond({redirect => $O->start(new_uuid_string())});
 };
 

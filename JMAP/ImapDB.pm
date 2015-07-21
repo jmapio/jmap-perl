@@ -90,9 +90,9 @@ sub setuser {
 sub access_data {
   my $Self = shift;
 
-  my $config = $Self->dbh->selectrow_array("SELECT * FROM iserver", {Slice => {}});
+  my $config = $Self->dbh->selectall_arrayref("SELECT * FROM iserver", {Slice => {}});
 
-  return $config
+  return $config->[0];
 }
 
 # synchronous backend for now
@@ -105,7 +105,7 @@ sub backend_cmd {
   Carp::confess("in transaction") if $Self->in_transaction();
 
   unless ($Self->{backend}) {
-    my $config = $Self->access_token();
+    my $config = $Self->access_data();
     my $backend;
     if ($config->{imapHost} eq 'imap.gmail.com') {
       $backend = JMAP::Sync::Gmail->new($config) || die "failed to setup $config->{username}";
@@ -165,7 +165,7 @@ sub sync_folders {
     $dbh->do("DELETE FROM ifolders WHERE ifolderid = ?", {}, $id);
   }
 
-  $Self->dmaybeupdate('iserver', {prefix => $prefix, lastfoldersync => time()});
+  $Self->dmaybeupdate('iserver', {imapPrefix => $prefix, lastfoldersync => time()});
 
   $Self->commit();
 
@@ -571,7 +571,7 @@ sub labels {
 
 sub sync_imap {
   my $Self = shift;
-  my $data = $Self->dbh->selectall_arrayref("SELECT ifolderid, imapname, uidvalidity, highestmodseq, label FROM ifolders");
+  my $data = $Self->dbh->selectall_arrayref("SELECT * FROM ifolders", {Slice => {}});
   if ($Self->{is_gmail}) {
     $data = [ grep { lc $_->{label} eq '\\allmail' or lc $_->{label} eq '\\trash' } @$data ];
   }
@@ -1089,7 +1089,7 @@ sub apply_data {
 
 sub _envelopedata {
   my $data = shift;
-  my $envelope = decode_json($data);
+  my $envelope = decode_json($data || "{}");
   my $encsub = Encode::decode('MIME-Header', $envelope->{Subject});
   return (
     msgsubject => $encsub,

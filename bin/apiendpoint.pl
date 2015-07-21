@@ -18,6 +18,7 @@ use AnyEvent::Gmail;
 use Mail::IMAPTalk;
 use Data::Dumper;
 use AnyEvent::HTTPD;
+use JMAP::Sync::Gmail;
 use JMAP::GmailDB;
 use JMAP::ImapDB;
 use JMAP::DB;
@@ -284,7 +285,7 @@ EOF
 sub handle_cb_google {
   my $code = shift;
 
-  my $O = JMAP::GmailDB::O();
+  my $O = JMAP::Sync::Gmail::O();
   die "NO ACCESS CODE PROVIDED (did you hit cancel?)\n" unless $code;
   my $gmaildata = $O->finish($code);
 

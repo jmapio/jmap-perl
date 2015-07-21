@@ -85,10 +85,8 @@ sub connect_imap {
   }
 
   for (1..3) {
-    $Self->log('debug', "Looking for server for $Self->{auth}{username}");
     my $port = 993;
     my $usessl = $port != 143;  # we use SSL for anything except default
-    $Self->log('debug', "getting imaptalk");
     $Self->{imap} = Mail::GmailTalk->new(
       Server   => 'imap.gmail.com',
       Port     => $port,
@@ -99,7 +97,6 @@ sub connect_imap {
       UseBlocking => $usessl,
     );
     next unless $Self->{imap};
-    $Self->log('debug', "Connected as $Self->{auth}{username}");
     $Self->{lastused} = time();
     return $Self->{imap};
   }
