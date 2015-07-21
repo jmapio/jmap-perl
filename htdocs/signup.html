@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 <link href='https://fonts.googleapis.com/css?family=Source+Sans+Pro:300,400,600,700,400italic' rel='stylesheet' type='text/css'>
-<link href="/main.css" rel="stylesheet" type="text/css">
+<link href="main.css" rel="stylesheet" type="text/css">
 <title>JMAP Proxy</title>
 </head>
 <body>
@@ -21,17 +21,37 @@
 </header>
 <article style="padding:0">
 
-<h1>Good work, your JMAP proxy account is now set up</h1>
+<h1>Set hosts</h1>
 
-<p>$INFO - (<a href="/">back to proxy login page</a>)</p>
+Please confirm hosts below.  IMAP must be on port 993, SMTP on port 587, CalDAV and CardDAV on port 443.
 
-<p>Access your account with the <a href="https://proxy.jmap.io/client/?debug=1&amp;k=$UUID">open source client</a>.</p>
+<form action="/signup" method="post">
+<table border="1">
+<tr>
+  <th>IMAP</th>
+  <td><input type="text" name="imap" value="$IMAP"></td>
+</tr>
+<tr>
+  <th>SMTP</th>
+  <td><input type="text" name="smtp" value="$SMTP"></td>
+</tr>
+<tr>
+  <th>CalDAV</th>
+  <td><input type="text" name="caldav" value="$CALDAV"></td>
+</tr>
+<tr>
+  <th>CardDAV</th>
+  <td><input type="text" name="carddav" value="$CARDDAV"></td>
+</tr>
+<tr>
+  <th>Submit</th>
+  <td><input type="submit" value="Create"></td>
+</tr>
+</table>
+<input type="hidden" name="user" value="$USER" />
+<input type="hidden" name="password" value="$PASSWORD" />
+</form>
 
-<p>You can also POST with the JMAP protocol to <a href="https://proxy.jmap.io/jmap/$UUID/">https://proxy.jmap.io/jmap/$UUID/</a> &ndash; there is no need to use any other form of authentication, the UUID is used by itself for privacy. Yes, we know this isn't enough security for a public service (and we need to implement the JMAP auth spec!), but it will do for testing.</p>
-
-<p>Please note: it may take a few minutes before the API responds to requests, because it needs to do an initial sync of mailbox envelope data.</p>
-
-<p>If you need to reset your account or want to delete all your data, please go to <a href="https://proxy.jmap.io/delete/$UUID">https://proxy.jmap.io/delete/$UUID</a>.  It will redirect you to the homepage when the account is wiped.</p>
-
-</article></body>
+</article>
+</body>
 </html>
