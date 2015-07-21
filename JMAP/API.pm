@@ -1157,7 +1157,7 @@ sub setMessages {
 
   foreach my $cid (sort keys %$created) {
     my $msgid = $created->{$cid}{id};
-    $created->{$cid}{rawUrl} = "https://proxy.jmap.io/raw/$accountid/$msgid";
+    $created->{$cid}{rawUrl} = "https://$ENV{jmaphost}/raw/$accountid/$msgid";
     $created->{$cid}{blobId} = "$msgid";
   }
 

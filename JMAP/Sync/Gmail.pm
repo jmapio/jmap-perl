@@ -50,7 +50,7 @@ sub connect_calendars {
   $Self->{calendars} = Net::GmailCalendars->new(
     user => $Self->{auth}{username},
     access_token => $Self->access_token(),
-    url => "https://apidata.googleusercontent.com/caldav/v2",
+    url => $Self->{auth}{caldavURL},
     is_google => 1,
     expandurl => 1,
   );
@@ -61,9 +61,6 @@ sub connect_calendars {
 sub connect_contacts {
   my $Self = shift;
 
-  # XXX - until we fix it
-  return;
-
   if ($Self->{contacts}) {
     $Self->{lastused} = time();
     return $Self->{contacts};
@@ -72,7 +69,7 @@ sub connect_contacts {
   $Self->{contacts} = Net::GmailContacts->new(
     user => $Self->{auth}{username},
     access_token => $Self->access_token(),
-    url => "https://www.googleapis.com/.well-known/carddav",
+    url => $Self->{auth}{carddavURL},
     expandurl => 1,
   );
 
@@ -88,11 +85,11 @@ sub connect_imap {
   }
 
   for (1..3) {
-    my $port = 993;
-    my $usessl = $port != 143;  # we use SSL for anything except default
+    my $port = $Self->{auth}{imapPort};
+    my $usessl = $Self->{auth}{imapSSL};
     $Self->{imap} = Mail::GmailTalk->new(
-      Server   => 'imap.gmail.com',
-      Port     => $port,
+      Server   => $Self->{auth}{imapHost},
+      Port     => $port;
       Username => $Self->{auth}{username},
       Password => $Self->access_token(),
       # not configurable right now...
@@ -116,9 +113,9 @@ sub send_email {
     from => $Self->{auth}{username},
     transport => Email::Sender::Transport::GmailSMTP->new({
       helo => $ENV{jmaphost},
-      host => 'smtp.gmail.com',
-      port => 465,
-      ssl => 1,
+      host => $Self->{auth}{smtpHost},
+      port => $Self->{auth}{smtpPort},
+      ssl => $Self->{auth}{smtpSSL},
       sasl_username => $Self->{auth}{username},
       access_token => $Self->access_token(),
     })

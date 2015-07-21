@@ -87,6 +87,15 @@ sub setuser {
   $Self->commit();
 }
 
+sub access_token {
+  my $Self = shift;
+  my ($hostname, $username, $password) = $Self->dbh->selectrow_array("SELECT imapHost, username, password FROM iserver");
+
+  return [$hostname, $username, $password];
+}
+
+
+
 sub access_data {
   my $Self = shift;
 

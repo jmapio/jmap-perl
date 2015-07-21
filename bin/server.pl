@@ -477,6 +477,7 @@ sub client_page {
 
     $html =~ s{\$INFO}{Account: <b>$data->[0] ($data->[1])</b>}gs;
     $html =~ s/\$UUID/$accountid/gs;
+    $html =~ s/\$JMAPHOST/$ENV{jmaphost}/gs;
     $req->respond ({ content => ['text/html', $html] });
   }, sub {
     my $cookie = bake_cookie("jmap_$accountid", {value => '', path => '/'});
