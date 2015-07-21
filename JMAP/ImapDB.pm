@@ -769,6 +769,8 @@ sub do_folder {
 
   $Self->commit();
 
+  return $didold if $batchsize;
+
   # need to make changes before counting
   my ($count) = $dbh->selectrow_array("SELECT COUNT(*) FROM imessages WHERE ifolderid = ?", {}, $ifolderid);
   # if we don't know everything, we have to ALWAYS check or moves break
@@ -788,8 +790,6 @@ sub do_folder {
     }
     $Self->commit();
   }
-
-  return $didold;
 }
 
 sub imap_search {
