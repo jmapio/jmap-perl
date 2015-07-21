@@ -422,8 +422,8 @@ sub do_upload {
 
   send_backend_request($accountid, 'upload', [$type, $content], sub {
     my $res = shift;
-    my $html = encode_utf8($json->encode($res));
-    $req->respond ({ content => ['application/json', $html] });
+    my $response = encode_utf8($json->encode($res));
+    $req->respond ({ content => ['application/json', $response] });
     return 1;
   }, mkerr($req));
 }
@@ -652,7 +652,8 @@ sub prod_idler {
 sub PushToHandle {
   my $Handle = shift;
   my %vals = @_;
-  print "PUSH EVENT $Handle " . encode_json(\%vals) . "\n";
+  my $Fd = fileno($Handle->fd);
+  print "PUSH EVENT $Fd " . encode_json(\%vals) . "\n";
   my @Lines = map { "$_: " . (ref($vals{$_}) ? encode_json($vals{$_}) : $vals{$_}) } keys %vals;
   $Handle->push_write(join("\r\n", @Lines) . "\r\n\r\n");
 }

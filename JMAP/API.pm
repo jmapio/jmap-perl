@@ -1044,12 +1044,22 @@ sub getRawMessage {
   return ($type, $data, $filename);
 }
 
+sub get_file {
+  my $Self = shift;
+  my $jfileid = shift;
+
+  my $dbh = $Self->{db}->dbh();
+  my ($type, $content) = $dbh->selectrow_array("SELECT type, content FROM jfiles WHERE jfileid = ?", {}, $jfileid);
+  return unless $content;
+  return ($type, $content);
+}
+
 # or this
 sub uploadFile {
   my $Self = shift;
   my ($type, $content) = @_; # XXX filehandle?
 
-  return $Self->upload_file($type, $content);
+  return $Self->put_file($type, $content);
 }
 
 sub downloadFile {
