@@ -9,7 +9,6 @@ use Data::Dumper;
 use DBI;
 use Carp qw(confess);
 
-use JSON::Config;
 use Data::UUID::LibUUID;
 use IO::LockedFile;
 use JSON::XS qw(encode_json decode_json);
