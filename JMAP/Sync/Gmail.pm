@@ -125,4 +125,37 @@ sub send_email {
   });
 }
 
+sub imap_labels {
+  my $Self = shift;
+  my $imapname = shift;
+  my $olduidvalidity = shift || 0;
+  my $uids = shift;
+  my $labels = shift;
+
+  my $imap = $Self->connect_imap();
+
+  my $r = $imap->select($imapname);
+  die "SELECT FAILED $imapname" unless $r;
+
+  my $uidvalidity = $imap->get_response_code('uidvalidity') + 0;
+
+  my %res = (
+    imapname => $imapname,
+    olduidvalidity => $olduidvalidity,
+    newuidvalidity => $uidvalidity,
+  );
+
+  if ($olduidvalidity != $uidvalidity) {
+    return \%res;
+  }
+
+  $imap->store($uids, "x-gm-labels" "(@$labels)");
+  _unselect($imap);
+
+  $res{updated} = $uids;
+
+  return \%res;
+}
+
+
 1;

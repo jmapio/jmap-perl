@@ -731,7 +731,10 @@ sub do_folder {
   if ($res->{update}) {
     my $changed = $res->{update}[1];
     foreach my $uid (sort { $a <=> $b } keys %$changed) {
-      @labels = $forcelabel ? ($forcelabel) : @{$new->{$uid}{"x-gm-labels"}};
+      my @labels = ($forcelabel);
+      if ($Self->{is_gmail}) {
+        @labels = $forcelabel ? ($forcelabel) : @{$changed->{$uid}{"x-gm-labels"}};
+      }
       $Self->changed_record($ifolderid, $uid, $changed->{$uid}{'flags'}, \@labels);
     }
   }
