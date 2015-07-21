@@ -616,13 +616,14 @@ sub firstsync {
 
   my $labels = $Self->labels();
 
-  my $ifolderid = $labels->{"inbox"}[0];
-  $Self->do_folder($ifolderid, "inbox", 50);
-
-  my $msgids = $Self->dbh->selectcol_arrayref("SELECT msgid FROM imessages WHERE ifolderid = ? ORDER BY uid DESC LIMIT 50", {}, $ifolderid);
-
-  # pre-load the INBOX!
-  $Self->fill_messages(@$msgids);
+  if ($Self->{is_gmail}) {
+    my $ifolderid = $labels->{"\\allmail"}[0];
+    $Self->do_folder($ifolderid, undef, 50);
+  }
+  else {
+    my $ifolderid = $labels->{"inbox"}[0];
+    $Self->do_folder($ifolderid, "inbox", 50);
+  }
 }
 
 sub _trimh {

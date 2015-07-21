@@ -189,7 +189,7 @@ sub folders {
       $label =~ s{^$prefix}{};
       $label =~ s{^[$folder->[1]]}{}; # just in case prefix was missing sep
     }
-    $folders{$name} = [$folder->[1], $label];
+    $folders{$name} = [$folder->[1], lc $label];
   }
 
   return [$prefix, \%folders];
