@@ -652,8 +652,7 @@ sub prod_idler {
 sub PushToHandle {
   my $Handle = shift;
   my %vals = @_;
-  my $Fd = fileno($Handle->fd);
-  print "PUSH EVENT $Fd " . encode_json(\%vals) . "\n";
+  print "PUSH EVENT " . encode_json(\%vals) . "\n";
   my @Lines = map { "$_: " . (ref($vals{$_}) ? encode_json($vals{$_}) : $vals{$_}) } keys %vals;
   $Handle->push_write(join("\r\n", @Lines) . "\r\n\r\n");
 }
