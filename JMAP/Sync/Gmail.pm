@@ -89,7 +89,7 @@ sub connect_imap {
     my $usessl = $Self->{auth}{imapSSL};
     $Self->{imap} = Mail::GmailTalk->new(
       Server   => $Self->{auth}{imapHost},
-      Port     => $port;
+      Port     => $port,
       Username => $Self->{auth}{username},
       Password => $Self->access_token(),
       # not configurable right now...

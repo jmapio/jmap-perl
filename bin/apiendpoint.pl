@@ -325,7 +325,7 @@ sub handle_cb_google {
     smtpSSL => 1,
     caldavURL => "https://apidata.googleusercontent.com/caldav/v2",
     # still broken
-    #carddavURL => "https://www.googleapis.com/.well-known/carddav",
+    carddavURL => "https://www.googleapis.com/.well-known/carddav",
   );
   $db->firstsync();
 
