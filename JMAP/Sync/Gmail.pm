@@ -51,7 +51,6 @@ sub connect_calendars {
     user => $Self->{auth}{username},
     access_token => $Self->access_token(),
     url => $Self->{auth}{caldavURL},
-    is_google => 1,
     expandurl => 1,
   );
 
