@@ -60,39 +60,39 @@ my %ROLE_MAP = (
 
 sub setuser {
   my $Self = shift;
-  my ($hostname, $username, $password) = @_;
+  my %args = @_;
+
   $Self->begin();
-  my $data = $Self->dbh->selectrow_arrayref("SELECT hostname, username, password FROM iserver");
+
+  my $data = $Self->dbh->selectrow_arrayref("SELECT username FROM iserver");
   if ($data and $data->[0]) {
-    $Self->dmaybeupdate('iserver', {hostname => $hostname, username => $username, password => $password});
+    $Self->dmaybeupdate('iserver', \%args);
   }
   else {
-    $Self->dinsert('iserver', {
-      hostname => $hostname,
-      username => $username,
-      password => $password,
-    });
+    $Self->dinsert('iserver', \%args);
   }
+
   my $user = $Self->dbh->selectrow_arrayref("SELECT email FROM account");
   if ($user and $user->[0]) {
-    $Self->dmaybeupdate('account', {email => $username});
+    $Self->dmaybeupdate('account', {email => $args{username}});
   }
   else {
     $Self->dinsert('account', {
-      email => $username,
+      email => $args{username},
       jdeletedmodseq => 0,
       jhighestmodseq => 1,
     });
   }
+
   $Self->commit();
 }
 
-sub access_token {
+sub access_data {
   my $Self = shift;
 
-  my ($hostname, $username, $password) = $Self->dbh->selectrow_array("SELECT hostname, username, password FROM iserver");
+  my $config = $Self->dbh->selectrow_array("SELECT * FROM iserver", {Slice => {}});
 
-  return [$hostname, $username, $password];
+  return $config
 }
 
 # synchronous backend for now
@@ -105,8 +105,7 @@ sub backend_cmd {
   Carp::confess("in transaction") if $Self->in_transaction();
 
   unless ($Self->{backend}) {
-    my $auth = $Self->access_token();
-    my $config = { hostname => $auth->[0], username => $auth->[1], password => $auth->[2] };
+    my $config = $Self->access_token();
     my $backend;
     if ($config->{hostname} eq 'gmail') {
       $backend = JMAP::Sync::Gmail->new($config) || die "failed to setup $auth->[1]";
@@ -573,25 +572,40 @@ sub labels {
 sub sync_imap {
   my $Self = shift;
   my $data = $Self->dbh->selectall_arrayref("SELECT ifolderid, imapname, uidvalidity, highestmodseq, label FROM ifolders");
-  my @imapnames = map { $_->[1] } @$data;
+  if ($Self->{is_gmail}) {
+    $data = [ grep { lc $_->{label} eq '\\allmail' or lc $_->{label} eq '\\trash' } @$data ];
+  }
+
+  my @imapnames = map { $_->{imapname} } @$data;
   my $status = $Self->backend_cmd('imap_status', \@imapnames);
 
   foreach my $row (@$data) {
     # XXX - better handling of UIDvalidity change?
-    next if ($status->{$row->[1]}{uidvalidity} == $row->[2] and $status->{$row->[1]}{highestmodseq} and $status->{$row->[1]}{highestmodseq} == $row->[3]);
-    $Self->do_folder($row->[0], $row->[4]);
+    next if ($status->{$row->{imapname}}{uidvalidity} == $row->{uidvalidity} and $status->{$row->{imapname}}{highestmodseq} and $status->{$row->{imapname}}{highestmodseq} == $row->{highestmodseq});
+    my $label = $row->{label};
+    $label = undef if lc $label eq '\\allmail';
+    $Self->do_folder($row->{ifolderid}, $label);
   }
 }
 
 sub backfill {
   my $Self = shift;
-  my $data = $Self->dbh->selectall_arrayref("SELECT ifolderid,label FROM ifolders WHERE uidnext > 1 AND uidfirst > 1 ORDER BY mtime");
+  my $data = $Self->dbh->selectall_arrayref("SELECT * FROM ifolders WHERE uidnext > 1 AND uidfirst > 1 ORDER BY mtime", {Slice => {}});
+  if ($Self->{is_gmail}) {
+    $data = [ grep { lc $_->{label} eq '\\allmail' or lc $_->{label} eq '\\trash' } @$data ];
+  }
+
   return unless @$data;
-  my $rest = 50;
+
+  my $rest = 500;
   foreach my $row (@$data) {
-    $rest -= $Self->do_folder(@$row, $rest);
+    my $id = $row->{ifolderid};
+    my $label = $row->{label};
+    $label = undef if lc $label eq '\\allmail';
+    $rest -= $Self->do_folder($id, $label, $rest);
     last if $rest < 10;
   }
+
   return 1;
 }
 
@@ -657,17 +671,21 @@ sub do_folder {
   die "NO SUCH FOLDER $ifolderid" unless $imapname;
 
   my %fetches;
+  my @immutable = qw(internaldate envelope rfc822.size);
+  if ($Self->{is_gmail}) {
+    push @immutable, qw(x-gm-msgid x-gm-thrid x-gm-labels);
+  }
 
   if ($batchsize) {
     if ($uidfirst > 1) {
       my $end = $uidfirst - 1;
       $uidfirst -= $batchsize;
       $uidfirst = 1 if $uidfirst < 1;
-      $fetches{backfill} = [$uidfirst, $end, [qw(internaldate envelope rfc822.size)]];
+      $fetches{backfill} = [$uidfirst, $end, \@immutable];
     }
   }
   else {
-    $fetches{new} = [$uidnext, '*', [qw(internaldate envelope rfc822.size)]];
+    $fetches{new} = [$uidnext, '*', \@immutable];
     $fetches{update} = [$uidfirst, $uidnext - 1, [], $highestmodseq];
   }
 
@@ -693,9 +711,17 @@ sub do_folder {
     my $new = $res->{backfill}[1];
     $Self->{backfilling} = 1;
     foreach my $uid (sort { $a <=> $b } keys %$new) {
-      my ($msgid, $thrid) = $Self->calcmsgid($imapname, $uid, $new->{$uid});
+      my ($msgid, $thrid, @labels);
+      if ($Self->{is_gmail}) {
+        ($msgid, $thrid) = ($new->{"x-gm-msgid"}, $new->{"x-gm-thrid"});
+        @labels = $forcelabel ? ($forcelabel) : @{$new->{"x-gm-labels"}};
+      }
+      else {
+        ($msgid, $thrid) = $Self->calcmsgid($imapname, $uid, $new->{$uid});
+        @labels = ($forcelabel);
+      }
       $didold++;
-      $Self->new_record($ifolderid, $uid, $new->{$uid}{'flags'}, [$forcelabel], $new->{$uid}{envelope}, str2time($new->{$uid}{internaldate}), $msgid, $thrid, $new->{$uid}{'rfc822.size'});
+      $Self->new_record($ifolderid, $uid, $new->{$uid}{'flags'}, \@labels, $new->{$uid}{envelope}, str2time($new->{$uid}{internaldate}), $msgid, $thrid, $new->{$uid}{'rfc822.size'});
     }
     delete $Self->{backfilling};
   }
@@ -710,7 +736,14 @@ sub do_folder {
   if ($res->{new}) {
     my $new = $res->{new}[1];
     foreach my $uid (sort { $a <=> $b } keys %$new) {
-      my ($msgid, $thrid) = $Self->calcmsgid($imapname, $uid, $new->{$uid});
+      if ($Self->{is_gmail}) {
+        ($msgid, $thrid) = ($new->{"x-gm-msgid"}, $new->{"x-gm-thrid"});
+        @labels = $forcelabel ? ($forcelabel) : @{$new->{"x-gm-labels"}};
+      }
+      else {
+        ($msgid, $thrid) = $Self->calcmsgid($imapname, $uid, $new->{$uid});
+        @labels = ($forcelabel);
+      }
       $Self->new_record($ifolderid, $uid, $new->{$uid}{'flags'}, [$forcelabel], $new->{$uid}{envelope}, str2time($new->{$uid}{internaldate}), $msgid, $thrid, $new->{$uid}{'rfc822.size'});
     }
   }
@@ -749,6 +782,10 @@ sub imap_search {
   my $dbh = $Self->dbh();
   my $data = $dbh->selectall_arrayref("SELECT * FROM ifolders", {Slice => {}});
 
+  if ($Self->{is_gmail}) {
+    $data = [ grep { lc $_->{label} eq '\\allmail' or lc $_->{label} eq '\\trash' } @$data ];
+  }
+
   my %matches;
   foreach my $item (@$data) {
     my $from = $item->{uidfirst};
@@ -786,12 +823,13 @@ sub import_message {
   my %flags = @_;
 
   my $dbh = $Self->dbh();
-  my $folderdata = $dbh->selectall_arrayref("SELECT ifolderid, imapname, label, jmailboxid FROM ifolders");
-  my %foldermap = map { $_->[0] => $_ } @$folderdata;
-  my %jmailmap = map { $_->[3] => $_ } grep { $_->[3] } @$folderdata;
+  my $folderdata = $dbh->selectall_arrayref("SELECT * FROM ifolders", {Slice => {}});
+  my %foldermap = map { $_->{ifolderid} => $_ } @$folderdata;
+  my %jmailmap = map { $_->{jmailboxid} => $_ } grep { $_->{jmailboxid} } @$folderdata;
 
   # store to the first named folder - we can use labels on gmail to add to other folders later.
-  my $imapname = $jmailmap{$mailboxIds->[0]}[1];
+  my ($id, @others) = @$mailboxIds;
+  my $imapname = $jmailmap{$id}{imapname};
 
   my @flags;
   push @flags, "\\Seen" unless $flags{isUnread};
@@ -803,15 +841,21 @@ sub import_message {
   my $date = Date::Format::time2str('%e-%b-%Y %T %z', $internaldate);
 
   my $data = $Self->backend_cmd('imap_append', $imapname, "(@flags)", $date, $rfc822);
-  warn Dumper($data);
   # XXX - compare $data->[2] with uidvalidity
   my $uid = $data->[3];
 
   # make sure we're up to date: XXX - imap only
-  $Self->do_folder($jmailmap{$mailboxIds->[0]}[0], $jmailmap{$mailboxIds->[0]}[2]);
+  if ($Self->{is_gmail}) {
+    my ($am) = grep { lc $_->{label} eq '\\allmail' } @$folderdata;
+    $Self->do_folder($am->{ifolderid}, undef);
+  }
+  else {
+    my $fdata = $jmailmap{$mailboxIds->[0]};
+    $Self->do_folder($fdata->{ifolderid}, $fdata->{label});
+  }
 
   $Self->begin();
-  my ($msgid, $thrid) = $Self->dbh->selectrow_array("SELECT msgid, thrid FROM imessages WHERE ifolderid = ? AND uid = ?", {}, $jmailmap{$mailboxIds->[0]}[0], $uid);
+  my ($msgid, $thrid) = $Self->dbh->selectrow_array("SELECT msgid, thrid FROM imessages WHERE ifolderid = ? AND uid = ?", {}, $jmailmap{$id}[0], $uid);
 
   # save us having to download it again
   $Self->add_raw_message($msgid, $rfc822);
@@ -847,7 +891,6 @@ sub update_messages {
   my %jrolemap = map { $_->[1] => $_->[0] } grep { $_-> [1] } @$jmapdata;
 
   my @changed;
-  my %dirty;
   foreach my $ifolderid (keys %updatemap) {
     # XXX - merge similar actions?
     my $imapname = $foldermap{$ifolderid}[1];
@@ -860,7 +903,6 @@ sub update_messages {
         $notchanged{$msgid} = "No folder found";
         next;
       }
-      $dirty{$imapname} = 1;
       if (exists $action->{isUnread}) {
         my $bool = !$action->{isUnread};
         my @flags = ("\\Seen");
@@ -881,42 +923,40 @@ sub update_messages {
       }
       if (exists $action->{mailboxIds}) {
         my @mboxes = map { $idmap->($_) } @{$action->{mailboxIds}};
-        my $id = $mboxes[0]; # there can be only one
-        if ($id eq 'outbox') {
-          my $newfolder = $jmailmap{$jrolemap{'sent'}}[1];
+        my ($has_outbox) = grep { $_ eq 'outbox' } @mboxes;
+        my (@others) = grep { $_ ne 'outbox' } @mboxes;
+        if ($has_outbox) {
+          # move to sent when we're done
+          push @others, $jmailmap{$jrolemap{'sent'}}[0];
           $Self->fill_messages($msgid);
           my ($rfc822) = $dbh->selectrow_array("SELECT rfc822 FROM jrawmessage WHERE msgid = ?", {}, $msgid);
-          warn "SENDING $imapname $uidvalidity and moving to $newfolder";
           $Self->backend_cmd('send_email', $rfc822);
+
           # strip the \Draft flag
           $Self->backend_cmd('imap_update', $imapname, $uidvalidity, $uid, 0, ["\\Draft"]);
-          $Self->backend_cmd('imap_move', $imapname, $uidvalidity, $uid, $newfolder);
-          $dirty{$newfolder} = 1;
-          warn "LOOKING FOR message to update";
 
-          # add the \Answered flag
+          # add the \Answered flag to our in-reply-to
           my ($updateid) = $dbh->selectrow_array("SELECT msginreplyto FROM jmessages WHERE msgid = ?", {}, $msgid);
           goto done unless $updateid;
-          warn "FOUND ($updateid)";
           my ($updatemsgid) = $dbh->selectrow_array("SELECT msgid FROM jmessages WHERE msgmessageid = ?", {}, $updateid);
-          warn "MAPPED TO $updatemsgid";
           goto done unless $updatemsgid;
           my ($ifolderid, $updateuid) = $dbh->selectrow_array("SELECT ifolderid, uid FROM imessages WHERE msgid = ?", {}, $updatemsgid);
-          warn "MAPPED TO $ifolderid ($updateuid)";
-	  goto done unless $ifolderid;
+          goto done unless $ifolderid;
           my $updatename = $foldermap{$ifolderid}[1];
           my $updatevalidity = $foldermap{$ifolderid}[2];
           goto done unless $updatename;
-          warn "MARKING $updatename $updatevalidity $updateuid as Answered";
           $Self->backend_cmd('imap_update', $updatename, $updatevalidity, $updateuid, 1, ["\\Answered"]);
-          $dirty{$updatename} = 1;
-        }
-        else {
-          my $newfolder = $jmailmap{$id}[1];
-          $Self->backend_cmd('imap_move', $imapname, $uidvalidity, $uid, $newfolder);
-          $dirty{$newfolder} = 1;
         }
         done:
+        if ($Self->{is_gmail}) {
+          my @labels = grep { lc $_ ne '\\allmail' } map { $jmailmap{$_}[2] || $jmailmap{$_}[1] } @others;
+          $Self->backend_cmd('imap_labels', $imapname, $uidvalidity, $uid, \@labels);
+        }
+        else {
+          my $id = $others[0];
+          my $newfolder = $jmailmap{$id}[1];
+          $Self->backend_cmd('imap_move', $imapname, $uidvalidity, $uid, $newfolder);
+        }
       }
       # XXX - handle errors from backend commands
       push @changed, $msgid;
@@ -972,7 +1012,7 @@ sub deleted_record {
 
   $Self->ddelete('imessages', {ifolderid => $folder, uid => $uid});
 
-  $Self->ddirty('jmessages', {}, {msgid => $msgid}); # dump modeseq
+  $Self->ddirty('jmessages', {}, {msgid => $msgid}); # bump modeseq
   $Self->delete_message_from_mailbox($msgid, $jmailboxid);
 }
 
@@ -1127,7 +1167,7 @@ sub create_mailboxes {
       $imapname = "$parentName$sep$imapname";
     }
     else {
-      my ($prefix) = $dbh->selectrow_array("SELECT prefix FROM iserver");
+      my ($prefix) = $dbh->selectrow_array("SELECT imapPrefix FROM iserver");
       $imapname = "$prefix$imapname";
     }
 
@@ -1174,7 +1214,7 @@ sub update_mailboxes {
       $imapname = "$parentName$sep$imapname";
     }
     else {
-      my ($prefix) = $dbh->selectrow_array("SELECT prefix FROM iserver");
+      my ($prefix) = $dbh->selectrow_array("SELECT imapPrefix FROM iserver");
       $prefix = '' unless $prefix;
       $imapname = "$prefix$imapname";
     }
@@ -1478,8 +1518,15 @@ sub _initdb {
 CREATE TABLE IF NOT EXISTS iserver (
   username TEXT PRIMARY KEY,
   password TEXT,
-  hostname TEXT,
-  prefix TEXT,
+  imapHost TEXT,
+  imapPort INTEGER,
+  imapSSL INTEGER,
+  imapPrefix TEXT,
+  smtpHost TEXT,
+  smtpPort INTEGER,
+  smtpSSL INTEGER,
+  caldavURL TEXT,
+  carddavURL TEXT,
   lastfoldersync DATE,
   mtime DATE NOT NULL
 );
@@ -1517,6 +1564,8 @@ CREATE TABLE IF NOT EXISTS imessages (
   mtime DATE NOT NULL
 );
 EOF
+
+# not used for Gmail, but it doesn't hurt to have it
   $dbh->do(<<EOF);
 CREATE TABLE IF NOT EXISTS ithread (
   messageid TEXT PRIMARY KEY,
@@ -1530,6 +1579,7 @@ CREATE TABLE IF NOT EXISTS icalendars (
   href TEXT,
   name TEXT,
   isReadOnly INTEGER,
+  sortOrder INTEGER,
   color TEXT,
   syncToken TEXT,
   jcalendarid INTEGER,
@@ -1556,12 +1606,15 @@ CREATE TABLE IF NOT EXISTS iaddressbooks (
   href TEXT,
   name TEXT,
   isReadOnly INTEGER,
+  sortOrder INTEGER,
   syncToken TEXT,
   jaddressbookid INTEGER,
   mtime DATE NOT NULL
 );
 EOF
 
+# XXX - should we store 'kind' in this?  Means we know which j table to update
+# if someone reuses a UID from a contact to a group or vice versa...
   $dbh->do(<<EOF);
 CREATE TABLE IF NOT EXISTS icards (
   icardid INTEGER PRIMARY KEY NOT NULL,

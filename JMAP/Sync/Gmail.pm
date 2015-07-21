@@ -13,8 +13,31 @@ use Email::Sender::Simple qw(sendmail);
 use Email::Sender::Transport::GmailSMTP;
 use Net::GmailCalendars;
 use Net::GmailContacts;
+use OAuth2::Tiny;
+use IO::All;
 
 my %KNOWN_SPECIALS = map { lc $_ => 1 } qw(\\HasChildren \\HasNoChildren \\NoSelect);
+
+my $O;
+sub O {
+  unless ($O) {
+    my $data = io->file("/home/jmap/jmap-perl/config.json")->slurp;
+    my $config = decode_json($data);
+    $O = OAuth2::Tiny->new(%$config);
+  }
+  return $O;
+}
+
+sub access_token {
+  my $Self = shift;
+  unless ($Self->{access_token}) {
+    my $refresh_token = $Self->{auth}{password};
+    my $O = $Self->O();
+    my $data = $O->refresh($refresh_token);
+    $Self->{access_token} = $data->{access_token};
+  }
+  return $Self->{access_token};
+}
 
 sub connect_calendars {
   my $Self = shift;
@@ -26,7 +49,7 @@ sub connect_calendars {
 
   $Self->{calendars} = Net::GmailCalendars->new(
     user => $Self->{auth}{username},
-    access_token => $Self->{auth}{access_token},
+    access_token => $Self->access_token(),
     url => "https://apidata.googleusercontent.com/caldav/v2",
     is_google => 1,
     expandurl => 1,
@@ -45,7 +68,7 @@ sub connect_contacts {
 
   $Self->{contacts} = Net::GmailContacts->new(
     user => $Self->{auth}{username},
-    access_token => $Self->{auth}{access_token},
+    access_token => $Self->access_token(),
     url => "https://www.googleapis.com/.well-known/carddav",
     expandurl => 1,
   );
@@ -70,7 +93,7 @@ sub connect_imap {
       Server   => 'imap.gmail.com',
       Port     => $port,
       Username => $Self->{auth}{username},
-      Password => $Self->{auth}{access_token},
+      Password => $Self->access_token(),
       # not configurable right now...
       UseSSL   => $usessl,
       UseBlocking => $usessl,
@@ -78,17 +101,6 @@ sub connect_imap {
     next unless $Self->{imap};
     $Self->log('debug', "Connected as $Self->{auth}{username}");
     $Self->{lastused} = time();
-    my @folders = $Self->{imap}->xlist('', '*');
-
-    delete $Self->{folders};
-    delete $Self->{labels};
-    foreach my $folder (@folders) {
-      my ($role) = grep { not $KNOWN_SPECIALS{lc $_} } @{$folder->[0]};
-      my $name = $folder->[2];
-      my $label = $role || $folder->[2];
-      $Self->{folders}{$name} = $label;
-      $Self->{labels}{$label} = $name;
-    }
     return $Self->{imap};
   }
 
@@ -108,15 +120,8 @@ sub send_email {
       port => 465,
       ssl => 1,
       sasl_username => $Self->{auth}{username},
-      access_token => $Self->{auth}{access_token},
+      access_token => $Self->access_token(),
     })
   });
 }
 
-sub update_folder {
-  my $Self = shift;
-  my $imapname = shift;
-  my $state = shift;
-
-  return $Self->SUPER::update_folder($imapname, $state, ['x-gm-labels'], ['x-gm-msgid', 'x-gm-thrid']);
-}
