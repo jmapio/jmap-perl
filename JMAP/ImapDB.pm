@@ -143,8 +143,7 @@ sub sync_folders {
   my %getstatus;
   foreach my $name (sort keys %$folders) {
     my $sep = $folders->{$name}[0];
-    my $role = $ROLE_MAP{$folders->{$name}[1]};
-    my $label = $role || $folders->{$name}[1];
+    my $label = $folders->{$name}[1];
     my $id = $ibylabel{$label}[0];
     if ($id) {
       $Self->dmaybeupdate('ifolders', {sep => $sep, imapname => $name}, {ifolderid => $id});
@@ -673,8 +672,10 @@ sub do_folder {
 
   my %fetches;
   my @immutable = qw(internaldate envelope rfc822.size);
+  my @mutable;
   if ($Self->{is_gmail}) {
     push @immutable, qw(x-gm-msgid x-gm-thrid x-gm-labels);
+    push @mutable, qw(x-gm-labels);
   }
 
   if ($batchsize) {
@@ -687,7 +688,7 @@ sub do_folder {
   }
   else {
     $fetches{new} = [$uidnext, '*', \@immutable];
-    $fetches{update} = [$uidfirst, $uidnext - 1, [], $highestmodseq];
+    $fetches{update} = [$uidfirst, $uidnext - 1, \@mutable, $highestmodseq];
   }
 
   $Self->commit();
@@ -730,7 +731,8 @@ sub do_folder {
   if ($res->{update}) {
     my $changed = $res->{update}[1];
     foreach my $uid (sort { $a <=> $b } keys %$changed) {
-      $Self->changed_record($ifolderid, $uid, $changed->{$uid}{'flags'}, [$forcelabel]);
+      @labels = $forcelabel ? ($forcelabel) : @{$new->{$uid}{"x-gm-labels"}};
+      $Self->changed_record($ifolderid, $uid, $changed->{$uid}{'flags'}, \@labels);
     }
   }
 

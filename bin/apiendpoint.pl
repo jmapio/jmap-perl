@@ -250,6 +250,7 @@ sub handle_sync {
 
 sub handle_syncall {
   my $db = shift;
+  return ['syncall', $JSON::true];
   $db->sync_folders();
   $db->sync_imap();
   $db->sync_addressbooks();
@@ -259,7 +260,8 @@ sub handle_syncall {
 
 sub handle_backfill {
   my $db = shift;
-  my $res = $db->backfill();
+  #my $res = $db->backfill();
+  my $res = 0;
   return ['sync', $res ? $JSON::true : $JSON::false];
 }
 
