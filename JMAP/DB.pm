@@ -9,6 +9,7 @@ use Data::Dumper;
 use DBI;
 use Carp qw(confess);
 
+use JSON::Config;
 use Data::UUID::LibUUID;
 use IO::LockedFile;
 use JSON::XS qw(encode_json decode_json);
@@ -425,7 +426,7 @@ sub attachments {
     push @res, {
       id => $id,
       type => $type,
-      url => "https://proxy.jmap.io/raw/$accountid/$messageid/$id/$filename", # XXX dep
+      url => "https://$ENV{jmaphost}/raw/$accountid/$messageid/$id/$filename", # XXX dep
       blobId => "$messageid/$id",
       name => $filename,
       size => length($body),
@@ -692,7 +693,7 @@ sub create_messages {
       # XXX - references
     }
     $item->{msgdate} = time();
-    $item->{msgmessageid} = new_uuid_string() . '@proxy.jmap.io';
+    $item->{msgmessageid} = new_uuid_string() . "\@$ENV{jmaphost}";
     my $message = $Self->_makemsg($item);
     # XXX - let's just assume goodness for now - lots of error handling to add
     my ($msgid, $thrid) = $Self->import_message($message, [$draftid],

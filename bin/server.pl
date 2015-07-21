@@ -3,6 +3,7 @@
 use lib '/home/jmap/jmap-perl';
 
 #use Mail::IMAPTalk qw(:trace);
+use JMAP::Config;
 use HTML::GenerateUtil qw(escape_html escape_uri);
 use strict;
 use warnings;
@@ -480,7 +481,7 @@ sub client_page {
     $req->respond ({ content => ['text/html', $html] });
   }, sub {
     my $cookie = bake_cookie("jmap_$accountid", {value => '', path => '/'});
-    $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "https://proxy.jmap.io/" }, "Redirected"]);
+    $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "https://$ENV{jmaphost}/" }, "Redirected"]);
   });
 }
 
@@ -509,7 +510,7 @@ sub home_page {
 </tr>
 EOF
     foreach my $key (sort keys %ids) {
-      $sessiontext .= qq{<tr>\n <td><a href="https://proxy.jmap.io/jmap/$key/">$ids{$key}</a>\n </td>\n</tr>\n};
+      $sessiontext .= qq{<tr>\n <td><a href="https://$ENV{jmaphost}/jmap/$key/">$ids{$key}</a>\n </td>\n</tr>\n};
     }
     $sessiontext .= "</table>";
   }
@@ -730,7 +731,7 @@ sub do_delete {
   if ($accountid) {
     send_backend_request($accountid, 'delete', $accountid, sub {
       my $cookie = bake_cookie("jmap_$accountid", {value => '', path => '/'});
-      $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "https://proxy.jmap.io/" }, "Redirected"]);
+      $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "https://$ENV{jmaphost}/" }, "Redirected"]);
     }, mkerr($req));
   }
 };
@@ -751,7 +752,7 @@ sub do_signup {
         path => '/',
         expires => '+3M',
       });
-      $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "https://proxy.jmap.io/jmap/$data->[0]" },
+      $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "https://$ENV{jmaphost}/jmap/$data->[0]" },
                 "Redirected"]);
       delete $backend{$accountid} unless $data->[0] eq $accountid;
       send_backend_request($data->[0], 'sync', $data->[0]);
@@ -777,7 +778,7 @@ sub do_cb_google {
         path => '/',
         expires => '+3M',
       });
-      $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "https://proxy.jmap.io/jmap/$data->[0]" },
+      $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "https://$ENV{jmaphost}/jmap/$data->[0]" },
                 "Redirected"]);
       delete $backend{$accountid} unless $data->[0] eq $accountid;
       send_backend_request($data->[0], 'sync', $data->[0]);

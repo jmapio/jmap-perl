@@ -3,6 +3,7 @@
 package JMAP::API;
 
 use JMAP::DB;
+use JMAP::Config;
 use JSON;
 use strict;
 use warnings;
@@ -954,7 +955,7 @@ sub getMessages {
     }
 
     if (_prop_wanted($args, 'rawUrl')) {
-      $item->{rawUrl} = "https://proxy.jmap.io/raw/$accountid/$msgid";
+      $item->{rawUrl} = "https://$ENV{jmaphost}/raw/$accountid/$msgid";
     }
 
     if (_prop_wanted($args, 'blobId')) {

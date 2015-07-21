@@ -6,6 +6,7 @@ use warnings;
 package JMAP::Sync::Standard;
 use base qw(JMAP::Sync::Common);
 
+use JSON::Config;
 use Mail::IMAPTalk;
 use JSON::XS qw(encode_json decode_json);
 use Email::Simple;
@@ -96,7 +97,7 @@ sub send_email {
   sendmail($email, {
     from => $Self->{auth}{username},
     transport => Email::Sender::Transport::SMTPS->new({
-      helo => 'proxy.jmap.io',
+      helo => $ENV{jmaphost},
       host => $Self->{auth}{smtpserver},
       port => 587,
       ssl => 'starttls',

@@ -6,6 +6,7 @@ use warnings;
 package JMAP::Sync::Gmail;
 use base qw(JMAP::Sync::Common);
 
+use JMAP::Config;
 use Mail::GmailTalk;
 use JSON::XS qw(encode_json decode_json);
 use Email::Simple;
@@ -115,7 +116,7 @@ sub send_email {
   sendmail($email, {
     from => $Self->{auth}{username},
     transport => Email::Sender::Transport::GmailSMTP->new({
-      helo => 'proxy.jmap.io',
+      helo => $ENV{jmaphost},
       host => 'smtp.gmail.com',
       port => 465,
       ssl => 1,
