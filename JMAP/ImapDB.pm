@@ -143,7 +143,7 @@ sub sync_folders {
   my %getstatus;
   foreach my $name (sort keys %$folders) {
     my $sep = $folders->{$name}[0];
-    my $role = $ROLE_MAP{lc $folders->{$name}[1]};
+    my $role = lc $ROLE_MAP{lc $folders->{$name}[4]};
     my $label = $role || $folders->{$name}[1];
     my $id = $ibylabel{$label}[0];
     if ($id) {
