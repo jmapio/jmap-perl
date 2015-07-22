@@ -45,7 +45,7 @@ sub idler {
   send_backend_request("$accountid:sync", 'gettoken', $accountid, sub {
     my ($data) = @_;
     if ($data) {
-      my $imap = $data->[0] eq 'gmail' ? AnyEvent::Gmail->new(
+      my $imap = $data->[0] eq 'imap.gmail.com' ? AnyEvent::Gmail->new(
         host => 'imap.gmail.com',
         user => $data->[1],
         token => $data->[2],
@@ -63,6 +63,7 @@ sub idler {
         connect => sub {
           $imap->login()->cb(sub {
             my ($ok, $line) = shift->recv;
+            warn "LOGIN $data->[1]: $ok @$line\n";
             if ($ok) {
               setup_examine($edgecb, $imap);
             }
@@ -130,6 +131,7 @@ sub read_idle_line {
     my $handle = shift;
     my $line = shift;
     if ($line =~ m/^\*/) {
+      warn "GOT IDLE LINE $line\n";
       $timer = make_timer($imap);
       $edgecb->($line);
     }

@@ -901,7 +901,7 @@ sub update_messages {
   }
 
   my $folderdata = $dbh->selectall_arrayref("SELECT * FROM ifolders", {Slice => {}});
-  my %foldermap = map { $_->{folderid} => $_ } @$folderdata;
+  my %foldermap = map { $_->{ifolderid} => $_ } @$folderdata;
   my %jmailmap = map { $_->{jmailboxid} => $_ } @$folderdata;
   my $jmapdata = $dbh->selectall_arrayref("SELECT * FROM jmailboxes", {Slice => {}});
   my %jidmap = map { $_->{jmailboxid} => $_->{role} } @$jmapdata;
