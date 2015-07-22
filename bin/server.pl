@@ -131,7 +131,6 @@ sub read_idle_line {
     my $handle = shift;
     my $line = shift;
     if ($line =~ m/^\*/) {
-      warn "GOT IDLE LINE $line\n";
       $timer = make_timer($imap);
       $edgecb->($line);
     }
