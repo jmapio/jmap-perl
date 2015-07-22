@@ -900,18 +900,18 @@ sub update_messages {
     }
   }
 
-  my $folderdata = $dbh->selectall_arrayref("SELECT ifolderid, imapname, uidvalidity, label, jmailboxid FROM ifolders");
-  my %foldermap = map { $_->[0] => $_ } @$folderdata;
-  my %jmailmap = map { $_->[4] => $_ } @$folderdata;
-  my $jmapdata = $dbh->selectall_arrayref("SELECT jmailboxid, role FROM jmailboxes");
-  my %jidmap = map { $_->[0] => $_->[1] } @$jmapdata;
-  my %jrolemap = map { $_->[1] => $_->[0] } grep { $_-> [1] } @$jmapdata;
+  my $folderdata = $dbh->selectall_arrayref("SELECT * FROM ifolders", {Slice => {}});
+  my %foldermap = map { $_->{folderid} => $_ } @$folderdata;
+  my %jmailmap = map { $_->{jmailboxid} => $_ } @$folderdata;
+  my $jmapdata = $dbh->selectall_arrayref("SELECT * FROM jmailboxes", {Slice => {}});
+  my %jidmap = map { $_->{jmailboxid} => $_->{role} } @$jmapdata;
+  my %jrolemap = map { $_->{role} => $_->{jmailboxid} } grep { $_->{role} } @$jmapdata;
 
   my @changed;
   foreach my $ifolderid (keys %updatemap) {
     # XXX - merge similar actions?
-    my $imapname = $foldermap{$ifolderid}[1];
-    my $uidvalidity = $foldermap{$ifolderid}[2];
+    my $imapname = $foldermap{$ifolderid}{imapname};
+    my $uidvalidity = $foldermap{$ifolderid}{uidvalidity};
 
     foreach my $uid (sort keys %{$updatemap{$ifolderid}}) {
       my $msgid = $updatemap{$ifolderid}{$uid};
@@ -939,12 +939,13 @@ sub update_messages {
         $Self->backend_cmd('imap_update', $imapname, $uidvalidity, $uid, $bool, \@flags);
       }
       if (exists $action->{mailboxIds}) {
+        # jmailboxid
         my @mboxes = map { $idmap->($_) } @{$action->{mailboxIds}};
         my ($has_outbox) = grep { $_ eq 'outbox' } @mboxes;
         my (@others) = grep { $_ ne 'outbox' } @mboxes;
         if ($has_outbox) {
           # move to sent when we're done
-          push @others, $jmailmap{$jrolemap{'sent'}}[0];
+          push @others, $jmailmap{$jrolemap{'sent'}}{jmailboxid};
           $Self->fill_messages($msgid);
           my ($rfc822) = $dbh->selectrow_array("SELECT rfc822 FROM jrawmessage WHERE msgid = ?", {}, $msgid);
           $Self->backend_cmd('send_email', $rfc822);
@@ -959,19 +960,19 @@ sub update_messages {
           goto done unless $updatemsgid;
           my ($ifolderid, $updateuid) = $dbh->selectrow_array("SELECT ifolderid, uid FROM imessages WHERE msgid = ?", {}, $updatemsgid);
           goto done unless $ifolderid;
-          my $updatename = $foldermap{$ifolderid}[1];
-          my $updatevalidity = $foldermap{$ifolderid}[2];
+          my $updatename = $foldermap{$ifolderid}{imapname};
+          my $updatevalidity = $foldermap{$ifolderid}{uidvalidity};
           goto done unless $updatename;
           $Self->backend_cmd('imap_update', $updatename, $updatevalidity, $updateuid, 1, ["\\Answered"]);
         }
         done:
         if ($Self->{is_gmail}) {
-          my @labels = grep { lc $_ ne '\\allmail' } map { $jmailmap{$_}[2] || $jmailmap{$_}[1] } @others;
+          my @labels = grep { lc $_ ne '\\allmail' } map { $jmailmap{$_}{label} } @others;
           $Self->backend_cmd('imap_labels', $imapname, $uidvalidity, $uid, \@labels);
         }
         else {
           my $id = $others[0];
-          my $newfolder = $jmailmap{$id}[1];
+          my $newfolder = $jmailmap{$id}{imapname};
           $Self->backend_cmd('imap_move', $imapname, $uidvalidity, $uid, $newfolder);
         }
       }
