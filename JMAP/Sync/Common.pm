@@ -60,12 +60,12 @@ sub get_calendars {
 
 sub get_events {
   my $Self = shift;
-  my $Args = shift;
+  my $href = shift;
   my $talk = $Self->connect_calendars();
   return unless $talk;
 
-  $Args->{href} =~ s{/$}{};
-  my $data = $talk->GetEvents($Args->{href}, Full => 1);
+  $href =~ s{/$}{};
+  my $data = $talk->GetEvents($href, Full => 1);
 
   my %res;
   foreach my $item (@$data) {

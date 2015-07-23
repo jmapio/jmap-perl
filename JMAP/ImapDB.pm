@@ -389,7 +389,7 @@ sub do_calendar {
   my $dbh = $Self->dbh();
 
   my ($href, $jcalendarid) = $dbh->selectrow_array("SELECT href, jcalendarid FROM icalendars WHERE icalendarid = ?", {}, $calendarid);
-  my $events = $Self->backend_cmd('get_events', {href => $href});
+  my $events = $Self->backend_cmd('get_events', $href);
 
   $Self->begin();
   my $exists = $dbh->selectall_arrayref("SELECT ieventid, resource, content FROM ievents WHERE icalendarid = ?", {}, $calendarid);
