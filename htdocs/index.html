@@ -23,23 +23,19 @@
 
 <h1>JMAP Proxy</h1>
 
-$SESSIONS
+[% sessions %]
 
 <p><a href="/register">OAuth to a Gmail account</a> or log in to an IMAP server below:</p>
 
 <form action="/signup" method="post">
 <table border="1">
 <tr>
-  <th>Host</th>
-  <td><input type="text" name="host"></td>
+  <th>Email</th>
+  <td><input type="text" name="username"></td>
 </tr>
 <tr>
-  <th>User</th>
-  <td><input type="text" name="user"></td>
-</tr>
-<tr>
-  <th>Pass</th>
-  <td><input type="password" name="pass"></td>
+  <th>Password</th>
+  <td><input type="password" name="password"></td>
 </tr>
 <tr>
   <th>Submit</th>

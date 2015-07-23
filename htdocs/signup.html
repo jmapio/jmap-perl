@@ -23,33 +23,52 @@
 
 <h1>Set hosts</h1>
 
-Please confirm hosts below.  IMAP must be on port 993, SMTP on port 587, CalDAV and CardDAV on port 443.
+Please confirm host details below.
 
 <form action="/signup" method="post">
 <table border="1">
 <tr>
   <th>IMAP</th>
-  <td><input type="text" name="imap" value="$IMAP"></td>
+  <td>
+    <input type="text" name="imapHost" value="[% imapHost %]">
+    <input type="text" name="imapPort" width="5" value="[% imapPort %]">
+    <select name="imapSSL">
+     <option value="0"[% IF imapSSL = 0 %] selected[% END %]>Plaintext</option>
+     <option value="1"[% IF imapSSL = 1 %] selected[% END %]>SSL</option>
+     <option value="2"[% IF imapSSL = 2 %] selected[% END %]>StartTLS</option>
+    </select>
+  </td>
 </tr>
 <tr>
   <th>SMTP</th>
-  <td><input type="text" name="smtp" value="$SMTP"></td>
+  <td>
+    <input type="text" name="smtpHost" value="[% smtpHost %]">
+    <input type="text" name="smtpPort" width="5" value="[% smtpPort %]">
+    <select name="smtpSSL">
+     <option value="0"[% IF imapSSL = 0 %] selected[% END %]>Plaintext</option>
+     <option value="1"[% IF imapSSL = 1 %] selected[% END %]>SSL</option>
+     <option value="2"[% IF imapSSL = 2 %] selected[% END %]>StartTLS</option>
+    </select>
+  </td>
 </tr>
 <tr>
   <th>CalDAV</th>
-  <td><input type="text" name="caldav" value="$CALDAV"></td>
+  <td><input type="text" name="caldavURL" value="[% caldavURL %]"></td>
 </tr>
 <tr>
   <th>CardDAV</th>
-  <td><input type="text" name="carddav" value="$CARDDAV"></td>
+  <td><input type="text" name="carddavURL" value="[% carddavURL %]"></td>
 </tr>
 <tr>
   <th>Submit</th>
-  <td><input type="submit" value="Create"></td>
+  <td>
+    <input type="hidden" name="force" value="1">
+    <input type="hidden" name="username" value="[% username %]" />
+    <input type="hidden" name="password" value="[% password %]" />
+    <input type="submit" value="Create">
+  </td>
 </tr>
 </table>
-<input type="hidden" name="user" value="$USER" />
-<input type="hidden" name="password" value="$PASSWORD" />
 </form>
 
 </article>

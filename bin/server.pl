@@ -21,17 +21,16 @@ use AnyEvent::HTTP;
 use JMAP::Sync::Gmail;
 use JSON::XS qw(encode_json decode_json);
 use Encode qw(encode_utf8);
+use Template::Toolkit;
+my $TT = Template->new();
 
 sub mkerr {
   my $req = shift;
   return sub {
     my $error = shift;
-    open(FH, "/home/jmap/jmap-perl/htdocs/error.html");
-    local $/ = undef;
-    my $html = <FH>;
-    close(FH);
+    my $html = '';
     $error =~ s{at (/|bin/).*}{}s;
-    $html =~ s/\$ERROR/$error/gs;
+    $TT->process("/home/jmap/jmap-perl/htdocs/error.html", { error => $error }, \$html);
     $req->respond({content => ['text/html', $html]});
   };
 }
@@ -471,15 +470,13 @@ sub client_page {
     prod_idler($accountid);
     send_backend_request($accountid, 'syncall');
 
-    open(FH, "/home/jmap/jmap-perl/htdocs/landing.html");
-    local $/ = undef;
-    my $html = <FH>;
-    close(FH);
-
-    $html =~ s{\$INFO}{Account: <b>$data->[0] ($data->[1])</b>}gs;
-    $html =~ s/\$UUID/$accountid/gs;
-    $html =~ s/\$JMAPHOST/$ENV{jmaphost}/gs;
-    $req->respond ({ content => ['text/html', $html] });
+    my $html = '';
+    $TT->process("/home/jmap/jmap-perl/htdocs/landing.html", {
+      info => "Account: <b>$data->[0] ($data->[1])</b>",
+      uuid => $accountid,
+      jmaphost => $ENV{jmaphost},
+     }, \$html);
+    $req->respond({content => ['text/html', $html]});
   }, sub {
     my $cookie = bake_cookie("jmap_$accountid", {value => '', path => '/'});
     $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "https://$ENV{jmaphost}/" }, "Redirected"]);
@@ -488,11 +485,6 @@ sub client_page {
 
 sub home_page {
   my ($httpd, $req) = @_;
-
-  open(FH, "/home/jmap/jmap-perl/htdocs/index.html");
-  local $/ = undef;
-  my $html = <FH>;
-  close(FH);
 
   my $sessiontext = '';
   my @text;
@@ -515,9 +507,12 @@ EOF
     }
     $sessiontext .= "</table>";
   }
-
-  $html =~ s/\$SESSIONS/$sessiontext/gs;
-  $req->respond ({ content => ['text/html', $html] });
+  my $html = '';
+  $TT->process("/home/jmap/jmap-perl/htdocs/index.html", {
+    sessions => $sessiontext,
+    jmaphost => $ENV{jmaphost},
+   }, \$html);
+  $req->respond({content => ['text/html', $html]});
 }
 
 sub need_auth {
@@ -740,23 +735,32 @@ sub do_delete {
 sub do_signup {
   my ($httpd, $req) = @_;
 
-  my $host = $req->parm('host');
-  my $user = $req->parm('user');
-  my $pass = $req->parm('pass');
+  my $uri = $req->url();
+  my $path = $uri->path();
+
+  my %opts;
+  foreach my $key (qw(username password imapHost imapPort imapSSL smtpHost smtpPort smtpSSL caldavURL carddavURL)) {
+    $opts{$key} = $req->parm($key);
+  }
 
   my $accountid = new_uuid_string();
-  send_backend_request($accountid, 'signup', [$host, $user, $pass], sub {
+  send_backend_request($accountid, 'signup', \%opts, sub {
     my ($data) = @_;
-    if ($data) {
-      my $cookie = bake_cookie("jmap_$data->[0]", {
-        value => $data->[1],
+    if ($data && $data->[0] eq 'done') {
+      $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "https://$ENV{jmaphost}/jmap/$data->[1]" },
+                "Redirected"]);
+      delete $backend{$accountid} unless $data->[1] eq $accountid;
+      send_backend_request($data->[0], 'sync', $data->[1]);
+      my $cookie = bake_cookie("jmap_$data->[1]", {
+        value => $data->[2],
         path => '/',
         expires => '+3M',
       });
-      $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "https://$ENV{jmaphost}/jmap/$data->[0]" },
-                "Redirected"]);
-      delete $backend{$accountid} unless $data->[0] eq $accountid;
-      send_backend_request($data->[0], 'sync', $data->[0]);
+    }
+    else {
+      my $html = '';
+      $TT->process("/home/jmap/jmap-perl/htdocs/signup.html", $data->[1], \$html);
+      $req->respond({content => ['text/html', $html]});
     }
     else {
       not_found($req);
