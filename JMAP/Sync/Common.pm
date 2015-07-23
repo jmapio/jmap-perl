@@ -186,7 +186,7 @@ sub folders {
     my $name = $folder->[2];
     my $label;
     if ($role) {
-      $label = lc $role;
+      $label = $role;
     }
     else {
       $label = $folder->[2];

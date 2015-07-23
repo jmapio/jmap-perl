@@ -208,7 +208,7 @@ sub sync_jmailboxes {
     my $fname = $folder->[2];
     # check for roles first
     my @bits = split "[$folder->[1]]", $fname;
-    shift @bits if $bits[0] eq 'INBOX';
+    shift @bits if ($bits[0] eq 'INBOX' and $bits[1]); # otehrwise we get none...
     shift @bits if $bits[0] eq '[Gmail]';
     my $role = $ROLE_MAP{lc $folder->[3]};
     my $id = 0;
@@ -563,7 +563,7 @@ sub labels {
   my $Self = shift;
   unless ($Self->{labels}) {
     my $data = $Self->dbh->selectall_arrayref("SELECT label, ifolderid, jmailboxid, imapname FROM ifolders");
-    $Self->{labels} = { map { lc $_->[0] => [$_->[1], $_->[2], $_->[3]] } @$data };
+    $Self->{labels} = { map { $_->[0] => [$_->[1], $_->[2], $_->[3]] } @$data };
   }
   return $Self->{labels};
 }
@@ -613,16 +613,15 @@ sub firstsync {
 
   $Self->sync_folders();
 
-  my $labels = $Self->labels();
+  my $data = $Self->dbh->selectall_arrayref("SELECT * FROM ifolders", {Slice => {}});
 
   if ($Self->{is_gmail}) {
-    my $ifolderid = $labels->{"\\allmail"}[0];
-    $Self->do_folder($ifolderid, undef, 50);
+    my ($folder) = grep { lc $_->{label} eq '\\allmail' } @$data;
+    $Self->do_folder($folder->{ifolderid}, undef, 50) if $folder;
   }
   else {
-    my $data = $Self->dbh->selectall_arrayref("SELECT ifolderid, imapname FROM ifolders");
-    my ($folder) = grep { lc $_->[1] eq 'inbox' } @$data;
-    $Self->do_folder($folder->[0], "inbox", 50);
+    my ($folder) = grep { lc $_->{imapname} eq 'inbox' } @$data;
+    $Self->do_folder($folder->{ifolderid}, $folder->{label}, 50) if $folder;
   }
 }
 
@@ -684,12 +683,12 @@ sub do_folder {
       my $end = $uidfirst - 1;
       $uidfirst -= $batchsize;
       $uidfirst = 1 if $uidfirst < 1;
-      $fetches{backfill} = [$uidfirst, $end, \@immutable];
+      $fetches{backfill} = [$uidfirst, $end, [@immutable, @mutable]];
     }
   }
   else {
-    $fetches{new} = [$uidnext, '*', \@immutable];
-    $fetches{update} = [$uidfirst, $uidnext - 1, \@mutable, $highestmodseq];
+    $fetches{new} = [$uidnext, '*', [@immutable, @mutable]];
+    $fetches{update} = [$uidfirst, $uidnext - 1, [@mutable], $highestmodseq];
   }
 
   $Self->commit();
@@ -893,7 +892,7 @@ sub update_messages {
 
   my $folderdata = $dbh->selectall_arrayref("SELECT * FROM ifolders", {Slice => {}});
   my %foldermap = map { $_->{ifolderid} => $_ } @$folderdata;
-  my %jmailmap = map { $_->{jmailboxid} => $_ } @$folderdata;
+  my %jmailmap = map { $_->{jmailboxid} => $_ } grep { $_->{jmailboxid} } @$folderdata;
   my $jmapdata = $dbh->selectall_arrayref("SELECT * FROM jmailboxes", {Slice => {}});
   my %jidmap = map { $_->{jmailboxid} => $_->{role} } @$jmapdata;
   my %jrolemap = map { $_->{role} => $_->{jmailboxid} } grep { $_->{role} } @$jmapdata;
@@ -1071,7 +1070,7 @@ sub apply_data {
   }
 
   my $labels = $Self->labels();
-  my @jmailboxids = grep { $_ } map { $labels->{lc $_}[1] } @$labellist;
+  my @jmailboxids = grep { $_ } map { $labels->{$_}[1] } @$labellist;
 
   my ($old) = $Self->{dbh}->selectrow_array("SELECT msgid FROM jmessages WHERE msgid = ? AND active = 1", {}, $msgid);
 
