@@ -21,8 +21,8 @@ use AnyEvent::HTTP;
 use JMAP::Sync::Gmail;
 use JSON::XS qw(encode_json decode_json);
 use Encode qw(encode_utf8);
-use Template::Toolkit;
-my $TT = Template->new();
+use Template;
+my $TT = Template->new(INCLUDE_PATH => '/home/jmap/jmap-perl/htdocs');
 
 sub mkerr {
   my $req = shift;
@@ -30,7 +30,7 @@ sub mkerr {
     my $error = shift;
     my $html = '';
     $error =~ s{at (/|bin/).*}{}s;
-    $TT->process("/home/jmap/jmap-perl/htdocs/error.html", { error => $error }, \$html);
+    $TT->process("error.html", { error => $error }, \$html) || die $Template::ERROR;
     $req->respond({content => ['text/html', $html]});
   };
 }
@@ -471,11 +471,11 @@ sub client_page {
     send_backend_request($accountid, 'syncall');
 
     my $html = '';
-    $TT->process("/home/jmap/jmap-perl/htdocs/landing.html", {
+    $TT->process("landing.html", {
       info => "Account: <b>$data->[0] ($data->[1])</b>",
       uuid => $accountid,
       jmaphost => $ENV{jmaphost},
-     }, \$html);
+     }, \$html) || die $Template::ERROR;
     $req->respond({content => ['text/html', $html]});
   }, sub {
     my $cookie = bake_cookie("jmap_$accountid", {value => '', path => '/'});
@@ -508,10 +508,10 @@ EOF
     $sessiontext .= "</table>";
   }
   my $html = '';
-  $TT->process("/home/jmap/jmap-perl/htdocs/index.html", {
+  $TT->process("index.html", {
     sessions => $sessiontext,
     jmaphost => $ENV{jmaphost},
-   }, \$html);
+   }, \$html) || die $Template::ERROR;
   $req->respond({content => ['text/html', $html]});
 }
 
@@ -739,31 +739,29 @@ sub do_signup {
   my $path = $uri->path();
 
   my %opts;
-  foreach my $key (qw(username password imapHost imapPort imapSSL smtpHost smtpPort smtpSSL caldavURL carddavURL)) {
+  foreach my $key (qw(username password imapHost imapPort imapSSL smtpHost smtpPort smtpSSL caldavURL carddavURL force)) {
     $opts{$key} = $req->parm($key);
   }
 
   my $accountid = new_uuid_string();
   send_backend_request($accountid, 'signup', \%opts, sub {
     my ($data) = @_;
+    warn Dumper($data);
     if ($data && $data->[0] eq 'done') {
-      $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "https://$ENV{jmaphost}/jmap/$data->[1]" },
-                "Redirected"]);
-      delete $backend{$accountid} unless $data->[1] eq $accountid;
       send_backend_request($data->[0], 'sync', $data->[1]);
       my $cookie = bake_cookie("jmap_$data->[1]", {
         value => $data->[2],
         path => '/',
         expires => '+3M',
       });
+      $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "https://$ENV{jmaphost}/jmap/$data->[1]" },
+                "Redirected"]);
+      delete $backend{$accountid} unless $data->[1] eq $accountid;
     }
     else {
       my $html = '';
-      $TT->process("/home/jmap/jmap-perl/htdocs/signup.html", $data->[1], \$html);
+      $TT->process("signup.html", $data->[1], \$html) || die $Template::ERROR;
       $req->respond({content => ['text/html', $html]});
-    }
-    else {
-      not_found($req);
     }
     return 1;
   }, mkerr($req));

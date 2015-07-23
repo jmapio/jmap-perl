@@ -85,7 +85,7 @@ sub connect_imap {
 
   for (1..3) {
     my $port = $Self->{auth}{imapPort};
-    my $usessl = $Self->{auth}{imapSSL};
+    my $usessl = 1;
     $Self->{imap} = Mail::GmailTalk->new(
       Server   => $Self->{auth}{imapHost},
       Port     => $port,
@@ -114,7 +114,7 @@ sub send_email {
       helo => $ENV{jmaphost},
       host => $Self->{auth}{smtpHost},
       port => $Self->{auth}{smtpPort},
-      ssl => $Self->{auth}{smtpSSL},
+      ssl => 1,
       sasl_username => $Self->{auth}{username},
       access_token => $Self->access_token(),
     })

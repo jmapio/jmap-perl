@@ -315,7 +315,6 @@ sub handle_cb_google {
   }
 
   getdb();
-  #$db->setuser(username => $email, password => $gmaildata->{refresh_token}, email => $data->{name}, picture => $data->{picture});
   $db->setuser({
     username => $email,
     password => $gmaildata->{refresh_token},
@@ -327,7 +326,7 @@ sub handle_cb_google {
     smtpSSL => 2,
     caldavURL => "https://apidata.googleusercontent.com/caldav/v2",
     carddavURL => "https://www.googleapis.com/.well-known/carddav",
-  }, { picture => $data->{picture});
+  }, { picture => $data->{picture} });
   $db->firstsync();
 
   return ['registered', [$accountid, $email]];
@@ -336,6 +335,7 @@ sub handle_cb_google {
 sub handle_signup {
   my $detail = shift;
 
+  my $force = delete $detail->{force};
   $detail->{imapPort} ||= 993;
   $detail->{imapSSL} ||= 2;
   $detail->{smtpPort} ||= 587;
@@ -346,7 +346,7 @@ sub handle_signup {
     $detail->{smtpHost} = 'smtp.mail.me.com';
     $detail->{caldavURL} = 'https://caldav.icloud.com/';
     $detail->{carddavURL} = 'https://contacts.icloud.com/';
-    $detail->{force} = 1;
+    $force = 1;
   }
 
   elsif ($detail->{username} =~ m/\@yahoo\.com/) {
@@ -354,7 +354,7 @@ sub handle_signup {
     $detail->{smtpHost} = 'smtp.mail.yahoo.com';
     $detail->{caldavURL} = 'https://caldav.calendar.yahoo.com';
     $detail->{carddavURL} = 'https://carddav.address.yahoo.com';
-    $detail->{force} = 1;
+    $force = 1;
   }
 
   else {
@@ -449,20 +449,20 @@ sub handle_signup {
     }
   }
 
-  unless ($detail->{force}) {
-    return ['continue', $detail];
+  unless ($force) {
+    return ['signup', ['continue', $detail]];
   }
 
   my $imap = Mail::IMAPTalk->new(
-   Server => $detail->,
-   Port => 993,
-   UseSSL => 1,
-   UseBlocking => 1,
+   Server => $detail->{imapHost},
+   Port => $detail->{imapPort},
+   UseSSL => ($detail->{imapSSL} > 1),
+   UseBlocking => ($detail->{imapSSL} > 1),
   );
-  die "UNABLE TO CONNECT to $detail->[0]\n" unless $imap;
+  die "UNABLE TO CONNECT for $detail->{username}\n" unless $imap;
 
-  my $ok = $imap->login($detail->[1], $detail->[2]);
-  die "LOGIN FAILED FOR $detail->[1] on $detail->[0]" unless $ok;
+  my $ok = $imap->login($detail->{username}, $detail->{password});
+  die "LOGIN FAILED FOR $detail->{username}" unless $ok;
   my $capa = $imap->capability();
   $imap->logout();
 
@@ -475,10 +475,10 @@ sub handle_signup {
     $dbh->do("INSERT INTO accounts (email, accountid, type) VALUES (?, ?, ?)", {}, $detail->{username}, $accountid, 'imap');
   }
   getdb();
-  $db->setuser(%$detail);
+  $db->setuser($detail);
   $db->firstsync();
 
-  return ['done', [$accountid, $detail->[1]]];
+  return ['signup', ['done', $accountid, $detail->{username}]];
 }
 
 sub handle_delete {

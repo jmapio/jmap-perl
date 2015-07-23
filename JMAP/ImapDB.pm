@@ -57,25 +57,26 @@ my %ROLE_MAP = (
 
 sub setuser {
   my $Self = shift;
-  my %args = @_;
+  my $args = shift;
+  # XXX - picture, etc
 
   $Self->begin();
 
   my $data = $Self->dbh->selectrow_arrayref("SELECT username FROM iserver");
   if ($data and $data->[0]) {
-    $Self->dmaybeupdate('iserver', \%args);
+    $Self->dmaybeupdate('iserver', $args);
   }
   else {
-    $Self->dinsert('iserver', \%args);
+    $Self->dinsert('iserver', $args);
   }
 
   my $user = $Self->dbh->selectrow_arrayref("SELECT email FROM account");
   if ($user and $user->[0]) {
-    $Self->dmaybeupdate('account', {email => $args{username}});
+    $Self->dmaybeupdate('account', {email => $args->{username}});
   }
   else {
     $Self->dinsert('account', {
-      email => $args{username},
+      email => $args->{username},
       jdeletedmodseq => 0,
       jhighestmodseq => 1,
     });
