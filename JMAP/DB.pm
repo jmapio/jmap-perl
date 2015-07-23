@@ -628,14 +628,14 @@ sub _makemsg {
       # XXX - attachments
       $MIME = Email::MIME->create(
         header_str => [@$header, 'Content-Type' => 'multipart/mixed'],
-	parts => [$msgparts],
+        parts => [$msgparts],
       );
     }
     else {
       # XXX - attachments
       $MIME = Email::MIME->create(
         header_str => [@$header, 'Content-Type' => 'multipart/mixed'],
-	parts => [$textpart],
+        parts => [$textpart],
       );
     }
   }
@@ -646,7 +646,7 @@ sub _makemsg {
           content_type => 'multipart/alternative',
         },
         header_str => $header,
-	parts => [$textpart, $htmlpart],
+        parts => [$textpart, $htmlpart],
       );
     }
     else {
@@ -656,7 +656,7 @@ sub _makemsg {
           charset => 'UTF-8',
         },
         header_str => $header,
-	body => $args->{textBody},
+        body => $args->{textBody},
       );
     }
   }
