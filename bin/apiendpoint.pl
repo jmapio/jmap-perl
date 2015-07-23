@@ -3,7 +3,7 @@
 use lib '/home/jmap/jmap-perl';
 package JMAP::Backend;
 
-use Mail::IMAPTalk qw(:trace);
+#use Mail::IMAPTalk qw(:trace);
 
 # stuff complains otherwise - twice for luck
 use IO::Socket::SSL;
