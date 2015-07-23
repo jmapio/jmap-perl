@@ -1121,7 +1121,9 @@ sub apply_data {
   my $labels = $Self->labels();
   my @list = @$labellist;
   # gmail empty list means archive at our end
-  @list = ('archive') if ($Self->{is_gmail} and not @list);
+  if ($Self->{is_gmail} and not @list) {
+    @list = $Self->{dbh}->selectrow_array("SELECT jmailboxid FROM jmailboxes WHERE role = 'archive'");
+  }
   my @jmailboxids = grep { $_ } map { $labels->{$_}[1] } @list;
 
   my ($old) = $Self->{dbh}->selectrow_array("SELECT msgid FROM jmessages WHERE msgid = ? AND active = 1", {}, $msgid);
