@@ -527,7 +527,7 @@ sub do_addressbook {
   my $dbh = $Self->dbh();
 
   my ($href, $jaddressbookid) = $dbh->selectrow_array("SELECT href, jaddressbookid FROM iaddressbooks WHERE iaddressbookid = ?", {}, $addressbookid);
-  my $cards = $Self->backend_cmd('get_cards', {href => $href});
+  my $cards = $Self->backend_cmd('get_cards', $href);
 
   $Self->begin();
 

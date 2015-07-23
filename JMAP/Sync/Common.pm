@@ -60,12 +60,12 @@ sub get_calendars {
 
 sub get_events {
   my $Self = shift;
-  my $href = shift;
+  my $collection = shift;
   my $talk = $Self->connect_calendars();
   return unless $talk;
 
-  $href =~ s{/$}{};
-  my $data = $talk->GetEvents($href, Full => 1);
+  $collection =~ s{/$}{};
+  my $data = $talk->GetEvents($collection, Full => 1);
 
   my %res;
   foreach my $item (@$data) {
@@ -77,14 +77,14 @@ sub get_events {
 
 sub new_event {
   my $Self = shift;
-  my $href = shift;
+  my $collection = shift; # is collection of the calendar
   my $event = shift;
-  $href =~ s{/$}{};
+  $collection =~ s{/$}{};
 
   my $talk = $Self->connect_calendars();
   return unless $talk;
 
-  $talk->NewEvent($href, $event);
+  $talk->NewEvent($collection, $event);
 }
 
 sub update_event {
@@ -105,7 +105,7 @@ sub delete_event {
   my $talk = $Self->connect_calendars();
   return unless $talk;
 
-  $talk->DeleteEvent({href => $resource});
+  $talk->DeleteEvent($resource);  # XXX - we pass more properties for no good reason to this API
 }
 
 sub get_addressbooks {
@@ -120,12 +120,12 @@ sub get_addressbooks {
 
 sub get_cards {
   my $Self = shift;
-  my $Args = shift;
+  my $collection = shift;
   my $talk = $Self->connect_contacts();
   return unless $talk;
 
-  $Args->{href} =~ s{/$}{};
-  my $data = $talk->GetContacts($Args->{href});
+  $collection =~ s{/$}{};
+  my $data = $talk->GetContacts($collection);
 
   my %res;
   foreach my $item (@$data) {
@@ -137,14 +137,14 @@ sub get_cards {
 
 sub new_card {
   my $Self = shift;
-  my $href = shift;
+  my $collection = shift;
   my $card = shift;
-  $href =~ s{/$}{};
+  $collection =~ s{/$}{};
 
   my $talk = $Self->connect_contacts();
   return unless $talk;
 
-  $talk->NewContact($href, $card);
+  $talk->NewContact($collection, $card);
 }
 
 sub update_card {
@@ -445,12 +445,13 @@ sub imap_append {
   my $r = $imap->append($imapname, $flags, $internaldate, {'Literal' => $rfc822});
   die "APPEND FAILED $r" unless (lc($r) eq 'ok' or lc($r) eq 'appenduid'); # what's with that??
 
-  my $uid = $imap->get_response_code('appenduid'); # returns [uidvalidity uid]
+  my $response = $imap->get_response_code('appenduid');
+  my ($uidvalidity, $uid) = @$response;
 
   # XXX - fetch the x-gm-msgid or envelope from the server so we know the
   # the ID that the server gave this message
 
-  return ['append', $imapname, @$uid];
+  return ['append', $imapname, $uidvalidity, $uid];
 }
 
 sub imap_search {
