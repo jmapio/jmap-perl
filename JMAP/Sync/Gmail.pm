@@ -16,8 +16,6 @@ use Net::GmailContacts;
 use OAuth2::Tiny;
 use IO::All;
 
-my %KNOWN_SPECIALS = map { lc $_ => 1 } qw(\\HasChildren \\HasNoChildren \\NoSelect);
-
 my $O;
 sub O {
   unless ($O) {

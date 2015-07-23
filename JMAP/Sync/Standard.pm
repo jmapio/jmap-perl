@@ -14,8 +14,6 @@ use Email::Sender::Transport::SMTPS;
 use Net::CalDAVTalk;
 use Net::CardDAVTalk;
 
-my %KNOWN_SPECIALS = map { lc $_ => 1 } qw(\\HasChildren \\HasNoChildren \\NoSelect \\NoInferiors);
-
 sub connect_calendars {
   my $Self = shift;
 
@@ -69,13 +67,12 @@ sub connect_imap {
   delete $Self->{imap};
 
   for (1..3) {
-    my $usessl = $Self->{auth}{imapSSL} - 1;
+    my $usessl = $Self->{auth}{imapSSL} - 1; # IDs for Mail::IMAPTalk are one lower than our internal format
     $Self->{imap} = Mail::IMAPTalk->new(
       Server   => $Self->{auth}{imapHost},
       Port     => $Self->{auth}{imapPort},
       Username => $Self->{auth}{username},
       Password => $Self->{auth}{password},
-      # not configurable right now...
       UseSSL   => $usessl,
       UseBlocking => $usessl,
     );
