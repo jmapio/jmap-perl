@@ -380,6 +380,13 @@ sub attachments {
   my $messages = shift;
   my $num = 0;
   my @res;
+
+  my $draftatt = $eml->header('X-JMAP-Draft-Attachments');
+  if ($draftatt) {
+    my $attach = decode_json($draftatt);
+    push @res, @$attach;
+  }
+
   foreach my $sub ($eml->subparts()) {
     $num++;
     my $type = $sub->content_type();
@@ -433,6 +440,7 @@ sub attachments {
       %extra,
     };
   }
+
   return @res;
 }
 
