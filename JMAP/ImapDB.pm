@@ -206,9 +206,10 @@ sub sync_jmailboxes {
   my %seen;
   foreach my $folder (@$ifolders) {
     my $fname = $folder->[2];
-    $fname =~ s/^INBOX\.//;  # XXX - this should be removing $prefix
     # check for roles first
     my @bits = split "[$folder->[1]]", $fname;
+    shift @bits if $bits[0] eq 'INBOX';
+    shift @bits if $bits[0] eq '[Gmail]';
     my $role = $ROLE_MAP{lc $folder->[3]};
     my $id = 0;
     my $parentId = 0;
