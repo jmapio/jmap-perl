@@ -24,7 +24,7 @@ use DateTime;
 use Date::Parse;
 use Net::CalDAVTalk;
 use Net::CardDAVTalk::VCard;
-use MIME::Base64 qw(encode_base64);
+use MIME::Base64 qw(encode_base64 decode_base64);
 
 my %TABLE2GROUPS = (
   jmessages => ['Message', 'Thread'],
@@ -383,8 +383,14 @@ sub attachments {
 
   my $draftatt = $eml->header('X-JMAP-Draft-Attachments');
   if ($draftatt) {
-    my $attach = decode_json($draftatt);
-    push @res, @$attach;
+    eval {
+      my $json = decode_base64($draftatt);
+      my $attach = decode_json($json);
+      push @res, @$attach;
+    };
+    if ($@) {
+      warn "FAILED TO PARSE $draftatt => $@";
+    }
   }
 
   foreach my $sub ($eml->subparts()) {
@@ -619,7 +625,7 @@ sub _makemsg {
   my @attachments = $args->{attachments} ? @{$args->{attachments}} : ();
 
   if (@attachments and not $isDraft) {
-    my $encoded = encode_base64(@attachments, '');
+    my $encoded = encode_base64(encode_json(\@attachments), '');
     push @$header, "X-JMAP-Draft-Attachments" => $encoded;
     @attachments = ();
   }
