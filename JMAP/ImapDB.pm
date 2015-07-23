@@ -864,7 +864,7 @@ sub import_message {
   }
 
   $Self->begin();
-  my ($msgid, $thrid) = $Self->dbh->selectrow_array("SELECT msgid, thrid FROM imessages WHERE ifolderid = ? AND uid = ?", {}, $jmailmap{$id}[0], $uid);
+  my ($msgid, $thrid) = $Self->dbh->selectrow_array("SELECT msgid, thrid FROM imessages WHERE ifolderid = ? AND uid = ?", {}, $jmailmap{$id}{ifolderid}, $uid);
 
   # save us having to download it again
   $Self->add_raw_message($msgid, $rfc822);
