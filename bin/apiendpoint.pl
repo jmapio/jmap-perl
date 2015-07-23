@@ -360,14 +360,17 @@ sub handle_signup {
   else {
     my $Resolver = Net::DNS::Resolver->new;
     my $domain = $detail->{username};
-    $domain =~ s/\@.*//;
+    $domain =~ s/.*\@//;
     my $reply;
+    warn "RESOLVING: $domain\n";
     ($reply) = $Resolver->search("_imaps._tcp.$domain", "srv");
+   use Data::Dumper;
+    warn Dumper($reply);
     if ($reply) {
       my @d = $reply->answer;
       if (@d) {
-        $detail->{imapHost} = $reply->target();
-        $detail->{imapPort} = $reply->port();
+        $detail->{imapHost} = $d[0]->target();
+        $detail->{imapPort} = $d[0]->port();
       }
     }
     else {
@@ -375,8 +378,8 @@ sub handle_signup {
       if ($reply) {
         my @d = $reply->answer;
         if (@d) {
-          $detail->{imapHost} = $reply->target();
-          $detail->{imapPort} = $reply->port();
+          $detail->{imapHost} = $d[0]->target();
+          $detail->{imapPort} = $d[0]->port();
           $detail->{imapSSL} = 3;
         }
       }
@@ -385,8 +388,8 @@ sub handle_signup {
     if ($reply) {
       my @d = $reply->answer;
       if (@d) {
-        $detail->{smtpHost} = $reply->target();
-        $detail->{smtpPort} = $reply->port();
+        $detail->{smtpHost} = $d[0]->target();
+        $detail->{smtpPort} = $d[0]->port();
         $detail->{smtpSSL} = 2;
       }
     }
@@ -395,8 +398,8 @@ sub handle_signup {
       if ($reply) {
         my @d = $reply->answer;
         if (@d) {
-          $detail->{smtpHost} = $reply->target();
-          $detail->{smtpPort} = $reply->port();
+          $detail->{smtpHost} = $d[0]->target();
+          $detail->{smtpPort} = $d[0]->port();
           $detail->{smtpSSL} = 3;
         }
       }
@@ -406,8 +409,8 @@ sub handle_signup {
     if ($reply) {
       my @d = $reply->answer;
       if (@d) {
-        my $host = $reply->target();
-        my $port = $reply->port();
+        my $host = $d[0]->target();
+        my $port = $d[0]->port();
         $detail->{caldavURL} = "https://$host";
         $detail->{caldavURL} .= ":$port" unless $port eq 443;
       }
@@ -417,8 +420,8 @@ sub handle_signup {
       if ($reply) {
         my @d = $reply->answer;
         if (@d) {
-          my $host = $reply->target();
-          my $port = $reply->port();
+          my $host = $d[0]->target();
+          my $port = $d[0]->port();
           $detail->{caldavURL} = "http://$host";
           $detail->{caldavURL} .= ":$port" unless $port eq 80;
         }
@@ -429,8 +432,8 @@ sub handle_signup {
     if ($reply) {
       my @d = $reply->answer;
       if (@d) {
-        my $host = $reply->target();
-        my $port = $reply->port();
+        my $host = $d[0]->target();
+        my $port = $d[0]->port();
         $detail->{carddavURL} = "https://$host";
         $detail->{carddavURL} .= ":$port" unless $port eq 443;
       }
@@ -440,8 +443,8 @@ sub handle_signup {
       if ($reply) {
         my @d = $reply->answer;
         if (@d) {
-          my $host = $reply->target();
-          my $port = $reply->port();
+          my $host = $d[0]->target();
+          my $port = $d[0]->port();
           $detail->{carddavURL} = "http://$host";
           $detail->{carddavURL} .= ":$port" unless $port eq 80;
         }

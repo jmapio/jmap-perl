@@ -292,7 +292,7 @@ sub parse_date {
 }
 
 sub isodate {
-  my $Selft = shift;
+  my $Self = shift;
   my $epoch = shift || time();
 
   my $date = DateTime->from_epoch( epoch => $epoch );
@@ -859,9 +859,9 @@ sub put_file {
   $Self->commit();
 
   return {
-    id => $id,
+    id => "$id",
     type => $type,
-    expires => $expires,
+    expires => scalar($Self->isodate($expires)),
     size => $size,
   };
 }
