@@ -289,7 +289,7 @@ sub sync_jmailboxes {
       mayRename => 0,
       mayDelete => 0,
     };
-    my $id = $Self->dmake('mailboxes', $outbox);
+    my $id = $Self->dmake('jmailboxes', $outbox);
     $seen{$id} = 1;
     $roletoid{'outbox'} = $id;
   }
@@ -304,7 +304,7 @@ sub sync_jmailboxes {
       name => 'Archive',
       role => 'archive',
       sortOrder => 2,
-      mustBeOnlyMailbox => not $Self->{db}->{is_gmail},
+      mustBeOnlyMailbox => 1,
       mayReadItems => 1,
       mayAddItems => 1,
       mayRemoveItems => 1,
@@ -312,7 +312,7 @@ sub sync_jmailboxes {
       mayRename => 0,
       mayDelete => 0,
     };
-    my $id = $Self->dmake('mailboxes', $archive);
+    my $id = $Self->dmake('jmailboxes', $archive);
     $seen{$id} = 1;
     $roletoid{'archive'} = $id;
   }
