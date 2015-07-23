@@ -1059,7 +1059,7 @@ sub uploadFile {
   my $Self = shift;
   my ($type, $content) = @_; # XXX filehandle?
 
-  return $Self->put_file($type, $content);
+  return $Self->{db}->put_file($type, $content);
 }
 
 sub downloadFile {
