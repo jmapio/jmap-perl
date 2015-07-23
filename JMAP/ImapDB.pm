@@ -92,8 +92,6 @@ sub access_token {
   return [$hostname, $username, $password];
 }
 
-
-
 sub access_data {
   my $Self = shift;
 

@@ -34,7 +34,7 @@ sub access_token {
 
   my $O = JMAP::Sync::Gmail::O();
   my $data = $O->refresh($password);
-   
+
   return [$hostname, $username, $data->{access_token}];
 }
 
