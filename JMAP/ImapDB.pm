@@ -19,9 +19,6 @@ use AnyEvent::Socket;
 use Date::Format;
 use Data::Dumper;
 use JMAP::Sync::Gmail;
-use JMAP::Sync::ICloud;
-use JMAP::Sync::Fastmail;
-use JMAP::Sync::Yahoo;
 use JMAP::Sync::Standard;
 
 our $TAG = 1;
@@ -118,12 +115,6 @@ sub backend_cmd {
     my $backend;
     if ($config->{imapHost} eq 'imap.gmail.com') {
       $backend = JMAP::Sync::Gmail->new($config) || die "failed to setup $config->{username}";
-    } elsif ($config->{imapHost} eq 'imap.mail.me.com') {
-      $backend = JMAP::Sync::ICloud->new($config) || die "failed to setup $config->{username}";
-    } elsif ($config->{imapHost} eq 'mail.messagingengine.com') {
-      $backend = JMAP::Sync::Fastmail->new($config) || die "failed to setup $config->{username}";
-    } elsif ($config->{imapHost} eq 'imap.mail.yahoo.com') {
-      $backend = JMAP::Sync::Yahoo->new($config) || die "failed to setup $config->{username}";
     } else {
       $backend = JMAP::Sync::Standard->new($config) || die "failed to setup $config->{username}";
     }

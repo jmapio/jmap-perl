@@ -33,9 +33,9 @@ Please confirm host details below.
     <input type="text" name="imapHost" value="[% imapHost %]">
     <input type="text" name="imapPort" width="5" value="[% imapPort %]">
     <select name="imapSSL">
-     <option value="0"[% IF imapSSL = 0 %] selected[% END %]>Plaintext</option>
-     <option value="1"[% IF imapSSL = 1 %] selected[% END %]>SSL</option>
-     <option value="2"[% IF imapSSL = 2 %] selected[% END %]>StartTLS</option>
+     <option value="1"[% IF imapSSL = 1 %] selected[% END %]>Plaintext</option>
+     <option value="2"[% IF imapSSL = 2 %] selected[% END %]>SSL</option>
+     <option value="3"[% IF imapSSL = 3 %] selected[% END %]>StartTLS</option>
     </select>
   </td>
 </tr>
@@ -45,9 +45,9 @@ Please confirm host details below.
     <input type="text" name="smtpHost" value="[% smtpHost %]">
     <input type="text" name="smtpPort" width="5" value="[% smtpPort %]">
     <select name="smtpSSL">
-     <option value="0"[% IF imapSSL = 0 %] selected[% END %]>Plaintext</option>
-     <option value="1"[% IF imapSSL = 1 %] selected[% END %]>SSL</option>
-     <option value="2"[% IF imapSSL = 2 %] selected[% END %]>StartTLS</option>
+     <option value="1"[% IF imapSSL = 1 %] selected[% END %]>Plaintext</option>
+     <option value="2"[% IF imapSSL = 2 %] selected[% END %]>SSL</option>
+     <option value="3"[% IF imapSSL = 3 %] selected[% END %]>StartTLS</option>
     </select>
   </td>
 </tr>

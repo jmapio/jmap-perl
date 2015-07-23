@@ -29,6 +29,8 @@ use AnyEvent::Util;
 use AnyEvent::HTTP;
 use EV;
 use JSON::XS qw(encode_json decode_json);
+use Net::DNS;
+use Net::DNS::Resolver;
 
 use Net::Server::Fork;
 
@@ -314,19 +316,18 @@ sub handle_cb_google {
 
   getdb();
   #$db->setuser(username => $email, password => $gmaildata->{refresh_token}, email => $data->{name}, picture => $data->{picture});
-  $db->setuser(
+  $db->setuser({
     username => $email,
     password => $gmaildata->{refresh_token},
     imapHost => 'imap.gmail.com',
     imapPort => '993',
-    imapSSL => 1,
+    imapSSL => 2,
     smtpHost => 'smtp.gmail.com',
     smtpPort => 465,
-    smtpSSL => 1,
+    smtpSSL => 2,
     caldavURL => "https://apidata.googleusercontent.com/caldav/v2",
-    # still broken
     carddavURL => "https://www.googleapis.com/.well-known/carddav",
-  );
+  }, { picture => $data->{picture});
   $db->firstsync();
 
   return ['registered', [$accountid, $email]];
@@ -335,8 +336,125 @@ sub handle_cb_google {
 sub handle_signup {
   my $detail = shift;
 
+  $detail->{imapPort} ||= 993;
+  $detail->{imapSSL} ||= 2;
+  $detail->{smtpPort} ||= 587;
+  $detail->{smtpSSL} ||= 3;
+
+  if ($detail->{username} =~ m/\@icloud\.com/) {
+    $detail->{imapHost} = 'imap.mail.me.com';
+    $detail->{smtpHost} = 'smtp.mail.me.com';
+    $detail->{caldavURL} = 'https://caldav.icloud.com/';
+    $detail->{carddavURL} = 'https://contacts.icloud.com/';
+    $detail->{force} = 1;
+  }
+
+  elsif ($detail->{username} =~ m/\@yahoo\.com/) {
+    $detail->{imapHost} = 'imap.mail.yahoo.com',
+    $detail->{smtpHost} = 'smtp.mail.yahoo.com';
+    $detail->{caldavURL} = 'https://caldav.calendar.yahoo.com';
+    $detail->{carddavURL} = 'https://carddav.address.yahoo.com';
+    $detail->{force} = 1;
+  }
+
+  else {
+    my $Resolver = Net::DNS::Resolver->new;
+    my $domain = $detail->{username};
+    $domain =~ s/\@.*//;
+    my $reply;
+    ($reply) = $Resolver->search("_imaps._tcp.$domain", "srv");
+    if ($reply) {
+      my @d = $reply->answer;
+      if (@d) {
+        $detail->{imapHost} = $reply->target();
+        $detail->{imapPort} = $reply->port();
+      }
+    }
+    else {
+      my ($reply) = $Resolver->search("_imap._tcp.$domain", "srv");
+      if ($reply) {
+        my @d = $reply->answer;
+        if (@d) {
+          $detail->{imapHost} = $reply->target();
+          $detail->{imapPort} = $reply->port();
+          $detail->{imapSSL} = 3;
+        }
+      }
+    }
+    ($reply) = $Resolver->search("_smtps._tcp.$domain", "srv");
+    if ($reply) {
+      my @d = $reply->answer;
+      if (@d) {
+        $detail->{smtpHost} = $reply->target();
+        $detail->{smtpPort} = $reply->port();
+        $detail->{smtpSSL} = 2;
+      }
+    }
+    else {
+      my ($reply) = $Resolver->search("_submission._tcp.$domain", "srv");
+      if ($reply) {
+        my @d = $reply->answer;
+        if (@d) {
+          $detail->{smtpHost} = $reply->target();
+          $detail->{smtpPort} = $reply->port();
+          $detail->{smtpSSL} = 3;
+        }
+      }
+    }
+
+    ($reply) = $Resolver->search("_caldavs._tcp.$domain", "srv");
+    if ($reply) {
+      my @d = $reply->answer;
+      if (@d) {
+        my $host = $reply->target();
+        my $port = $reply->port();
+        $detail->{caldavURL} = "https://$host";
+        $detail->{caldavURL} .= ":$port" unless $port eq 443;
+      }
+    }
+    else {
+      my ($reply) = $Resolver->search("_caldav._tcp.$domain", "srv");
+      if ($reply) {
+        my @d = $reply->answer;
+        if (@d) {
+          my $host = $reply->target();
+          my $port = $reply->port();
+          $detail->{caldavURL} = "http://$host";
+          $detail->{caldavURL} .= ":$port" unless $port eq 80;
+        }
+      }
+    }
+
+    ($reply) = $Resolver->search("_carddavs._tcp.$domain", "srv");
+    if ($reply) {
+      my @d = $reply->answer;
+      if (@d) {
+        my $host = $reply->target();
+        my $port = $reply->port();
+        $detail->{carddavURL} = "https://$host";
+        $detail->{carddavURL} .= ":$port" unless $port eq 443;
+      }
+    }
+    else {
+      my ($reply) = $Resolver->search("_carddav._tcp.$domain", "srv");
+      if ($reply) {
+        my @d = $reply->answer;
+        if (@d) {
+          my $host = $reply->target();
+          my $port = $reply->port();
+          $detail->{carddavURL} = "http://$host";
+          $detail->{carddavURL} .= ":$port" unless $port eq 80;
+        }
+      }
+    }
+  }
+
+  unless ($detail->{force}) {
+    return ['continue', $detail];
+  }
+
   my $imap = Mail::IMAPTalk->new(
-   Server => $detail->[0],
+   Server => $detail->,
    Port => 993,
    UseSSL => 1,
    UseBlocking => 1,
@@ -349,27 +467,18 @@ sub handle_signup {
   $imap->logout();
 
   my $dbh = accountsdb();
-  my ($existing, $type) = $dbh->selectrow_array("SELECT accountid, type FROM accounts WHERE email = ?", {}, $detail->[1]);
+  my ($existing, $type) = $dbh->selectrow_array("SELECT accountid, type FROM accounts WHERE email = ?", {}, $detail->{username});
   if ($existing) {
     set_accountid($existing);
   }
   else {
-    $dbh->do("INSERT INTO accounts (email, accountid, type) VALUES (?, ?, ?)", {}, $detail->[1], $accountid, 'imap');
+    $dbh->do("INSERT INTO accounts (email, accountid, type) VALUES (?, ?, ?)", {}, $detail->{username}, $accountid, 'imap');
   }
   getdb();
-  $db->setuser(
-    username => $detail->[1],
-    password => $detail->[2],
-    imapHost => $detail->[0],
-    imapPort => 993,
-    imapSSL => 1,
-    smtpHost => $detail->[0],
-    smtpPort => 465,
-    smtpSSL => 1,
-  );
+  $db->setuser(%$detail);
   $db->firstsync();
 
-  return ['signedup', [$accountid, $detail->[1]]];
+  return ['done', [$accountid, $detail->[1]]];
 }
 
 sub handle_delete {

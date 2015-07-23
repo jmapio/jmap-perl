@@ -19,7 +19,7 @@ my %KNOWN_SPECIALS = map { lc $_ => 1 } qw(\\HasChildren \\HasNoChildren \\NoSel
 sub connect_calendars {
   my $Self = shift;
 
-  return unless $Self->{auth}{calurl};
+  return unless $Self->{auth}{caldavURL};
 
   if ($Self->{calendars}) {
     $Self->{lastused} = time();
@@ -29,7 +29,7 @@ sub connect_calendars {
   $Self->{calendars} = Net::CalDAVTalk->new(
     user => $Self->{auth}{username},
     password => $Self->{auth}{password},
-    url => $Self->{auth}{calurl},
+    url => $Self->{auth}{caldavURL},
     expandurl => 1,
   );
 
@@ -39,7 +39,7 @@ sub connect_calendars {
 sub connect_contacts {
   my $Self = shift;
 
-  return unless $Self->{auth}{addressbookurl};
+  return unless $Self->{auth}{carddavURL};
 
   if ($Self->{contacts}) {
     $Self->{lastused} = time();
@@ -49,7 +49,7 @@ sub connect_contacts {
   $Self->{contacts} = Net::CardDAVTalk->new(
     user => $Self->{auth}{username},
     password => $Self->{auth}{password},
-    url => $Self->{auth}{addressbookurl},
+    url => $Self->{auth}{carddavURL},
     expandurl => 1,
   );
 
@@ -69,11 +69,10 @@ sub connect_imap {
   delete $Self->{imap};
 
   for (1..3) {
-    my $port = 993;
-    my $usessl = $port != 143;  # we use SSL for anything except default
+    my $usessl = $Self->{auth}{imapSSL} - 1;
     $Self->{imap} = Mail::IMAPTalk->new(
-      Server   => $Self->{auth}{imapserver},
-      Port     => $port,
+      Server   => $Self->{auth}{imapHost},
+      Port     => $Self->{auth}{imapPort},
       Username => $Self->{auth}{username},
       Password => $Self->{auth}{password},
       # not configurable right now...
@@ -88,18 +87,22 @@ sub connect_imap {
   die "Could not connect to IMAP server: $@";
 }
 
+
 sub send_email {
   my $Self = shift;
   my $rfc822 = shift;
 
+  my $ssl;
+  $ssl = 'ssl' if $Self->{auth}{smtpSSL} == 2;
+  $ssl = 'startls' if $Self->{auth}{smtpSSL} == 3;
   my $email = Email::Simple->new($rfc822);
   sendmail($email, {
     from => $Self->{auth}{username},
     transport => Email::Sender::Transport::SMTPS->new({
       helo => $ENV{jmaphost},
-      host => $Self->{auth}{smtpserver},
-      port => 587,
-      ssl => 'starttls',
+      host => $Self->{auth}{smtpHost},
+      port => $Self->{auth}{smtpPort},
+      ssl => $ssl,
       sasl_username => $Self->{auth}{username},
       sasl_password => $Self->{auth}{password},
     }),
