@@ -851,8 +851,12 @@ sub put_file {
 
   my $size = length($content);
 
+  $Self->begin();
+
   # XXX - no dedup on sha1 here yet
   my $id = $Self->dinsert('jfiles', { type => $type, size => $size, content => $content, expires => $expires });
+
+  $Self->commit();
 
   return {
     id => $id,
