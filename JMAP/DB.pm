@@ -527,6 +527,7 @@ sub hasatt {
   my $eml = shift;
   my $type = $eml->content_type() || 'text/plain';
   return 1 if $type =~ m{(image|video|application)/};
+  return 1 if $eml->header('X-JMAP-Draft-Attachments');
   foreach my $sub ($eml->subparts()) {
     my $res = hasatt($sub);
     return $res if $res;
