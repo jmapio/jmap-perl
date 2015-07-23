@@ -1030,9 +1030,11 @@ sub getRawMessage {
   my $msgid = $selector;
   my $part;
   my $filename;
-  if ($msgid =~ s{/([^/]+)/?(.*)}{}) {
-    $part = $1;
-    $filename = $2;
+  if ($msgid =~ s{/?(.*)}{}) {
+    $filename = $1;
+  }
+  if ($msgid =~ s{-(.*)}{}) {
+   $part = $1;
   }
 
   # skipping transactions here

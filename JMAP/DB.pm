@@ -438,8 +438,8 @@ sub attachments {
     push @res, {
       id => $id,
       type => $type,
-      url => "https://$ENV{jmaphost}/raw/$accountid/$messageid/$id/$filename", # XXX dep
-      blobId => "$messageid/$id",
+      url => "https://$ENV{jmaphost}/raw/$accountid/$messageid-$id/$filename", # XXX dep
+      blobId => "$messageid-$id",
       name => $filename,
       size => length($body),
       isInline => $isInline,
