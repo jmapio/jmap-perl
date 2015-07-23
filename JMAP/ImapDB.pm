@@ -978,8 +978,8 @@ sub update_messages {
       if (exists $action->{mailboxIds}) {
         # jmailboxid
         my @mboxes = map { $idmap->($_) } @{$action->{mailboxIds}};
-        my ($has_outbox) = grep { $_ eq 'outbox' } @mboxes;
-        my (@others) = grep { $_ ne 'outbox' } @mboxes;
+        my ($has_outbox) = grep { $jidmap{$_} eq 'outbox' } @mboxes;
+        my (@others) = grep { $jidmap{$_} ne 'outbox' } @mboxes;
         if ($has_outbox) {
           # move to sent when we're done
           push @others, $jmailmap{$jrolemap{'sent'}}{jmailboxid};
@@ -1004,8 +1004,8 @@ sub update_messages {
         }
         done:
         if ($Self->{is_gmail}) {
-          # because 'archive' is synthetic on gmail it will appear as a non-present record here,
-          # and be stripped - so we store back labels == []
+          # because 'archive' is synthetic on gmail we strip it here
+          (@others) = grep { $jidmap{$_} ne 'archive' } @others;
           my @labels = grep { $_ and lc $_ ne '\\allmail' } map { $jmailmap{$_}{label} } @others;
           $Self->backend_cmd('imap_labels', $imapname, $uidvalidity, $uid, \@labels);
         }
