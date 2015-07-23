@@ -169,22 +169,6 @@ sub getMailboxes {
 
   my $data = $dbh->selectall_arrayref("SELECT * FROM jmailboxes WHERE active = 1", {Slice => {}});
 
-  # outbox - magic
-  push @$data, {
-    jmailboxid => 'outbox',
-    parentId => 0,
-    name => 'Outbox',
-    role => 'outbox',
-    sortOrder => 1,
-    mustBeOnlyMailbox => 1,
-    mayReadItems => 1,
-    mayAddItems => 1,
-    mayRemoveItems => 1,
-    mayCreateChild => 0,
-    mayRename => 0,
-    mayDelete => 0,
-  };
-
   my %ids;
   if ($args->{ids}) {
     %ids = map { $Self->idmap($_) => 1 } @{$args->{ids}};

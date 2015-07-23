@@ -271,12 +271,59 @@ sub sync_jmailboxes {
     $Self->dmaybeupdate('ifolders', {jmailboxid => $id}, {ifolderid => $folder->[0]});
   }
 
+  if ($roletoid{'outbox'}) {
+    $seen{$roletoid{'outbox'}} = 1;
+  }
+  else {
+    # outbox - magic
+    my $outbox = {
+      parentId => 0,
+      name => 'Outbox',
+      role => 'outbox',
+      sortOrder => 2,
+      mustBeOnlyMailbox => 1,
+      mayReadItems => 1,
+      mayAddItems => 1,
+      mayRemoveItems => 1,
+      mayCreateChild => 0,
+      mayRename => 0,
+      mayDelete => 0,
+    };
+    my $id = $Self->dmake('mailboxes', $outbox);
+    $seen{$id} = 1;
+    $roletoid{'outbox'} = $id;
+  }
+
+  if ($roletoid{'archive'}) {
+    $seen{$roletoid{'archive'}} = 1;
+  }
+  else {
+    # archive - magic
+    my $archive = {
+      parentId => 0,
+      name => 'Archive',
+      role => 'archive',
+      sortOrder => 2,
+      mustBeOnlyMailbox => not $Self->{db}->{is_gmail},
+      mayReadItems => 1,
+      mayAddItems => 1,
+      mayRemoveItems => 1,
+      mayCreateChild => 0,
+      mayRename => 0,
+      mayDelete => 0,
+    };
+    my $id = $Self->dmake('mailboxes', $archive);
+    $seen{$id} = 1;
+    $roletoid{'archive'} = $id;
+  }
+
   foreach my $mailbox (@$jmailboxes) {
     my $id = $mailbox->[0];
     next unless $mailbox->[4];
     next if $seen{$id};
     $Self->dupdate('jmailboxes', {active => 0}, {jmailboxid => $id});
   }
+
   $Self->commit();
 }
 
@@ -957,7 +1004,9 @@ sub update_messages {
         }
         done:
         if ($Self->{is_gmail}) {
-          my @labels = grep { lc $_ ne '\\allmail' } map { $jmailmap{$_}{label} } @others;
+          # because 'archive' is synthetic on gmail it will appear as a non-present record here,
+          # and be stripped - so we store back labels == []
+          my @labels = grep { $_ and lc $_ ne '\\allmail' } map { $jmailmap{$_}{label} } @others;
           $Self->backend_cmd('imap_labels', $imapname, $uidvalidity, $uid, \@labels);
         }
         else {
@@ -1070,7 +1119,10 @@ sub apply_data {
   }
 
   my $labels = $Self->labels();
-  my @jmailboxids = grep { $_ } map { $labels->{$_}[1] } @$labellist;
+  my @list = @$labellist;
+  # gmail empty list means archive at our end
+  @list = ('archive') if ($Self->{is_gmail} and not @list);
+  my @jmailboxids = grep { $_ } map { $labels->{$_}[1] } @list;
 
   my ($old) = $Self->{dbh}->selectrow_array("SELECT msgid FROM jmessages WHERE msgid = ? AND active = 1", {}, $msgid);
 
