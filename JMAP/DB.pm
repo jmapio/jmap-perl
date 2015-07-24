@@ -238,7 +238,7 @@ sub add_message {
 
   return unless @$mailboxes; # no mailboxes, no message
 
-  $Self->dmake('jmessages', $data, $Self->{backfilling});
+  $Self->dmake('jmessages', $data);
   foreach my $mailbox (@$mailboxes) {
     $Self->add_message_to_mailbox($data->{msgid}, $mailbox);
   }
@@ -895,8 +895,10 @@ sub dinsert {
 # dinsert with a modseq
 sub dmake {
   my $Self = shift;
-  my ($table, $values, $backfilling) = @_;
-  $values->{jmodseq} = $backfilling ? 1 : $Self->dirty($table);
+  my ($table, $values) = @_;
+  my $modseq = $Self->dirty($table);
+  $values->{jcreated} = $modseq;
+  $values->{jmodseq} = $modseq;
   $values->{active} = 1;
   return $Self->dinsert($table, $values);
 }
@@ -1007,6 +1009,7 @@ CREATE TABLE IF NOT EXISTS jmessages (
   msgmessageid TEXT,
   msgdate INTEGER,
   msgsize INTEGER,
+  jcreated INTEGER,
   jmodseq INTEGER,
   mtime DATE,
   active BOOLEAN
@@ -1030,6 +1033,7 @@ CREATE TABLE IF NOT EXISTS jmailboxes (
   mayCreateChild BOOLEAN,
   mayRename BOOLEAN,
   mayDelete BOOLEAN,
+  jcreated INTEGER,
   jmodseq INTEGER,
   jcountsmodseq INTEGER,
   mtime DATE,
@@ -1041,6 +1045,7 @@ EOF
 CREATE TABLE IF NOT EXISTS jmessagemap (
   jmailboxid INTEGER,
   msgid TEXT,
+  jcreated INTEGER,
   jmodseq INTEGER,
   mtime DATE,
   active BOOLEAN,
@@ -1102,6 +1107,7 @@ CREATE TABLE IF NOT EXISTS jcalendars (
   mayRemoveItems BOOLEAN,
   mayDelete BOOLEAN,
   mayRename BOOLEAN,
+  jcreated INTEGER,
   jmodseq INTEGER,
   mtime DATE,
   active BOOLEAN
@@ -1115,6 +1121,7 @@ CREATE TABLE IF NOT EXISTS jevents (
   firststart DATE,
   lastend DATE,
   payload TEXT,
+  jcreated INTEGER,
   jmodseq INTEGER,
   mtime DATE,
   active BOOLEAN
@@ -1132,6 +1139,7 @@ CREATE TABLE IF NOT EXISTS jaddressbooks (
   mayRemoveItems BOOLEAN,
   mayDelete BOOLEAN,
   mayRename BOOLEAN,
+  jcreated INTEGER,
   jmodseq INTEGER,
   mtime DATE,
   active BOOLEAN
@@ -1143,6 +1151,7 @@ CREATE TABLE IF NOT EXISTS jcontactgroups (
   groupuid TEXT PRIMARY KEY,
   jaddressbookid INTEGER,
   name TEXT,
+  jcreated INTEGER,
   jmodseq INTEGER,
   mtime DATE,
   active BOOLEAN
@@ -1166,6 +1175,7 @@ CREATE TABLE IF NOT EXISTS jcontacts (
   jaddressbookid INTEGER,
   isFlagged BOOLEAN,
   payload TEXT,
+  jcreated INTEGER,
   jmodseq INTEGER,
   mtime DATE,
   active BOOLEAN
