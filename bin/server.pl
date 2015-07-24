@@ -616,7 +616,6 @@ sub HandleEventSource {
 sub prod_backfill {
   my $accountid = shift;
   my $force = shift;
-  return;
   return if (not $force and $idler{$accountid}{backfilling});
   $idler{$accountid}{backfilling} = 1;
     
