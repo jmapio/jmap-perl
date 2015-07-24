@@ -252,6 +252,7 @@ sub handle_sync {
 
 sub handle_syncall {
   my $db = shift;
+  $db->firstsync();
   $db->sync_folders();
   $db->sync_imap();
   $db->sync_addressbooks();
