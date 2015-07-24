@@ -43,7 +43,7 @@ my %TABLE2GROUPS = (
 sub new {
   my $class = shift;
   my $accountid = shift || die;
-  my $dbh = DBI->connect("dbi:SQLite:dbname=/home/jmap/data/$accountid.sqlite3", undef, undef, { RaiseError => 1 });
+  my $dbh = DBI->connect("dbi:SQLite:dbname=/home/jmap/data/$accountid.sqlite3");
   my $Self = bless { accountid => $accountid, dbh => $dbh, start => time() }, ref($class) || $class;
   $Self->_initdb($dbh);
   return $Self;

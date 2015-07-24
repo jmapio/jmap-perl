@@ -59,7 +59,7 @@ sub refreshSyncedCalendars {
   my $Self = shift;
 
   $Self->{db}->sync_calendars();
-  
+
   # no response
   return ();
 }
