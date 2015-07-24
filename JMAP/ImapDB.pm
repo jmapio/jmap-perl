@@ -437,7 +437,7 @@ sub do_calendar {
   my ($href, $jcalendarid) = $dbh->selectrow_array("SELECT href, jcalendarid FROM icalendars WHERE icalendarid = ?", {}, $calendarid);
   my $events = $Self->backend_cmd('get_events', $href);
   # parse events before we lock
-  my %parsed = map { $Self->parse_event($events->{$_}) } keys %$events;
+  my %parsed = map { $_ => $Self->parse_event($events->{$_}) } keys %$events;
 
   $Self->begin();
   my $exists = $dbh->selectall_arrayref("SELECT ieventid, resource, uid FROM ievents WHERE icalendarid = ?", {Slice => {}}, $calendarid);
@@ -585,7 +585,7 @@ sub do_addressbook {
   my ($href, $jaddressbookid) = $dbh->selectrow_array("SELECT href, jaddressbookid FROM iaddressbooks WHERE iaddressbookid = ?", {}, $addressbookid);
   my $cards = $Self->backend_cmd('get_cards', $href);
   # parse before locking
-  my %parsed = map { $Self->parse_card($cards->{$_}) } keys %$cards;
+  my %parsed = map { $_ => $Self->parse_card($cards->{$_}) } keys %$cards;
 
   $Self->begin();
 
@@ -595,6 +595,7 @@ sub do_addressbook {
   foreach my $resource (keys %$cards) {
     my $data = delete $res{$resource};
     my $raw = $cards->{$resource};
+    my $card = $parsed{$resource};
     my $uid = $card->{uid};
     my $kind = $card->{kind};
     my $item = {
