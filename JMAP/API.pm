@@ -710,6 +710,7 @@ sub getMessageListUpdates {
 
       # jmodseq greater than sinceState is a change
       my $changed = ($item->{jmodseq} > $args->{sinceState});
+      my $isnew = ($item->{jcreated} > $args->{sinceState});
 
       if ($changed) {
         # if it's in AND it's the exemplar, it's been added
@@ -758,6 +759,7 @@ sub getMessageListUpdates {
 
       # jmodseq greater than sinceState is a change
       my $changed = ($item->{jmodseq} > $args->{sinceState});
+      my $isnew = ($item->{jcreated} > $args->{sinceState});
 
       if ($changed) {
         if ($isin) {

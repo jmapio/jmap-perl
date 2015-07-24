@@ -145,9 +145,6 @@ my %backend;
 
 $httpd->reg_cb (
   '/jmap' => \&do_jmap,
-  '/A' => \&do_A,
-  '/J' => \&do_J,
-  '/U' => \&do_U,
   '/upload' => \&do_upload,
   '/raw' => \&do_raw,
   '/register' => \&do_register,
@@ -316,85 +313,6 @@ sub do_raw {
     else {
       not_found($req)
     }
-    return 1;
-  }, mkerr($req));
-}
-
-sub _getaccountid {
-  my $req = shift;
-  my $header = $req->headers->{"authorization"};
-  $header =~ s/^Token //;
-  return $header;
-}
-
-sub do_A {
-  my ($httpd, $req) = @_;
-
-  return not_found($req) unless $req->method eq 'post';
-
-  my $content = $req->content();
-  return invalid_request($req) unless $content;
-  my $request = eval { $json->decode($content) };
-  return invalid_request($req) unless ($request and ref($request) eq 'HASH');
-
-  # more validation?
-
-  $httpd->stop_request();
-
-  send_backend_request("A", 'authenticate', $request, sub {
-    my $res = shift;
-    my $html = encode_utf8($json->encode($res));
-    $req->respond ({ content => ['application/json', $html] });
-    return 1;
-  }, mkerr($req));
-}
-
-sub do_J {
-  my ($httpd, $req) = @_;
-
-  return not_found($req) unless $req->method eq 'post';
-
-  my $accountid = _getaccountid($req);
-  return need_auth($req) unless $accountid;
-
-  prod_idler($accountid);
-
-  my $content = $req->content();
-  return invalid_request($req) unless $content;
-  my $request = eval { $json->decode($content) };
-  return invalid_request($req) unless ($request and ref($request) eq 'ARRAY');
-
-  $httpd->stop_request();
-
-  send_backend_request($accountid, 'jmap', $request, sub {
-    my $res = shift;
-    my $html = encode_utf8($json->encode($res));
-    $req->respond ({ content => ['application/json', $html] });
-    return 1;
-  }, mkerr($req));
-}
-
-sub do_U {
-  my ($httpd, $req) = @_;
-
-  return not_found($req) unless $req->method eq 'post';
-
-  my $accountid = _getaccountid($req);
-  return need_auth($req) unless $accountid;
-
-  prod_idler($accountid);
-
-  my $content = $req->content();
-  return invalid_request($req) unless $content;
-
-  my $type = $req->headers->{"content-type"};
-
-  $httpd->stop_request();
-
-  send_backend_request($accountid, 'upload', [$type, $content], sub {
-    my $res = shift;
-    my $html = encode_utf8($json->encode($res));
-    $req->respond ({ content => ['application/json', $html] });
     return 1;
   }, mkerr($req));
 }
