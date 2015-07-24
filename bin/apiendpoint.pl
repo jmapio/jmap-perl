@@ -62,7 +62,7 @@ sub getdb {
   die "no accountid" unless $accountid;
   $dbh ||= accountsdb();
   my ($email, $type) = $dbh->selectrow_array("SELECT email,type FROM accounts WHERE accountid = ?", {}, $accountid);
-  die "no type for $accountid" unless $type;
+  die "Account $accountid does not exist, please re-create\n" unless $type;
   warn "CONNECTING: $email $type\n";
   if ($type eq 'gmail') {
     $db = JMAP::GmailDB->new($accountid);
@@ -71,7 +71,7 @@ sub getdb {
     $db = JMAP::ImapDB->new($accountid);
   }
   else {
-    die "Weird type $type";
+    die "Weird type $type for $accountid";
   }
   $db->{change_cb} = \&change_cb;
   return $db;
@@ -141,9 +141,10 @@ sub handle_getstate {
 
   $db->begin();
   my $user = $db->get_user();
+  $db->commit();
+
   die "Failed to get user" unless $user;
   my $state = "$user->{jhighestmodseq}";
-  $db->commit();
 
   my %map;
   foreach my $key (keys %$user) {
@@ -230,7 +231,7 @@ sub mk_handler {
       $res = ['error', "$@"]
     }
     if ($db and $db->in_transaction()) {
-      $res = ['error', "STILL IN TRANSACTION " . Dumper($res, $args, $tag)]
+      $db->rollback();
     }
     $res->[2] = $tag;
     $hdl->push_write(json => $res) if $res->[0];
@@ -263,7 +264,7 @@ sub handle_syncall {
 sub handle_backfill {
   my $db = shift;
   my $res = $db->backfill();
-  return ['sync', $res ? $JSON::true : $JSON::false];
+  return ['backfill', $res ? $JSON::true : $JSON::false];
 }
 
 sub handle_davsync {
@@ -365,8 +366,6 @@ sub handle_signup {
     my $reply;
     warn "RESOLVING: $domain\n";
     ($reply) = $Resolver->search("_imaps._tcp.$domain", "srv");
-   use Data::Dumper;
-    warn Dumper($reply);
     if ($reply) {
       my @d = $reply->answer;
       if (@d) {
@@ -543,7 +542,7 @@ sub handle_jmap {
       @items = eval { $api->$command($args, $tag) };
       if ($@) {
         @items = ['error', { type => "serverError", message => "$@" }];
-	eval { $api->rollback() };
+        eval { $api->rollback() };
       }
     }
     else {
