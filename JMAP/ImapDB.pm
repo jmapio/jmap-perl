@@ -926,11 +926,18 @@ sub import_message {
     $Self->do_folder($fdata->{ifolderid}, $fdata->{label});
   }
 
-  $Self->begin();
   my ($msgid, $thrid) = $Self->dbh->selectrow_array("SELECT msgid, thrid FROM imessages WHERE ifolderid = ? AND uid = ?", {}, $jmailmap{$id}{ifolderid}, $uid);
 
   # save us having to download it again
-  $Self->add_raw_message($msgid, $rfc822);
+  my $eml = Email::MIME->new($rfc822);
+  my $message = $Self->parse_message($msgid, $eml);
+
+  $Self->begin();
+  $Self->dinsert('jrawmessage', {
+    msgid => $msgid,
+    rfc822 => $rfc822,
+    parsed => encode_json($message),
+  });
   $Self->commit();
 
   return ($msgid, $thrid);
@@ -1212,20 +1219,32 @@ sub fill_messages {
     next unless $imapname;
 
     my $res = $Self->backend_cmd('imap_fill', $imapname, $uidvalidity, $uids);
-
-    $Self->begin();
-
-    foreach my $uid (sort { $a <=> $b } keys %{$res->{data}}) {
-      my $msgid = $uhash->{$uid};
-      next if $result{$msgid};
+    my %parsed;
+    foreach my $uid (keys %{$res->{data}}) {
       my $rfc822 = $res->{data}{$uid};
       next unless $rfc822;
-      $result{$msgid} = $Self->add_raw_message($msgid, $rfc822);
+      my $msgid = $uhash->{$uid};
+      next if $result{$msgid};
+      my $eml = Email::MIME->new($rfc822);
+      $parsed{$uid} = $Self->parse_message($msgid, $eml);
     }
 
+    $Self->begin();
+    foreach my $uid (sort { $a <=> $b } keys %parsed) {
+      my $msgid = $uhash->{$uid};
+      my $rfc822 = $res->{data}{$uid};
+      next unless $rfc822;
+      $Self->dinsert('jrawmessage', {
+       msgid => $msgid,
+       rfc822 => $rfc822,
+       parsed => encode_json($parsed{$uid}),
+      });
+      $result{$msgid} = $parsed{$uid}
+    }
     $Self->commit();
   }
 
+  # XXX - handle not getting data that we need?
   my @stillneed = grep { not $result{$_} } @ids;
 
   return \%result;

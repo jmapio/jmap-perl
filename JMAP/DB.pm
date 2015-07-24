@@ -264,27 +264,6 @@ sub get_raw_message {
   return find_part($eml, $part);
 }
 
-sub add_raw_message {
-  my $Self = shift;
-  my $msgid = shift;
-  my $rfc822 = shift;
-
-  my $eml = Email::MIME->new($rfc822);
-  my $message = $Self->parse_message($msgid, $eml);
-  my $parsed = encode_json($message);
-
-  # fiddle the top-level fields
-  my $data = {
-    msgid => $msgid,
-    rfc822 => $rfc822,
-    parsed => $parsed,
-  };
-
-  my $jid = $Self->dinsert('jrawmessage', $data);
-
-  return decode_json($parsed);
-}
-
 sub parse_date {
   my $Self = shift;
   my $date = shift;
