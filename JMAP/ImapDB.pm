@@ -1009,7 +1009,7 @@ sub update_messages {
         if ($has_outbox) {
           # move to sent when we're done
           push @others, $jmailmap{$jrolemap{'sent'}}{jmailboxid};
-          my ($rfc822) = $Self->get_raw_message($msgid);
+          my ($type, $rfc822) = $Self->get_raw_message($msgid);
           # XXX - add attachments - we might actually want the parsed message and then realise the attachments...
           $Self->backend_cmd('send_email', $rfc822);
 
@@ -1259,7 +1259,7 @@ sub get_raw_message {
 
   my $res = $Self->backend_cmd('imap_getpart', $imapname, $uidvalidity, $uid, $part);
 
-  return $res->{data};
+  return ($res->{type}, $res->{data});
 }
 
 sub create_mailboxes {

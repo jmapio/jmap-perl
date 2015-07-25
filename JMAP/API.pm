@@ -1022,12 +1022,8 @@ sub getRawMessage {
    $part = $1;
   }
 
-  # skipping transactions here
-  my $dbh = $Self->{db}->dbh();
-  my ($content) = $dbh->selectrow_array("SELECT rfc822 FROM jrawmessage WHERE msgid = ?", {}, $msgid);
-  return unless $content;
+  my ($type, $data) = $Self->{db}->get_raw_message($msgid, $part);
 
-  my ($type, $data) = $Self->{db}->get_raw_message($content, $part);
   return ($type, $data, $filename);
 }
 

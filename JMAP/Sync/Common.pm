@@ -319,11 +319,22 @@ sub imap_getpart {
     return \%res;
   }
 
-  my $key = $part ? "BINARY[$part]" : "RFC822";
+  my $key = $part ? "(BINARY[$part] BODY[$part.header.fields (content-type)])" : "RFC822";
   my $data = $imap->fetch($uid, $key);
   $Self->_unselect($imap);
 
-  ($res{data}) = values %{$data->{$uid}}; # ignore which key we got
+  my @keys = keys %{$data->{$uid}};
+  if ($part) {
+    my ($datakey) = grep { m/binary/i } @keys;
+    my ($typekey) = grep { m/header/i } @keys;
+    my $type = $data->{$uid}{$typekey};
+    $type =~ s/;.*//;
+    $res{type} = $type;
+    $res{type} = $data->{$uid}{$datakey};
+  }
+  else {
+    ($res{data}) = values %{$data->{$uid}}; # ignore which key we got
+  }
   return \%res;
 }
 
