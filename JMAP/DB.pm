@@ -253,17 +253,6 @@ sub add_message_to_mailbox {
   $Self->dmaybeupdate('jmailboxes', {jcountsmodseq => $data->{jmodseq}}, {jmailboxid => $jmailboxid});
 }
 
-sub get_raw_message {
-  my $Self = shift;
-  my $rfc822 = shift;
-  my $part = shift;
-
-  return ('message/rfc822', $rfc822) unless $part;
-
-  my $eml = Email::MIME->new($rfc822);
-  return find_part($eml, $part);
-}
-
 sub parse_date {
   my $Self = shift;
   my $date = shift;
@@ -330,25 +319,6 @@ sub headers {
     $data{$name} = join("\n", @values);
   }
   return \%data;
-}
-
-sub find_part {
-  my $eml = shift;
-  my $target = shift;
-  my $part = shift;
-  my $num = 0;
-  foreach my $sub ($eml->subparts()) {
-    $num++;
-    my $id = $part ? "$part.$num" : $num;
-    my $type = $sub->content_type();
-    $type =~ s/;.*//;
-    return ($type, $sub->body()) if ($id eq $target);
-    if ($type =~ m{^multipart/}) {
-      my @res = find_part($sub, $target, $id);
-      return @res if @res;
-    }
-  }
-  return ();
 }
 
 sub attachments {
@@ -1076,8 +1046,8 @@ EOF
   $dbh->do(<<EOF);
 CREATE TABLE IF NOT EXISTS jrawmessage (
   msgid TEXT PRIMARY KEY,
-  rfc822 TEXT,
   parsed TEXT,
+  hasAttachment INTEGER,
   mtime DATE
 );
 EOF

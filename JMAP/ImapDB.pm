@@ -936,8 +936,8 @@ sub import_message {
   $Self->begin();
   $Self->dinsert('jrawmessage', {
     msgid => $msgid,
-    rfc822 => $rfc822,
     parsed => encode_json($message),
+    hasAttachment => $message->{hasAttachment},
   });
   $Self->commit();
 
@@ -1009,8 +1009,8 @@ sub update_messages {
         if ($has_outbox) {
           # move to sent when we're done
           push @others, $jmailmap{$jrolemap{'sent'}}{jmailboxid};
-          $Self->fill_messages($msgid);
-          my ($rfc822) = $dbh->selectrow_array("SELECT rfc822 FROM jrawmessage WHERE msgid = ?", {}, $msgid);
+          my ($rfc822) = $Self->get_raw_message($msgid);
+          # XXX - add attachments - we might actually want the parsed message and then realise the attachments...
           $Self->backend_cmd('send_email', $rfc822);
 
           # strip the \Draft flag
@@ -1227,20 +1227,18 @@ sub fill_messages {
       my $msgid = $uhash->{$uid};
       next if $result{$msgid};
       my $eml = Email::MIME->new($rfc822);
-      $parsed{$uid} = $Self->parse_message($msgid, $eml);
+      $parsed{$msgid} = $Self->parse_message($msgid, $eml);
     }
 
     $Self->begin();
-    foreach my $uid (sort { $a <=> $b } keys %parsed) {
-      my $msgid = $uhash->{$uid};
-      my $rfc822 = $res->{data}{$uid};
-      next unless $rfc822;
+    foreach my $msgid (sort keys %parsed) {
+      my $message = $parsed{$msgid};
       $Self->dinsert('jrawmessage', {
        msgid => $msgid,
-       rfc822 => $rfc822,
-       parsed => encode_json($parsed{$uid}),
+       parsed => $message,
+       hasAttachment => $message->{hasAttachment},
       });
-      $result{$msgid} = $parsed{$uid}
+      $result{$msgid} = $parsed{$msgid};
     }
     $Self->commit();
   }
@@ -1249,6 +1247,19 @@ sub fill_messages {
   my @stillneed = grep { not $result{$_} } @ids;
 
   return \%result;
+}
+
+sub get_raw_message {
+  my $Self = shift;
+  my $msgid = shift;
+  my $part = shift;
+
+  my ($imapname, $uidvalidity, $uid) = $Self->dbh->selectrow_array("SELECT imapname, uidvalidity, uid FROM ifolders JOIN imessages USING (ifolderid) WHERE msgid = ?", {}, $msgid);
+  return unless $imapname;
+
+  my $res = $Self->backend_cmd('imap_getpart', $imapname, $uidvalidity, $uid, $part);
+
+  return $res->{data};
 }
 
 sub create_mailboxes {
