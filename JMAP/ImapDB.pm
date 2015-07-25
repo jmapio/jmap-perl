@@ -1235,7 +1235,7 @@ sub fill_messages {
       my $message = $parsed{$msgid};
       $Self->dinsert('jrawmessage', {
        msgid => $msgid,
-       parsed => $message,
+       parsed => encode_json($message),
        hasAttachment => $message->{hasAttachment},
       });
       $result{$msgid} = $parsed{$msgid};
