@@ -295,6 +295,40 @@ sub imap_fill {
   return \%res;
 }
 
+sub imap_getpart {
+  my $Self = shift;
+  my $imapname = shift;
+  my $olduidvalidity = shift || 0;
+  my $uid = shift;
+  my $partnum = shift;
+
+  my $imap = $Self->connect_imap();
+
+  my $r = $imap->examine($imapname);
+  die "EXAMINE FAILED $imapname" unless $r;
+
+  my $uidvalidity = $imap->get_response_code('uidvalidity') + 0;
+
+  my %res = (
+    imapname => $imapname,
+    olduidvalidity => $olduidvalidity,
+    newuidvalidity => $uidvalidity,
+  );
+
+  if ($olduidvalidity != $uidvalidity) {
+    return \%res;
+  }
+
+  my $key = $part ? "BINARY[$part]" : "RFC822";
+  my $data = $imap->fetch($uid, $key);
+  $Self->_unselect($imap);
+
+  ($res{data}) = values %{$data->{$uid}}; # ignore which key we got
+  return \%res;
+}
+
+}
+
 sub imap_count {
   my $Self = shift;
   my $imapname = shift;
