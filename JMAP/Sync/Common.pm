@@ -300,7 +300,7 @@ sub imap_getpart {
   my $imapname = shift;
   my $olduidvalidity = shift || 0;
   my $uid = shift;
-  my $partnum = shift;
+  my $part = shift;
 
   my $imap = $Self->connect_imap();
 
@@ -325,8 +325,6 @@ sub imap_getpart {
 
   ($res{data}) = values %{$data->{$uid}}; # ignore which key we got
   return \%res;
-}
-
 }
 
 sub imap_count {
