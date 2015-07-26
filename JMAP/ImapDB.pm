@@ -1249,6 +1249,18 @@ sub fill_messages {
   return \%result;
 }
 
+sub find_type {
+  my $message = shift;
+  my $part = shift;
+
+  return $message->{type} if ($message->{part} || '') eq $part;
+
+  foreach my $sub (@{$part->{attachments}}) {
+    my $type = find_type($sub, $part);
+    return $type if $type;
+  }
+}
+
 sub get_raw_message {
   my $Self = shift;
   my $msgid = shift;
@@ -1257,9 +1269,15 @@ sub get_raw_message {
   my ($imapname, $uidvalidity, $uid) = $Self->dbh->selectrow_array("SELECT imapname, uidvalidity, uid FROM ifolders JOIN imessages USING (ifolderid) WHERE msgid = ?", {}, $msgid);
   return unless $imapname;
 
+  my $type = 'message/rfc822';
+  if ($part) {
+    my $parsed = $Self->fill_messages($msgid);
+    $type = find_type($parsed, $part);
+  }
+
   my $res = $Self->backend_cmd('imap_getpart', $imapname, $uidvalidity, $uid, $part);
 
-  return ($res->{type}, $res->{data});
+  return ($type, $res->{data});
 }
 
 sub create_mailboxes {

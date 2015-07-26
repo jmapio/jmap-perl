@@ -939,11 +939,11 @@ sub getMessages {
     }
 
     if (_prop_wanted($args, 'rawUrl')) {
-      $item->{rawUrl} = "https://$ENV{jmaphost}/raw/$accountid/$msgid";
+      $item->{rawUrl} = "https://$ENV{jmaphost}/raw/$accountid/m-$msgid";
     }
 
     if (_prop_wanted($args, 'blobId')) {
-      $item->{blobId} = "$msgid";
+      $item->{blobId} = "m-$msgid";
     }
 
     push @list, $item;
@@ -1013,16 +1013,24 @@ sub getRawMessage {
   my $selector = shift;
 
   my $msgid = $selector;
+  return () unless $msgid =~ s/^([mf])-//;
+  my $source = $1;
   my $part;
   my $filename;
-  if ($msgid =~ s{/?(.*)}{}) {
+  if ($msgid =~ s{/(.*)}{}) {
     $filename = $1;
   }
   if ($msgid =~ s{-(.*)}{}) {
    $part = $1;
   }
 
-  my ($type, $data) = $Self->{db}->get_raw_message($msgid, $part);
+  my ($type, $data);
+  if ($source) eq 'f') {
+    ($type, $data) = $Self->get_file($msgid);
+  }
+  else {
+    ($type, $data) = $Self->{db}->get_raw_message($msgid, $part);
+  }
 
   return ($type, $data, $filename);
 }
@@ -1140,8 +1148,8 @@ sub setMessages {
 
   foreach my $cid (sort keys %$created) {
     my $msgid = $created->{$cid}{id};
-    $created->{$cid}{rawUrl} = "https://$ENV{jmaphost}/raw/$accountid/$msgid";
-    $created->{$cid}{blobId} = "$msgid";
+    $created->{$cid}{rawUrl} = "https://$ENV{jmaphost}/raw/$accountid/m-$msgid";
+    $created->{$cid}{blobId} = "m-$msgid";
   }
 
   my @res;
