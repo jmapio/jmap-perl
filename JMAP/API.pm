@@ -275,10 +275,12 @@ sub getMailboxUpdates {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
+  my $newState = "$user->{jhighestmodseq}";
+
   my $sinceState = $args->{sinceState};
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if not $args->{sinceState};
-  return $Self->_transError(['error', {type => 'cannotCalculateChanges'}])
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $sinceState <= $user->{jdeletedmodseq});
 
   my $data = $dbh->selectall_arrayref("SELECT * FROM jmailboxes WHERE jmodseq > ?1 OR jcountsmodseq > ?1", {Slice => {}}, $sinceState);
@@ -301,7 +303,7 @@ sub getMailboxUpdates {
   my @res = (['mailboxUpdates', {
     accountId => $accountid,
     oldState => "$sinceState",
-    newState => "$user->{jhighestmodseq}",
+    newState => $newState,
     changed => [map { "$_" } @changed],
     removed => [map { "$_" } @removed],
     onlyCountsChanged => $onlyCounts ? JSON::true : JSON::false,
@@ -659,9 +661,11 @@ sub getMessageListUpdates {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
+  my $newState = "$user->{jhighestmodseq}";
+
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if not $args->{sinceState};
-  return $Self->_transError(['error', {type => 'cannotCalculateChanges'}])
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
 
   my $start = $args->{position} || 0;
@@ -736,7 +740,7 @@ sub getMessageListUpdates {
       }
 
       if ($args->{maxChanges} and $changes > $args->{maxChanges}) {
-        return $Self->_transError(['error', {type => 'tooManyChanges'}]);
+        return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
       }
 
       if ($args->{upToMessageId} and $args->{upToMessageId} eq $item->{msgid}) {
@@ -773,7 +777,7 @@ sub getMessageListUpdates {
       }
 
       if ($args->{maxChanges} and $changes > $args->{maxChanges}) {
-        return $Self->_transError(['error', {type => 'tooManyChanges'}]);
+        return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
       }
 
       if ($args->{upToMessageId} and $args->{upToMessageId} eq $item->{msgid}) {
@@ -1075,9 +1079,11 @@ sub getMessageUpdates {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
+  my $newState = "$user->{jhighestmodseq}";
+
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if not $args->{sinceState};
-  return $Self->_transError(['error', {type => 'cannotCalculateChanges'}])
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
 
   my $sql = "SELECT msgid,active FROM jmessages WHERE jmodseq > ?";
@@ -1085,7 +1091,7 @@ sub getMessageUpdates {
   my $data = $dbh->selectall_arrayref($sql, {}, $args->{sinceState});
 
   if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
-    return $Self->_transError(['error', {type => 'tooManyChanges'}]);
+    return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
   }
 
   my @changed;
@@ -1106,7 +1112,7 @@ sub getMessageUpdates {
   push @res, ['messageUpdates', {
     accountId => $accountid,
     oldState => "$args->{sinceState}",
-    newState => "$user->{jhighestmodseq}",
+    newState => $newState,
     changed => [map { "$_" } @changed],
     removed => [map { "$_" } @removed],
   }];
@@ -1337,9 +1343,11 @@ sub getThreadUpdates {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
+  my $newState = "$user->{jhighestmodseq}";
+
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if not $args->{sinceState};
-  return $Self->_transError(['error', {type => 'cannotCalculateChanges'}])
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
 
   my $sql = "SELECT * FROM jmessages WHERE jmodseq > ?";
@@ -1351,7 +1359,7 @@ sub getThreadUpdates {
   my $data = $dbh->selectall_arrayref($sql, {Slice => {}}, $args->{sinceState});
 
   if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
-    return $Self->_transError(['error', {type => 'tooManyChanges'}]);
+    return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
   }
 
   my %threads;
@@ -1378,7 +1386,7 @@ sub getThreadUpdates {
   push @res, ['threadUpdates', {
     accountId => $accountid,
     oldState => $args->{sinceState},
-    newState => "$user->{jhighestmodseq}",
+    newState => $newState,
     changed => \@changed,
     removed => \@removed,
   }];
@@ -1497,10 +1505,12 @@ sub getCalendarUpdates {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
+  my $newState = "$user->{jhighestmodseq}";
+
   my $sinceState = $args->{sinceState};
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if not $args->{sinceState};
-  return $Self->_transError(['error', {type => 'cannotCalculateChanges'}])
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $sinceState <= $user->{jdeletedmodseq});
 
   my $data = $dbh->selectall_arrayref("SELECT jcalendarid, jmodseq, active FROM jcalendars ORDER BY jcalendarid");
@@ -1533,7 +1543,7 @@ sub getCalendarUpdates {
   my @res = (['calendarUpdates', {
     accountId => $accountid,
     oldState => "$sinceState",
-    newState => "$user->{jhighestmodseq}",
+    newState => $newState,
     changed => [map { "$_" } @changed],
     removed => [map { "$_" } @removed],
   }]);
@@ -1687,9 +1697,11 @@ sub getCalendarEventUpdates {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
+  my $newState = "$user->{jhighestmodseq}";
+
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if not $args->{sinceState};
-  return $Self->_transError(['error', {type => 'cannotCalculateChanges'}])
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
 
   my $sql = "SELECT eventuid,active FROM jevents WHERE jmodseq > ?";
@@ -1697,7 +1709,7 @@ sub getCalendarEventUpdates {
   my $data = $dbh->selectall_arrayref($sql, {}, $args->{sinceState});
 
   if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
-    return $Self->_transError(['error', {type => 'tooManyChanges'}]);
+    return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
   }
 
   $Self->commit();
@@ -1718,7 +1730,7 @@ sub getCalendarEventUpdates {
   push @res, ['calendarEventUpdates', {
     accountId => $accountid,
     oldState => "$args->{sinceState}",
-    newState => "$user->{jhighestmodseq}",
+    newState => $newState,
     changed => [map { "$_" } @changed],
     removed => [map { "$_" } @removed],
   }];
@@ -1803,10 +1815,12 @@ sub getAddressbookUpdates {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
+  my $newState = "$user->{jhighestmodseq}";
+
   my $sinceState = $args->{sinceState};
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if not $args->{sinceState};
-  return $Self->_transError(['error', {type => 'cannotCalculateChanges'}])
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $sinceState <= $user->{jdeletedmodseq});
 
   my $data = $dbh->selectall_arrayref("SELECT jaddressbookid, jmodseq, active FROM jaddressbooks ORDER BY jaddressbookid");
@@ -1839,7 +1853,7 @@ sub getAddressbookUpdates {
   my @res = (['addressbookUpdates', {
     accountId => $accountid,
     oldState => "$sinceState",
-    newState => "$user->{jhighestmodseq}",
+    newState => $newState,
     changed => [map { "$_" } @changed],
     removed => [map { "$_" } @removed],
   }]);
@@ -1991,9 +2005,11 @@ sub getContactUpdates {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
+  my $newState = "$user->{jhighestmodseq}";
+
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if not $args->{sinceState};
-  return $Self->_transError(['error', {type => 'cannotCalculateChanges'}])
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
 
   my $sql = "SELECT contactuid,active FROM jcontacts WHERE jmodseq > ?";
@@ -2001,7 +2017,7 @@ sub getContactUpdates {
   my $data = $dbh->selectall_arrayref($sql, {}, $args->{sinceState});
 
   if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
-    return $Self->_transError(['error', {type => 'tooManyChanges'}]);
+    return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
   }
   $Self->commit();
 
@@ -2021,7 +2037,7 @@ sub getContactUpdates {
   push @res, ['contactUpdates', {
     accountId => $accountid,
     oldState => "$args->{sinceState}",
-    newState => "$user->{jhighestmodseq}",
+    newState => $newState,
     changed => [map { "$_" } @changed],
     removed => [map { "$_" } @removed],
   }];
@@ -2102,9 +2118,11 @@ sub getContactGroupUpdates {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
+  my $newState = "$user->{jhighestmodseq}";
+
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if not $args->{sinceState};
-  return $Self->_transError(['error', {type => 'cannotCalculateChanges'}])
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
 
   my $sql = "SELECT groupuid,active FROM jcontactgroups WHERE jmodseq > ?";
@@ -2112,7 +2130,7 @@ sub getContactGroupUpdates {
   my $data = $dbh->selectall_arrayref($sql, {}, $args->{sinceState});
 
   if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
-    return $Self->_transError(['error', {type => 'tooManyChanges'}]);
+    return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
   }
 
   my @changed;
@@ -2132,7 +2150,7 @@ sub getContactGroupUpdates {
   push @res, ['contactGroupUpdates', {
     accountId => $accountid,
     oldState => "$args->{sinceState}",
-    newState => "$user->{jhighestmodseq}",
+    newState => $newState,
     changed => [map { "$_" } @changed],
     removed => [map { "$_" } @removed],
   }];
