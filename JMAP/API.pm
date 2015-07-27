@@ -1025,7 +1025,7 @@ sub getRawMessage {
   }
 
   my ($type, $data);
-  if ($source) eq 'f') {
+  if ($source eq 'f') {
     ($type, $data) = $Self->get_file($msgid);
   }
   else {

@@ -112,7 +112,7 @@ sub commit {
     }
      
     $Self->dupdate('account', \%dbdata);
-    $Self->{change_cb}->($Self, \%map);
+    $Self->{change_cb}->($Self, \%map) unless $Self->{t}->{backfilling};
   }
 
   $Self->dbh->commit();

@@ -773,6 +773,7 @@ sub do_folder {
   }
 
   $Self->begin();
+  $Self->{t}{backfilling} = 1 if $batchsize;
 
   my $didold = 0;
   if ($res->{backfill}) {
@@ -1253,9 +1254,9 @@ sub find_type {
   my $message = shift;
   my $part = shift;
 
-  return $message->{type} if ($message->{part} || '') eq $part;
+  return $message->{type} if ($message->{id} || '') eq $part;
 
-  foreach my $sub (@{$part->{attachments}}) {
+  foreach my $sub (@{$message->{attachments}}) {
     my $type = find_type($sub, $part);
     return $type if $type;
   }
