@@ -1273,7 +1273,7 @@ sub get_raw_message {
   my $type = 'message/rfc822';
   if ($part) {
     my $parsed = $Self->fill_messages($msgid);
-    $type = find_type($parsed, $part);
+    $type = find_type($parsed->{$msgid}, $part);
   }
 
   my $res = $Self->backend_cmd('imap_getpart', $imapname, $uidvalidity, $uid, $part);

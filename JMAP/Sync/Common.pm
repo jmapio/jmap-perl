@@ -323,7 +323,8 @@ sub imap_getpart {
   my $data = $imap->fetch($uid, $key);
   $Self->_unselect($imap);
 
-  ($res{data}) = values %{$data->{$uid}}; # ignore which key we got
+  my $datakey = $part ? 'binary' : 'rfc822';
+  $res{data} = $data->{$uid}{$datakey};
 
   return \%res;
 }
