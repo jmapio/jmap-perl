@@ -662,7 +662,7 @@ sub backfill {
 
   return unless @$data;
 
-  my $rest = 500;
+  my $rest = 5000;
   foreach my $row (@$data) {
     my $id = $row->{ifolderid};
     my $label = $row->{label};

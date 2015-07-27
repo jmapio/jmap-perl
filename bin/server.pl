@@ -538,7 +538,7 @@ sub prod_backfill {
   $idler{$accountid}{backfilling} = 1;
     
   my $timer;
-  $timer = AnyEvent->timer(after => 5, cb => sub {
+  $timer = AnyEvent->timer(after => 60, cb => sub {
     send_backend_request("$accountid:backfill", 'backfill', $accountid, sub {
       $timer = undef;
       prod_backfill($accountid, @_);
