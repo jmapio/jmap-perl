@@ -30,7 +30,9 @@ sub new {
 
 sub access_token {
   my $Self = shift;
+  $Self->begin();
   my ($hostname, $username, $password) = $Self->dbh->selectrow_array("SELECT imapHost, username, password FROM iserver");
+  $Self->commit();
 
   my $O = JMAP::Sync::Gmail::O();
   my $data = $O->refresh($password);
