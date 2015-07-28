@@ -433,24 +433,26 @@ sub do_calendars {
   my $cals = shift;
 
   my %allparsed;
+  my %allevents;
   foreach my $href (sort values %$cals) {
     my $events = $Self->backend_cmd('get_events', $href);
     # parse events before we lock
     my %parsed = map { $_ => $Self->parse_event($events->{$_}) } keys %$events;
     $allparsed{$href} = \%parsed;
+    $allevents{$href} = $events;
   }
 
   $Self->begin();
   foreach my $id (keys %$cals) {
     my $href = $cals->{$id};
-    my ($jcalendarid) = $Self->dbh->selectrow_array("SELECT jcalendarid FROM icalendars WHERE icalendarid = ?", {}, $calendarid);
+    my ($jcalendarid) = $Self->dbh->selectrow_array("SELECT jcalendarid FROM icalendars WHERE icalendarid = ?", {}, $id);
     my $exists = $Self->dbh->selectall_arrayref("SELECT ieventid, resource, uid FROM ievents WHERE icalendarid = ?", {Slice => {}}, $id);
     my %res = map { $_->{resource} => $_ } @$exists;
 
-    foreach my $resource (keys %$events) {
+    foreach my $resource (keys %{$allparsed{$href}}) {
       my $data = delete $res{$resource};
-      my $raw = $events->{$resource};
-      my $event = $parsed{$resource};
+      my $raw = $allevents{$href}{$resource};
+      my $event = $allparsed{$href}{$resource};
       my $uid = $event->{uid};
       my $item = {
         icalendarid => $id,
@@ -580,25 +582,27 @@ sub do_addressbooks {
   my $Self = shift;
   my $books = shift;
 
+  my %allcards;
   my %allparsed;
   foreach my $href (sort values %$books) {
     my $cards = $Self->backend_cmd('get_cards', $href);
     # parse before locking
     my %parsed = map { $_ => $Self->parse_card($cards->{$_}) } keys %$cards;
     $allparsed{$href} = \%parsed;
+    $allcards{$href} = $cards;
   }
 
   $Self->begin();
 
   foreach my $id (keys %$books) {
     my $href = $books->{$id};
-    my ($jaddresbookid) = $Self->dbh->selectrow_array("SELECT jaddressbookid FROM iaddressbooks WHERE iaddressbookid = ?", {}, $id);
+    my ($jaddressbookid) = $Self->dbh->selectrow_array("SELECT jaddressbookid FROM iaddressbooks WHERE iaddressbookid = ?", {}, $id);
     my $exists = $Self->dbh->selectall_arrayref("SELECT icardid, resource, uid, kind FROM icards WHERE iaddressbookid = ?", {Slice => {}}, $id);
     my %res = map { $_->{resource} => $_ } @$exists;
 
-    foreach my $resource (keys %$cards) {
+    foreach my $resource (keys %{$allparsed{$href}}) {
       my $data = delete $res{$resource};
-      my $raw = $cards->{$resource};
+      my $raw = $allcards{$href}{$resource};
       my $card = $allparsed{$href}{$resource};
       my $uid = $card->{uid};
       my $kind = $card->{kind};
@@ -610,8 +614,8 @@ sub do_addressbooks {
         content => $raw,
       };
       if ($data) {
-        my $id = $data->{icardid};
-        $Self->dmaybeupdate('icards', $item, {icardid => $id});
+        my $cid = $data->{icardid};
+        $Self->dmaybeupdate('icards', $item, {icardid => $cid});
       }
       else {
         $Self->dinsert('icards', $item);
