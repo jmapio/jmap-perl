@@ -667,10 +667,13 @@ sub sync_imap {
 
 sub backfill {
   my $Self = shift;
+
+  $Self->begin();
   my $data = $Self->dbh->selectall_arrayref("SELECT * FROM ifolders WHERE uidnext > 1 AND uidfirst > 1 ORDER BY mtime", {Slice => {}});
   if ($Self->{is_gmail}) {
     $data = [ grep { lc $_->{label} eq '\\allmail' or lc $_->{label} eq '\\trash' } @$data ];
   }
+  $Self->commit();
 
   return unless @$data;
 
