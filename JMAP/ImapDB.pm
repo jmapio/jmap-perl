@@ -460,11 +460,11 @@ sub do_calendars {
         icalendarid => $id,
         uid => $uid,
         resource => $resource,
-        content => $raw,
+        content => encode_utf8($raw),
       };
       if ($data) {
         my $eid = $data->{ieventid};
-        next if $raw eq $data->{content};
+        next if $raw eq decode_utf8($data->{content});
         $Self->dmaybeupdate('ievents', $item, {ieventid => $eid});
       }
       else {
@@ -614,11 +614,11 @@ sub do_addressbooks {
         resource => $resource,
         uid => $uid,
         kind => $kind,
-        content => $raw,
+        content => encode_utf8($raw),
       };
       if ($data) {
         my $cid = $data->{icardid};
-        next if $raw eq $data->{content};
+        next if $raw eq decode_utf8($data->{content});
         $Self->dmaybeupdate('icards', $item, {icardid => $cid});
       }
       else {
