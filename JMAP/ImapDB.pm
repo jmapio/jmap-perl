@@ -212,7 +212,7 @@ sub sync_jmailboxes {
     my $fname = $folder->[2];
     # check for roles first
     my @bits = split "[$folder->[1]]", $fname;
-    shift @bits if ($bits[0] eq 'INBOX' and $bits[1]); really we should be stripping the actual prefix, if any
+    shift @bits if ($bits[0] eq 'INBOX' and $bits[1]); # really we should be stripping the actual prefix, if any
     shift @bits if $bits[0] eq '[Gmail]'; # we special case this GMail magic
     next unless @bits; # also skip the magic '[Gmail]' top-level
     my $role = $ROLE_MAP{lc $folder->[3]};
