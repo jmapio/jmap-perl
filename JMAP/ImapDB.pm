@@ -956,6 +956,8 @@ sub update_messages {
   my $changes = shift;
   my $idmap = shift;
 
+  $Self->begin();
+
   my %updatemap;
   my %notchanged;
   foreach my $msgid (keys %$changes) {
@@ -974,6 +976,8 @@ sub update_messages {
   my $jmapdata = $Self->dbh->selectall_arrayref("SELECT * FROM jmailboxes", {Slice => {}});
   my %jidmap = map { $_->{jmailboxid} => $_->{role} } @$jmapdata;
   my %jrolemap = map { $_->{role} => $_->{jmailboxid} } grep { $_->{role} } @$jmapdata;
+
+  $Self->commit();
 
   my @changed;
   foreach my $ifolderid (keys %updatemap) {
@@ -1014,13 +1018,16 @@ sub update_messages {
         if ($has_outbox) {
           # move to sent when we're done
           push @others, $jmailmap{$jrolemap{'sent'}}{jmailboxid};
+
           my ($type, $rfc822) = $Self->get_raw_message($msgid);
           # XXX - add attachments - we might actually want the parsed message and then realise the attachments...
           $Self->backend_cmd('send_email', $rfc822);
 
           # strip the \Draft flag
+
           $Self->backend_cmd('imap_update', $imapname, $uidvalidity, $uid, 0, ["\\Draft"]);
 
+          $Self->begin();
           # add the \Answered flag to our in-reply-to
           my ($updateid) = $Self->dbh->selectrow_array("SELECT msginreplyto FROM jmessages WHERE msgid = ?", {}, $msgid);
           goto done unless $updateid;
@@ -1031,9 +1038,11 @@ sub update_messages {
           my $updatename = $foldermap{$ifolderid}{imapname};
           my $updatevalidity = $foldermap{$ifolderid}{uidvalidity};
           goto done unless $updatename;
+          $Self->commit();
           $Self->backend_cmd('imap_update', $updatename, $updatevalidity, $updateuid, 1, ["\\Answered"]);
         }
         done:
+        $Self->reset();  # bogus, but otherwise we need to commit on all the done commands
         if ($Self->{is_gmail}) {
           # because 'archive' is synthetic on gmail we strip it here
           (@others) = grep { $jidmap{$_} ne 'archive' } @others;
