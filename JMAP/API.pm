@@ -943,10 +943,6 @@ sub getMessages {
       $item->{size} = $data->{msgsize};
     }
 
-    if (_prop_wanted($args, 'rawUrl')) {
-      $item->{rawUrl} = "https://$ENV{jmaphost}/raw/$accountid/m-$msgid";
-    }
-
     if (_prop_wanted($args, 'blobId')) {
       $item->{blobId} = "m-$msgid";
     }
@@ -1154,7 +1150,6 @@ sub setMessages {
 
   foreach my $cid (sort keys %$created) {
     my $msgid = $created->{$cid}{id};
-    $created->{$cid}{rawUrl} = "https://$ENV{jmaphost}/raw/$accountid/m-$msgid";
     $created->{$cid}{blobId} = "m-$msgid";
   }
 
