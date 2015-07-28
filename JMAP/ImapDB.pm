@@ -338,7 +338,7 @@ sub sync_calendars {
   my %byhref = map { $_->[1] => $_ } @$icalendars;
 
   my %seen;
-  my @todo;
+  my %todo;
   foreach my $calendar (@$calendars) {
     my $id = $calendar->{href} ? $byhref{$calendar->{href}}[0] : 0;
     my $data = {
@@ -352,14 +352,13 @@ sub sync_calendars {
       $Self->dmaybeupdate('icalendars', $data, {icalendarid => $id});
       my $token = $byhref{$calendar->{href}}[5];
       if ($token ne $calendar->{syncToken}) {
-        push @todo, $id;
         $Self->dmaybeupdate('icalendars', $data, {icalendarid => $id});
       }
     }
     else {
       $id = $Self->dinsert('icalendars', $data);
-      push @todo, $id;
     }
+    $todo{$id} = $calendar->{href};
     $seen{$id} = 1;
   }
 
@@ -369,20 +368,18 @@ sub sync_calendars {
     $Self->dbh->do("DELETE FROM icalendars WHERE icalendarid = ?", {}, $id);
   }
 
-  $Self->commit();
-
   $Self->sync_jcalendars();
 
-  foreach my $id (@todo) {
-    $Self->do_calendar($id);
-  }
+  $Self->commit();
+
+  $Self->do_calendars(\%todo);
 }
 
 # synchronise from the imap folder cache to the jmap mailbox listing
 # call in transaction
 sub sync_jcalendars {
   my $Self = shift;
-  $Self->begin();
+
   my $icalendars = $Self->dbh->selectall_arrayref("SELECT icalendarid, name, color, jcalendarid FROM icalendars");
   my $jcalendars = $Self->dbh->selectall_arrayref("SELECT jcalendarid, name, color, active FROM jcalendars");
 
@@ -421,52 +418,54 @@ sub sync_jcalendars {
     next if $seen{$id};
     $Self->dupdate('jcalendars', {active => 0}, {jcalendarid => $id});
   }
-  $Self->commit();
 }
 
-sub do_calendar {
+sub do_calendars {
   my $Self = shift;
-  my $calendarid = shift;
+  my $cals = shift;
 
-  $Self->begin();
-
-  my ($href, $jcalendarid) = $Self->dbh->selectrow_array("SELECT href, jcalendarid FROM icalendars WHERE icalendarid = ?", {}, $calendarid);
-  $Self->commit();
-
-  my $events = $Self->backend_cmd('get_events', $href);
-  # parse events before we lock
-  my %parsed = map { $_ => $Self->parse_event($events->{$_}) } keys %$events;
-
-  $Self->begin();
-  my $exists = $Self->dbh->selectall_arrayref("SELECT ieventid, resource, uid FROM ievents WHERE icalendarid = ?", {Slice => {}}, $calendarid);
-  my %res = map { $_->{resource} => $_ } @$exists;
-
-  foreach my $resource (keys %$events) {
-    my $data = delete $res{$resource};
-    my $raw = $events->{$resource};
-    my $event = $parsed{$resource};
-    my $uid = $event->{uid};
-    my $item = {
-      icalendarid => $calendarid,
-      uid => $uid,
-      resource => $resource,
-      content => $raw,
-    };
-    if ($data) {
-      my $id = $data->{ieventid};
-      $Self->dmaybeupdate('ievents', $item, {ieventid => $id});
-    }
-    else {
-      $Self->dinsert('ievents', $item);
-    }
-    $Self->set_event($jcalendarid, $event);
+  my %allparsed;
+  foreach my $href (sort values %$cals) {
+    my $events = $Self->backend_cmd('get_events', $href);
+    # parse events before we lock
+    my %parsed = map { $_ => $Self->parse_event($events->{$_}) } keys %$events;
+    $allparsed{$href} = \%parsed;
   }
 
-  foreach my $resource (keys %res) {
-    my $data = delete $res{$resource};
-    my $id = $data->{ieventid};
-    $Self->ddelete('ievents', {ieventid => $id});
-    $Self->delete_event($jcalendarid, $data->{uid});
+  $Self->begin();
+  foreach my $id (keys %$cals) {
+    my $href = $cals->{$id};
+    my ($jcalendarid) = $Self->dbh->selectrow_array("SELECT jcalendarid FROM icalendars WHERE icalendarid = ?", {}, $calendarid);
+    my $exists = $Self->dbh->selectall_arrayref("SELECT ieventid, resource, uid FROM ievents WHERE icalendarid = ?", {Slice => {}}, $id);
+    my %res = map { $_->{resource} => $_ } @$exists;
+
+    foreach my $resource (keys %$events) {
+      my $data = delete $res{$resource};
+      my $raw = $events->{$resource};
+      my $event = $parsed{$resource};
+      my $uid = $event->{uid};
+      my $item = {
+        icalendarid => $id,
+        uid => $uid,
+        resource => $resource,
+        content => $raw,
+      };
+      if ($data) {
+        my $eid = $data->{ieventid};
+        $Self->dmaybeupdate('ievents', $item, {ieventid => $eid});
+      }
+      else {
+        $Self->dinsert('ievents', $item);
+      }
+      $Self->set_event($jcalendarid, $event);
+    }
+
+    foreach my $resource (keys %res) {
+      my $data = delete $res{$resource};
+      my $id = $data->{ieventid};
+      $Self->ddelete('ievents', {ieventid => $id});
+      $Self->delete_event($jcalendarid, $data->{uid});
+    }
   }
 
   $Self->commit();
@@ -486,7 +485,7 @@ sub sync_addressbooks {
   my %byhref = map { $_->{href} => $_ } @$iaddressbooks;
 
   my %seen;
-  my @todo;
+  my %todo;
   foreach my $addressbook (@$addressbooks) {
     my $id = $byhref{$addressbook->{href}}{iaddressbookid};
     my $data = {
@@ -499,13 +498,12 @@ sub sync_addressbooks {
       my $token = $byhref{$addressbook->{href}}{syncToken};
       if ($token ne $addressbook->{syncToken}) {
         $Self->dmaybeupdate('iaddressbooks', $data, {iaddressbookid => $id});
-        push @todo, $id;
       }
     }
     else {
       $id = $Self->dinsert('iaddressbooks', $data);
-      push @todo, $id;
     }
+    $todo{$id} = $addressbook->{href};
     $seen{$id} = 1;
   }
 
@@ -515,21 +513,17 @@ sub sync_addressbooks {
     $Self->dbh->do("DELETE FROM iaddressbooks WHERE iaddressbookid = ?", {}, $id);
   }
 
-  $Self->commit();
-
   $Self->sync_jaddressbooks();
 
-  foreach my $id (@todo) {
-    $Self->do_addressbook($id);
-  }
+  $Self->commit();
+
+  $Self->do_addressbooks(\%todo);
 }
 
 # synchronise from the imap folder cache to the jmap mailbox listing
 # call in transaction
 sub sync_jaddressbooks {
   my $Self = shift;
-
-  $Self->begin();
 
   my $iaddressbooks = $Self->dbh->selectall_arrayref("SELECT iaddressbookid, name, jaddressbookid FROM iaddressbooks", {Slice => {}});
   my $jaddressbooks = $Self->dbh->selectall_arrayref("SELECT jaddressbookid, name, active FROM jaddressbooks", {Slice => {}});
@@ -570,53 +564,57 @@ sub sync_jaddressbooks {
     next if $seen{$jid};
     $Self->dupdate('jaddressbooks', {active => 0}, {jaddressbookid => $jid});
   }
-  $Self->commit();
 }
 
-sub do_addressbook {
+sub do_addressbooks {
   my $Self = shift;
-  my $addressbookid = shift;
+  my $books = shift;
 
-  $Self->begin();
-  my ($href, $jaddressbookid) = $Self->dbh->selectrow_array("SELECT href, jaddressbookid FROM iaddressbooks WHERE iaddressbookid = ?", {}, $addressbookid);
-  $Self->commit();
-  my $cards = $Self->backend_cmd('get_cards', $href);
-  # parse before locking
-  my %parsed = map { $_ => $Self->parse_card($cards->{$_}) } keys %$cards;
-
-  $Self->begin();
-
-  my $exists = $Self->dbh->selectall_arrayref("SELECT icardid, resource, uid, kind FROM icards WHERE iaddressbookid = ?", {Slice => {}}, $addressbookid);
-  my %res = map { $_->{resource} => $_ } @$exists;
-
-  foreach my $resource (keys %$cards) {
-    my $data = delete $res{$resource};
-    my $raw = $cards->{$resource};
-    my $card = $parsed{$resource};
-    my $uid = $card->{uid};
-    my $kind = $card->{kind};
-    my $item = {
-      iaddressbookid => $addressbookid,
-      resource => $resource,
-      uid => $uid,
-      kind => $kind,
-      content => $raw,
-    };
-    if ($data) {
-      my $id = $data->{icardid};
-      $Self->dmaybeupdate('icards', $item, {icardid => $id});
-    }
-    else {
-      $Self->dinsert('icards', $item);
-    }
-    $Self->set_card($jaddressbookid, $card);
+  my %allparsed;
+  foreach my $href (sort values %$books) {
+    my $cards = $Self->backend_cmd('get_cards', $href);
+    # parse before locking
+    my %parsed = map { $_ => $Self->parse_card($cards->{$_}) } keys %$cards;
+    $allparsed{$href} = \%parsed;
   }
 
-  foreach my $resource (keys %res) {
-    my $data = delete $res{$resource};
-    my $id = $data->{icardid};
-    $Self->ddelete('icards', {icardid => $id});
-    $Self->delete_card($jaddressbookid, $data->{uid}, $data->{kind});
+  $Self->begin();
+
+  foreach my $id (keys %$books) {
+    my $href = $books->{$id};
+    my ($jaddresbookid) = $Self->dbh->selectrow_array("SELECT jaddressbookid FROM iaddressbooks WHERE iaddressbookid = ?", {}, $id);
+    my $exists = $Self->dbh->selectall_arrayref("SELECT icardid, resource, uid, kind FROM icards WHERE iaddressbookid = ?", {Slice => {}}, $id);
+    my %res = map { $_->{resource} => $_ } @$exists;
+
+    foreach my $resource (keys %$cards) {
+      my $data = delete $res{$resource};
+      my $raw = $cards->{$resource};
+      my $card = $allparsed{$href}{$resource};
+      my $uid = $card->{uid};
+      my $kind = $card->{kind};
+      my $item = {
+        iaddressbookid => $id,
+        resource => $resource,
+        uid => $uid,
+        kind => $kind,
+        content => $raw,
+      };
+      if ($data) {
+        my $id = $data->{icardid};
+        $Self->dmaybeupdate('icards', $item, {icardid => $id});
+      }
+      else {
+        $Self->dinsert('icards', $item);
+      }
+      $Self->set_card($jaddressbookid, $card);
+    }
+
+    foreach my $resource (keys %res) {
+      my $data = delete $res{$resource};
+      my $cid = $data->{icardid};
+      $Self->ddelete('icards', {icardid => $cid});
+      $Self->delete_card($jaddressbookid, $data->{uid}, $data->{kind});
+    }
   }
 
   $Self->commit();
