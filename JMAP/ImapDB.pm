@@ -403,7 +403,7 @@ sub sync_jcalendars {
       mayRename => 1,
     };
     if ($calendar->[3] && $jbyid{$calendar->[3]}) {
-      $Self->dmaybeupdate('jcalendars', $data, {jcalendarid => $calendar->[3]});
+      $Self->dmaybedirty('jcalendars', $data, {jcalendarid => $calendar->[3]});
       $seen{$calendar->[3]} = 1;
     }
     else {
@@ -416,7 +416,8 @@ sub sync_jcalendars {
   foreach my $calendar (@$jcalendars) {
     my $id = $calendar->[0];
     next if $seen{$id};
-    $Self->dupdate('jcalendars', {active => 0}, {jcalendarid => $id});
+    $Self->dmaybedirty('jcalendars', {active => 0}, {jcalendarid => $id});
+    $Self->dmaybedirty('jevents', {active => 0}, {jcalendarid => $id});
   }
 }
 
@@ -549,7 +550,7 @@ sub sync_jaddressbooks {
     };
     my $jid = $addressbook->{jaddressbookid};
     if ($jid && $jbyid{$jid}) {
-      $Self->dmaybeupdate('jaddressbooks', $data, {jaddressbookid => $jid});
+      $Self->dmaybedirty('jaddressbooks', $data, {jaddressbookid => $jid});
       $seen{$jid} = 1;
     }
     else {
@@ -562,7 +563,9 @@ sub sync_jaddressbooks {
   foreach my $addressbook (@$jaddressbooks) {
     my $jid = $addressbook->{jaddressbookid};
     next if $seen{$jid};
-    $Self->dupdate('jaddressbooks', {active => 0}, {jaddressbookid => $jid});
+    $Self->dmaybedirty('jaddressbooks', {active => 0}, {jaddressbookid => $jid});
+    $Self->dmaybedirty('jcontactgroups', {active => 0}, {jaddressbookid => $jid});
+    $Self->dmaybedirty('jcontacts', {active => 0}, {jaddressbookid => $jid});
   }
 }
 
