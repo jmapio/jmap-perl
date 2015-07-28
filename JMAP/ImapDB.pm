@@ -883,7 +883,7 @@ sub changed_record {
   my $flags = encode_json([grep { lc $_ ne '\\recent' } sort @$flaglist]);
   my $labels = encode_json([sort @$labellist]);
 
-  my ($msgid) = $Self->{dbh}->selectrow_array("SELECT msgid FROM imessages WHERE ifolderid = ? AND uid = ?", {}, $folder, $uid);
+  my ($msgid) = $Self->dbh->selectrow_array("SELECT msgid FROM imessages WHERE ifolderid = ? AND uid = ?", {}, $folder, $uid);
 
   $Self->dmaybeupdate('imessages', {flags => $flags, labels => $labels}, {ifolderid => $folder, uid => $uid});
 
@@ -950,7 +950,7 @@ sub update_messages {
   my $changes = shift;
   my $idmap = shift;
 
-  my $dbh = $Self->{dbh};
+  my $dbh = $Self->dbh;
 
   my %updatemap;
   my %notchanged;
@@ -1054,7 +1054,7 @@ sub destroy_messages {
   my $Self = shift;
   my $ids = shift;
 
-  my $dbh = $Self->{dbh};
+  my $dbh = $Self->dbh;
 
   my %destroymap;
   my %notdestroyed;
@@ -1091,7 +1091,7 @@ sub deleted_record {
   my $Self = shift;
   my ($folder, $uid) = @_;
 
-  my ($msgid, $jmailboxid) = $Self->{dbh}->selectrow_array("SELECT msgid, jmailboxid FROM imessages JOIN ifolders USING (ifolderid) WHERE imessages.ifolderid = ? AND uid = ?", {}, $folder, $uid);
+  my ($msgid, $jmailboxid) = $Self->dbh->selectrow_array("SELECT msgid, jmailboxid FROM imessages JOIN ifolders USING (ifolderid) WHERE imessages.ifolderid = ? AND uid = ?", {}, $folder, $uid);
   return unless $msgid;
 
   $Self->ddelete('imessages', {ifolderid => $folder, uid => $uid});
@@ -1152,10 +1152,10 @@ sub apply_data {
 
   # check for archive folder for gmail
   if ($Self->{is_gmail} and not @list) {
-    @jmailboxids = $Self->{dbh}->selectrow_array("SELECT jmailboxid FROM jmailboxes WHERE role = 'archive'");
+    @jmailboxids = $Self->dbh->selectrow_array("SELECT jmailboxid FROM jmailboxes WHERE role = 'archive'");
   }
 
-  my ($old) = $Self->{dbh}->selectrow_array("SELECT msgid FROM jmessages WHERE msgid = ? AND active = 1", {}, $msgid);
+  my ($old) = $Self->dbh->selectrow_array("SELECT msgid FROM jmessages WHERE msgid = ? AND active = 1", {}, $msgid);
 
   $Self->log('debug', "DATA (@jmailboxids) for $msgid");
 
@@ -1285,7 +1285,7 @@ sub create_mailboxes {
   my $Self = shift;
   my $new = shift;
 
-  my $dbh = $Self->{dbh};
+  my $dbh = $Self->dbh;
 
   my %idmap;
   my %notcreated;
@@ -1327,7 +1327,7 @@ sub update_mailboxes {
   my $update = shift;
   my $idmap = shift;
 
-  my $dbh = $Self->{dbh};
+  my $dbh = $Self->dbh;
 
   my @updated;
   my %notupdated;
@@ -1366,7 +1366,7 @@ sub destroy_mailboxes {
   my $Self = shift;
   my $destroy = shift;
 
-  my $dbh = $Self->{dbh};
+  my $dbh = $Self->dbh;
 
   my @destroyed;
   my %notdestroyed;
@@ -1386,7 +1386,7 @@ sub create_calendar_events {
   my $Self = shift;
   my $new = shift;
 
-  my $dbh = $Self->{dbh};
+  my $dbh = $Self->dbh;
 
   my %createmap;
   my %notcreated;
@@ -1411,7 +1411,7 @@ sub update_calendar_events {
   my $update = shift;
   my $idmap = shift;
 
-  my $dbh = $Self->{dbh};
+  my $dbh = $Self->dbh;
 
   my @updated;
   my %notupdated;
@@ -1434,7 +1434,7 @@ sub destroy_calendar_events {
   my $Self = shift;
   my $destroy = shift;
 
-  my $dbh = $Self->{dbh};
+  my $dbh = $Self->dbh;
 
   my @destroyed;
   my %notdestroyed;
@@ -1456,7 +1456,7 @@ sub create_contact_groups {
   my $Self = shift;
   my $new = shift;
 
-  my $dbh = $Self->{dbh};
+  my $dbh = $Self->dbh;
 
   my %createmap;
   my %notcreated;
@@ -1490,7 +1490,7 @@ sub update_contact_groups {
   my $changes = shift;
   my $idmap = shift;
 
-  my $dbh = $Self->{dbh};
+  my $dbh = $Self->dbh;
 
   my @updated;
   my %notchanged;
@@ -1520,7 +1520,7 @@ sub destroy_contact_groups {
   my $Self = shift;
   my $destroy = shift;
 
-  my $dbh = $Self->{dbh};
+  my $dbh = $Self->dbh;
 
   my @destroyed;
   my %notdestroyed;
@@ -1541,7 +1541,7 @@ sub create_contacts {
   my $Self = shift;
   my $new = shift;
 
-  my $dbh = $Self->{dbh};
+  my $dbh = $Self->dbh;
 
   my %createmap;
   my %notcreated;
@@ -1583,7 +1583,7 @@ sub update_contacts {
   my $changes = shift;
   my $idmap = shift;
 
-  my $dbh = $Self->{dbh};
+  my $dbh = $Self->dbh;
 
   my @updated;
   my %notchanged;
@@ -1622,7 +1622,7 @@ sub destroy_contacts {
   my $Self = shift;
   my $destroy = shift;
 
-  my $dbh = $Self->{dbh};
+  my $dbh = $Self->dbh;
 
   my @destroyed;
   my %notdestroyed;

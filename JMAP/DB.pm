@@ -76,7 +76,8 @@ sub log {
 
 sub dbh {
   my $Self = shift;
-  return $Self->{dbh};
+  confess("NOT IN TRANSACTION") unless $Self->{t};
+  return $Self->{t}{dbh};
 }
 
 sub in_transaction {
@@ -88,7 +89,7 @@ sub begin {
   my $Self = shift;
   confess("ALREADY IN TRANSACTION") if $Self->{t};
   my $accountid = $Self->accountid();
-  $Self->{t} = {};
+  $Self->{t} = {dbh => $Self->{dbh}};
   # we need this because sqlite locking isn't as robust as you might hope
   $Self->{t}{lock} = IO::LockedFile->new(">/home/jmap/data/$accountid.lock");
   $Self->dbh->begin_work();
@@ -110,7 +111,7 @@ sub commit {
         $dbdata{"jstate$group"} = $state;
       }
     }
-     
+
     $Self->dupdate('account', \%dbdata);
     $Self->{change_cb}->($Self, \%map) unless $Self->{t}->{backfilling};
   }

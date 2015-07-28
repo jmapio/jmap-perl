@@ -40,7 +40,7 @@ sub getAccounts {
 
   my @list;
   push @list, {
-    id => $Self->{db}->{accountId},
+    id => $Self->{db}->accountid(),
     name => $user->{displayname} || $user->{email},
     isPrimary => $JSON::true,
     isReadOnly => $JSON::false,
@@ -158,7 +158,6 @@ sub getMailboxes {
   my $Self = shift;
   my $args = shift;
 
-  # XXX - ideally this is transacted inside the DB
   $Self->begin();
   my $dbh = $Self->{db}->dbh();
 
@@ -166,6 +165,8 @@ sub getMailboxes {
   my $accountid = $Self->{db}->accountid();
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  my $newState = "$user->{jhighestmodseq}";
 
   my $data = $dbh->selectall_arrayref("SELECT * FROM jmailboxes WHERE active = 1", {Slice => {}});
 
@@ -237,7 +238,7 @@ sub getMailboxes {
   return ['mailboxes', {
     list => \@list,
     accountId => $accountid,
-    state => "$user->{jhighestmodseq}",
+    state => $newState,
     notFound => (%missingids ? [map { "$_" } keys %missingids] : undef),
   }];
 }
@@ -267,9 +268,9 @@ sub getIdentities {
 sub getMailboxUpdates {
   my $Self = shift;
   my $args = shift;
-  my $dbh = $Self->{db}->dbh();
 
   $Self->begin();
+  my $dbh = $Self->{db}->dbh();
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
   return $Self->_transError(['error', {type => 'accountNotFound'}])
@@ -1071,7 +1072,6 @@ sub getMessageUpdates {
   my $args = shift;
 
   $Self->begin();
-
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
@@ -1335,7 +1335,6 @@ sub getThreadUpdates {
   my $args = shift;
 
   $Self->begin();
-
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
@@ -1497,7 +1496,6 @@ sub getCalendarUpdates {
   my $args = shift;
 
   $Self->begin();
-
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
@@ -1689,7 +1687,6 @@ sub getCalendarEventUpdates {
   my $args = shift;
 
   $Self->begin();
-
   my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
