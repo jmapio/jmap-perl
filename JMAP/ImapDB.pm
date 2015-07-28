@@ -691,7 +691,9 @@ sub firstsync {
 
   $Self->sync_folders();
 
+  $Self->begin();
   my $data = $Self->dbh->selectall_arrayref("SELECT * FROM ifolders", {Slice => {}});
+  $Self->commit();
 
   if ($Self->{is_gmail}) {
     my ($folder) = grep { lc $_->{label} eq '\\allmail' } @$data;
