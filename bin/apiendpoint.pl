@@ -28,7 +28,7 @@ use AnyEvent::Socket;
 use AnyEvent::Util;
 use AnyEvent::HTTP;
 use EV;
-use JSON::XS qw(encode_json decode_json);
+use JSON::XS qw(decode_json);
 use Net::DNS;
 use Net::DNS::Resolver;
 

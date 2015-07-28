@@ -9,7 +9,6 @@ use base qw(JMAP::ImapDB);
 
 use DBI;
 use Date::Parse;
-use JSON::XS qw(encode_json decode_json);
 use Data::UUID::LibUUID;
 use OAuth2::Tiny;
 use Encode;

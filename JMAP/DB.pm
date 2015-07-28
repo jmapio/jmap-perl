@@ -11,7 +11,7 @@ use Carp qw(confess);
 
 use Data::UUID::LibUUID;
 use IO::LockedFile;
-use JSON::XS qw(encode_json decode_json);
+use JSON::XS qw(decode_json);
 use Email::MIME;
 # seriously, it's parsable, get over it
 $Email::MIME::ContentType::STRICT_PARAMS = 0;
@@ -25,6 +25,8 @@ use Date::Parse;
 use Net::CalDAVTalk;
 use Net::CardDAVTalk::VCard;
 use MIME::Base64 qw(encode_base64 decode_base64);
+
+my $json = JSON::XS->new->utf8->canonical();
 
 my %TABLE2GROUPS = (
   jmessages => ['Message', 'Thread'],
@@ -570,7 +572,7 @@ sub _makemsg {
   my @attachments = $args->{attachments} ? @{$args->{attachments}} : ();
 
   if (@attachments and not $isDraft) {
-    my $encoded = encode_base64(encode_json(\@attachments), '');
+    my $encoded = encode_base64($json->encode(\@attachments), '');
     push @$header, "X-JMAP-Draft-Attachments" => $encoded;
     @attachments = ();
   }
@@ -724,7 +726,7 @@ sub set_event {
   $Self->dmake('jevents', {
     eventuid => $eventuid,
     jcalendarid => $jcalendarid,
-    payload => encode_json($event),
+    payload => $json->encode($event),
   });
 }
 
@@ -780,7 +782,7 @@ sub set_card {
     $Self->dmake('jcontacts', {
       contactuid => $carduid,
       jaddressbookid => $jaddressbookid,
-      payload => encode_json($card),
+      payload => $json->encode($card),
     });
   }
   else {

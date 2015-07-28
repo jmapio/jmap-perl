@@ -7,7 +7,6 @@ package JMAP::Sync::Standard;
 use base qw(JMAP::Sync::Common);
 
 use Mail::IMAPTalk;
-use JSON::XS qw(encode_json decode_json);
 use Email::Simple;
 use Email::Sender::Simple qw(sendmail);
 use Email::Sender::Transport::SMTPS;

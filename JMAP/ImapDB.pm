@@ -8,7 +8,7 @@ use base qw(JMAP::DB);
 
 use DBI;
 use Date::Parse;
-use JSON::XS qw(encode_json decode_json);
+use JSON::XS qw(decode_json);
 use Data::UUID::LibUUID;
 use OAuth2::Tiny;
 use Digest::SHA qw(sha1_hex);
@@ -20,6 +20,8 @@ use Date::Format;
 use Data::Dumper;
 use JMAP::Sync::Gmail;
 use JMAP::Sync::Standard;
+
+my $json = JSON::XS->new->utf8->canonical();
 
 our $TAG = 1;
 
@@ -900,8 +902,8 @@ sub changed_record {
   my $Self = shift;
   my ($folder, $uid, $flaglist, $labellist) = @_;
 
-  my $flags = encode_json([grep { lc $_ ne '\\recent' } sort @$flaglist]);
-  my $labels = encode_json([sort @$labellist]);
+  my $flags = $json->encode([grep { lc $_ ne '\\recent' } sort @$flaglist]);
+  my $labels = $json->encode([sort @$labellist]);
 
   my ($msgid) = $Self->dbh->selectrow_array("SELECT msgid FROM imessages WHERE ifolderid = ? AND uid = ?", {}, $folder, $uid);
 
@@ -961,7 +963,7 @@ sub import_message {
   $Self->begin();
   $Self->dinsert('jrawmessage', {
     msgid => $msgid,
-    parsed => encode_json($message),
+    parsed => $json->encode($message),
     hasAttachment => $message->{hasAttachment},
   });
   $Self->commit();
@@ -1141,8 +1143,8 @@ sub new_record {
   my $Self = shift;
   my ($ifolderid, $uid, $flaglist, $labellist, $envelope, $internaldate, $msgid, $thrid, $size) = @_;
 
-  my $flags = encode_json([grep { lc $_ ne '\\recent' } sort @$flaglist]);
-  my $labels = encode_json([sort @$labellist]);
+  my $flags = $json->encode([grep { lc $_ ne '\\recent' } sort @$flaglist]);
+  my $labels = $json->encode([sort @$labellist]);
 
   my $data = {
     ifolderid => $ifolderid,
@@ -1152,7 +1154,7 @@ sub new_record {
     internaldate => $internaldate,
     msgid => $msgid,
     thrid => $thrid,
-    envelope => encode_json($envelope),
+    envelope => $json->encode($envelope),
     size => $size,
   };
 
@@ -1294,7 +1296,7 @@ sub fill_messages {
     my $message = $parsed{$msgid};
     $Self->dinsert('jrawmessage', {
      msgid => $msgid,
-     parsed => encode_json($message),
+     parsed => $json->encode($message),
      hasAttachment => $message->{hasAttachment},
     });
     $result{$msgid} = $parsed{$msgid};

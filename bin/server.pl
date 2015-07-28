@@ -19,10 +19,12 @@ use AnyEvent::Socket;
 use AnyEvent::Util;
 use AnyEvent::HTTP;
 use JMAP::Sync::Gmail;
-use JSON::XS qw(encode_json decode_json);
+use JSON::XS qw(decode_json);
 use Encode qw(encode_utf8);
 use Template;
 my $TT = Template->new(INCLUDE_PATH => '/home/jmap/jmap-perl/htdocs');
+
+my $json = JSON::XS->new->utf8->canonical();
 
 sub mkerr {
   my $req = shift;
@@ -567,8 +569,8 @@ sub prod_idler {
 sub PushToHandle {
   my $Handle = shift;
   my %vals = @_;
-  print "PUSH EVENT " . encode_json(\%vals) . "\n";
-  my @Lines = map { "$_: " . (ref($vals{$_}) ? encode_json($vals{$_}) : $vals{$_}) } keys %vals;
+  print "PUSH EVENT " . $json->encode(\%vals) . "\n";
+  my @Lines = map { "$_: " . (ref($vals{$_}) ? $json->encode($vals{$_}) : $vals{$_}) } keys %vals;
   $Handle->push_write(join("\r\n", @Lines) . "\r\n\r\n");
 }
 

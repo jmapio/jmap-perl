@@ -7,7 +7,7 @@ package JMAP::Sync::Gmail;
 use base qw(JMAP::Sync::Common);
 
 use Mail::GmailTalk;
-use JSON::XS qw(encode_json decode_json);
+use JSON::XS qw(decode_json);
 use Email::Simple;
 use Email::Sender::Simple qw(sendmail);
 use Email::Sender::Transport::GmailSMTP;
