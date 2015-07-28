@@ -498,8 +498,8 @@ sub sync_addressbooks {
     if ($id) {
       my $token = $byhref{$addressbook->{href}}{syncToken};
       if ($token ne $addressbook->{syncToken}) {
-        push @todo, $id;
         $Self->dmaybeupdate('iaddressbooks', $data, {iaddressbookid => $id});
+        push @todo, $id;
       }
     }
     else {
@@ -536,12 +536,13 @@ sub sync_jaddressbooks {
 
   my %jbyid;
   foreach my $addressbook (@$jaddressbooks) {
+    next unless $addressbook->{jaddressbookid};
     $jbyid{$addressbook->{jaddressbookid}} = $addressbook;
   }
 
   my %seen;
   foreach my $addressbook (@$iaddressbooks) {
-    my $aid = $addressbook->{iaddressbooks};
+    my $aid = $addressbook->{iaddressbookid};
     my $data = {
       name => $addressbook->{name},
       isVisible => 1,
