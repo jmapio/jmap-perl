@@ -636,15 +636,16 @@ sub create_messages {
   my %created;
   my %notCreated;
 
-  my $dbh = $Self->dbh();
+  $Self->begin();
 
   # XXX - get draft mailbox ID
-  my ($draftid) = $dbh->selectrow_array("SELECT jmailboxid FROM jmailboxes WHERE role = ?", {}, "drafts");
+  my ($draftid) = $Self->dbh->selectrow_array("SELECT jmailboxid FROM jmailboxes WHERE role = ?", {}, "drafts");
 
+  my %todo;
   foreach my $cid (keys %$args) {
     my $item = $args->{$cid};
     if ($item->{inReplyToMessageId}) {
-      my ($replymessageid) = $dbh->selectrow_array("SELECT msgmessageid FROM jmessages WHERE msgid = ?", {}, $item->{inReplyToMessageId});
+      my ($replymessageid) = $Self->dbh->selectrow_array("SELECT msgmessageid FROM jmessages WHERE msgid = ?", {}, $item->{inReplyToMessageId});
       unless ($replymessageid) {
         $notCreated{$cid} = 'inReplyToNotFound';
         next;
@@ -657,6 +658,13 @@ sub create_messages {
     $item->{msgmessageid} = new_uuid_string() . "\@$ENV{jmaphost}";
     my $message = $Self->_makemsg($item);
     # XXX - let's just assume goodness for now - lots of error handling to add
+    $todo{$cid} = $message;
+  }
+
+  $Self->commit();
+
+  foreach my $cid (keys %todo) {
+    my $message = $todo{$cid};
     my ($msgid, $thrid) = $Self->import_message($message, [$draftid],
       isUnread => 0,
       isAnswered => 0,
