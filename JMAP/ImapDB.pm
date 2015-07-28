@@ -1137,7 +1137,7 @@ sub deleted_record {
 
   $Self->ddelete('imessages', {ifolderid => $folder, uid => $uid});
 
-  $Self->dmaybedirty('jmessages', {}, {msgid => $msgid}); # bump modeseq
+  $Self->ddirty('jmessages', {}, {msgid => $msgid}); # bump modeseq
   $Self->delete_message_from_mailbox($msgid, $jmailboxid);
 }
 
