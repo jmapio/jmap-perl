@@ -166,7 +166,7 @@ sub getMailboxes {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  my $newState = "$user->{jhighestmodseq}";
+  my $newState = "$user->{jstateMailbox}";
 
   my $data = $dbh->selectall_arrayref("SELECT * FROM jmailboxes WHERE active = 1", {Slice => {}});
 
@@ -276,7 +276,7 @@ sub getMailboxUpdates {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  my $newState = "$user->{jhighestmodseq}";
+  my $newState = "$user->{jstateMailbox}";
 
   my $sinceState = $args->{sinceState};
   return $Self->_transError(['error', {type => 'invalidArguments'}])
@@ -583,6 +583,8 @@ sub getMessageList {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
+  my $newState = "$user->{jstateMailbox}";
+
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if (exists $args->{position} and exists $args->{anchor});
   return $Self->_transError(['error', {type => 'invalidArguments'}])
@@ -629,7 +631,7 @@ gotit:
     filter => $args->{filter},
     sort => $args->{sort},
     collapseThreads => $args->{collapseThreads},
-    state => "$user->{jhighestmodseq}",
+    state => $newState,
     canCalculateUpdates => $JSON::true,
     position => $start,
     total => scalar(@$data),
@@ -666,7 +668,7 @@ sub getMessageListUpdates {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  my $newState = "$user->{jhighestmodseq}";
+  my $newState = "$user->{jstateMailbox}";
 
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if not $args->{sinceState};
@@ -799,7 +801,7 @@ sub getMessageListUpdates {
     sort => $args->{sort},
     collapseThreads => $args->{collapseThreads},
     oldState => "$args->{sinceState}",
-    newState => "$user->{jhighestmodseq}",
+    newState => $newState,
     removed => \@removed,
     added => \@added,
     total => $total,
@@ -871,6 +873,8 @@ sub getMessages {
   my $accountid = $Self->{db}->accountid();
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  my $newState = "$user->{jstateMessage}";
 
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     unless $args->{ids};
@@ -1007,7 +1011,7 @@ sub getMessages {
   return ['messages', {
     list => \@list,
     accountId => $accountid,
-    state => "$user->{jhighestmodseq}",
+    state => $newState,
     notFound => (%missingids ? [keys %missingids] : undef),
   }];
 }
@@ -1079,7 +1083,7 @@ sub getMessageUpdates {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  my $newState = "$user->{jhighestmodseq}";
+  my $newState = "$user->{jstateMessage}";
 
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if not $args->{sinceState};
@@ -1263,6 +1267,8 @@ sub getThreads {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
+  my $newState = "$user->{jstateThread}";
+
   # XXX - error if no IDs
 
   my @list;
@@ -1314,7 +1320,7 @@ sub getThreads {
   push @res, ['threads', {
     list => \@list,
     accountId => $accountid,
-    state => "$user->{jhighestmodseq}",
+    state => $newState,
     notFound => (%missingids ? [keys %missingids] : undef),
   }];
 
@@ -1341,7 +1347,7 @@ sub getThreadUpdates {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  my $newState = "$user->{jhighestmodseq}";
+  my $newState = "$user->{jstateThread}";
 
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if not $args->{sinceState};
@@ -1443,6 +1449,8 @@ sub getCalendars {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
+  my $newState = "$user->{jstateCalendar}";
+
   my $data = $dbh->selectall_arrayref("SELECT jcalendarid, name, color, isVisible, mayReadFreeBusy, mayReadItems, mayAddItems, mayModifyItems, mayRemoveItems, mayDelete, mayRename FROM jcalendars WHERE active = 1");
 
   my %ids;
@@ -1485,7 +1493,7 @@ sub getCalendars {
   return ['calendars', {
     list => \@list,
     accountId => $accountid,
-    state => "$user->{jhighestmodseq}",
+    state => $newState,
     notFound => (%missingids ? [map { "$_" } keys %missingids] : undef),
   }];
 }
@@ -1502,7 +1510,7 @@ sub getCalendarUpdates {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  my $newState = "$user->{jhighestmodseq}";
+  my $newState = "$user->{jstateCalendar}";
 
   my $sinceState = $args->{sinceState};
   return $Self->_transError(['error', {type => 'invalidArguments'}])
@@ -1596,6 +1604,8 @@ sub getCalendarEventList {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
+  my $newState = "$user->{jstateCalendarEvent}";
+
   my $start = $args->{position} || 0;
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if $start < 0;
@@ -1615,7 +1625,7 @@ sub getCalendarEventList {
   push @res, ['calendarEventList', {
     accountId => $accountid,
     filter => $args->{filter},
-    state => "$user->{jhighestmodseq}",
+    state => $newState,
     position => $start,
     total => scalar(@$data),
     calendarEventIds => [map { "$_" } @result],
@@ -1642,6 +1652,8 @@ sub getCalendarEvents {
   my $accountid = $Self->{db}->accountid();
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  my $newState = "$user->{jstateCalendarEvent}";
 
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     unless $args->{ids};
@@ -1676,7 +1688,7 @@ sub getCalendarEvents {
   return ['calendarEvents', {
     list => \@list,
     accountId => $accountid,
-    state => "$user->{jhighestmodseq}",
+    state => $newState,
     notFound => (%missingids ? [keys %missingids] : undef),
   }];
 }
@@ -1693,7 +1705,7 @@ sub getCalendarEventUpdates {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  my $newState = "$user->{jhighestmodseq}";
+  my $newState = "$user->{jstateCalendarEvent}";
 
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if not $args->{sinceState};
@@ -1754,6 +1766,9 @@ sub getAddressbooks {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
+  # we have no datatype for this yet
+  my $newState = "$user->{jhighestmodseq}";
+
   my $data = $dbh->selectall_arrayref("SELECT jaddressbookid, name, isVisible, mayReadItems, mayAddItems, mayModifyItems, mayRemoveItems, mayDelete, mayRename FROM jaddressbooks WHERE active = 1");
 
   my %ids;
@@ -1788,13 +1803,13 @@ sub getAddressbooks {
     push @list, \%rec;
   }
   my %missingids = %ids;
- 
+
   $Self->commit();
 
   return ['addressbooks', {
     list => \@list,
     accountId => $accountid,
-    state => "$user->{jhighestmodseq}",
+    state => $newState,
     notFound => (%missingids ? [map { "$_" } keys %missingids] : undef),
   }];
 }
@@ -1811,6 +1826,7 @@ sub getAddressbookUpdates {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
+  # we have no datatype for you yet
   my $newState = "$user->{jhighestmodseq}";
 
   my $sinceState = $args->{sinceState};
@@ -1905,6 +1921,8 @@ sub getContactList {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
+  my $newState = "$user->{jstateContact}";
+
   my $start = $args->{position} || 0;
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if $start < 0;
@@ -1924,7 +1942,7 @@ sub getContactList {
   push @res, ['contactList', {
     accountId => $accountid,
     filter => $args->{filter},
-    state => "$user->{jhighestmodseq}",
+    state => $newState,
     position => $start,
     total => scalar(@$data),
     contactIds => [map { "$_" } @result],
@@ -1951,6 +1969,8 @@ sub getContacts {
   my $accountid = $Self->{db}->accountid();
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  my $newState = "$user->{jstateContact}";
 
   #properties: String[] A list of properties to fetch for each message.
 
@@ -1984,7 +2004,7 @@ sub getContacts {
   return ['contacts', {
     list => \@list,
     accountId => $accountid,
-    state => "$user->{jhighestmodseq}",
+    state => $newState,
     notFound => (%want ? [keys %want] : undef),
   }];
 }
@@ -2001,7 +2021,7 @@ sub getContactUpdates {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  my $newState = "$user->{jhighestmodseq}";
+  my $newState = "$user->{jstateContact}";
 
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if not $args->{sinceState};
@@ -2061,6 +2081,8 @@ sub getContactGroups {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
+  my $newState = "$user->{jstateContactGroup}";
+
   #properties: String[] A list of properties to fetch for each message.
 
   my $data = $dbh->selectall_hashref("SELECT * FROM jcontactgroups WHERE active = 1", 'groupuid', {Slice => {}});
@@ -2097,7 +2119,7 @@ sub getContactGroups {
   return ['contactGroups', {
     list => \@list,
     accountId => $accountid,
-    state => "$user->{jhighestmodseq}",
+    state => $newState,
     notFound => (%want ? [keys %want] : undef),
   }];
 }
@@ -2114,7 +2136,7 @@ sub getContactGroupUpdates {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  my $newState = "$user->{jhighestmodseq}";
+  my $newState = "$user->{jstateContactGroup}";
 
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if not $args->{sinceState};
