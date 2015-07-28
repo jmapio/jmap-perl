@@ -92,7 +92,7 @@ sub begin {
   $Self->{t} = {dbh => $Self->{dbh}};
   # we need this because sqlite locking isn't as robust as you might hope
   $Self->{t}{lock} = IO::LockedFile->new(">/home/jmap/data/$accountid.lock");
-  $Self->dbh->begin_work();
+  $Self->{t}{dbh}->begin_work();
 }
 
 sub commit {
@@ -116,14 +116,14 @@ sub commit {
     $Self->{change_cb}->($Self, \%map) unless $Self->{t}->{backfilling};
   }
 
-  $Self->dbh->commit();
+  $Self->{t}{dbh}->commit();
   delete $Self->{t};
 }
 
 sub rollback {
   my $Self = shift;
   confess("NOT IN TRANSACTION") unless $Self->{t};
-  $Self->dbh->rollback();
+  $Self->{t}{dbh}->rollback();
   delete $Self->{t};
 }
 
@@ -131,14 +131,13 @@ sub rollback {
 sub reset {
   my $Self = shift;
   return unless $Self->{t};
-  $Self->dbh->rollback();
+  $Self->{t}{dbh}->rollback();
   delete $Self->{t};
 }
 
 sub dirty {
   my $Self = shift;
   my $table = shift || die 'need to have a table to dirty';
-  confess("NOT IN TRANSACTION") unless $Self->{t};
   unless ($Self->{t}{modseq}) {
     my $user = $Self->get_user();
     $user->{jhighestmodseq}++;
@@ -151,7 +150,6 @@ sub dirty {
 
 sub get_user {
   my $Self = shift;
-  confess("NOT IN TRANSACTION") unless $Self->{t};
   unless ($Self->{t}{user}) {
     $Self->{t}{user} = $Self->dbh->selectrow_hashref("SELECT * FROM account");
   }
@@ -168,7 +166,6 @@ sub get_user {
 
 sub get_mailboxes {
   my $Self = shift;
-  confess("NOT IN TRANSACTION") unless $Self->{t};
   unless ($Self->{t}{mailboxes}) {
     $Self->{t}{mailboxes} = $Self->dbh->selectall_hashref("SELECT jmailboxid, jmodseq, label, name, parentId, nummessages, numumessages, numthreads, numuthreads, active FROM jmailboxes", 'jmailboxid', {Slice => {}});
   }
@@ -848,8 +845,6 @@ sub dinsert {
   my $Self = shift;
   my ($table, $values) = @_;
 
-  confess("NOT IN TRANSACTION") unless $Self->{t};
-
   $values->{mtime} = time();
 
   my @keys = sort keys %$values;
@@ -946,8 +941,6 @@ sub dmaybedirty {
 sub ddelete {
   my $Self = shift;
   my ($table, $limit) = @_;
-
-  confess("NOT IN TRANSACTION") unless $Self->{t};
 
   my @lkeys = sort keys %$limit;
   my $sql = "DELETE FROM $table WHERE " . join(' AND ', map { "$_ = ?" } @lkeys);

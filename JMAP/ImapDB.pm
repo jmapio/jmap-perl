@@ -133,9 +133,8 @@ sub sync_folders {
   my ($prefix, $folders) = @$data;
 
   $Self->begin();
-  my $dbh = $Self->dbh();
 
-  my $ifolders = $dbh->selectall_arrayref("SELECT ifolderid, sep, uidvalidity, imapname, label FROM ifolders");
+  my $ifolders = $Self->dbh->selectall_arrayref("SELECT ifolderid, sep, uidvalidity, imapname, label FROM ifolders");
   my %ibylabel = map { $_->[4] => $_ } @$ifolders;
   my %seen;
 
@@ -160,7 +159,7 @@ sub sync_folders {
   foreach my $folder (@$ifolders) {
     my $id = $folder->[0];
     next if $seen{$id};
-    $dbh->do("DELETE FROM ifolders WHERE ifolderid = ?", {}, $id);
+    $Self->dbh->do("DELETE FROM ifolders WHERE ifolderid = ?", {}, $id);
   }
 
   $Self->dmaybeupdate('iserver', {imapPrefix => $prefix, lastfoldersync => time()});
@@ -190,9 +189,8 @@ sub sync_folders {
 sub sync_jmailboxes {
   my $Self = shift;
   $Self->begin();
-  my $dbh = $Self->dbh();
-  my $ifolders = $dbh->selectall_arrayref("SELECT ifolderid, sep, imapname, label, jmailboxid FROM ifolders");
-  my $jmailboxes = $dbh->selectall_arrayref("SELECT jmailboxid, name, parentId, role, active FROM jmailboxes");
+  my $ifolders = $Self->dbh->selectall_arrayref("SELECT ifolderid, sep, imapname, label, jmailboxid FROM ifolders");
+  my $jmailboxes = $Self->dbh->selectall_arrayref("SELECT jmailboxid, name, parentId, role, active FROM jmailboxes");
 
   my %jbyid;
   my %roletoid;
@@ -335,9 +333,8 @@ sub sync_calendars {
   return unless $calendars;
 
   $Self->begin();
-  my $dbh = $Self->dbh();
 
-  my $icalendars = $dbh->selectall_arrayref("SELECT icalendarid, href, name, isReadOnly, color, syncToken FROM icalendars");
+  my $icalendars = $Self->dbh->selectall_arrayref("SELECT icalendarid, href, name, isReadOnly, color, syncToken FROM icalendars");
   my %byhref = map { $_->[1] => $_ } @$icalendars;
 
   my %seen;
@@ -369,7 +366,7 @@ sub sync_calendars {
   foreach my $calendar (@$icalendars) {
     my $id = $calendar->[0];
     next if $seen{$id};
-    $dbh->do("DELETE FROM icalendars WHERE icalendarid = ?", {}, $id);
+    $Self->dbh->do("DELETE FROM icalendars WHERE icalendarid = ?", {}, $id);
   }
 
   $Self->commit();
@@ -386,9 +383,8 @@ sub sync_calendars {
 sub sync_jcalendars {
   my $Self = shift;
   $Self->begin();
-  my $dbh = $Self->dbh();
-  my $icalendars = $dbh->selectall_arrayref("SELECT icalendarid, name, color, jcalendarid FROM icalendars");
-  my $jcalendars = $dbh->selectall_arrayref("SELECT jcalendarid, name, color, active FROM jcalendars");
+  my $icalendars = $Self->dbh->selectall_arrayref("SELECT icalendarid, name, color, jcalendarid FROM icalendars");
+  my $jcalendars = $Self->dbh->selectall_arrayref("SELECT jcalendarid, name, color, active FROM jcalendars");
 
   my %jbyid;
   foreach my $calendar (@$jcalendars) {
@@ -432,15 +428,17 @@ sub do_calendar {
   my $Self = shift;
   my $calendarid = shift;
 
-  my $dbh = $Self->dbh();
+  $Self->begin();
 
-  my ($href, $jcalendarid) = $dbh->selectrow_array("SELECT href, jcalendarid FROM icalendars WHERE icalendarid = ?", {}, $calendarid);
+  my ($href, $jcalendarid) = $Self->dbh->selectrow_array("SELECT href, jcalendarid FROM icalendars WHERE icalendarid = ?", {}, $calendarid);
+  $Self->commit();
+
   my $events = $Self->backend_cmd('get_events', $href);
   # parse events before we lock
   my %parsed = map { $_ => $Self->parse_event($events->{$_}) } keys %$events;
 
   $Self->begin();
-  my $exists = $dbh->selectall_arrayref("SELECT ieventid, resource, uid FROM ievents WHERE icalendarid = ?", {Slice => {}}, $calendarid);
+  my $exists = $Self->dbh->selectall_arrayref("SELECT ieventid, resource, uid FROM ievents WHERE icalendarid = ?", {Slice => {}}, $calendarid);
   my %res = map { $_->{resource} => $_ } @$exists;
 
   foreach my $resource (keys %$events) {
@@ -483,9 +481,8 @@ sub sync_addressbooks {
   return unless $addressbooks;
 
   $Self->begin();
-  my $dbh = $Self->dbh();
 
-  my $iaddressbooks = $dbh->selectall_arrayref("SELECT iaddressbookid, href, syncToken FROM iaddressbooks", {Slice => {}});
+  my $iaddressbooks = $Self->dbh->selectall_arrayref("SELECT iaddressbookid, href, syncToken FROM iaddressbooks", {Slice => {}});
   my %byhref = map { $_->{href} => $_ } @$iaddressbooks;
 
   my %seen;
@@ -515,7 +512,7 @@ sub sync_addressbooks {
   foreach my $addressbook (@$iaddressbooks) {
     my $id = $addressbook->{iaddressbookid};
     next if $seen{$id};
-    $dbh->do("DELETE FROM iaddressbooks WHERE iaddressbookid = ?", {}, $id);
+    $Self->dbh->do("DELETE FROM iaddressbooks WHERE iaddressbookid = ?", {}, $id);
   }
 
   $Self->commit();
@@ -533,10 +530,9 @@ sub sync_jaddressbooks {
   my $Self = shift;
 
   $Self->begin();
-  my $dbh = $Self->dbh();
 
-  my $iaddressbooks = $dbh->selectall_arrayref("SELECT iaddressbookid, name, jaddressbookid FROM iaddressbooks", {Slice => {}});
-  my $jaddressbooks = $dbh->selectall_arrayref("SELECT jaddressbookid, name, active FROM jaddressbooks", {Slice => {}});
+  my $iaddressbooks = $Self->dbh->selectall_arrayref("SELECT iaddressbookid, name, jaddressbookid FROM iaddressbooks", {Slice => {}});
+  my $jaddressbooks = $Self->dbh->selectall_arrayref("SELECT jaddressbookid, name, active FROM jaddressbooks", {Slice => {}});
 
   my %jbyid;
   foreach my $addressbook (@$jaddressbooks) {
@@ -580,16 +576,16 @@ sub do_addressbook {
   my $Self = shift;
   my $addressbookid = shift;
 
-  my $dbh = $Self->dbh();
-
-  my ($href, $jaddressbookid) = $dbh->selectrow_array("SELECT href, jaddressbookid FROM iaddressbooks WHERE iaddressbookid = ?", {}, $addressbookid);
+  $Self->begin();
+  my ($href, $jaddressbookid) = $Self->dbh->selectrow_array("SELECT href, jaddressbookid FROM iaddressbooks WHERE iaddressbookid = ?", {}, $addressbookid);
+  $Self->commit();
   my $cards = $Self->backend_cmd('get_cards', $href);
   # parse before locking
   my %parsed = map { $_ => $Self->parse_card($cards->{$_}) } keys %$cards;
 
   $Self->begin();
 
-  my $exists = $dbh->selectall_arrayref("SELECT icardid, resource, uid, kind FROM icards WHERE iaddressbookid = ?", {Slice => {}}, $addressbookid);
+  my $exists = $Self->dbh->selectall_arrayref("SELECT icardid, resource, uid, kind FROM icards WHERE iaddressbookid = ?", {Slice => {}}, $addressbookid);
   my %res = map { $_->{resource} => $_ } @$exists;
 
   foreach my $resource (keys %$cards) {
@@ -636,10 +632,13 @@ sub labels {
 
 sub sync_imap {
   my $Self = shift;
+
+  $Self->begin();
   my $data = $Self->dbh->selectall_arrayref("SELECT * FROM ifolders", {Slice => {}});
   if ($Self->{is_gmail}) {
     $data = [ grep { lc $_->{label} eq '\\allmail' or lc $_->{label} eq '\\trash' } @$data ];
   }
+  $Self->commit();
 
   my @imapnames = map { $_->{imapname} } @$data;
   my $status = $Self->backend_cmd('imap_status', \@imapnames);
@@ -730,10 +729,9 @@ sub do_folder {
 
   Carp::confess("NO FOLDERID") unless $ifolderid;
   $Self->begin();
-  my $dbh = $Self->dbh();
 
   my ($imapname, $uidfirst, $uidnext, $uidvalidity, $highestmodseq) =
-     $dbh->selectrow_array("SELECT imapname, uidfirst, uidnext, uidvalidity, highestmodseq FROM ifolders WHERE ifolderid = ?", {}, $ifolderid);
+     $Self->dbh->selectrow_array("SELECT imapname, uidfirst, uidnext, uidvalidity, highestmodseq FROM ifolders WHERE ifolderid = ?", {}, $ifolderid);
   die "NO SUCH FOLDER $ifolderid" unless $imapname;
 
   my %fetches;
@@ -829,7 +827,9 @@ sub do_folder {
   return $didold if $batchsize;
 
   # need to make changes before counting
-  my ($count) = $dbh->selectrow_array("SELECT COUNT(*) FROM imessages WHERE ifolderid = ?", {}, $ifolderid);
+  $Self->begin();
+  my ($count) = $Self->dbh->selectrow_array("SELECT COUNT(*) FROM imessages WHERE ifolderid = ?", {}, $ifolderid);
+  $Self->commit();
   # if we don't know everything, we have to ALWAYS check or moves break
   if ($uidfirst != 1 or $count != $res->{newstate}{exists}) {
     # welcome to the future
@@ -839,7 +839,7 @@ sub do_folder {
     my $res = $Self->backend_cmd('imap_count', $imapname, $uidvalidity, "$uidfirst:$to");
     $Self->begin();
     my $uids = $res->{data};
-    my $data = $dbh->selectcol_arrayref("SELECT uid FROM imessages WHERE ifolderid = ? AND uid >= ?", {}, $ifolderid, $uidfirst);
+    my $data = $Self->dbh->selectcol_arrayref("SELECT uid FROM imessages WHERE ifolderid = ? AND uid >= ?", {}, $ifolderid, $uidfirst);
     my %exists = map { $_ => 1 } @$uids;
     foreach my $uid (@$data) {
       next if $exists{$uid};
@@ -853,12 +853,12 @@ sub imap_search {
   my $Self = shift;
   my @search = @_;
 
-  my $dbh = $Self->dbh();
-  my $data = $dbh->selectall_arrayref("SELECT * FROM ifolders", {Slice => {}});
-
+  $Self->begin();
+  my $data = $Self->dbh->selectall_arrayref("SELECT * FROM ifolders", {Slice => {}});
   if ($Self->{is_gmail}) {
     $data = [ grep { lc $_->{label} eq '\\allmail' or lc $_->{label} eq '\\trash' } @$data ];
   }
+  $Self->commit();
 
   my %matches;
   foreach my $item (@$data) {
@@ -867,10 +867,12 @@ sub imap_search {
     my $res = $Self->backend_cmd('imap_search', $item->{imapname}, 'uid', "$from:$to", @search);
     # XXX - uidvaldity changed
     next unless $res->[2] == $item->{uidvalidity};
+    $Self->begin();
     foreach my $uid (@{$res->[3]}) {
-      my ($msgid) = $dbh->selectrow_array("SELECT msgid FROM imessages WHERE ifolderid = ? and uid = ?", {}, $item->{ifolderid}, $uid);
+      my ($msgid) = $Self->dbh->selectrow_array("SELECT msgid FROM imessages WHERE ifolderid = ? and uid = ?", {}, $item->{ifolderid}, $uid);
       $matches{$msgid} = 1;
     }
+    $Self->commit();
   }
 
   return \%matches;
@@ -896,8 +898,10 @@ sub import_message {
   my $mailboxIds = shift;
   my %flags = @_;
 
-  my $dbh = $Self->dbh();
-  my $folderdata = $dbh->selectall_arrayref("SELECT * FROM ifolders", {Slice => {}});
+  $Self->begin();
+  my $folderdata = $Self->dbh->selectall_arrayref("SELECT * FROM ifolders", {Slice => {}});
+  $Self->commit();
+
   my %foldermap = map { $_->{ifolderid} => $_ } @$folderdata;
   my %jmailmap = map { $_->{jmailboxid} => $_ } grep { $_->{jmailboxid} } @$folderdata;
 
@@ -928,9 +932,11 @@ sub import_message {
     $Self->do_folder($fdata->{ifolderid}, $fdata->{label});
   }
 
+  $Self->begin();
   my ($msgid, $thrid) = $Self->dbh->selectrow_array("SELECT msgid, thrid FROM imessages WHERE ifolderid = ? AND uid = ?", {}, $jmailmap{$id}{ifolderid}, $uid);
+  $Self->commit();
 
-  # save us having to download it again
+  # save us having to download it again - drop out of transaction so we don't wait on the parse
   my $eml = Email::MIME->new($rfc822);
   my $message = $Self->parse_message($msgid, $eml);
 
@@ -950,12 +956,10 @@ sub update_messages {
   my $changes = shift;
   my $idmap = shift;
 
-  my $dbh = $Self->dbh;
-
   my %updatemap;
   my %notchanged;
   foreach my $msgid (keys %$changes) {
-    my ($ifolderid, $uid) = $dbh->selectrow_array("SELECT ifolderid, uid FROM imessages WHERE msgid = ?", {}, $msgid);
+    my ($ifolderid, $uid) = $Self->dbh->selectrow_array("SELECT ifolderid, uid FROM imessages WHERE msgid = ?", {}, $msgid);
     if ($ifolderid and $uid) {
       $updatemap{$ifolderid}{$uid} = $msgid;
     }
@@ -964,10 +968,10 @@ sub update_messages {
     }
   }
 
-  my $folderdata = $dbh->selectall_arrayref("SELECT * FROM ifolders", {Slice => {}});
+  my $folderdata = $Self->dbh->selectall_arrayref("SELECT * FROM ifolders", {Slice => {}});
   my %foldermap = map { $_->{ifolderid} => $_ } @$folderdata;
   my %jmailmap = map { $_->{jmailboxid} => $_ } grep { $_->{jmailboxid} } @$folderdata;
-  my $jmapdata = $dbh->selectall_arrayref("SELECT * FROM jmailboxes", {Slice => {}});
+  my $jmapdata = $Self->dbh->selectall_arrayref("SELECT * FROM jmailboxes", {Slice => {}});
   my %jidmap = map { $_->{jmailboxid} => $_->{role} } @$jmapdata;
   my %jrolemap = map { $_->{role} => $_->{jmailboxid} } grep { $_->{role} } @$jmapdata;
 
@@ -1018,11 +1022,11 @@ sub update_messages {
           $Self->backend_cmd('imap_update', $imapname, $uidvalidity, $uid, 0, ["\\Draft"]);
 
           # add the \Answered flag to our in-reply-to
-          my ($updateid) = $dbh->selectrow_array("SELECT msginreplyto FROM jmessages WHERE msgid = ?", {}, $msgid);
+          my ($updateid) = $Self->dbh->selectrow_array("SELECT msginreplyto FROM jmessages WHERE msgid = ?", {}, $msgid);
           goto done unless $updateid;
-          my ($updatemsgid) = $dbh->selectrow_array("SELECT msgid FROM jmessages WHERE msgmessageid = ?", {}, $updateid);
+          my ($updatemsgid) = $Self->dbh->selectrow_array("SELECT msgid FROM jmessages WHERE msgmessageid = ?", {}, $updateid);
           goto done unless $updatemsgid;
-          my ($ifolderid, $updateuid) = $dbh->selectrow_array("SELECT ifolderid, uid FROM imessages WHERE msgid = ?", {}, $updatemsgid);
+          my ($ifolderid, $updateuid) = $Self->dbh->selectrow_array("SELECT ifolderid, uid FROM imessages WHERE msgid = ?", {}, $updatemsgid);
           goto done unless $ifolderid;
           my $updatename = $foldermap{$ifolderid}{imapname};
           my $updatevalidity = $foldermap{$ifolderid}{uidvalidity};
@@ -1054,12 +1058,11 @@ sub destroy_messages {
   my $Self = shift;
   my $ids = shift;
 
-  my $dbh = $Self->dbh;
-
+  $Self->begin();
   my %destroymap;
   my %notdestroyed;
   foreach my $msgid (@$ids) {
-    my ($ifolderid, $uid) = $dbh->selectrow_array("SELECT ifolderid, uid FROM imessages WHERE msgid = ?", {}, $msgid);
+    my ($ifolderid, $uid) = $Self->dbh->selectrow_array("SELECT ifolderid, uid FROM imessages WHERE msgid = ?", {}, $msgid);
     if ($ifolderid and $uid) {
       $destroymap{$ifolderid}{$uid} = $msgid;
     }
@@ -1068,9 +1071,11 @@ sub destroy_messages {
     }
   }
 
-  my $folderdata = $dbh->selectall_arrayref("SELECT ifolderid, imapname, uidvalidity, label, jmailboxid FROM ifolders");
+  my $folderdata = $Self->dbh->selectall_arrayref("SELECT ifolderid, imapname, uidvalidity, label, jmailboxid FROM ifolders");
   my %foldermap = map { $_->[0] => $_ } @$folderdata;
   my %jmailmap = map { $_->[4] => $_ } grep { $_->[4] } @$folderdata;
+
+  $Self->commit();
 
   my @destroyed;
   foreach my $ifolderid (keys %destroymap) {
@@ -1084,6 +1089,7 @@ sub destroy_messages {
     $Self->backend_cmd('imap_move', $imapname, $uidvalidity, $uids, undef); # no destination folder
     push @destroyed, values %{$destroymap{$ifolderid}};
   }
+
   return (\@destroyed, \%notdestroyed);
 }
 
@@ -1285,8 +1291,7 @@ sub create_mailboxes {
   my $Self = shift;
   my $new = shift;
 
-  my $dbh = $Self->dbh;
-
+  $Self->begin();
   my %idmap;
   my %notcreated;
   foreach my $cid (keys %$new) {
@@ -1294,30 +1299,36 @@ sub create_mailboxes {
 
     my $imapname = $mailbox->{name};
     if ($mailbox->{parentId}) {
-      my ($parentName, $sep) = $dbh->selectrow_array("SELECT imapname, sep FROM ifolders WHERE jmailboxid = ?", {}, $mailbox->{parentId});
+      my ($parentName, $sep) = $Self->dbh->selectrow_array("SELECT imapname, sep FROM ifolders WHERE jmailboxid = ?", {}, $mailbox->{parentId});
       # XXX - errors
       $imapname = "$parentName$sep$imapname";
     }
     else {
-      my ($prefix) = $dbh->selectrow_array("SELECT imapPrefix FROM iserver");
+      my ($prefix) = $Self->dbh->selectrow_array("SELECT imapPrefix FROM iserver");
       $imapname = "$prefix$imapname";
     }
-
-    my $res = $Self->backend_cmd('create_mailbox', $imapname);
-    # XXX - handle errors...
     $idmap{$imapname} = $cid; # need to resolve this after the sync
+  }
+
+  $Self->commit();
+
+  foreach my $imapname (sort keys %idmap) {
+    # XXX - handle errors...
+    my $res = $Self->backend_cmd('create_mailbox', $imapname);
   }
 
   # (in theory we could save this until the end and resolve the names in after the renames and deletes... but it does mean
   # we can't use ids as referenes...)
   $Self->sync_folders() if keys %idmap;
 
+  $Self->begin();
   my %createmap;
   foreach my $imapname (keys %idmap) {
     my $cid = $idmap{$imapname};
-    my ($jid) = $dbh->selectrow_array("SELECT jmailboxid FROM ifolders WHERE imapname = ?", {}, $imapname);
+    my ($jid) = $Self->dbh->selectrow_array("SELECT jmailboxid FROM ifolders WHERE imapname = ?", {}, $imapname);
     $createmap{$cid} = $jid;
   }
+  $Self->commit();
 
   return (\%createmap, \%notcreated);
 }
@@ -1327,34 +1338,43 @@ sub update_mailboxes {
   my $update = shift;
   my $idmap = shift;
 
-  my $dbh = $Self->dbh;
+  $Self->begin();
 
   my @updated;
   my %notupdated;
+  my %namemap;
   # XXX - reorder the crap out of this if renaming multiple mailboxes due to deep rename
   foreach my $id (keys %$update) {
     my $mailbox = $update->{$id};
     my $imapname = $mailbox->{name};
     next unless (defined $imapname and $imapname ne '');
     my $parentId = $mailbox->{parentId};
-    ($parentId) = $dbh->selectrow_array("SELECT parentId FROM jmailboxes WHERE jmailboxid = ?", {}, $id)
+    ($parentId) = $Self->dbh->selectrow_array("SELECT parentId FROM jmailboxes WHERE jmailboxid = ?", {}, $id)
       unless exists $mailbox->{parentId};
     if ($parentId) {
       $parentId = $idmap->($parentId);
-      my ($parentName, $sep) = $dbh->selectrow_array("SELECT imapname, sep FROM ifolders WHERE jmailboxid = ?", {}, $parentId);
+      my ($parentName, $sep) = $Self->dbh->selectrow_array("SELECT imapname, sep FROM ifolders WHERE jmailboxid = ?", {}, $parentId);
       # XXX - errors
       $imapname = "$parentName$sep$imapname";
     }
     else {
-      my ($prefix) = $dbh->selectrow_array("SELECT imapPrefix FROM iserver");
+      my ($prefix) = $Self->dbh->selectrow_array("SELECT imapPrefix FROM iserver");
       $prefix = '' unless $prefix;
       $imapname = "$prefix$imapname";
     }
 
-    my ($oldname) = $dbh->selectrow_array("SELECT imapname FROM ifolders WHERE jmailboxid = ?", {}, $id);
+    my ($oldname) = $Self->dbh->selectrow_array("SELECT imapname FROM ifolders WHERE jmailboxid = ?", {}, $id);
 
-    $Self->backend_cmd('rename_mailbox', $oldname, $imapname) if $oldname ne $imapname;
+    $namemap{$oldname} = $newname;
+
     push @updated, $id;
+  }
+
+  $Self->commit();
+
+  foreach my $oldname (sort keys %namemap) {
+    my $newname = $namemap{$oldname};
+    $Self->backend_cmd('rename_mailbox', $oldname, $imapname) if $oldname ne $imapname;
   }
 
   $Self->sync_folders() if @updated;
@@ -1366,15 +1386,23 @@ sub destroy_mailboxes {
   my $Self = shift;
   my $destroy = shift;
 
-  my $dbh = $Self->dbh;
+  $Self->begin();
 
   my @destroyed;
   my %notdestroyed;
+  my %namemap;
   foreach my $id (@$destroy) {
-    my ($oldname) = $dbh->selectrow_array("SELECT imapname FROM ifolders WHERE jmailboxid = ?", {}, $id);
-
-    $Self->backend_cmd('delete_mailbox', $oldname);
+    my ($oldname) = $Self->dbh->selectrow_array("SELECT imapname FROM ifolders WHERE jmailboxid = ?", {}, $id);
+    $namemap{$oldname} = 1;
     push @destroyed, $id;
+  }
+
+  $Self->commit();
+
+  # we reverse so we delete children before parents
+  foreach my $oldname (reverse sort keys %namemap) {
+     # XXX - handle errors
+    $Self->backend_cmd('delete_mailbox', $oldname);
   }
 
   $Self->sync_folders() if @destroyed;
@@ -1386,21 +1414,29 @@ sub create_calendar_events {
   my $Self = shift;
   my $new = shift;
 
-  my $dbh = $Self->dbh;
+  $Self->begin();
 
+  my %todo;
   my %createmap;
   my %notcreated;
   foreach my $cid (keys %$new) {
     my $calendar = $new->{$cid};
-    my ($href) = $dbh->selectrow_array("SELECT href FROM icalendars WHERE icalendarid = ?", {}, $calendar->{calendarId});
+    my ($href) = $Self->dbh->selectrow_array("SELECT href FROM icalendars WHERE icalendarid = ?", {}, $calendar->{calendarId});
     unless ($href) {
       $notcreated{$cid} = "No such calendar on server";
       next;
     }
     my $uid = new_uuid_string();
 
-    $Self->backend_cmd('new_event', $href, {%$calendar, uid => $uid});
+    $todo{$href} = {%$calendar, uid => $uid};
+
     $createmap{$cid} = { id => $uid };
+  }
+
+  $Self->commit();
+
+  foreach my $href (sort keys %todo) {
+    $Self->backend_cmd('new_event', $href, $todo{$href});
   }
 
   return (\%createmap, \%notcreated);
@@ -1411,20 +1447,28 @@ sub update_calendar_events {
   my $update = shift;
   my $idmap = shift;
 
-  my $dbh = $Self->dbh;
+  $Self->begin();
 
+  my %todo;
   my @updated;
   my %notupdated;
   foreach my $uid (keys %$update) {
     my $calendar = $update->{$uid};
-    my ($resource) = $dbh->selectrow_array("SELECT resource FROM ievents WHERE uid = ?", {}, $uid);
+    my ($resource) = $Self->dbh->selectrow_array("SELECT resource FROM ievents WHERE uid = ?", {}, $uid);
     unless ($resource) {
       $notupdated{$uid} = "No such event on server";
       next;
     }
 
-    $Self->backend_cmd('update_event', $resource, $calendar);
+    $todo{$resource} = $calendar;
+
     push @updated, $uid;
+  }
+
+  $Self->commit();
+
+  foreach my $href (sort keys %todo) {
+    $Self->backend_cmd('update_event', $href, $todo{$href});
   }
 
   return (\@updated, \%notupdated);
@@ -1434,19 +1478,27 @@ sub destroy_calendar_events {
   my $Self = shift;
   my $destroy = shift;
 
-  my $dbh = $Self->dbh;
+  $Self->begin();
 
+  my %todo;
   my @destroyed;
   my %notdestroyed;
   foreach my $uid (@$destroy) {
-    my ($resource) = $dbh->selectrow_array("SELECT resource FROM ievents WHERE uid = ?", {}, $uid);
+    my ($resource) = $Self->dbh->selectrow_array("SELECT resource FROM ievents WHERE uid = ?", {}, $uid);
     unless ($resource) {
       $notdestroyed{$uid} = "No such event on server";
       next;
     }
 
-    $Self->backend_cmd('delete_event', $resource);
+    $todo{$resource} = 1;
+
     push @destroyed, $uid;
+  }
+
+  $Self->commit();
+
+  foreach my $href (sort keys %todo) {
+    $Self->backend_cmd('delete_event', $href);
   }
 
   return (\@destroyed, \%notdestroyed);
@@ -1456,14 +1508,15 @@ sub create_contact_groups {
   my $Self = shift;
   my $new = shift;
 
-  my $dbh = $Self->dbh;
+  $Self->begin();
 
+  my %todo;
   my %createmap;
   my %notcreated;
   foreach my $cid (keys %$new) {
     my $contact = $new->{$cid};
-    #my ($href) = $dbh->selectrow_array("SELECT href FROM iaddressbooks WHERE iaddressbookid = ?", {}, $contact->{addressbookId});
-    my ($href) = $dbh->selectrow_array("SELECT href FROM iaddressbooks");
+    #my ($href) = $Self->dbh->selectrow_array("SELECT href FROM iaddressbooks WHERE iaddressbookid = ?", {}, $contact->{addressbookId});
+    my ($href) = $Self->dbh->selectrow_array("SELECT href FROM iaddressbooks");
     unless ($href) {
       $notcreated{$cid} = "No such addressbook on server";
       next;
@@ -1478,8 +1531,15 @@ sub create_contact_groups {
       $card->VGroupContactUIDs(\@ids);
     }
 
-    $Self->backend_cmd('new_card', $href, $card);
+    $todo{$href} = $card;
+
     $createmap{$cid} = { id => $uid };
+  }
+
+  $Self->commit();
+
+  foreach my $href (sort keys %todo) {
+    $Self->backend_cmd('new_card', $href, $todo{$href});
   }
 
   return (\%createmap, \%notcreated);
@@ -1490,13 +1550,14 @@ sub update_contact_groups {
   my $changes = shift;
   my $idmap = shift;
 
-  my $dbh = $Self->dbh;
+  $Self->begin();
 
+  my %todo;
   my @updated;
   my %notchanged;
   foreach my $carduid (keys %$changes) {
     my $contact = $changes->{$carduid};
-    my ($resource, $content) = $dbh->selectrow_array("SELECT resource, content FROM icards WHERE uid = ?", {}, $carduid);
+    my ($resource, $content) = $Self->dbh->selectrow_array("SELECT resource, content FROM icards WHERE uid = ?", {}, $carduid);
     unless ($resource) {
       $notchanged{$carduid} = "No such card on server";
       next;
@@ -1509,8 +1570,14 @@ sub update_contact_groups {
       $card->VGroupContactUIDs(\@ids);
     }
 
-    $Self->backend_cmd('update_card', $resource, $card);
+    $todo{$resource} = $card;
     push @updated, $carduid;
+  }
+
+  $Self->commit();
+
+  foreach my $href (sort keys %todo) {
+    $Self->backend_cmd('update_card', $href, $todo{$href});
   }
 
   return (\@updated, \%notchanged);
@@ -1520,18 +1587,25 @@ sub destroy_contact_groups {
   my $Self = shift;
   my $destroy = shift;
 
-  my $dbh = $Self->dbh;
+  $Self->begin();
 
+  my %todo;
   my @destroyed;
   my %notdestroyed;
   foreach my $carduid (@$destroy) {
-    my ($resource, $content) = $dbh->selectrow_array("SELECT resource, content FROM icards WHERE uid = ?", {}, $carduid);
+    my ($resource, $content) = $Self->dbh->selectrow_array("SELECT resource, content FROM icards WHERE uid = ?", {}, $carduid);
     unless ($resource) {
       $notdestroyed{$carduid} = "No such card on server";
       next;
     }
-    $Self->backend_cmd('delete_card', $resource);
+    $todo{$resource} = 1;
     push @destroyed, $carduid;
+  }
+
+  $Self->commit();
+
+  foreach my $href (sort keys %todo) {
+    $Self->backend_cmd('delete_card', $href);
   }
 
   return (\@destroyed, \%notdestroyed);
@@ -1541,13 +1615,13 @@ sub create_contacts {
   my $Self = shift;
   my $new = shift;
 
-  my $dbh = $Self->dbh;
+  $Self->begin();
 
   my %createmap;
   my %notcreated;
   foreach my $cid (keys %$new) {
     my $contact = $new->{$cid};
-    my ($href) = $dbh->selectrow_array("SELECT href FROM iaddressbooks");
+    my ($href) = $Self->dbh->selectrow_array("SELECT href FROM iaddressbooks");
     unless ($href) {
       $notcreated{$cid} = "No such addressbook on server";
       next;
@@ -1583,13 +1657,14 @@ sub update_contacts {
   my $changes = shift;
   my $idmap = shift;
 
-  my $dbh = $Self->dbh;
+  $Self->begin();
 
+  my %todo;
   my @updated;
   my %notchanged;
   foreach my $carduid (keys %$changes) {
     my $contact = $changes->{$carduid};
-    my ($resource, $content) = $dbh->selectrow_array("SELECT resource, content FROM icards WHERE uid = ?", {}, $carduid);
+    my ($resource, $content) = $Self->dbh->selectrow_array("SELECT resource, content FROM icards WHERE uid = ?", {}, $carduid);
     unless ($resource) {
       $notchanged{$carduid} = "No such card on server";
       next;
@@ -1611,8 +1686,14 @@ sub update_contacts {
     $card->VBirthday($contact->{birthday}) if exists $contact->{birthday};
     $card->VNotes($contact->{notes}) if exists $contact->{notes};
 
-    $Self->backend_cmd('update_card', $resource, $card);
+    $todo{$resource} = $card;
     push @updated, $carduid;
+  }
+
+  $Self->commit();
+
+  foreach my $href (sort keys %todo) {
+    $Self->backend_cmd('update_card', $href, $todo{$href});
   }
 
   return (\@updated, \%notchanged);
@@ -1622,18 +1703,25 @@ sub destroy_contacts {
   my $Self = shift;
   my $destroy = shift;
 
-  my $dbh = $Self->dbh;
+  $Self->begin();
 
+  my %todo;
   my @destroyed;
   my %notdestroyed;
   foreach my $carduid (@$destroy) {
-    my ($resource, $content) = $dbh->selectrow_array("SELECT resource, content FROM icards WHERE uid = ?", {}, $carduid);
+    my ($resource, $content) = $Self->dbh->selectrow_array("SELECT resource, content FROM icards WHERE uid = ?", {}, $carduid);
     unless ($resource) {
       $notdestroyed{$carduid} = "No such card on server";
       next;
     }
-    $Self->backend_cmd('delete_card', $resource);
+    $todo{$resource} = 1;
     push @destroyed, $carduid;
+  }
+
+  $Self->commit();
+
+  foreach my $href (sort keys %todo) {
+    $Self->backend_cmd('delete_card', $href);
   }
 
   return (\@destroyed, \%notdestroyed);
