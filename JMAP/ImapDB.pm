@@ -253,18 +253,18 @@ sub sync_jmailboxes {
       if ($role and $roletoid{$role} and $roletoid{$role} != $id) {
         # still gotta move it
         $id = $roletoid{$role};
-        $Self->ddirty('jmailboxes', {active => 1, %details}, {jmailboxid => $id});
+        $Self->dmaybedirty('jmailboxes', {active => 1, %details}, {jmailboxid => $id});
       }
       elsif (not $folder->[4]) {
         # reactivate!
-        $Self->ddirty('jmailboxes', {active => 1}, {jmailboxid => $id});
+        $Self->dmaybedirty('jmailboxes', {active => 1}, {jmailboxid => $id});
       }
     }
     else {
       # case: role - we need to see if there's a case for moving this thing
       if ($role and $roletoid{$role}) {
         $id = $roletoid{$role};
-        $Self->ddirty('jmailboxes', {active => 1, %details}, {jmailboxid => $id});
+        $Self->dmaybedirty('jmailboxes', {active => 1, %details}, {jmailboxid => $id});
       }
       else {
         $id = $Self->dmake('jmailboxes', {role => $role, %details});
@@ -1133,7 +1133,7 @@ sub deleted_record {
 
   $Self->ddelete('imessages', {ifolderid => $folder, uid => $uid});
 
-  $Self->ddirty('jmessages', {}, {msgid => $msgid}); # bump modeseq
+  $Self->dmaybedirty('jmessages', {}, {msgid => $msgid}); # bump modeseq
   $Self->delete_message_from_mailbox($msgid, $jmailboxid);
 }
 

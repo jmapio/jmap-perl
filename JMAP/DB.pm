@@ -487,7 +487,7 @@ sub delete_message_from_mailbox {
   my ($msgid, $jmailboxid) = @_;
 
   my $data = {active => 0};
-  $Self->ddirty('jmessagemap', $data, {msgid => $msgid, jmailboxid => $jmailboxid});
+  $Self->dmaybedirty('jmessagemap', $data, {msgid => $msgid, jmailboxid => $jmailboxid});
   $Self->dmaybeupdate('jmailboxes', {jcountsmodseq => $data->{jmodseq}}, {jmailboxid => $jmailboxid});
 }
 
@@ -495,10 +495,7 @@ sub change_message {
   my $Self = shift;
   my ($msgid, $data, $newids) = @_;
 
-  # doesn't work if only IDs have changed :(
-  #return unless $Self->dmaybedirty('jmessages', $data, {msgid => $msgid});
-
-  $Self->ddirty('jmessages', $data, {msgid => $msgid});
+  $Self->dmaybedirty('jmessages', $data, {msgid => $msgid});
 
   my $oldids = $Self->dbh->selectcol_arrayref("SELECT jmailboxid FROM jmessagemap WHERE msgid = ? AND active = 1", {}, $msgid);
   my %old = map { $_ => 1 } @$oldids;
@@ -735,7 +732,7 @@ sub delete_event {
   my $Self = shift;
   my $jcalendarid = shift; # doesn't matter
   my $eventuid = shift;
-  return $Self->dupdate('jevents', {active => 0}, {eventuid => $eventuid});
+  return $Self->dmaybedirty('jevents', {active => 0}, {eventuid => $eventuid});
 }
 
 sub parse_card {
@@ -808,10 +805,10 @@ sub delete_card {
   my $carduid = shift;
   my $kind = shift;
   if ($kind eq 'contact') {
-    $Self->dupdate('jcontacts', {active => 0}, {contactuid => $carduid, jaddressbookid => $jaddressbookid});
+    $Self->dmaybedirty('jcontacts', {active => 0}, {contactuid => $carduid, jaddressbookid => $jaddressbookid});
   }
   else {
-    $Self->dupdate('jcontactgroups', {active => 0}, {groupuid => $carduid, jaddressbookid => $jaddressbookid});
+    $Self->dmaybedirty('jcontactgroups', {active => 0}, {groupuid => $carduid, jaddressbookid => $jaddressbookid});
   }
 }
 
