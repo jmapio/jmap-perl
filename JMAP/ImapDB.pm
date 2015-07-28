@@ -87,7 +87,10 @@ sub setuser {
 
 sub access_token {
   my $Self = shift;
+
+  $Self->begin();
   my ($hostname, $username, $password) = $Self->dbh->selectrow_array("SELECT imapHost, username, password FROM iserver");
+  $Self->commit();
 
   return [$hostname, $username, $password];
 }
@@ -95,7 +98,9 @@ sub access_token {
 sub access_data {
   my $Self = shift;
 
+  $Self->begin();
   my $config = $Self->dbh->selectall_arrayref("SELECT * FROM iserver", {Slice => {}});
+  $Self->commit();
 
   return $config->[0];
 }
@@ -203,11 +208,13 @@ sub sync_jmailboxes {
 
   my %seen;
   foreach my $folder (@$ifolders) {
+    next if lc $folder->[3] eq "\\allmail"; # we don't show this folder
     my $fname = $folder->[2];
     # check for roles first
     my @bits = split "[$folder->[1]]", $fname;
-    shift @bits if ($bits[0] eq 'INBOX' and $bits[1]); # otehrwise we get none...
-    shift @bits if $bits[0] eq '[Gmail]';
+    shift @bits if ($bits[0] eq 'INBOX' and $bits[1]); really we should be stripping the actual prefix, if any
+    shift @bits if $bits[0] eq '[Gmail]'; # we special case this GMail magic
+    next unless @bits; # also skip the magic '[Gmail]' top-level
     my $role = $ROLE_MAP{lc $folder->[3]};
     my $id = 0;
     my $parentId = 0;
@@ -1214,6 +1221,8 @@ sub fill_messages {
   my $Self = shift;
   my @ids = @_;
 
+  $Self->begin();
+
   my $data = $Self->dbh->selectall_arrayref("SELECT msgid, parsed FROM jrawmessage WHERE msgid IN (" . join(', ', map { "?" } @ids) . ")", {}, @ids);
   my %result;
   foreach my $line (@$data) {
@@ -1221,24 +1230,38 @@ sub fill_messages {
   }
   my @need = grep { not $result{$_} } @ids;
 
-  return \%result unless @need;
-
-  my $uids = $Self->dbh->selectall_arrayref("SELECT ifolderid, uid, msgid FROM imessages WHERE msgid IN (" . join(', ', map { "?" } @need) . ")", {}, @need);
   my %udata;
-  foreach my $row (@$uids) {
-    $udata{$row->[0]}{$row->[1]} = $row->[2];
+  if (@need) {
+    my $uids = $Self->dbh->selectall_arrayref("SELECT ifolderid, uid, msgid FROM imessages WHERE msgid IN (" . join(', ', map { "?" } @need) . ")", {}, @need);
+    foreach my $row (@$uids) {
+      $udata{$row->[0]}{$row->[1]} = $row->[2];
+    }
   }
 
+  my %foldermap;
+  foreach my $ifolderid (sort keys %udata) {
+    my $uhash = $udata{$ifolderid};
+    my $uids = join(',', sort { $a <=> $b } grep { not $result{$uhash->{$_}} } keys %$uhash);
+    next unless $uids;
+    my ($imapname, $uidvalidity) = $Self->dbh->selectrow_array("SELECT imapname, uidvalidity FROM ifolders WHERE ifolderid = ?", {}, $ifolderid);
+    next unless $imapname;
+    $foldermap{$ifolderid} = [$imapname, $uidvalidity];
+  }
+
+  # drop out of transaction to actually fetch the data
+  $Self->commit();
+
+  my %parsed;
   foreach my $ifolderid (sort keys %udata) {
     my $uhash = $udata{$ifolderid};
     my $uids = join(',', sort { $a <=> $b } grep { not $result{$uhash->{$_}} } keys %$uhash);
     next unless $uids;
 
-    my ($imapname, $uidvalidity) = $Self->dbh->selectrow_array("SELECT imapname, uidvalidity FROM ifolders WHERE ifolderid = ?", {}, $ifolderid);
-    next unless $imapname;
+    my $data = $foldermap{$ifolderid};
+    next unless $data;
 
+    my ($imapname, $uidvalidity) = @$data;
     my $res = $Self->backend_cmd('imap_fill', $imapname, $uidvalidity, $uids);
-    my %parsed;
     foreach my $uid (keys %{$res->{data}}) {
       my $rfc822 = $res->{data}{$uid};
       next unless $rfc822;
@@ -1247,19 +1270,19 @@ sub fill_messages {
       my $eml = Email::MIME->new($rfc822);
       $parsed{$msgid} = $Self->parse_message($msgid, $eml);
     }
-
-    $Self->begin();
-    foreach my $msgid (sort keys %parsed) {
-      my $message = $parsed{$msgid};
-      $Self->dinsert('jrawmessage', {
-       msgid => $msgid,
-       parsed => encode_json($message),
-       hasAttachment => $message->{hasAttachment},
-      });
-      $result{$msgid} = $parsed{$msgid};
-    }
-    $Self->commit();
   }
+
+  $Self->begin();
+  foreach my $msgid (sort keys %parsed) {
+    my $message = $parsed{$msgid};
+    $Self->dinsert('jrawmessage', {
+     msgid => $msgid,
+     parsed => encode_json($message),
+     hasAttachment => $message->{hasAttachment},
+    });
+    $result{$msgid} = $parsed{$msgid};
+  }
+  $Self->commit();
 
   # XXX - handle not getting data that we need?
   my @stillneed = grep { not $result{$_} } @ids;
@@ -1376,7 +1399,7 @@ sub update_mailboxes {
 
     my ($oldname) = $Self->dbh->selectrow_array("SELECT imapname FROM ifolders WHERE jmailboxid = ?", {}, $id);
 
-    $namemap{$oldname} = $newname;
+    $namemap{$oldname} = $imapname;
 
     push @updated, $id;
   }
@@ -1384,7 +1407,7 @@ sub update_mailboxes {
   $Self->commit();
 
   foreach my $oldname (sort keys %namemap) {
-    my $newname = $namemap{$oldname};
+    my $imapname = $namemap{$oldname};
     $Self->backend_cmd('rename_mailbox', $oldname, $imapname) if $oldname ne $imapname;
   }
 

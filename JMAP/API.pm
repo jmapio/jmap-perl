@@ -398,13 +398,17 @@ sub _load_mailbox {
   my $Self = shift;
   my $id = shift;
 
+  $Self->begin();
   my $data = $Self->{db}->dbh->selectall_arrayref("SELECT msgid,jmodseq,active FROM jmessagemap WHERE jmailboxid = ?", {}, $id);
+  $Self->commit();
   return { map { $_->[0] => $_ } @$data };
 }
 
 sub _load_hasatt {
   my $Self = shift;
+  $Self->begin();
   my $data = $Self->{db}->dbh->selectcol_arrayref("SELECT msgid FROM jrawmessage WHERE hasAttachment = 1");
+  $Self->commit();
   return { map { $_ => 1 } @$data };
 }
 
@@ -954,7 +958,7 @@ sub getMessages {
 
   # need to load messages from the server
   if ($need_content) {
-    my $content = $Self->{db}->fill_messages('interactive', map { $_->{id} } @list);
+    my $content = $Self->{db}->fill_messages(map { $_->{id} } @list);
     foreach my $item (@list) {
       my $data = $content->{$item->{id}};
       foreach my $prop (qw(preview textBody htmlBody)) {
