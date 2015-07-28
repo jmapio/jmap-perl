@@ -636,6 +636,8 @@ sub create_messages {
   my %created;
   my %notCreated;
 
+  return ({}, {}) unless %$args;
+
   $Self->begin();
 
   # XXX - get draft mailbox ID

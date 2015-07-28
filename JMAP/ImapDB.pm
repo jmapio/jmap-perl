@@ -974,6 +974,8 @@ sub update_messages {
   my $changes = shift;
   my $idmap = shift;
 
+  return ([], {}) unless %$changes;
+
   $Self->begin();
 
   my %updatemap;
@@ -1084,6 +1086,8 @@ sub update_messages {
 sub destroy_messages {
   my $Self = shift;
   my $ids = shift;
+
+  return ([], {}) unless @$ids;
 
   $Self->begin();
   my %destroymap;
@@ -1230,6 +1234,8 @@ sub fill_messages {
   my $Self = shift;
   my @ids = @_;
 
+  return {} unless @ids;
+
   $Self->begin();
 
   my $data = $Self->dbh->selectall_arrayref("SELECT msgid, parsed FROM jrawmessage WHERE msgid IN (" . join(', ', map { "?" } @ids) . ")", {}, @ids);
@@ -1259,6 +1265,8 @@ sub fill_messages {
 
   # drop out of transaction to actually fetch the data
   $Self->commit();
+
+  return \%result unless keys %udata;
 
   my %parsed;
   foreach my $ifolderid (sort keys %udata) {
@@ -1334,6 +1342,8 @@ sub create_mailboxes {
   my $Self = shift;
   my $new = shift;
 
+  return ({}, {}) unless keys %$new;
+
   $Self->begin();
   my %idmap;
   my %notcreated;
@@ -1380,6 +1390,8 @@ sub update_mailboxes {
   my $Self = shift;
   my $update = shift;
   my $idmap = shift;
+
+  return ([], {}) unless %$update;
 
   $Self->begin();
 
@@ -1429,6 +1441,8 @@ sub destroy_mailboxes {
   my $Self = shift;
   my $destroy = shift;
 
+  return ([], {}) unless @$destroy;
+
   $Self->begin();
 
   my @destroyed;
@@ -1456,6 +1470,8 @@ sub destroy_mailboxes {
 sub create_calendar_events {
   my $Self = shift;
   my $new = shift;
+
+  return ({}, {}) unless keys %$new;
 
   $Self->begin();
 
@@ -1490,6 +1506,8 @@ sub update_calendar_events {
   my $update = shift;
   my $idmap = shift;
 
+  return ([], {}) unless %$update;
+
   $Self->begin();
 
   my %todo;
@@ -1521,6 +1539,8 @@ sub destroy_calendar_events {
   my $Self = shift;
   my $destroy = shift;
 
+  return ([], {}) unless @$destroy;
+
   $Self->begin();
 
   my %todo;
@@ -1550,6 +1570,8 @@ sub destroy_calendar_events {
 sub create_contact_groups {
   my $Self = shift;
   my $new = shift;
+
+  return ({}, {}) unless keys %$new;
 
   $Self->begin();
 
@@ -1593,6 +1615,8 @@ sub update_contact_groups {
   my $changes = shift;
   my $idmap = shift;
 
+  return ([], {}) unless %$changes;
+
   $Self->begin();
 
   my %todo;
@@ -1630,6 +1654,8 @@ sub destroy_contact_groups {
   my $Self = shift;
   my $destroy = shift;
 
+  return ([], {}) unless @$destroy;
+
   $Self->begin();
 
   my %todo;
@@ -1657,6 +1683,8 @@ sub destroy_contact_groups {
 sub create_contacts {
   my $Self = shift;
   my $new = shift;
+
+  return ({}, {}) unless keys %$new;
 
   $Self->begin();
 
@@ -1699,6 +1727,8 @@ sub update_contacts {
   my $Self = shift;
   my $changes = shift;
   my $idmap = shift;
+
+  return ([], {}) unless %$changes;
 
   $Self->begin();
 
@@ -1745,6 +1775,8 @@ sub update_contacts {
 sub destroy_contacts {
   my $Self = shift;
   my $destroy = shift;
+
+  return ([], {}) unless @$destroy;
 
   $Self->begin();
 
