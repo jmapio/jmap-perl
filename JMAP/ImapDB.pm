@@ -448,7 +448,7 @@ sub do_calendars {
   foreach my $id (keys %$cals) {
     my $href = $cals->{$id};
     my ($jcalendarid) = $Self->dbh->selectrow_array("SELECT jcalendarid FROM icalendars WHERE icalendarid = ?", {}, $id);
-    my $exists = $Self->dbh->selectall_arrayref("SELECT ieventid, resource, uid FROM ievents WHERE icalendarid = ?", {Slice => {}}, $id);
+    my $exists = $Self->dbh->selectall_arrayref("SELECT ieventid, resource, raw, uid FROM ievents WHERE icalendarid = ?", {Slice => {}}, $id);
     my %res = map { $_->{resource} => $_ } @$exists;
 
     foreach my $resource (keys %{$allparsed{$href}}) {
@@ -464,6 +464,7 @@ sub do_calendars {
       };
       if ($data) {
         my $eid = $data->{ieventid};
+        next if $raw eq $data->{raw};
         $Self->dmaybeupdate('ievents', $item, {ieventid => $eid});
       }
       else {
@@ -599,7 +600,7 @@ sub do_addressbooks {
   foreach my $id (keys %$books) {
     my $href = $books->{$id};
     my ($jaddressbookid) = $Self->dbh->selectrow_array("SELECT jaddressbookid FROM iaddressbooks WHERE iaddressbookid = ?", {}, $id);
-    my $exists = $Self->dbh->selectall_arrayref("SELECT icardid, resource, uid, kind FROM icards WHERE iaddressbookid = ?", {Slice => {}}, $id);
+    my $exists = $Self->dbh->selectall_arrayref("SELECT icardid, resource, raw, uid, kind FROM icards WHERE iaddressbookid = ?", {Slice => {}}, $id);
     my %res = map { $_->{resource} => $_ } @$exists;
 
     foreach my $resource (keys %{$allparsed{$href}}) {
@@ -617,6 +618,7 @@ sub do_addressbooks {
       };
       if ($data) {
         my $cid = $data->{icardid};
+        next if $raw eq $data->{raw};
         $Self->dmaybeupdate('icards', $item, {icardid => $cid});
       }
       else {
