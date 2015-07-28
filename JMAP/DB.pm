@@ -843,6 +843,7 @@ sub filter_values {
 
   my $sql = "SELECT " . join(', ', @keys) . " FROM $table";
   $sql .= " WHERE " . join(' AND ', map { "$_ = ?" } @lkeys) if @lkeys;
+  $Self->log('debug', $sql, _dbl(map { $limit->{$_} } @lkeys));
   my $data = $Self->dbh->selectrow_hashref($sql, {}, map { $limit->{$_} } @lkeys);
   foreach my $key (@keys) {
     delete $values{$key} if $limit->{$key}; # in the limit, no point setting again
