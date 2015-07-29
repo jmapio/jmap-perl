@@ -878,7 +878,7 @@ sub do_folder {
     my $res = $Self->backend_cmd('imap_count', $imapname, $uidvalidity, "$uidfirst:$to");
     $Self->begin();
     my $uids = $res->{data};
-    my $data = $Self->dbh->selectcol_arrayref("SELECT uid FROM imessages WHERE ifolderid = ? AND uid >= ?", {}, $ifolderid, $uidfirst);
+    my $data = $Self->dbh->selectcol_arrayref("SELECT uid FROM imessages WHERE ifolderid = ? AND uid >= ? AND uid <= ?", {}, $ifolderid, $uidfirst, $to);
     my %exists = map { $_ => 1 } @$uids;
     foreach my $uid (@$data) {
       next if $exists{$uid};
@@ -1170,13 +1170,12 @@ sub deleted_record {
   my $Self = shift;
   my ($folder, $uid) = @_;
 
-  my ($msgid, $jmailboxid) = $Self->dbh->selectrow_array("SELECT msgid, jmailboxid FROM imessages JOIN ifolders USING (ifolderid) WHERE imessages.ifolderid = ? AND uid = ?", {}, $folder, $uid);
+  my ($msgid) = $Self->dbh->selectrow_array("SELECT msgid FROM imessages WHERE ifolderid = ? AND uid = ?", {}, $folder, $uid);
   return unless $msgid;
 
   $Self->ddelete('imessages', {ifolderid => $folder, uid => $uid});
 
-  $Self->ddirty('jmessages', {}, {msgid => $msgid}); # bump modeseq
-  $Self->delete_message_from_mailbox($msgid, $jmailboxid);
+  $Self->delete_message($msgid);
 }
 
 sub new_record {

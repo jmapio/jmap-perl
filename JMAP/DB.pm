@@ -442,7 +442,7 @@ sub change_message {
   my $Self = shift;
   my ($msgid, $data, $newids) = @_;
 
-  $Self->dmaybedirty('jmessages', $data, {msgid => $msgid});
+  my $bump = $Self->dmaybedirty('jmessages', $data, {msgid => $msgid});
 
   my $oldids = $Self->dbh->selectcol_arrayref("SELECT jmailboxid FROM jmessagemap WHERE msgid = ? AND active = 1", {}, $msgid);
   my %old = map { $_ => 1 } @$oldids;
@@ -450,7 +450,7 @@ sub change_message {
   foreach my $jmailboxid (@$newids) {
     if (delete $old{$jmailboxid}) {
       # just bump the modseq
-      $Self->dmaybeupdate('jmailboxes', {jcountsmodseq => $data->{jmodseq}}, {jmailboxid => $jmailboxid});
+      $Self->dmaybeupdate('jmailboxes', {jcountsmodseq => $data->{jmodseq}}, {jmailboxid => $jmailboxid}) if $bump;
     }
     else {
       $Self->add_message_to_mailbox($msgid, $jmailboxid);
