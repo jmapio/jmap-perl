@@ -351,10 +351,10 @@ sub imap_count {
     return \%res;
   }
 
-  my $data = $imap->fetch($uids, "UID");
+  my $data = $imap->search($uids);
   $Self->_unselect($imap);
 
-  $res{data} = [sort { $a <=> $b } keys %$data];
+  $res{data} = $data;
   return \%res;
 }
 
