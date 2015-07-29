@@ -373,7 +373,7 @@ sub _build_sort {
   return 'internaldate desc' unless $sortargs;
   my %fieldmap = (
     id => 'msgid',
-    date => 'internaldate',
+    date => 'msgdate',
     size => 'msgsize',
     isflagged => 'isFlagged',
     isunread => 'isUnread',
