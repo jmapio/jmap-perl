@@ -992,7 +992,7 @@ sub update_messages {
       $updatemap{$ifolderid}{$uid} = $msgid;
     }
     else {
-      $notchanged{$msgid} = "No such message on server";
+      $notchanged{$msgid} = {type => 'notFound', description => "No such message on server"};
     }
   }
 
@@ -1015,7 +1015,7 @@ sub update_messages {
       my $msgid = $updatemap{$ifolderid}{$uid};
       my $action = $changes->{$msgid};
       unless ($imapname and $uidvalidity) {
-        $notchanged{$msgid} = "No folder found";
+        $notchanged{$msgid} = {type => 'notFound', description => "No folder found"};
         next;
       }
       if (exists $action->{isUnread}) {
@@ -1403,8 +1403,8 @@ sub update_mailboxes {
 
   $Self->begin();
 
-  my @updated;
-  my %notupdated;
+  my @changed;
+  my %notchanged;
   my %namemap;
   # XXX - reorder the crap out of this if renaming multiple mailboxes due to deep rename
   foreach my $id (keys %$update) {
@@ -1430,7 +1430,7 @@ sub update_mailboxes {
 
     $namemap{$oldname} = $imapname;
 
-    push @updated, $id;
+    push @changed, $id;
   }
 
   $Self->commit();
@@ -1440,9 +1440,9 @@ sub update_mailboxes {
     $Self->backend_cmd('rename_mailbox', $oldname, $imapname) if $oldname ne $imapname;
   }
 
-  $Self->sync_folders() if @updated;
+  $Self->sync_folders() if @changed;
 
-  return (\@updated, \%notupdated);
+  return (\@changed, \%notchanged);
 }
 
 sub destroy_mailboxes {
@@ -1519,19 +1519,19 @@ sub update_calendar_events {
   $Self->begin();
 
   my %todo;
-  my @updated;
-  my %notupdated;
+  my @changed;
+  my %notchanged;
   foreach my $uid (keys %$update) {
     my $calendar = $update->{$uid};
     my ($resource) = $Self->dbh->selectrow_array("SELECT resource FROM ievents WHERE uid = ?", {}, $uid);
     unless ($resource) {
-      $notupdated{$uid} = "No such event on server";
+      $notchanged{$uid} = {type => 'notFound', description => "No such event on server"};
       next;
     }
 
     $todo{$resource} = $calendar;
 
-    push @updated, $uid;
+    push @changed, $uid;
   }
 
   $Self->commit();
@@ -1540,7 +1540,7 @@ sub update_calendar_events {
     $Self->backend_cmd('update_event', $href, $todo{$href});
   }
 
-  return (\@updated, \%notupdated);
+  return (\@changed, \%notchanged);
 }
 
 sub destroy_calendar_events {
@@ -1628,13 +1628,13 @@ sub update_contact_groups {
   $Self->begin();
 
   my %todo;
-  my @updated;
+  my @changed;
   my %notchanged;
   foreach my $carduid (keys %$changes) {
     my $contact = $changes->{$carduid};
     my ($resource, $content) = $Self->dbh->selectrow_array("SELECT resource, content FROM icards WHERE uid = ?", {}, $carduid);
     unless ($resource) {
-      $notchanged{$carduid} = "No such card on server";
+      $notchanged{$carduid} = {type => 'notFound', description => "No such card on server"};
       next;
     }
     my ($card) = Net::CardDAVTalk::VCard->new_fromstring($content);
@@ -1646,7 +1646,7 @@ sub update_contact_groups {
     }
 
     $todo{$resource} = $card;
-    push @updated, $carduid;
+    push @changed, $carduid;
   }
 
   $Self->commit();
@@ -1655,7 +1655,7 @@ sub update_contact_groups {
     $Self->backend_cmd('update_card', $href, $todo{$href});
   }
 
-  return (\@updated, \%notchanged);
+  return (\@changed, \%notchanged);
 }
 
 sub destroy_contact_groups {
@@ -1741,13 +1741,13 @@ sub update_contacts {
   $Self->begin();
 
   my %todo;
-  my @updated;
+  my @changed;
   my %notchanged;
   foreach my $carduid (keys %$changes) {
     my $contact = $changes->{$carduid};
     my ($resource, $content) = $Self->dbh->selectrow_array("SELECT resource, content FROM icards WHERE uid = ?", {}, $carduid);
     unless ($resource) {
-      $notchanged{$carduid} = "No such card on server";
+      $notchanged{$carduid} = {type => 'notFound', description => "No such card on server"};
       next;
     }
     my ($card) = Net::CardDAVTalk::VCard->new_fromstring($content);
@@ -1768,7 +1768,7 @@ sub update_contacts {
     $card->VNotes($contact->{notes}) if exists $contact->{notes};
 
     $todo{$resource} = $card;
-    push @updated, $carduid;
+    push @changed, $carduid;
   }
 
   $Self->commit();
@@ -1777,7 +1777,7 @@ sub update_contacts {
     $Self->backend_cmd('update_card', $href, $todo{$href});
   }
 
-  return (\@updated, \%notchanged);
+  return (\@changed, \%notchanged);
 }
 
 sub destroy_contacts {
