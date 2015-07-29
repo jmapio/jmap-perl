@@ -882,6 +882,20 @@ sub dmaybedirty {
   return $Self->dupdate($table, $filtered, $limit);
 }
 
+sub dnuke {
+  my $Self = shift;
+  my ($table, $limit) = @_;
+
+  my $modseq = $Self->dirty($table);
+
+  my @lkeys = sort keys %$limit;
+  my $sql = "UPDATE $table SET active = 0, jmodseq = ? WHERE active = 1 AND " . join(' AND ', map { "$_ = ?" } @lkeys);
+
+  $Self->log('debug', $sql, _dbl($modseq), _dbl(map { $limit->{$_} } @lkeys));
+
+  $Self->dbh->do($sql, {}, $modseq, map { $limit->{$_} } @lkeys);
+}
+
 sub ddelete {
   my $Self = shift;
   my ($table, $limit) = @_;

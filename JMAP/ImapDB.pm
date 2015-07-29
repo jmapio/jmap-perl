@@ -360,8 +360,9 @@ sub sync_calendars {
     if ($id) {
       $Self->dmaybeupdate('icalendars', $data, {icalendarid => $id});
       my $token = $byhref{$calendar->{href}}[5];
-      if ($token ne $calendar->{syncToken}) {
-        $Self->dmaybeupdate('icalendars', $data, {icalendarid => $id});
+      if ($token eq $calendar->{syncToken}) {
+        $seen{$id} = 1;
+        next;
       }
     }
     else {
@@ -374,7 +375,7 @@ sub sync_calendars {
   foreach my $calendar (@$icalendars) {
     my $id = $calendar->[0];
     next if $seen{$id};
-    $Self->dbh->do("DELETE FROM icalendars WHERE icalendarid = ?", {}, $id);
+    $Self->ddelete('icalendars', {icalendarid => $id});
   }
 
   $Self->sync_jcalendars();
@@ -425,8 +426,8 @@ sub sync_jcalendars {
   foreach my $calendar (@$jcalendars) {
     my $id = $calendar->[0];
     next if $seen{$id};
-    $Self->dmaybedirty('jcalendars', {active => 0}, {jcalendarid => $id});
-    $Self->dmaybedirty('jevents', {active => 0}, {jcalendarid => $id});
+    $Self->dnuke('jcalendars', {jcalendarid => $id});
+    $Self->dnuke('jevents', {jcalendarid => $id});
   }
 }
 
@@ -508,9 +509,11 @@ sub sync_addressbooks {
       syncToken => $addressbook->{syncToken},
     };
     if ($id) {
+      $Self->dmaybeupdate('iaddressbooks', $data, {iaddressbookid => $id});
       my $token = $byhref{$addressbook->{href}}{syncToken};
-      if ($token ne $addressbook->{syncToken}) {
-        $Self->dmaybeupdate('iaddressbooks', $data, {iaddressbookid => $id});
+      if ($token eq $addressbook->{syncToken}) {
+        $seen{$id} = 1;
+        next;
       }
     }
     else {
@@ -575,9 +578,9 @@ sub sync_jaddressbooks {
   foreach my $addressbook (@$jaddressbooks) {
     my $jid = $addressbook->{jaddressbookid};
     next if $seen{$jid};
-    $Self->dmaybedirty('jaddressbooks', {active => 0}, {jaddressbookid => $jid});
-    $Self->dmaybedirty('jcontactgroups', {active => 0}, {jaddressbookid => $jid});
-    $Self->dmaybedirty('jcontacts', {active => 0}, {jaddressbookid => $jid});
+    $Self->dnuke('jaddressbooks', {jaddressbookid => $jid});
+    $Self->dnuke('jcontactgroups', {jaddressbookid => $jid});
+    $Self->dnuke('jcontacts', {jaddressbookid => $jid});
   }
 }
 
