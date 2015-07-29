@@ -684,7 +684,8 @@ sub backfill {
 
   return unless @$data;
 
-  my $rest = 5000;
+  #DB::enable_profile();
+  my $rest = 500;
   foreach my $row (@$data) {
     my $id = $row->{ifolderid};
     my $label = $row->{label};
@@ -692,6 +693,8 @@ sub backfill {
     $rest -= $Self->do_folder($id, $label, $rest);
     last if $rest < 10;
   }
+  #DB::disable_profile();
+  #exit 0;
 
   return 1;
 }

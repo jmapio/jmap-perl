@@ -3,11 +3,13 @@
 package JMAP::API;
 
 use JMAP::DB;
-use JSON;
 use strict;
 use warnings;
 use Encode;
 use HTML::GenerateUtil qw(escape_html);
+use JSON::XS;
+
+my $json = JSON::XS->new->utf8->canonical();
 
 sub new {
   my $class = shift;
