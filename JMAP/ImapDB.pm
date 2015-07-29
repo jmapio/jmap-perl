@@ -807,7 +807,16 @@ sub do_folder {
   my $didold = 0;
   if ($res->{backfill}) {
     my $new = $res->{backfill}[1];
+    my $count = 0;
     foreach my $uid (sort { $a <=> $b } keys %$new) {
+      $count++;
+      # release the lock frequently so we don't starve the API
+      if ($count > 50) {
+        $Self->commit();
+        $Self->begin();
+        $Self->{t}{backfilling} = 1;
+        $count = 0;
+      }
       my ($msgid, $thrid, @labels);
       if ($Self->{is_gmail}) {
         ($msgid, $thrid) = ($new->{$uid}{"x-gm-msgid"}, $new->{$uid}{"x-gm-thrid"});
