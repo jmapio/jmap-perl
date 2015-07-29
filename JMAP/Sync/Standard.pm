@@ -90,18 +90,19 @@ sub send_email {
 
   my $ssl;
   $ssl = 'ssl' if $Self->{auth}{smtpSSL} == 2;
-  $ssl = 'startls' if $Self->{auth}{smtpSSL} == 3;
+  $ssl = 'starttls' if $Self->{auth}{smtpSSL} == 3;
   my $email = Email::Simple->new($rfc822);
-  sendmail($email, {
-    from => $Self->{auth}{username},
-    transport => Email::Sender::Transport::SMTPS->new({
+  my $detail = {
       helo => $ENV{jmaphost},
       host => $Self->{auth}{smtpHost},
       port => $Self->{auth}{smtpPort},
       ssl => $ssl,
       sasl_username => $Self->{auth}{username},
       sasl_password => $Self->{auth}{password},
-    }),
+  };
+  sendmail($email, {
+    from => $Self->{auth}{username},
+    transport => Email::Sender::Transport::SMTPS->new($detail),
   });
 }
 
