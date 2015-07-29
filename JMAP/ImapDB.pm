@@ -729,8 +729,7 @@ sub calcmsgid {
   my $uid = shift;
   my $data = shift;
   my $envelope = $data->{envelope};
-  my $json = JSON::XS->new->allow_nonref->canonical;
-  my $coded = $json->encode([$envelope, $data->{'rfc822.size'}]);
+  my $coded = $json->encode([$envelope]);
   my $base = substr(sha1_hex($coded), 0, 9);
   my $msgid = "m$base";
 
