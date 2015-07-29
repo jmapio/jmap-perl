@@ -351,7 +351,7 @@ sub imap_count {
     return \%res;
   }
 
-  my $data = $imap->search($uids);
+  my $data = $imap->search('uid', $uids);
   $Self->_unselect($imap);
 
   $res{data} = $data;
