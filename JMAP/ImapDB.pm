@@ -1752,6 +1752,7 @@ sub create_contacts {
 
   my %createmap;
   my %notcreated;
+  my %todo;
   foreach my $cid (keys %$new) {
     my $contact = $new->{$cid};
     my ($href) = $Self->dbh->selectrow_array("SELECT href FROM iaddressbooks");
@@ -1778,8 +1779,14 @@ sub create_contacts {
     $card->VBirthday($contact->{birthday}) if exists $contact->{birthday};
     $card->VNotes($contact->{notes}) if exists $contact->{notes};
 
-    $Self->backend_cmd('new_card', $href, $card);
     $createmap{$cid} = { id => $uid };
+    $todo{$href} = $card;
+  }
+
+  $Self->commit();
+
+  foreach my $href (sort keys %todo) {
+    $Self->backend_cmd('new_card', $href, $todo{$href});
   }
 
   return (\%createmap, \%notcreated);
