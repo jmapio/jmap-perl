@@ -807,7 +807,6 @@ sub do_folder {
   my $didold = 0;
   if ($res->{backfill}) {
     my $new = $res->{backfill}[1];
-    $Self->{backfilling} = 1;
     foreach my $uid (sort { $a <=> $b } keys %$new) {
       my ($msgid, $thrid, @labels);
       if ($Self->{is_gmail}) {
@@ -821,7 +820,6 @@ sub do_folder {
       $didold++;
       $Self->new_record($ifolderid, $uid, $new->{$uid}{'flags'}, \@labels, $new->{$uid}{envelope}, str2time($new->{$uid}{internaldate}), $msgid, $thrid, $new->{$uid}{'rfc822.size'});
     }
-    delete $Self->{backfilling};
   }
 
   if ($res->{update}) {
