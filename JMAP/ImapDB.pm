@@ -910,9 +910,9 @@ sub changed_record {
   my $flags = $json->encode([grep { lc $_ ne '\\recent' } sort @$flaglist]);
   my $labels = $json->encode([sort @$labellist]);
 
-  my ($msgid) = $Self->dbh->selectrow_array("SELECT msgid FROM imessages WHERE ifolderid = ? AND uid = ?", {}, $folder, $uid);
+  return unless $Self->dmaybeupdate('imessages', {flags => $flags, labels => $labels}, {ifolderid => $folder, uid => $uid});
 
-  $Self->dmaybeupdate('imessages', {flags => $flags, labels => $labels}, {ifolderid => $folder, uid => $uid});
+  my ($msgid) = $Self->dbh->selectrow_array("SELECT msgid FROM imessages WHERE ifolderid = ? AND uid = ?", {}, $folder, $uid);
 
   $Self->apply_data($msgid, $flaglist, $labellist);
 }
