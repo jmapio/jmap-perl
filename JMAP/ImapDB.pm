@@ -770,7 +770,7 @@ sub do_folder {
   my @immutable = qw(internaldate envelope rfc822.size);
   my @mutable;
   if ($Self->{is_gmail}) {
-    push @immutable, qw(x-gm-msgid x-gm-thrid x-gm-labels);
+    push @immutable, qw(x-gm-msgid x-gm-thrid);
     push @mutable, qw(x-gm-labels);
   }
 
