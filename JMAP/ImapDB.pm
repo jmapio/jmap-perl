@@ -1331,7 +1331,9 @@ sub get_raw_message {
   my $msgid = shift;
   my $part = shift;
 
+  $Self->begin();
   my ($imapname, $uidvalidity, $uid) = $Self->dbh->selectrow_array("SELECT imapname, uidvalidity, uid FROM ifolders JOIN imessages USING (ifolderid) WHERE msgid = ?", {}, $msgid);
+  $Self->commit();
   return unless $imapname;
 
   my $type = 'message/rfc822';
