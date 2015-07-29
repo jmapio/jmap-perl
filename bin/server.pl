@@ -139,8 +139,6 @@ sub read_idle_line {
   });
 }
 
-my $json = JSON::XS->new->allow_nonref->pretty->canonical;
-
 my $httpd = AnyEvent::HTTPD->new (port => 9000);
 
 my %backend;

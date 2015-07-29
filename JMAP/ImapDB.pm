@@ -1107,7 +1107,7 @@ sub destroy_messages {
       $destroymap{$ifolderid}{$uid} = $msgid;
     }
     else {
-      $notdestroyed{$msgid} = "No such message on server";
+      $notdestroyed{$msgid} = {type => 'notFound', description => "No such message on server"};
     }
   }
 
@@ -1123,7 +1123,7 @@ sub destroy_messages {
     my $imapname = $foldermap{$ifolderid}[1];
     my $uidvalidity = $foldermap{$ifolderid}[2];
     unless ($imapname) {
-      $notdestroyed{$_} = "No folder" for values %{$destroymap{$ifolderid}};
+      $notdestroyed{$_} = {type => 'notFound', description => "No folder"} for values %{$destroymap{$ifolderid}};
     }
     my $uids = [sort keys %{$destroymap{$ifolderid}}];
     $Self->backend_cmd('imap_move', $imapname, $uidvalidity, $uids, undef); # no destination folder
@@ -1493,7 +1493,7 @@ sub create_calendar_events {
     my $calendar = $new->{$cid};
     my ($href) = $Self->dbh->selectrow_array("SELECT href FROM icalendars WHERE icalendarid = ?", {}, $calendar->{calendarId});
     unless ($href) {
-      $notcreated{$cid} = "No such calendar on server";
+      $notcreated{$cid} = {type => 'notFound', description => "No such calendar on server"};
       next;
     }
     my $uid = new_uuid_string();
@@ -1560,7 +1560,7 @@ sub destroy_calendar_events {
   foreach my $uid (@$destroy) {
     my ($resource) = $Self->dbh->selectrow_array("SELECT resource FROM ievents WHERE uid = ?", {}, $uid);
     unless ($resource) {
-      $notdestroyed{$uid} = "No such event on server";
+      $notdestroyed{$uid} = {type => 'notFound', description => "No such event on server"};
       next;
     }
 
@@ -1594,7 +1594,7 @@ sub create_contact_groups {
     #my ($href) = $Self->dbh->selectrow_array("SELECT href FROM iaddressbooks WHERE iaddressbookid = ?", {}, $contact->{addressbookId});
     my ($href) = $Self->dbh->selectrow_array("SELECT href FROM iaddressbooks");
     unless ($href) {
-      $notcreated{$cid} = "No such addressbook on server";
+      $notcreated{$cid} = {type => 'notFound', description => "No such addressbook on server"};
       next;
     }
     my ($card) = Net::CardDAVTalk::VCard->new();
@@ -1675,7 +1675,7 @@ sub destroy_contact_groups {
   foreach my $carduid (@$destroy) {
     my ($resource, $content) = $Self->dbh->selectrow_array("SELECT resource, content FROM icards WHERE uid = ?", {}, $carduid);
     unless ($resource) {
-      $notdestroyed{$carduid} = "No such card on server";
+      $notdestroyed{$carduid} = {type => 'notFound', description => "No such card on server"};
       next;
     }
     $todo{$resource} = 1;
@@ -1705,7 +1705,7 @@ sub create_contacts {
     my $contact = $new->{$cid};
     my ($href) = $Self->dbh->selectrow_array("SELECT href FROM iaddressbooks");
     unless ($href) {
-      $notcreated{$cid} = "No such addressbook on server";
+      $notcreated{$cid} = {type => 'notFound', description => "No such addressbook on server"};
       next;
     }
     my ($card) = Net::CardDAVTalk::VCard->new();
@@ -1797,7 +1797,7 @@ sub destroy_contacts {
   foreach my $carduid (@$destroy) {
     my ($resource, $content) = $Self->dbh->selectrow_array("SELECT resource, content FROM icards WHERE uid = ?", {}, $carduid);
     unless ($resource) {
-      $notdestroyed{$carduid} = "No such card on server";
+      $notdestroyed{$carduid} = {type => 'notFound', description => "No such card on server"};
       next;
     }
     $todo{$resource} = 1;
