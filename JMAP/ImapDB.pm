@@ -53,6 +53,7 @@ my %ROLE_MAP = (
   '\\trash' => 'trash',
   '\\sent' => 'sent',
   '\\junk' => 'spam',
+  '\\spam' => 'spam',
   '\\archive' => 'archive',
   '\\drafts' => 'drafts',
 );
@@ -879,6 +880,27 @@ sub do_folder {
 sub imap_search {
   my $Self = shift;
   my @search = @_;
+
+  if ($Self->{is_gmail}) {
+    if ($search[0] eq 'text') {
+      @search = ('x-gm-raw', $search[1]);
+    }
+    if ($search[0] eq 'from') {
+      @search = ('x-gm-raw', "from:$search[1]");
+    }
+    if ($search[0] eq 'to') {
+      @search = ('x-gm-raw', "to:$search[1]");
+    }
+    if ($search[0] eq 'cc') {
+      @search = ('x-gm-raw', "cc:$search[1]");
+    }
+    if ($search[0] eq 'subject') {
+      @search = ('x-gm-raw', "subject:$search[1]");
+    }
+    if ($search[0] eq 'body') {
+      @search = ('x-gm-raw', $search[1]);
+    }
+  }
 
   $Self->begin();
   my $data = $Self->dbh->selectall_arrayref("SELECT * FROM ifolders", {Slice => {}});
