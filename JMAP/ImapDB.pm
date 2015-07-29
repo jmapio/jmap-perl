@@ -52,7 +52,7 @@ my %ROLE_MAP = (
   '\\inbox' => 'inbox',
   '\\trash' => 'trash',
   '\\sent' => 'sent',
-  '\\junk' => 'junk',
+  '\\junk' => 'spam',
   '\\archive' => 'archive',
   '\\drafts' => 'drafts',
 );
