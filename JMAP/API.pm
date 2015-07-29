@@ -591,8 +591,6 @@ sub getMessageList {
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if (exists $args->{position} and exists $args->{anchor});
   return $Self->_transError(['error', {type => 'invalidArguments'}])
-    if (not exists $args->{position} and not exists $args->{anchor});
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
     if (exists $args->{anchor} and not exists $args->{anchorOffset});
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if (not exists $args->{anchor} and exists $args->{anchorOffset});
