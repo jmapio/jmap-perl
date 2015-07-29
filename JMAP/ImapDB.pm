@@ -179,6 +179,7 @@ sub sync_folders {
     $Self->begin();
     foreach my $name (keys %$data) {
       my $status = $data->{$name};
+      next unless ref($status) eq 'HASH';
       $Self->dmaybeupdate('ifolders', {
         uidvalidity => $status->{uidvalidity},
         uidnext => $status->{uidnext},
