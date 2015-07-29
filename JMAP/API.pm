@@ -28,6 +28,7 @@ sub setid {
 sub idmap {
   my $Self = shift;
   my $key = shift;
+  return unless $key;
   my $val = exists $Self->{idmap}{$key} ? $Self->{idmap}{$key} : $key;
   return $val;
 }
