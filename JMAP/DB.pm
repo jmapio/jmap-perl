@@ -87,13 +87,24 @@ sub in_transaction {
   return $Self->{t} ? 1 : 0;
 }
 
+sub begin_superlock {
+  my $Self = shift;
+  my $accountid = $Self->accountid();
+  $Self->{superlock} = IO::LockedFile->new(">/home/jmap/data/$accountid.lock");
+}
+
+sub end_superlock {
+  my $Self = shift;
+  delete $Self->{superlock};
+}
+
 sub begin {
   my $Self = shift;
   confess("ALREADY IN TRANSACTION") if $Self->{t};
   my $accountid = $Self->accountid();
   $Self->{t} = {dbh => $Self->{dbh}};
   # we need this because sqlite locking isn't as robust as you might hope
-  $Self->{t}{lock} = IO::LockedFile->new(">/home/jmap/data/$accountid.lock");
+  $Self->{t}{lock} = $Self->{superlock} || IO::LockedFile->new(">/home/jmap/data/$accountid.lock");
   $Self->{t}{dbh}->begin_work();
 }
 
