@@ -369,8 +369,7 @@ sub setMailboxes {
 
 sub _build_sort {
   my $Self = shift;
-  my $sortargs = shift;
-  return 'internaldate desc' unless $sortargs;
+  my $sortargs = shift || [];
   my %fieldmap = (
     id => 'msgid',
     date => 'msgdate',
