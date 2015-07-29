@@ -1258,6 +1258,7 @@ sub apply_data {
 
 sub _normalsubject {
   my $sub = shift;
+  return unless defined $sub;
 
   # Re: and friends
   $sub =~ s/^[ \t]*[A-Za-z0-9]+://g;
