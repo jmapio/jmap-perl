@@ -383,7 +383,7 @@ sub _build_sort {
     size => 'msgsize',
     isflagged => 'isFlagged',
     isunread => 'isUnread',
-    subject => 'msgsubject',
+    subject => 'sortsubject',
     from => 'msgfrom',
     to => 'msgto',
   );

@@ -942,6 +942,7 @@ CREATE TABLE IF NOT EXISTS jmessages (
   msgmessageid TEXT,
   msgdate INTEGER,
   msgsize INTEGER,
+  sortsubject TEXT,
   jcreated INTEGER,
   jmodseq INTEGER,
   mtime DATE,

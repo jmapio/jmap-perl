@@ -739,11 +739,14 @@ sub calcmsgid {
 
   my $replyto = _trimh($envelope->{'In-Reply-To'});
   my $messageid = _trimh($envelope->{'Message-ID'});
-  my ($thrid) = $Self->dbh->selectrow_array("SELECT DISTINCT thrid FROM ithread WHERE messageid IN (?, ?)", {}, $replyto, $messageid);
+  my $encsub = Encode::decode('MIME-Header', $envelope->{Subject});
+  my $sortsub = _normalsubject($encsub);
+  my ($thrid) = $Self->dbh->selectrow_array("SELECT DISTINCT thrid FROM ithread WHERE messageid IN (?, ?) AND sortsubject = ?", {}, $replyto, $messageid, $sortsub);
+  # XXX - merging?  subject-checking?  We have a subject here
   $thrid ||= "t$base";
   foreach my $id ($replyto, $messageid) {
     next if $id eq '';
-    $Self->dbh->do("INSERT OR IGNORE INTO ithread (messageid, thrid) VALUES (?, ?)", {}, $id, $thrid);
+    $Self->dbh->do("INSERT OR IGNORE INTO ithread (messageid, thrid, sortsubject) VALUES (?, ?, ?)", {}, $id, $thrid, $sortsub);
   }
 
   return ($msgid, $thrid);
@@ -1245,12 +1248,29 @@ sub apply_data {
   }
 }
 
+sub _normalsubject {
+  my $sub = shift;
+
+  # Re: and friends
+  $sub =~ s/^[ \t]*[A-Za-z0-9]+://g;
+  # [LISTNAME] and friends
+  $sub =~ s/^[ \t]*\\[[^]]+\\]//g;
+  # Australian security services and frenemies
+  $sub =~ s/[\\[(SEC|DLM)=[^]]+\\][ \t]*$//g;
+  # any old whitespace
+  $sub =~ s/[ \t\r\n]+//g;
+
+  return $sub;
+}
+
 sub _envelopedata {
   my $data = shift;
   my $envelope = decode_json($data || "{}");
   my $encsub = Encode::decode('MIME-Header', $envelope->{Subject});
+  my $sortsub = _normalsubject($encsub);
   return (
     msgsubject => $encsub,
+    sortsubject => $sortsub,
     msgfrom => $envelope->{From},
     msgto => $envelope->{To},
     msgcc => $envelope->{Cc},
@@ -1897,6 +1917,7 @@ EOF
   $dbh->do(<<EOF);
 CREATE TABLE IF NOT EXISTS ithread (
   messageid TEXT PRIMARY KEY,
+  sortsubject TEXT,
   thrid TEXT
 );
 EOF
