@@ -900,7 +900,8 @@ sub dnuke {
   my $modseq = $Self->dirty($table);
 
   my @lkeys = sort keys %$limit;
-  my $sql = "UPDATE $table SET active = 0, jmodseq = ? WHERE active = 1 AND " . join(' AND ', map { "$_ = ?" } @lkeys);
+  my $sql = "UPDATE $table SET active = 0, jmodseq = ? WHERE active = 1";
+  $sql .= " AND " . join(' AND ', map { "$_ = ?" } @lkeys) if @lkeys;
 
   $Self->log('debug', $sql, _dbl($modseq), _dbl(map { $limit->{$_} } @lkeys));
 
@@ -912,11 +913,33 @@ sub ddelete {
   my ($table, $limit) = @_;
 
   my @lkeys = sort keys %$limit;
-  my $sql = "DELETE FROM $table WHERE " . join(' AND ', map { "$_ = ?" } @lkeys);
+  my $sql = "DELETE FROM $table";
+  $sql .= " WHERE " . join(' AND ', map { "$_ = ?" } @lkeys) if @lkeys;
 
   $Self->log('debug', $sql, _dbl(map { $limit->{$_} } @lkeys));
 
   $Self->dbh->do($sql, {}, map { $limit->{$_} } @lkeys);
+}
+
+sub dget {
+  my $Self = shift;
+  my ($table, $limit) = @_;
+
+  my @lkeys = sort keys %$limit;
+  my $sql = "SELECT * FROM $table";
+  $sql .= " WHERE " . join(' AND ', map { "$_ = ?" } @lkeys) if @lkeys;
+
+  $Self->log('debug', $sql, _dbl(map { $limit->{$_} } @lkeys));
+
+  my $data = $Self->dbh->selectall_arrayref($sql, {Slice => {}}, map { $limit->{$_} } @lkeys);
+  return $data;
+}
+
+# selectrow_arrayref?  Nah
+sub dgetone {
+  my $Self = shift;
+  my $res = $Self->dget(@_);
+  return $res->[0];
 }
 
 sub _initdb {
