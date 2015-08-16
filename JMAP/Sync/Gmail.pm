@@ -11,8 +11,8 @@ use JSON::XS qw(decode_json);
 use Email::Simple;
 use Email::Sender::Simple qw(sendmail);
 use Email::Sender::Transport::GmailSMTP;
-use Net::GmailCalendars;
-use Net::GmailContacts;
+use Net::CalDAVTalk;
+use Net::CardDAVTalk;
 use OAuth2::Tiny;
 use IO::All;
 
@@ -45,7 +45,7 @@ sub connect_calendars {
     return $Self->{calendars};
   }
 
-  $Self->{calendars} = Net::GmailCalendars->new(
+  $Self->{calendars} = Net::CalDAVTalk->new(
     user => $Self->{auth}{username},
     access_token => $Self->access_token(),
     url => $Self->{auth}{caldavURL},
@@ -63,7 +63,7 @@ sub connect_contacts {
     return $Self->{contacts};
   }
 
-  $Self->{contacts} = Net::GmailContacts->new(
+  $Self->{contacts} = Net::CardDAVTalk->new(
     user => $Self->{auth}{username},
     access_token => $Self->access_token(),
     url => $Self->{auth}{carddavURL},
