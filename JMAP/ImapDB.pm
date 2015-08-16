@@ -65,16 +65,16 @@ sub setuser {
 
   $Self->begin();
 
-  my $data = $Self->dbh->selectrow_arrayref("SELECT username FROM iserver");
-  if ($data and $data->[0]) {
+  my $data = $Self->dgetone('iserver');
+  if ($data) {
     $Self->dmaybeupdate('iserver', $args);
   }
   else {
     $Self->dinsert('iserver', $args);
   }
 
-  my $user = $Self->dbh->selectrow_arrayref("SELECT email FROM account");
-  if ($user and $user->[0]) {
+  my $user = $Self->dgetone('account');
+  if ($user) {
     $Self->dmaybeupdate('account', {email => $args->{username}});
   }
   else {
@@ -92,20 +92,20 @@ sub access_token {
   my $Self = shift;
 
   $Self->begin();
-  my ($hostname, $username, $password) = $Self->dbh->selectrow_array("SELECT imapHost, username, password FROM iserver");
+  my $data = $Self->dgetone('iserver');
   $Self->commit();
 
-  return [$hostname, $username, $password];
+  return [$data->{imapHost}, $data->{username}, $data->{password}];
 }
 
 sub access_data {
   my $Self = shift;
 
   $Self->begin();
-  my $config = $Self->dbh->selectall_arrayref("SELECT * FROM iserver", {Slice => {}});
+  my $data = $Self->dgetone('iserver');
   $Self->commit();
 
-  return $config->[0];
+  return $data;
 }
 
 # synchronous backend for now
@@ -142,15 +142,15 @@ sub sync_folders {
 
   $Self->begin();
 
-  my $ifolders = $Self->dbh->selectall_arrayref("SELECT ifolderid, sep, uidvalidity, imapname, label FROM ifolders");
-  my %ibylabel = map { $_->[4] => $_ } @$ifolders;
+  my $ifolders = $Self->dget('ifolders');
+  my %ibylabel = map { $_->{label} => $_ } @$ifolders;
   my %seen;
 
   my %getstatus;
   foreach my $name (sort keys %$folders) {
     my $sep = $folders->{$name}[0];
     my $label = $folders->{$name}[1];
-    my $id = $ibylabel{$label}[0];
+    my $id = $ibylabel{$label}{ifolderid};
     if ($id) {
       $Self->dmaybeupdate('ifolders', {sep => $sep, imapname => $name}, {ifolderid => $id});
     }
@@ -158,16 +158,16 @@ sub sync_folders {
       $id = $Self->dinsert('ifolders', {sep => $sep, imapname => $name, label => $label});
     }
     $seen{$id} = 1;
-    unless ($ibylabel{$label}[2]) {
+    unless ($ibylabel{$label}{uidvalidity}) {
       # no uidvalidity, we need to get status for this one
       $getstatus{$name} = $id;
     }
   }
 
   foreach my $folder (@$ifolders) {
-    my $id = $folder->[0];
+    my $id = $folder->{ifolderid};
     next if $seen{$id};
-    $Self->dbh->do("DELETE FROM ifolders WHERE ifolderid = ?", {}, $id);
+    $Self->ddelete('ifolders', {ifolderid => $id});
   }
 
   $Self->dmaybeupdate('iserver', {imapPrefix => $prefix, lastfoldersync => time()});
@@ -198,28 +198,28 @@ sub sync_folders {
 sub sync_jmailboxes {
   my $Self = shift;
   $Self->begin();
-  my $ifolders = $Self->dbh->selectall_arrayref("SELECT ifolderid, sep, imapname, label, jmailboxid FROM ifolders");
-  my $jmailboxes = $Self->dbh->selectall_arrayref("SELECT jmailboxid, name, parentId, role, active FROM jmailboxes");
+  my $ifolders = $Self->dget('ifolders');
+  my $jmailboxes = $Self->dget('jmailboxes');
 
   my %jbyid;
   my %roletoid;
   my %byname;
   foreach my $mailbox (@$jmailboxes) {
-    $jbyid{$mailbox->[0]} = $mailbox;
-    $roletoid{$mailbox->[3]} = $mailbox->[0] if $mailbox->[3];
-    $byname{$mailbox->[2]}{$mailbox->[1]} = $mailbox->[0];
+    $jbyid{$mailbox->{jmailboxid}} = $mailbox;
+    $roletoid{$mailbox->{role}} = $mailbox->{jmailboxid} if $mailbox->{role};
+    $byname{$mailbox->{parentId}}{$mailbox->{name}} = $mailbox->{jmailboxid};
   }
 
   my %seen;
   foreach my $folder (@$ifolders) {
-    next if lc $folder->[3] eq "\\allmail"; # we don't show this folder
-    my $fname = $folder->[2];
+    next if lc $folder->{label} eq "\\allmail"; # we don't show this folder
+    my $fname = $folder->{imapname};
     # check for roles first
-    my @bits = split "[$folder->[1]]", $fname;
+    my @bits = split "[$folder->{sep}]", $fname;
     shift @bits if ($bits[0] eq 'INBOX' and $bits[1]); # really we should be stripping the actual prefix, if any
     shift @bits if $bits[0] eq '[Gmail]'; # we special case this GMail magic
     next unless @bits; # also skip the magic '[Gmail]' top-level
-    my $role = $ROLE_MAP{lc $folder->[3]};
+    my $role = $ROLE_MAP{lc $folder->{label}};
     my $id = 0;
     my $parentId = 0;
     my $name;
@@ -259,7 +259,7 @@ sub sync_jmailboxes {
         $id = $roletoid{$role};
         $Self->dmaybedirty('jmailboxes', {active => 1, %details}, {jmailboxid => $id});
       }
-      elsif (not $folder->[4]) {
+      elsif (not $folder->{active}) {
         # reactivate!
         $Self->dmaybedirty('jmailboxes', {active => 1}, {jmailboxid => $id});
       }
@@ -327,8 +327,8 @@ sub sync_jmailboxes {
   }
 
   foreach my $mailbox (@$jmailboxes) {
-    my $id = $mailbox->[0];
-    next unless $mailbox->[4];
+    my $id = $mailbox->{jmailboxid};
+    next unless $mailbox->{active};
     next if $seen{$id};
     $Self->dupdate('jmailboxes', {active => 0}, {jmailboxid => $id});
   }
@@ -345,13 +345,13 @@ sub sync_calendars {
 
   $Self->begin();
 
-  my $icalendars = $Self->dbh->selectall_arrayref("SELECT icalendarid, href, name, isReadOnly, color, syncToken FROM icalendars");
-  my %byhref = map { $_->[1] => $_ } @$icalendars;
+  my $icalendars = $Self->dget('icalendars');
+  my %byhref = map { $_->{href} => $_ } @$icalendars;
 
   my %seen;
   my %todo;
   foreach my $calendar (@$calendars) {
-    my $id = $calendar->{href} ? $byhref{$calendar->{href}}[0] : 0;
+    my $id = $calendar->{href} ? $byhref{$calendar->{href}}{icalendarid} : 0;
     my $data = {
       isReadOnly => $calendar->{isReadOnly},
       href => $calendar->{href},
@@ -361,7 +361,7 @@ sub sync_calendars {
     };
     if ($id) {
       $Self->dmaybeupdate('icalendars', $data, {icalendarid => $id});
-      my $token = $byhref{$calendar->{href}}[5];
+      my $token = $byhref{$calendar->{href}}{syncToken};
       if ($token eq $calendar->{syncToken}) {
         $seen{$id} = 1;
         next;
@@ -375,7 +375,7 @@ sub sync_calendars {
   }
 
   foreach my $calendar (@$icalendars) {
-    my $id = $calendar->[0];
+    my $id = $calendar->{icalendarid};
     next if $seen{$id};
     $Self->ddelete('icalendars', {icalendarid => $id});
   }
@@ -392,19 +392,19 @@ sub sync_calendars {
 sub sync_jcalendars {
   my $Self = shift;
 
-  my $icalendars = $Self->dbh->selectall_arrayref("SELECT icalendarid, name, color, jcalendarid FROM icalendars");
-  my $jcalendars = $Self->dbh->selectall_arrayref("SELECT jcalendarid, name, color, active FROM jcalendars");
+  my $icalendars = $Self->dget('icalendars');
+  my $jcalendars = $Self->dget('jcalendars');
 
   my %jbyid;
   foreach my $calendar (@$jcalendars) {
-    $jbyid{$calendar->[0]} = $calendar;
+    $jbyid{$calendar->{jcalendarid}} = $calendar;
   }
 
   my %seen;
   foreach my $calendar (@$icalendars) {
     my $data = {
-      name => $calendar->[1],
-      color => $calendar->[2],
+      name => $calendar->{name},
+      color => $calendar->{color},
       isVisible => 1,
       mayReadFreeBusy => 1,
       mayReadItems => 1,
@@ -414,19 +414,19 @@ sub sync_jcalendars {
       mayDelete => 1,
       mayRename => 1,
     };
-    if ($calendar->[3] && $jbyid{$calendar->[3]}) {
-      $Self->dmaybedirty('jcalendars', $data, {jcalendarid => $calendar->[3]});
-      $seen{$calendar->[3]} = 1;
+    my $id = $calendar->{jcalendarid};
+    if ($id && $jbyid{$id}) {
+      $Self->dmaybedirty('jcalendars', $data, {jcalendarid => $id});
     }
     else {
-      my $id = $Self->dmake('jcalendars', $data);
-      $Self->dupdate('icalendars', {jcalendarid => $id}, {icalendarid => $calendar->[0]});
-      $seen{$id} = 1;
+      $id = $Self->dmake('jcalendars', $data);
+      $Self->dupdate('icalendars', {jcalendarid => $id}, {icalendarid => $calendar->{icalendarid}});
     }
+    $seen{$id} = 1;
   }
 
   foreach my $calendar (@$jcalendars) {
-    my $id = $calendar->[0];
+    my $id = $calendar->{jcalendarid};
     next if $seen{$id};
     $Self->dnuke('jcalendars', {jcalendarid => $id});
     $Self->dnuke('jevents', {jcalendarid => $id});
@@ -451,7 +451,7 @@ sub do_calendars {
   foreach my $id (keys %$cals) {
     my $href = $cals->{$id};
     my ($jcalendarid) = $Self->dbh->selectrow_array("SELECT jcalendarid FROM icalendars WHERE icalendarid = ?", {}, $id);
-    my $exists = $Self->dbh->selectall_arrayref("SELECT ieventid, resource, content, uid FROM ievents WHERE icalendarid = ?", {Slice => {}}, $id);
+    my $exists = $Self->dget('ievents', {icalendarid => $id});
     my %res = map { $_->{resource} => $_ } @$exists;
 
     foreach my $resource (keys %{$allparsed{$href}}) {
@@ -497,7 +497,7 @@ sub sync_addressbooks {
 
   $Self->begin();
 
-  my $iaddressbooks = $Self->dbh->selectall_arrayref("SELECT iaddressbookid, href, syncToken FROM iaddressbooks", {Slice => {}});
+  my $iaddressbooks = $Self->dget('iaddressbooks');
   my %byhref = map { $_->{href} => $_ } @$iaddressbooks;
 
   my %seen;
@@ -528,7 +528,7 @@ sub sync_addressbooks {
   foreach my $addressbook (@$iaddressbooks) {
     my $id = $addressbook->{iaddressbookid};
     next if $seen{$id};
-    $Self->dbh->do("DELETE FROM iaddressbooks WHERE iaddressbookid = ?", {}, $id);
+    $Self->ddelete('iaddressbooks', {iaddressbookid => $id});
   }
 
   $Self->sync_jaddressbooks();
@@ -543,8 +543,8 @@ sub sync_addressbooks {
 sub sync_jaddressbooks {
   my $Self = shift;
 
-  my $iaddressbooks = $Self->dbh->selectall_arrayref("SELECT iaddressbookid, name, jaddressbookid FROM iaddressbooks", {Slice => {}});
-  my $jaddressbooks = $Self->dbh->selectall_arrayref("SELECT jaddressbookid, name, active FROM jaddressbooks", {Slice => {}});
+  my $iaddressbooks = $Self->dget('iaddressbooks');
+  my $jaddressbooks = $Self->dget('jaddressbooks');
 
   my %jbyid;
   foreach my $addressbook (@$jaddressbooks) {
@@ -605,7 +605,7 @@ sub do_addressbooks {
   foreach my $id (keys %$books) {
     my $href = $books->{$id};
     my ($jaddressbookid) = $Self->dbh->selectrow_array("SELECT jaddressbookid FROM iaddressbooks WHERE iaddressbookid = ?", {}, $id);
-    my $exists = $Self->dbh->selectall_arrayref("SELECT icardid, resource, content, uid, kind FROM icards WHERE iaddressbookid = ?", {Slice => {}}, $id);
+    my $exists = $Self->dget('icards', {iaddressbookid => $id});
     my %res = map { $_->{resource} => $_ } @$exists;
 
     foreach my $resource (keys %{$allparsed{$href}}) {
@@ -646,8 +646,8 @@ sub do_addressbooks {
 sub labels {
   my $Self = shift;
   unless ($Self->{labels}) {
-    my $data = $Self->dbh->selectall_arrayref("SELECT label, ifolderid, jmailboxid, imapname FROM ifolders");
-    $Self->{labels} = { map { $_->[0] => [$_->[1], $_->[2], $_->[3]] } @$data };
+    my $data = $Self->dget('ifolders');
+    $Self->{labels} = { map { $_->{label} => [$_->{ifolderid}, $_->{jmailboxid}, $_->{imapname}] } @$data };
   }
   return $Self->{labels};
 }
@@ -656,7 +656,7 @@ sub sync_imap {
   my $Self = shift;
 
   $Self->begin();
-  my $data = $Self->dbh->selectall_arrayref("SELECT * FROM ifolders", {Slice => {}});
+  my $data = $Self->dget('ifolders');
   if ($Self->{is_gmail}) {
     $data = [ grep { lc $_->{label} eq '\\allmail' or lc $_->{label} eq '\\trash' } @$data ];
   }
@@ -707,7 +707,7 @@ sub firstsync {
   $Self->sync_folders();
 
   $Self->begin();
-  my $data = $Self->dbh->selectall_arrayref("SELECT * FROM ifolders", {Slice => {}});
+  my $data = $Self->dget('ifolders');
   $Self->commit();
 
   if ($Self->{is_gmail}) {
@@ -762,9 +762,13 @@ sub do_folder {
   Carp::confess("NO FOLDERID") unless $ifolderid;
   $Self->begin();
 
-  my ($imapname, $uidfirst, $uidnext, $uidvalidity, $highestmodseq) =
-     $Self->dbh->selectrow_array("SELECT imapname, uidfirst, uidnext, uidvalidity, highestmodseq FROM ifolders WHERE ifolderid = ?", {}, $ifolderid);
-  die "NO SUCH FOLDER $ifolderid" unless $imapname;
+  my $data = $Self->dgetone('ifolders', {ifolderid => $ifolderid});
+  die "NO SUCH FOLDER $ifolderid" unless $data;
+  my $imapname = $data->{imapname};
+  my $uidfirst = $data->{uidfirst};
+  my $uidvalidity = $data->{uidvalidity};
+  my $uidnext = $data->{uidnext};
+  my $highestmodseq = $data->{highestmodseq};
 
   my %fetches;
   my @immutable = qw(internaldate envelope rfc822.size);
@@ -914,7 +918,7 @@ sub imap_search {
   }
 
   $Self->begin();
-  my $data = $Self->dbh->selectall_arrayref("SELECT * FROM ifolders", {Slice => {}});
+  my $data = $Self->dget('ifolders');
   if ($Self->{is_gmail}) {
     $data = [ grep { lc $_->{label} eq '\\allmail' or lc $_->{label} eq '\\trash' } @$data ];
   }
@@ -959,7 +963,7 @@ sub import_message {
   my %flags = @_;
 
   $Self->begin();
-  my $folderdata = $Self->dbh->selectall_arrayref("SELECT * FROM ifolders", {Slice => {}});
+  my $folderdata = $Self->dget('ifolders');
   $Self->commit();
 
   my %foldermap = map { $_->{ifolderid} => $_ } @$folderdata;
@@ -1032,10 +1036,10 @@ sub update_messages {
     }
   }
 
-  my $folderdata = $Self->dbh->selectall_arrayref("SELECT * FROM ifolders", {Slice => {}});
+  my $folderdata = $Self->dget('ifolders');
   my %foldermap = map { $_->{ifolderid} => $_ } @$folderdata;
   my %jmailmap = map { $_->{jmailboxid} => $_ } grep { $_->{jmailboxid} } @$folderdata;
-  my $jmapdata = $Self->dbh->selectall_arrayref("SELECT * FROM jmailboxes", {Slice => {}});
+  my $jmapdata = $Self->dget('jmailboxes');
   my %jidmap = map { $_->{jmailboxid} => $_->{role} } @$jmapdata;
   my %jrolemap = map { $_->{role} => $_->{jmailboxid} } grep { $_->{role} } @$jmapdata;
 
@@ -1144,7 +1148,7 @@ sub destroy_messages {
     }
   }
 
-  my $folderdata = $Self->dbh->selectall_arrayref("SELECT ifolderid, imapname, uidvalidity, label, jmailboxid FROM ifolders");
+  my $folderdata = $Self->dget('ifolders');
   my %foldermap = map { $_->[0] => $_ } @$folderdata;
   my %jmailmap = map { $_->[4] => $_ } grep { $_->[4] } @$folderdata;
 
