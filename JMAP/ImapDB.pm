@@ -277,7 +277,7 @@ sub sync_jmailboxes {
       }
     }
     $seen{$id} = 1;
-    $Self->dmaybeupdate('ifolders', {jmailboxid => $id}, {ifolderid => $folder->[0]});
+    $Self->dmaybeupdate('ifolders', {jmailboxid => $id}, {ifolderid => $folder->{ifolderid}});
   }
 
   if ($roletoid{'outbox'}) {
