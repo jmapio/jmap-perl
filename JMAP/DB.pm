@@ -45,8 +45,8 @@ my %TABLE2GROUPS = (
 sub new {
   my $class = shift;
   my $accountid = shift || die;
+  my $Self = bless { accountid => $accountid, start => time() }, ref($class) || $class;
   my $dbh = DBI->connect("dbi:SQLite:dbname=/home/jmap/data/$accountid.sqlite3");
-  my $Self = bless { accountid => $accountid, dbh => $dbh, start => time() }, ref($class) || $class;
   $Self->_initdb($dbh);
   return $Self;
 }
@@ -102,9 +102,9 @@ sub begin {
   my $Self = shift;
   confess("ALREADY IN TRANSACTION") if $Self->{t};
   my $accountid = $Self->accountid();
-  $Self->{t} = {dbh => $Self->{dbh}};
   # we need this because sqlite locking isn't as robust as you might hope
-  $Self->{t}{lock} = $Self->{superlock} || IO::LockedFile->new(">/home/jmap/data/$accountid.lock");
+  $Self->{t} = {lock => $Self->{superlock} || IO::LockedFile->new(">/home/jmap/data/$accountid.lock")};
+  $Self->{t}{dbh} = DBI->connect("dbi:SQLite:dbname=/home/jmap/data/$accountid.sqlite3");
   $Self->{t}{dbh}->begin_work();
 }
 
