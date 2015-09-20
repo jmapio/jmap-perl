@@ -40,7 +40,7 @@ config.example to config.json and replace XXX and YYY with your details.
 
 Replace /etc/nginx/sites-available/default with the a symlink to nginx.conf
 
-Run bin/blocking.pl in one screen
+Run bin/apiendpoint.pl in one screen
 Run bin/server.pl in another screen
 
 There's various stuff hard coded too, oh well
