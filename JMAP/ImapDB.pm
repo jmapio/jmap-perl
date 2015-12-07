@@ -1149,16 +1149,15 @@ sub destroy_messages {
   }
 
   my $folderdata = $Self->dget('ifolders');
-  my %foldermap = map { $_->[0] => $_ } @$folderdata;
-  my %jmailmap = map { $_->[4] => $_ } grep { $_->[4] } @$folderdata;
+  my %foldermap = map { $_->{ifolderid} => $_ } @$folderdata;
 
   $Self->commit();
 
   my @destroyed;
   foreach my $ifolderid (keys %destroymap) {
     # XXX - merge similar actions?
-    my $imapname = $foldermap{$ifolderid}[1];
-    my $uidvalidity = $foldermap{$ifolderid}[2];
+    my $imapname = $foldermap{$ifolderid}{imapname};
+    my $uidvalidity = $foldermap{$ifolderid}{uidvalidity};
     unless ($imapname) {
       $notdestroyed{$_} = {type => 'notFound', description => "No folder"} for values %{$destroymap{$ifolderid}};
     }
