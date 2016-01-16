@@ -552,5 +552,8 @@ sub handle_jmap {
     push @res, @items;
   }
 
+  use Data::Dumper;
+  warn Dumper($request, \@res) if $ENV{DEBUGJMAP};
+
   return ['jmap', \@res];
 }
