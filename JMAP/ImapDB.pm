@@ -362,7 +362,7 @@ sub sync_calendars {
     if ($id) {
       $Self->dmaybeupdate('icalendars', $data, {icalendarid => $id});
       my $token = $byhref{$calendar->{href}}{syncToken};
-      if ($token eq $calendar->{syncToken}) {
+      if ($token && $token eq $calendar->{syncToken}) {
         $seen{$id} = 1;
         next;
       }
@@ -513,7 +513,7 @@ sub sync_addressbooks {
     if ($id) {
       $Self->dmaybeupdate('iaddressbooks', $data, {iaddressbookid => $id});
       my $token = $byhref{$addressbook->{href}}{syncToken};
-      if ($token eq $addressbook->{syncToken}) {
+      if ($token && $token eq $addressbook->{syncToken}) {
         $seen{$id} = 1;
         next;
       }
