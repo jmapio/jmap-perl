@@ -18,8 +18,10 @@ use AnyEvent::Gmail;
 use Mail::IMAPTalk;
 use Data::Dumper;
 use AnyEvent::HTTPD;
+use JMAP::Sync::AOL;
 use JMAP::Sync::Gmail;
 use JMAP::GmailDB;
+use JMAP::AOLDB;
 use JMAP::ImapDB;
 use JMAP::DB;
 use JMAP::API;
@@ -66,6 +68,9 @@ sub getdb {
   warn "CONNECTING: $email $type\n";
   if ($type eq 'gmail') {
     $db = JMAP::GmailDB->new($accountid);
+  }
+  elsif ($type eq 'aol') {
+    $db = JMAP::AOLDB->new($accountid);
   }
   elsif ($type eq 'imap') {
     $db = JMAP::ImapDB->new($accountid);
@@ -195,6 +200,9 @@ sub mk_handler {
       if ($cmd eq 'jmap') {
         return handle_jmap(getdb(), $args, $tag);
       }
+      if ($cmd eq 'cb_aol') {
+        return handle_cb_aol($args);
+      }
       if ($cmd eq 'cb_google') {
         return handle_cb_google($args);
       }
@@ -284,6 +292,56 @@ CREATE TABLE IF NOT EXISTS accounts (
 );
 EOF
   return $dbh;
+}
+
+sub handle_cb_aol {
+  my $code = shift;
+
+  my $O = JMAP::Sync::AOL::O();
+  die "NO ACCESS CODE PROVIDED (did you hit cancel?)\n" unless $code;
+  my $aoldata = $O->finish($code);
+
+  my $access_token = $aoldata->{access_token};
+  die "ACCESS TOKEN FAILED\n" unless $access_token;
+
+  my $ua = HTTP::Tiny->new;
+  my $res = $ua->get(q{https://api.screenname.aol.com/auth/getUserData?f=json&attribute=email}, {
+    headers => {
+        authorization => "Bearer $access_token",
+    }
+  });
+  die "USER INFO LOOKUP FAILED" unless $res->{success};
+  # {"response": {"statusCode": 200, "data": {"userData": {"loginId": "brongondwana", "lastAuth": "1452795114000", "attributes": {"email": "brongondwana@aol.com"}, "md5Verified": false, "displayName": "Bron Gondwana", "OPENAUTH_LOGIN_TYPE": "OAUTH"}}, "statusText": "OK"}}
+  my $data = decode_json($res->{content});
+
+  # yep, it's hiding in here
+  my $email = $data->{response}{data}{userData}{attributes}{email};
+
+  my $dbh = accountsdb();
+  my ($existing, $type) = $dbh->selectrow_array("SELECT accountid,type FROM accounts WHERE email = ?", {}, $email);
+  if ($existing) {
+    set_accountid($existing);
+  }
+  else {
+    $dbh->do("INSERT INTO accounts (email, accountid, type) VALUES (?, ?, ?)", {}, $email, $accountid, 'aol');
+  }
+
+  getdb();
+  $db->setuser({
+    username => $email,
+    password => $aoldata->{refresh_token},
+    imapHost => 'imap.aol.com',
+    imapPort => '993',
+    imapSSL => 2,
+    smtpHost => 'smtp.aol.com',
+    smtpPort => 465,
+    smtpSSL => 2,
+    caldavURL => "https://caldav.aol.com/.well-known/caldav",
+    carddavURL => "https://carddav.aol.com/.well-known/carddav",
+  }, { picture => $data->{picture} });
+  $db->firstsync();
+
+  return ['registered', [$accountid, $email]];
 }
 
 sub handle_cb_google {

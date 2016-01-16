@@ -122,6 +122,8 @@ sub backend_cmd {
     my $backend;
     if ($config->{imapHost} eq 'imap.gmail.com') {
       $backend = JMAP::Sync::Gmail->new($config) || die "failed to setup $config->{username}";
+    } elsif ($config->{imapHost} eq 'imap.aol.com') {
+      $backend = JMAP::Sync::AOL->new($config) || die "failed to setup $config->{username}";
     } else {
       $backend = JMAP::Sync::Standard->new($config) || die "failed to setup $config->{username}";
     }

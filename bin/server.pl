@@ -18,6 +18,7 @@ use AnyEvent::Handle;
 use AnyEvent::Socket;
 use AnyEvent::Util;
 use AnyEvent::HTTP;
+use JMAP::Sync::AOL;
 use JMAP::Sync::Gmail;
 use JSON::XS qw(decode_json);
 use Encode qw(encode_utf8);
@@ -48,6 +49,12 @@ sub idler {
     if ($data) {
       my $imap = $data->[0] eq 'imap.gmail.com' ? AnyEvent::Gmail->new(
         host => 'imap.gmail.com',
+        user => $data->[1],
+        token => $data->[2],
+        port => 993,
+        ssl => 1,
+      ) : $data->[0] eq 'imap.aol.com' ? AnyEvent::Gmail->new(
+        host => 'imap.aol.com',
         user => $data->[1],
         token => $data->[2],
         port => 993,
@@ -147,8 +154,10 @@ $httpd->reg_cb (
   '/jmap' => \&do_jmap,
   '/upload' => \&do_upload,
   '/raw' => \&do_raw,
-  '/register' => \&do_register,
+  '/register/gmail' => \&do_register_gmail,
+  '/register/aol' => \&do_register_aol,
   '/delete' => \&do_delete,
+  '/cb/aol' => \&do_cb_aol,
   '/cb/google' => \&do_cb_google,
   '/signup' => \&do_signup,
   '/files' => \&do_files,
@@ -627,9 +636,15 @@ sub HandleKeepAlive {
   }
 }
 
-sub do_register {
+sub do_register_gmail {
   my ($httpd, $req) = @_;
   my $O = JMAP::Sync::Gmail::O();
+  $req->respond({redirect => $O->start(new_uuid_string())});
+};
+
+sub do_register_aol {
+  my ($httpd, $req) = @_;
+  my $O = JMAP::Sync::AOL::O();
   $req->respond({redirect => $O->start(new_uuid_string())});
 };
 
@@ -684,6 +699,32 @@ sub do_signup {
     return 1;
   }, mkerr($req));
 }
+
+sub do_cb_aol {
+  my ($httpd, $req) = @_;
+
+  my $accountid = $req->parm('state');
+  my $code = $req->parm('code');
+
+  send_backend_request($accountid, 'cb_aol', $code, sub {
+    my ($data) = @_;
+    if ($data) {
+      my $cookie = bake_cookie("jmap_$data->[0]", {
+        value => $data->[1],
+        path => '/',
+        expires => '+3M',
+      });
+      $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "https://$ENV{jmaphost}/jmap/$data->[0]" },
+                "Redirected"]);
+      delete $backend{$accountid} unless $data->[0] eq $accountid;
+      send_backend_request($data->[0], 'sync', $data->[0]);
+    }
+    else {
+      not_found($req);
+    }
+    return 1;
+  }, mkerr($req));
+};
 
 sub do_cb_google {
   my ($httpd, $req) = @_;
