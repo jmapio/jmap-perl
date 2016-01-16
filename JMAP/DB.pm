@@ -196,6 +196,7 @@ sub add_message_to_mailbox {
   my $data = {msgid => $msgid, jmailboxid => $jmailboxid};
   $Self->dmake('jmessagemap', $data);
   $Self->dmaybeupdate('jmailboxes', {jcountsmodseq => $data->{jmodseq}}, {jmailboxid => $jmailboxid});
+  $Self->ddirty('jmessages', {}, {msgid => $msgid});
 }
 
 sub parse_date {
@@ -436,6 +437,7 @@ sub delete_message_from_mailbox {
   my $data = {active => 0};
   $Self->dmaybedirty('jmessagemap', $data, {msgid => $msgid, jmailboxid => $jmailboxid});
   $Self->dmaybeupdate('jmailboxes', {jcountsmodseq => $data->{jmodseq}}, {jmailboxid => $jmailboxid});
+  $Self->ddirty('jmessages', {}, {msgid => $msgid});
 }
 
 sub change_message {
