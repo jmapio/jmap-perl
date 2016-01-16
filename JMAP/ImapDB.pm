@@ -674,6 +674,8 @@ sub sync_imap {
     $label = undef if lc $label eq '\\allmail';
     $Self->do_folder($row->{ifolderid}, $label);
   }
+
+  $Self->sync_jmap();
 }
 
 sub backfill {
@@ -700,6 +702,8 @@ sub backfill {
   #DB::disable_profile();
   #exit 0;
 
+  $Self->sync_jmap();
+
   return 1;
 }
 
@@ -720,6 +724,8 @@ sub firstsync {
     my ($folder) = grep { lc $_->{imapname} eq 'inbox' } @$data;
     $Self->do_folder($folder->{ifolderid}, $folder->{label}, 50) if $folder;
   }
+
+  $Self->sync_jmap();
 }
 
 sub _trimh {
@@ -944,6 +950,12 @@ sub imap_search {
   return \%matches;
 }
 
+sub mark_sync {
+  my $Self = shift;
+  my ($msgid) = @_;
+  $Self->dbh->do("INSERT OR IGNORE INTO imsgidtodo (msgid) VALUES (?)", {}, $msgid);
+}
+
 sub changed_record {
   my $Self = shift;
   my ($folder, $uid, $flaglist, $labellist) = @_;
@@ -955,7 +967,7 @@ sub changed_record {
 
   my ($msgid) = $Self->dbh->selectrow_array("SELECT msgid FROM imessages WHERE ifolderid = ? AND uid = ?", {}, $folder, $uid);
 
-  $Self->apply_data($msgid, $flaglist, $labellist);
+  $Self->mark_sync($msgid);
 }
 
 sub import_message {
@@ -1181,7 +1193,7 @@ sub deleted_record {
 
   $Self->ddelete('imessages', {ifolderid => $folder, uid => $uid});
 
-  $Self->delete_message($msgid);
+  $Self->mark_sync($msgid);
 }
 
 sub new_record {
@@ -1206,15 +1218,12 @@ sub new_record {
   # XXX - what about dupes?
   $Self->dinsert('imessages', $data);
 
-  $Self->apply_data($msgid, $flaglist, $labellist);
+  $Self->mark_sync($msgid);
 }
 
-sub apply_data {
+sub sync_jmap_msgid {
   my $Self = shift;
-  my ($msgid, $flaglist, $labellist) = @_;
-
-  # spurious temporary old message during move
-  return if grep { lc $_ eq '\\deleted' } @$flaglist;
+  my ($msgid) = @_;
 
   my %flagdata = (
     isUnread => 1,
@@ -1222,7 +1231,20 @@ sub apply_data {
     isAnswered => 0,
     isDraft => 0,
   );
-  foreach my $flag (@$flaglist) {
+
+  my $imessages = $Self->dbh->selectall_arrayref("SELECT flags, labels FROM imessages WHERE msgid = ?", {}, $msgid);
+
+  my %labels;
+  my %flags;
+  foreach my $row (@$imessages) {
+    my ($flags, $labels) = @$row;
+    my $flaglist = decode_json($flags);
+    my $labellist = decode_json($labels);
+    $flags{$_} = 1 for @$flaglist;
+    $labels{$_} = 1 for @$labellist;
+  }
+
+  foreach my $flag (keys %flags) {
     $flagdata{isUnread} = 0 if lc $flag eq '\\seen';
     $flagdata{isFlagged} = 1 if lc $flag eq '\\flagged';
     $flagdata{isAnswered} = 1 if lc $flag eq '\\answered';
@@ -1230,14 +1252,16 @@ sub apply_data {
   }
 
   my $labels = $Self->labels();
-  my @list = @$labellist;
+  my @list = keys %labels;
   # gmail empty list means archive at our end
   my @jmailboxids = grep { $_ } map { $labels->{$_}[1] } @list;
 
   # check for archive folder for gmail
-  if ($Self->{is_gmail} and not @list) {
+  if ($Self->{is_gmail} and @$imessages and not @list) {
     @jmailboxids = $Self->dbh->selectrow_array("SELECT jmailboxid FROM jmailboxes WHERE role = 'archive'");
   }
+
+  return $Self->delete_message($msgid) if (not @jmailboxids);
 
   my ($old) = $Self->dbh->selectrow_array("SELECT msgid FROM jmessages WHERE msgid = ? AND active = 1", {}, $msgid);
 
@@ -1259,6 +1283,17 @@ sub apply_data {
       %flagdata,
     }, \@jmailboxids);
   }
+}
+
+sub sync_jmap {
+  my $Self = shift;
+  $Self->begin();
+  my $msgids = $Self->dbh->selectcol_arrayref("SELECT msgid FROM imsgidtodo");
+  foreach my $msgid (@$msgids) {
+    $Self->sync_jmap_msgid($msgid);
+    $Self->dbh->do("DELETE FROM imsgidtodo WHERE msgid = ?", {}, $msgid);
+  }
+  $Self->commit();
 }
 
 sub _normalsubject {
@@ -1998,6 +2033,8 @@ CREATE TABLE IF NOT EXISTS icards (
 EOF
 
   $dbh->do("CREATE INDEX IF NOT EXISTS icarduid ON icards (uid)");
+
+  $dbh->do("CREATE TABLE IF NOT EXISTS imsgidtodo (msgid TEXT PRIMARY KEY NOT NULL)");
 
 }
 
