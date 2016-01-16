@@ -1040,7 +1040,7 @@ sub update_messages {
   my %foldermap = map { $_->{ifolderid} => $_ } @$folderdata;
   my %jmailmap = map { $_->{jmailboxid} => $_ } grep { $_->{jmailboxid} } @$folderdata;
   my $jmapdata = $Self->dget('jmailboxes');
-  my %jidmap = map { $_->{jmailboxid} => $_->{role} } @$jmapdata;
+  my %jidmap = map { $_->{jmailboxid} => ($_->{role} || '') } @$jmapdata;
   my %jrolemap = map { $_->{role} => $_->{jmailboxid} } grep { $_->{role} } @$jmapdata;
 
   $Self->commit();
