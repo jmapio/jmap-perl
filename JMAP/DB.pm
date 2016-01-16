@@ -70,7 +70,7 @@ sub log {
   }
   else {
     my ($level, @items) = @_;
-    return if $level eq 'debug';
+    return if (not $ENV{DEBUGDB} and $level eq 'debug');
     my $time = time() - $Self->{start};
     warn "[$level $time]: @items\n";
   }
