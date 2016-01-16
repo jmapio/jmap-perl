@@ -1383,7 +1383,7 @@ sub getThreadUpdates {
 
   my @removed;
   foreach my $key (keys %delcheck) {
-    my ($exists) = $dbh->selectrow_array("SELECT COUNT(DISTINCT msgid) FROM jmessages JOIN jmessagemap WHERE thrid = ? AND jmessages.active = 1 AND jmessagemap.active = 1", {}, $key);
+    my ($exists) = $dbh->selectrow_array("SELECT COUNT(DISTINCT jmessages.msgid) FROM jmessages JOIN jmessagemap WHERE thrid = ? AND jmessages.active = 1 AND jmessagemap.active = 1", {}, $key);
     unless ($exists) {
       delete $threads{$key};
       push @removed, $key;
