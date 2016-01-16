@@ -491,7 +491,6 @@ sub _makemsg {
     Bcc => _mkemail($args->{bcc}),
     Subject => $args->{subject},
     Date => Date::Format::time2str("%a, %d %b %Y %H:%M:%S %z", $args->{msgdate}),
-    'Message-Id' => $args->{msgmessageid},
     %{$args->{headers} || {}},
   ];
 
@@ -603,7 +602,7 @@ sub create_messages {
       # XXX - references
     }
     $item->{msgdate} = time();
-    $item->{msgmessageid} = new_uuid_string() . "\@$ENV{jmaphost}";
+    $item->{headers}{'Message-ID'} ||= "<" . new_uuid_string() . ".$item->{msgdate}\@$ENV{jmaphost}>";
     my $message = $Self->_makemsg($item);
     # XXX - let's just assume goodness for now - lots of error handling to add
     $todo{$cid} = $message;
