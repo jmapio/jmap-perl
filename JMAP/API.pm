@@ -46,6 +46,27 @@ sub getAccounts {
     id => $Self->{db}->accountid(),
     name => $user->{displayname} || $user->{email},
     isPrimary => $JSON::true,
+    versions => [ 0.20150115 ],
+    extensions => {
+      "io.jmap.proxy" => [ 1, 2 ],
+    },
+    capabilities => {
+      maxSizeUpload => 1073741824,
+    },
+    mail => {
+      isReadOnly => $JSON::false,
+      maxSizeMessageAttachments => 1073741824,
+      canDelaySend => $JSON::false,
+      messageListSortOptions => [ "date", "id" ],
+    },
+    contacts => {
+      isReadOnly => $JSON::false,
+    },
+    calendars => {
+      isReadOnly => $JSON::false,
+    },
+
+    # legacy
     isReadOnly => $JSON::false,
     hasMail => $JSON::true,
     hasContacts => $JSON::true,
