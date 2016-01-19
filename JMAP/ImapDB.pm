@@ -1460,6 +1460,7 @@ sub create_mailboxes {
     }
     else {
       my ($prefix) = $Self->dbh->selectrow_array("SELECT imapPrefix FROM iserver");
+      $prefix = '' unless defined $prefix;
       $imapname = "$prefix$imapname";
     }
     $idmap{$imapname} = $cid; # need to resolve this after the sync
