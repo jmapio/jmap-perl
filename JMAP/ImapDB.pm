@@ -1481,7 +1481,7 @@ sub create_mailboxes {
   foreach my $imapname (keys %idmap) {
     my $cid = $idmap{$imapname};
     my ($jid) = $Self->dbh->selectrow_array("SELECT jmailboxid FROM ifolders WHERE imapname = ?", {}, $imapname);
-    $createmap{$cid} = $jid;
+    $createmap{$cid} =  { id => $jid };
   }
   $Self->commit();
 
