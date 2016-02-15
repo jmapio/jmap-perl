@@ -318,11 +318,11 @@ sub imap_getpart {
     return \%res;
   }
 
-  my $key = $part ? "BINARY[$part]" : "RFC822";
+  my $key = $part ? "BODY[$part]" : "RFC822";
   my $data = $imap->fetch($uid, $key);
   $Self->_unselect($imap);
 
-  my $datakey = $part ? 'binary' : 'rfc822';
+  my $datakey = $part ? 'body' : 'rfc822';
   $res{data} = $data->{$uid}{$datakey};
 
   return \%res;

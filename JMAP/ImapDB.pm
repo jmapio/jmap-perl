@@ -20,6 +20,7 @@ use Date::Format;
 use Data::Dumper;
 use JMAP::Sync::Gmail;
 use JMAP::Sync::Standard;
+use MIME::Base64 qw(decode_base64);
 
 my $json = JSON::XS->new->utf8->canonical();
 
@@ -1437,7 +1438,7 @@ sub get_raw_message {
 
   my $res = $Self->backend_cmd('imap_getpart', $imapname, $uidvalidity, $uid, $part);
 
-  return ($type, $res->{data});
+  return ($type, decode_base64($res->{data}));
 }
 
 sub create_mailboxes {
