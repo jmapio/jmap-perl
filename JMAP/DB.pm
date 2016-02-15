@@ -329,6 +329,10 @@ sub attachments {
       $extra{width} = $w;
       $extra{height} = $h;
     }
+    my $cid = $sub->header('Content-ID');
+    if ($cid =~ /<(.+)>/) {
+      $extra{cid} = "$1";
+    }
     my $accountid = $Self->accountid();
     push @res, {
       id => $id,
