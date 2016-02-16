@@ -11,6 +11,8 @@ use Email::Sender::Simple qw(sendmail);
 use Email::Sender::Transport::SMTPS;
 use Net::CalDAVTalk;
 use Net::CardDAVTalk;
+use MIME::Base64 qw(decode_base64);
+use MIME::QuotedPrint qw(decode_qp);
 
 my %KNOWN_SPECIALS = map { lc $_ => 1 } qw(\\HasChildren \\HasNoChildren \\NoSelect \\NoInferiors);
 
@@ -294,6 +296,34 @@ sub imap_fill {
   return \%res;
 }
 
+sub _get_bs_part {
+  my ($bs, $part) = @_;
+  return $bs if ($bs->{'IMAP-Partnum'} eq $part);
+  return unless $bs->{'MIME-Subparts'};
+  foreach my $sub (@{$bs->{'MIME-Subparts'}}) {
+    my $res = _get_bs_part($sub, $part);
+    return $res if $res;
+  }
+  return;
+}
+
+sub _decode_bs_part {
+  my ($data, $bs, $part) = @_;
+  use Data::Dumper;
+  my $info = _get_bs_part($bs, $part);
+  my $enc = $info->{'Content-Transfer-Encoding'};
+
+  my $res = $data;
+  if ($enc =~ m/base64/i) {
+    $res = decode_base64($data);
+  }
+  elsif ($enc =~ m/quoted-print/i) {
+    $res = decode_qp($data);
+  }
+
+  return $res;
+}
+
 sub imap_getpart {
   my $Self = shift;
   my $imapname = shift;
@@ -318,12 +348,23 @@ sub imap_getpart {
     return \%res;
   }
 
-  my $key = $part ? "BINARY[$part]" : "RFC822";
-  my $data = $imap->fetch($uid, $key);
-  $Self->_unselect($imap);
+  if ($part) {
+    if ($imap->capability->{binary}) {
+      my $data = $imap->fetch($uid, "BINARY[$part]");
+      $res{data} = $data->{$uid}{'binary'};
+    }
+    else {
+      # tricky case!  We've going to have to ask for the bodystructure and parse out the CTE
+      my $data = $imap->fetch($uid, "(BODY[$part] BODYSTRUCTURE)");
+      $res{data} = _decode_bs_part($data->{$uid}{'body'}, $data->{$uid}{'bodystructure'}, $part);
+    }
+  }
+  else {
+    my $data = $imap->fetch($uid, "RFC822");
+    $res{data} = $data->{$uid}{'rfc822'};
+  }
 
-  my $datakey = $part ? 'binary' : 'rfc822';
-  $res{data} = $data->{$uid}{$datakey};
+  $Self->_unselect($imap);
 
   return \%res;
 }
