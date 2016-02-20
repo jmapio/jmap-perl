@@ -766,6 +766,7 @@ sub delete_card {
 
 sub put_file {
   my $Self = shift;
+  my $accountid = shift;
   my $type = shift;
   my $content = shift;
   my $expires = shift // time() + (7 * 86400);
@@ -780,7 +781,8 @@ sub put_file {
   $Self->commit();
 
   return {
-    id => "$id",
+    accountId => "$accountid",
+    blobId => "$id",
     type => $type,
     expires => scalar($Self->isodate($expires)),
     size => $size,

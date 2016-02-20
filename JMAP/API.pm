@@ -1082,9 +1082,9 @@ sub get_file {
 # or this
 sub uploadFile {
   my $Self = shift;
-  my ($type, $content) = @_; # XXX filehandle?
+  my ($accountid, $type, $content) = @_; # XXX filehandle?
 
-  return $Self->{db}->put_file($type, $content);
+  return $Self->{db}->put_file($accountid, $type, $content);
 }
 
 sub downloadFile {

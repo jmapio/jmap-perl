@@ -347,7 +347,7 @@ sub do_upload {
 
   $httpd->stop_request();
 
-  send_backend_request($accountid, 'upload', [$type, $content], sub {
+  send_backend_request($accountid, 'upload', [$accountid, $type, $content], sub {
     my $res = shift;
     my $response = encode_utf8($json->encode($res));
     $req->respond ({ content => ['application/json', $response] });
