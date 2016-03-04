@@ -7,6 +7,7 @@ package JMAP::DB;
 
 use Data::Dumper;
 use DBI;
+use DBI qw(:sql_types);
 use Carp qw(confess);
 
 use Data::UUID::LibUUID;
@@ -775,8 +776,15 @@ sub put_file {
 
   $Self->begin();
 
-  # XXX - no dedup on sha1 here yet
-  my $id = $Self->dinsert('jfiles', { type => $type, size => $size, content => $content, expires => $expires });
+  my $statement = $Self->dbh->prepare('INSERT OR REPLACE INTO jfiles (type, size, content, expires) VALUES (?, ?, ?, ?)');
+
+  $statement->bind_param(1, $type);
+  $statement->bind_param(2, $size);
+  $statement->bind_param(3, $content, SQL_BLOB);
+  $statement->bind_param(4, $expires);
+  $statement->execute();
+
+  my $id = $Self->dbh->last_insert_id(undef, undef, undef, undef);
 
   $Self->commit();
 
@@ -786,6 +794,7 @@ sub put_file {
     type => $type,
     expires => scalar($Self->isodate($expires)),
     size => $size,
+    url => "https://$ENV{jmaphost}/files/$accountid/$id"
   };
 }
 
@@ -793,7 +802,9 @@ sub get_file {
   my $Self = shift;
   my $id = shift;
 
+  $Self->begin();
   my $data = $Self->dbh->selectrow_arrayref("SELECT type,content FROM jfiles WHERE jfileid = ?", {}, $id);
+  $Self->commit();
 
   return @$data;
 }
@@ -1051,7 +1062,7 @@ CREATE TABLE IF NOT EXISTS jfiles (
   jfileid INTEGER PRIMARY KEY,
   type TEXT,
   size INTEGER,
-  content TEXT,
+  content BLOB,
   expires DATE,
   mtime DATE,
   active BOOLEAN

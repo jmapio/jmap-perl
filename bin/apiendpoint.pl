@@ -559,10 +559,10 @@ sub handle_gettoken {
 
 sub handle_upload {
   my ($db, $req) = @_;
-  my ($type, $content) = @$req;
+  my ($accountid, $type, $content) = @$req;
 
   my $api = JMAP::API->new($db);
-  my ($res) = $api->uploadFile($type, $content);
+  my ($res) = $api->uploadFile($accountid, $type, $content);
 
   return ['upload', $res];
 }
