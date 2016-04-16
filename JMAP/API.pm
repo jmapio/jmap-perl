@@ -1060,23 +1060,13 @@ sub getRawMessage {
 
   my ($type, $data);
   if ($source eq 'f') {
-    ($type, $data) = $Self->get_file($msgid);
+    ($type, $data) = $Self->{db}->get_file($msgid);
   }
   else {
     ($type, $data) = $Self->{db}->get_raw_message($msgid, $part);
   }
 
   return ($type, $data, $filename);
-}
-
-sub get_file {
-  my $Self = shift;
-  my $jfileid = shift;
-
-  my $dbh = $Self->{db}->dbh();
-  my ($type, $content) = $dbh->selectrow_array("SELECT type, content FROM jfiles WHERE jfileid = ?", {}, $jfileid);
-  return unless $content;
-  return ($type, $content);
 }
 
 # or this
@@ -1091,7 +1081,7 @@ sub downloadFile {
   my $Self = shift;
   my $jfileid = shift;
 
-  my ($type, $content) = $Self->get_file($jfileid);
+  my ($type, $content) = $Self->{db}->get_file($jfileid);
 
   return ($type, $content);
 }
@@ -1222,7 +1212,7 @@ sub importMessage {
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if not $args->{mailboxIds};
 
-  my ($type, $message) = $Self->get_file($args->{file});
+  my ($type, $message) = $Self->{db}->get_file($args->{file});
   return $Self->_transError(['error', {type => 'notFound'}])
     if (not $type or $type ne 'message/rfc822');
 
