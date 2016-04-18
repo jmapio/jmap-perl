@@ -1,46 +1,25 @@
-Debian install instructions (port to your own OS as you like)
+INSTALLATION:
+=============
 
-# Might need some software too
+The included Makefile is targetted for Debian Jessie. This will most likely not
+work on other platforms, so please adjust accordingly to your needs.
 
-apt-get install build-essential \
-                libanyevent-httpd-perl \
-                libdata-uuid-libuuid-perl \
-                libdatetime-perl \
-                libdbd-sqlite3-perl \
-                libdbi-perl \
-                libemail-address-perl \
-                libemail-mime-perl \
-                libhtml-parser-perl \
-                libhtml-strip-perl \
-                libhttp-tiny-perl \
-                libhttp-date-perl \
-                libimage-size-perl \
-                libio-socket-ssl-perl \
-                libjson-perl \
-                libjson-xs-perl \
-                liblocale-gettext-perl \
-                libswitch-perl
+    make install
 
-cpan AnyEvent::HTTPD::CookiePatch
-cpan AnyEvent::IMAP
-cpan Cookie::Baker
-cpan Date::Parse
-cpan HTML::GenerateUtil
+The installer will:
 
-# to run the server
+    - Install the prerequisite packages
+    - Install a self-signed certificate for "jmap-proxy.local"
+    - Install new Diffie-Hellman parameters for Nginx
+    - Install an Nginx site config for "jmap-proxy.local"
 
-apt-get install nginx screen
-
-# OAuth2 config
-
-If you want to use the Gmail OAUTH2 you will need your own secrets.  Copy
+If you want to use the Gmail OAUTH2, you will need your own secrets. Copy
 config.example to config.json and replace XXX and YYY with your details.
 
-# Running.
+RUNNING:
+========
 
-Replace /etc/nginx/sites-available/default with the a symlink to nginx.conf
+The following scripts need to be run in paralell:
 
-Run bin/apiendpoint.pl in one screen
-Run bin/server.pl in another screen
-
-There's various stuff hard coded too, oh well
+    - bin/apiendpoint.pl
+    - bin/server.pl
