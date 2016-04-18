@@ -71,6 +71,7 @@ install: all
 	adduser --quiet --disabled-login --gecos "JMAP" jmap || true
 	install -o jmap -g jmap -m 755 -d /home/jmap/jmap-perl/htdocs/
 	install -o jmap -g jmap -m 644 htdocs/* /home/jmap/jmap-perl/htdocs/
+	install -o jmap -g jmap -m 755 -d /home/jmap/data
 
 diff: all
 	diff -Nu /etc/nginx/sites-enabled/$(DOMAIN).conf nginx.conf || true
