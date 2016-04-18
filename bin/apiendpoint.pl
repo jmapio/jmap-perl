@@ -423,7 +423,7 @@ sub handle_signup {
     $domain =~ s/.*\@//;
     my $reply;
     warn "RESOLVING: $domain\n";
-    ($reply) = $Resolver->search("_imaps._tcp.$domain", "srv");
+    ($reply) = $Resolver->query("_imaps._tcp.$domain", "srv");
     if ($reply) {
       my @d = $reply->answer;
       if (@d) {
@@ -432,7 +432,7 @@ sub handle_signup {
       }
     }
     else {
-      my ($reply) = $Resolver->search("_imap._tcp.$domain", "srv");
+      my ($reply) = $Resolver->query("_imap._tcp.$domain", "srv");
       if ($reply) {
         my @d = $reply->answer;
         if (@d) {
@@ -442,7 +442,8 @@ sub handle_signup {
         }
       }
     }
-    ($reply) = $Resolver->search("_smtps._tcp.$domain", "srv");
+
+    ($reply) = $Resolver->query("_smtps._tcp.$domain", "srv");
     if ($reply) {
       my @d = $reply->answer;
       if (@d) {
@@ -452,7 +453,7 @@ sub handle_signup {
       }
     }
     else {
-      my ($reply) = $Resolver->search("_submission._tcp.$domain", "srv");
+      my ($reply) = $Resolver->query("_submission._tcp.$domain", "srv");
       if ($reply) {
         my @d = $reply->answer;
         if (@d) {
@@ -463,7 +464,7 @@ sub handle_signup {
       }
     }
 
-    ($reply) = $Resolver->search("_caldavs._tcp.$domain", "srv");
+    ($reply) = $Resolver->query("_caldavs._tcp.$domain", "srv");
     if ($reply) {
       my @d = $reply->answer;
       if (@d) {
@@ -474,7 +475,7 @@ sub handle_signup {
       }
     }
     else {
-      my ($reply) = $Resolver->search("_caldav._tcp.$domain", "srv");
+      my ($reply) = $Resolver->query("_caldav._tcp.$domain", "srv");
       if ($reply) {
         my @d = $reply->answer;
         if (@d) {
@@ -486,7 +487,7 @@ sub handle_signup {
       }
     }
 
-    ($reply) = $Resolver->search("_carddavs._tcp.$domain", "srv");
+    ($reply) = $Resolver->query("_carddavs._tcp.$domain", "srv");
     if ($reply) {
       my @d = $reply->answer;
       if (@d) {
@@ -497,7 +498,7 @@ sub handle_signup {
       }
     }
     else {
-      my ($reply) = $Resolver->search("_carddav._tcp.$domain", "srv");
+      my ($reply) = $Resolver->query("_carddav._tcp.$domain", "srv");
       if ($reply) {
         my @d = $reply->answer;
         if (@d) {
