@@ -68,6 +68,9 @@ install: all
 	install -o root -g root -m 644 $(DHPARAM) $(DHPARAMDIR)/$(DHPARAM)
 	install -o root -g root -m 644 $(PUBLICCERT) /etc/ssl/certs/$(PUBLICCERT)
 	install -o root -g root -m 644 $(PRIVATEKEY) /etc/ssl/private/$(PRIVATEKEY)
+	adduser --quiet --disabled-login --gecos "JMAP" jmap || true
+	install -o jmap -g jmap -m 755 -d /home/jmap/jmap-perl/htdocs/
+	install -o jmap -g jmap -m 644 htdocs/* /home/jmap/jmap-perl/htdocs/
 
 diff: all
 	diff -Nu /etc/nginx/sites-enabled/$(DOMAIN).conf nginx.conf || true
