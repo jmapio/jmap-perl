@@ -16,10 +16,23 @@ The installer will:
 If you want to use the Gmail OAUTH2, you will need your own secrets. Copy
 config.example to config.json and replace XXX and YYY with your details.
 
-RUNNING:
-========
+RUNNING THE SERVER:
+===================
 
 The following scripts need to be run in paralell:
 
     - bin/apiendpoint.pl
     - bin/server.pl
+
+ACCESSING THE PROXY:
+====================
+
+First, update your hosts file to include the proxy:
+
+    echo <jmap-proxy-ip-address> jmap-proxy.local
+
+Then point your browser to:
+
+    https://jmap-proxy.local
+
+Accept the self-signed certificate, then everything should be good to go!
