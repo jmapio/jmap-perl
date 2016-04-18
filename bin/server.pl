@@ -23,8 +23,10 @@ use JMAP::Sync::Gmail;
 use JSON::XS qw(decode_json);
 use Encode qw(encode_utf8);
 use Template;
-my $TT = Template->new(INCLUDE_PATH => '/home/jmap/jmap-perl/htdocs');
 
+$ENV{jmaphost} ||= 'jmap-proxy.local';
+
+my $TT   = Template->new(INCLUDE_PATH => '/home/jmap/jmap-perl/htdocs');
 my $json = JSON::XS->new->utf8->canonical();
 
 sub mkerr {
