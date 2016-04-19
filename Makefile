@@ -58,10 +58,7 @@ $(PRIVATEKEY):
 
 install: all
 	apt-get install -y $(PACKAGES)
-	if [ ! `which cpanm` ]; then                          \
-	  curl -L https://cpanmin.us | perl - App::cpanminus; \
-	fi
-	$(foreach PERLPACKAGE, $(PERLPACKAGES), cpanm $(PERLPACKAGE) &&) true
+	$(foreach PERLPACKAGE, $(PERLPACKAGES), yes | cpan $(PERLPACKAGE) &&) true
 	install -o root -g root -m 644 nginx.conf /etc/nginx/sites-available/$(DOMAIN).conf
 	ln -fs /etc/nginx/sites-available/$(DOMAIN).conf /etc/nginx/sites-enabled/$(DOMAIN).conf
 	install -o root -g root -m 755 -d $(DHPARAMDIR)
