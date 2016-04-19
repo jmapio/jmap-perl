@@ -71,9 +71,9 @@ install: all
 	  git clone . /home/jmap/jmap-perl;    \
 	fi
 	install -o jmap -g jmap -m 755 -d /home/jmap/data
-	if [ ! -d /home/jmap/jmap-perl/htdocs/client ]; then                                     \
-	  git clone https://github.com/jmapio/jmap-demo-webmail.git /home/jmap/jmap-perl/htdocs/client; \
-	  perl -pi -e 's/^/<!--/, s/$/-->/ if /fixtures.js/' /home/jmap/jmap-perl/htdocs/client/index.html
+	if [ ! -d /home/jmap/jmap-perl/htdocs/client ]; then                                                 \
+	  git clone https://github.com/jmapio/jmap-demo-webmail.git /home/jmap/jmap-perl/htdocs/client;      \
+	  perl -pi -e 's/^/<!--/, s/$$/-->/ if /fixtures.js/' /home/jmap/jmap-perl/htdocs/client/index.html; \
 	fi
 
 diff: all
