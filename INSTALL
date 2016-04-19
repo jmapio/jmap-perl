@@ -21,8 +21,8 @@ RUNNING THE SERVER:
 
 The following scripts need to be run in paralell:
 
-    - bin/apiendpoint.pl
-    - bin/server.pl
+    - /home/jmap/jmap-perl/bin/apiendpoint.pl
+    - /home/jmap/jmap-perl/bin/server.pl
 
 ACCESSING THE PROXY:
 ====================

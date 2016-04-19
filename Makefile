@@ -58,19 +58,18 @@ $(PRIVATEKEY):
 
 install: all
 	apt-get install -y $(PACKAGES)
-	if [ ! `which cpanm` ]; then                          \
-	  curl -L https://cpanmin.us | perl - App::cpanminus; \
-	fi
-	$(foreach PERLPACKAGE, $(PERLPACKAGES), cpanm $(PERLPACKAGE) &&) true
-	install -o root -g root -m 644 nginx.conf /etc/nginx/sites-available/$(DOMAIN).conf
-	ln -fs /etc/nginx/sites-available/$(DOMAIN).conf /etc/nginx/sites-enabled/$(DOMAIN).conf
+	$(foreach PERLPACKAGE, $(PERLPACKAGES), yes | cpan $(PERLPACKAGE) &&) true
 	install -o root -g root -m 755 -d $(DHPARAMDIR)
 	install -o root -g root -m 644 $(DHPARAM) $(DHPARAMDIR)/$(DHPARAM)
 	install -o root -g root -m 644 $(PUBLICCERT) /etc/ssl/certs/$(PUBLICCERT)
 	install -o root -g root -m 644 $(PRIVATEKEY) /etc/ssl/private/$(PRIVATEKEY)
+	install -o root -g root -m 644 nginx.conf /etc/nginx/sites-available/$(DOMAIN).conf
+	ln -fs /etc/nginx/sites-available/$(DOMAIN).conf /etc/nginx/sites-enabled/$(DOMAIN).conf
+	/etc/init.d/nginx restart
 	adduser --quiet --disabled-login --gecos "JMAP" jmap || true
-	install -o jmap -g jmap -m 755 -d /home/jmap/jmap-perl/htdocs/
-	install -o jmap -g jmap -m 644 htdocs/* /home/jmap/jmap-perl/htdocs/
+	if [ ! -d /home/jmap/jmap-perl ]; then \
+	  git clone . /home/jmap/jmap-perl;    \
+	fi
 	install -o jmap -g jmap -m 755 -d /home/jmap/data
 
 diff: all
