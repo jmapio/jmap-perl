@@ -1447,7 +1447,7 @@ sub create_mailboxes {
   return ({}, {}) unless keys %$new;
 
   $Self->begin();
-  my %idmap;
+  my %todo;
   my %notcreated;
   foreach my $cid (keys %$new) {
     my $mailbox = $new->{$cid};
@@ -1463,28 +1463,30 @@ sub create_mailboxes {
       $prefix = '' unless defined $prefix;
       $imapname = "$prefix$imapname";
     }
-    $idmap{$imapname} = $cid; # need to resolve this after the sync
+    $todo{$cid} = $imapname; # need to resolve this after the sync
   }
 
   $Self->commit();
 
-  foreach my $imapname (sort keys %idmap) {
+  foreach my $imapname (sort values %todo) {
     # XXX - handle errors...
     my $res = $Self->backend_cmd('create_mailbox', $imapname);
   }
 
+  my %createmap;
   # (in theory we could save this until the end and resolve the names in after the renames and deletes... but it does mean
   # we can't use ids as referenes...)
-  $Self->sync_folders() if keys %idmap;
+  if (keys %todo) {
+    $Self->sync_folders();
 
-  $Self->begin();
-  my %createmap;
-  foreach my $imapname (keys %idmap) {
-    my $cid = $idmap{$imapname};
-    my ($jid) = $Self->dbh->selectrow_array("SELECT jmailboxid FROM ifolders WHERE imapname = ?", {}, $imapname);
-    $createmap{$cid} =  { id => $jid };
+    $Self->begin();
+    foreach my $cid (keys %todo) {
+      my $imapname = $todo{$cid};
+      my ($jid) = $Self->dbh->selectrow_array("SELECT jmailboxid FROM ifolders WHERE imapname = ?", {}, $imapname);
+      $createmap{$cid} = { id => $jid };
+    }
+    $Self->commit();
   }
-  $Self->commit();
 
   return (\%createmap, \%notcreated);
 }
@@ -1581,7 +1583,7 @@ sub create_calendar_events {
   my %todo;
   my %createmap;
   my %notcreated;
-  foreach my $cid (keys %$new) {
+  foreach my $cid (sort keys %$new) {
     my $calendar = $new->{$cid};
     my ($href) = $Self->dbh->selectrow_array("SELECT href FROM icalendars WHERE icalendarid = ?", {}, $calendar->{calendarId});
     unless ($href) {
@@ -1590,15 +1592,16 @@ sub create_calendar_events {
     }
     my $uid = new_uuid_string();
 
-    $todo{$href} = {%$calendar, uid => $uid};
+    $todo{$cid} = [$href, {%$calendar, uid => $uid}];
 
     $createmap{$cid} = { id => $uid };
   }
 
   $Self->commit();
 
-  foreach my $href (sort keys %todo) {
-    $Self->backend_cmd('new_event', $href, $todo{$href});
+  foreach my $cid (sort keys %todo) {
+    # XXX - on error?  Should remove $createmap{$cid} and set $notcreated{$cid}
+    $Self->backend_cmd('new_event', @{$todo{$cid}});
   }
 
   return (\%createmap, \%notcreated);
@@ -1699,15 +1702,16 @@ sub create_contact_groups {
       $card->VGroupContactUIDs(\@ids);
     }
 
-    $todo{$href} = $card;
+    $todo{$cid} = [$href, $card];
 
     $createmap{$cid} = { id => $uid };
   }
 
   $Self->commit();
 
-  foreach my $href (sort keys %todo) {
-    $Self->backend_cmd('new_card', $href, $todo{$href});
+  foreach my $cid (sort keys %todo) {
+    # XXX - on error?  Should remove $createmap{$cid} and set $notcreated{$cid}
+    $Self->backend_cmd('new_card', @{$todo{$cid}});
   }
 
   return (\%createmap, \%notcreated);
@@ -1820,14 +1824,16 @@ sub create_contacts {
     $card->VBirthday($contact->{birthday}) if exists $contact->{birthday};
     $card->VNotes($contact->{notes}) if exists $contact->{notes};
 
+    $todo{$cid} = [$href, $card];
+
     $createmap{$cid} = { id => $uid };
-    $todo{$href} = $card;
   }
 
   $Self->commit();
 
-  foreach my $href (sort keys %todo) {
-    $Self->backend_cmd('new_card', $href, $todo{$href});
+  foreach my $cid (sort keys %todo) {
+    # XXX - on error?  Should remove $createmap{$cid} and set $notcreated{$cid}
+    $Self->backend_cmd('new_card', @{$todo{$cid}});
   }
 
   return (\%createmap, \%notcreated);
