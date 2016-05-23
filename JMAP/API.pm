@@ -442,6 +442,7 @@ sub _load_hasatt {
 sub _match {
   my $Self = shift;
   my ($item, $condition, $storage) = @_;
+
   return $Self->_match_operator($item, $condition, $storage) if $condition->{operator};
 
   if ($condition->{inMailboxes}) {
@@ -560,13 +561,14 @@ sub _match_operator {
     return not $Self->_match_operator($item, {operator => 'OR', conditions => $filter->{conditions}}, $storage);
   }
   elsif ($filter->{operator} eq 'OR') {
-    foreach my $condition ($filter->{conditions}) {
+    foreach my $condition (@{$filter->{conditions}}) {
       return 1 if $Self->_match($item, $condition, $storage);
     }
     return 0;
   }
   elsif ($filter->{operator} eq 'AND') {
-    foreach my $condition ($filter->{conditions}) {
+
+    foreach my $condition (@{$filter->{conditions}}) {
       return 0 if $Self->_match($item, $condition, $storage);
     }
     return 1;
