@@ -567,9 +567,8 @@ sub _match_operator {
     return 0;
   }
   elsif ($filter->{operator} eq 'AND') {
-
     foreach my $condition (@{$filter->{conditions}}) {
-      return 0 if $Self->_match($item, $condition, $storage);
+      return 0 if not $Self->_match($item, $condition, $storage);
     }
     return 1;
   }
