@@ -560,9 +560,17 @@ sub create_mailbox {
 
   my $imap = $Self->connect_imap();
 
-  $imap->create($imapname);
+  my $res = $imap->create($imapname);
 
-  return [];
+  my @res = ($res);
+  unless ($res) {
+    my $err = $imap->get_last_error();
+    if ($err =~ m/Response was : (\w+) - (.*)/) {
+      @res = ($1, $2);
+    }
+  }
+
+  return ['create', @res];
 }
 
 sub rename_mailbox {
@@ -572,9 +580,17 @@ sub rename_mailbox {
 
   my $imap = $Self->connect_imap();
 
-  $imap->rename($oldname, $imapname);
+  my $res = $imap->rename($oldname, $imapname);
 
-  return [];
+  my @res = ($res);
+  unless ($res) {
+    my $err = $imap->get_last_error();
+    if ($err =~ m/Response was : (\w+) - (.*)/) {
+      @res = ($1, $2);
+    }
+  }
+
+  return ['rename', @res];
 }
 
 sub delete_mailbox {
@@ -583,9 +599,17 @@ sub delete_mailbox {
 
   my $imap = $Self->connect_imap();
 
-  $imap->delete($imapname);
+  my $res = $imap->delete($imapname);
 
-  return [];
+  my @res = ($res);
+  unless ($res) {
+    my $err = $imap->get_last_error();
+    if ($err =~ m/Response was : (\w+) - (.*)/) {
+      @res = ($1, $2);
+    }
+  }
+
+  return ['delete', @res];
 }
 
 1;
