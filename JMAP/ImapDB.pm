@@ -1446,36 +1446,52 @@ sub create_mailboxes {
 
   return ({}, {}) unless keys %$new;
 
+  # XXX - handle sort order issues - it may actually be necessary to create a folder to get its ID
+  # so we know the ID of the next one, and so on.
+
   $Self->begin();
   my %todo;
   my %notcreated;
   foreach my $cid (keys %$new) {
     my $mailbox = $new->{$cid};
 
-    my $imapname = $mailbox->{name};
+    unless (exists $mailbox->{name} and $mailbox->{name} ne '') {
+      $notcreated{$cid} = {type => 'invalidProperties', description => "name is required"};
+      next;
+    }
+    # XXX - other validations ?
+
     if ($mailbox->{parentId}) {
       my ($parentName, $sep) = $Self->dbh->selectrow_array("SELECT imapname, sep FROM ifolders WHERE jmailboxid = ?", {}, $mailbox->{parentId});
-      # XXX - errors
-      $imapname = "$parentName$sep$imapname";
+      # XXX - check "mailCreateChild" on parent mailbox
+      unless ($parentName) {
+        $notcreated{$cid} = {type => 'notFound', description => "parent folder not found"};
+        next;
+      }
+      $todo{$cid} = $parentName . $sep . $mailbox->{name};
     }
     else {
       my ($prefix) = $Self->dbh->selectrow_array("SELECT imapPrefix FROM iserver");
       $prefix = '' unless defined $prefix;
-      $imapname = "$prefix$imapname";
+      $todo{$cid} = $prefix . $mailbox->{name};
     }
-    $todo{$cid} = $imapname; # need to resolve this after the sync
   }
 
   $Self->commit();
 
-  foreach my $imapname (sort values %todo) {
+  foreach my $cid (sort { $todo{$a} <=> $todo{$b} } keys %todo) {
+    my $imapname = $todo{$cid};
     # XXX - handle errors...
     my $res = $Self->backend_cmd('create_mailbox', $imapname);
+    if ($res->[1]) ne 'ok') {
+      delete $todo{$cid};
+      $notcreated{$cid} = {type => 'internalError', description => $res->[2]};
+    }
   }
 
   my %createmap;
   # (in theory we could save this until the end and resolve the names in after the renames and deletes... but it does mean
-  # we can't use ids as referenes...)
+  # we can't use ids as references...)
   if (keys %todo) {
     $Self->sync_folders();
 
@@ -1483,7 +1499,11 @@ sub create_mailboxes {
     foreach my $cid (keys %todo) {
       my $imapname = $todo{$cid};
       my ($jid) = $Self->dbh->selectrow_array("SELECT jmailboxid FROM ifolders WHERE imapname = ?", {}, $imapname);
-      $createmap{$cid} = { id => $jid };
+      if ($jid) {
+        $createmap{$cid} = { id => $jid };
+      } else {
+        $notcreated{$cid} = {type => 'internalError', description => "folder missing after sync"};
+      }
     }
     $Self->commit();
   }
@@ -1504,37 +1524,57 @@ sub update_mailboxes {
   my %notchanged;
   my %namemap;
   # XXX - reorder the crap out of this if renaming multiple mailboxes due to deep rename
-  foreach my $id (keys %$update) {
-    my $mailbox = $update->{$id};
-    my $imapname = $mailbox->{name};
-    next unless (defined $imapname and $imapname ne '');
-    my $parentId = $mailbox->{parentId};
-    ($parentId) = $Self->dbh->selectrow_array("SELECT parentId FROM jmailboxes WHERE jmailboxid = ?", {}, $id)
-      unless exists $mailbox->{parentId};
-    if ($parentId) {
-      $parentId = $idmap->($parentId);
-      my ($parentName, $sep) = $Self->dbh->selectrow_array("SELECT imapname, sep FROM ifolders WHERE jmailboxid = ?", {}, $parentId);
-      # XXX - errors
-      $imapname = "$parentName$sep$imapname";
+  foreach my $jid (keys %$update) {
+    my $mailbox = $update->{$jid};
+    unless (keys %$mailbox) {
+      $notchanged{$jid} = {type => 'invalidProperties', description => "nothing to change"};
+      next;
     }
-    else {
-      my ($prefix) = $Self->dbh->selectrow_array("SELECT imapPrefix FROM iserver");
-      $prefix = '' unless $prefix;
-      $imapname = "$prefix$imapname";
+
+    my $data = $Self->dgetone('jmailboxes', {jmailboxid => $jid});
+    foreach my $key (keys %$mailbox) { # XXX - check if valid
+      $data->{$key} = $update->{$key};
+    }
+    my $parentId = $data->{parentId};
+    if ($data->{parentId}) {
+      $parentId = $idmap->($data->{parentId});
     }
 
     my ($oldname) = $Self->dbh->selectrow_array("SELECT imapname FROM ifolders WHERE jmailboxid = ?", {}, $id);
 
-    $namemap{$oldname} = $imapname;
-
-    push @changed, $id;
+    if ($parentId) {
+      my ($parentName, $sep) = $Self->dbh->selectrow_array("SELECT imapname, sep FROM ifolders WHERE jmailboxid = ?", {}, $parentId);
+      unless ($parentName) {
+        $notchanged{$jid} = {type => 'invalidProperties', description => "parent folder not found"};
+        next;
+      }
+      $namemap{$oldname} = ["$parentName$sep$imapname", $jid];
+    }
+    else {
+      my ($prefix) = $Self->dbh->selectrow_array("SELECT imapPrefix FROM iserver");
+      $prefix = '' unless $prefix;
+      $namemap{$oldname} = ["$prefix$imapname", $jid];
+    }
   }
 
   $Self->commit();
 
   foreach my $oldname (sort keys %namemap) {
-    my $imapname = $namemap{$oldname};
-    $Self->backend_cmd('rename_mailbox', $oldname, $imapname) if $oldname ne $imapname;
+    my ($imapname, $jid) = @{$namemap{$oldname}};
+
+    if ($imapname eq $oldname) {
+      # no change, yay
+      push @changed, $jid;
+      next;
+    }
+
+    my $res = $Self->backend_cmd('rename_mailbox', $oldname, $imapname)
+    if ($res->[1] eq 'ok') {
+      push @changed, $jid;
+    }
+    else {
+      $notchanged{$jid} = {type => 'serverError', description => $res->[2]};
+    }
   }
 
   $Self->sync_folders() if @changed;
@@ -1553,18 +1593,28 @@ sub destroy_mailboxes {
   my @destroyed;
   my %notdestroyed;
   my %namemap;
-  foreach my $id (@$destroy) {
-    my ($oldname) = $Self->dbh->selectrow_array("SELECT imapname FROM ifolders WHERE jmailboxid = ?", {}, $id);
-    $namemap{$oldname} = 1;
-    push @destroyed, $id;
+  foreach my $jid (@$destroy) {
+    my ($oldname) = $Self->dbh->selectrow_array("SELECT imapname FROM ifolders WHERE jmailboxid = ?", {}, $jid);
+    if ($oldname) {
+      $namemap{$oldname} = $jid;
+    }
+    else {
+      $notdestroyed{$jid} = {type => 'invalidProperties', description => "parent folder not found"};
+    }
   }
 
   $Self->commit();
 
   # we reverse so we delete children before parents
   foreach my $oldname (reverse sort keys %namemap) {
-     # XXX - handle errors
-    $Self->backend_cmd('delete_mailbox', $oldname);
+    my $jid = $namemap{$oldname};
+    my $res = $Self->backend_cmd('delete_mailbox', $oldname);
+    if ($res->[1] eq 'ok') {
+      push @destroyed, $jid;
+    }
+    else {
+      $notdestroyed{$jid} = {type => 'serverError', description => $res->[2]};
+    }
   }
 
   $Self->sync_folders() if @destroyed;
