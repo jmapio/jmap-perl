@@ -1483,7 +1483,7 @@ sub create_mailboxes {
     my $imapname = $todo{$cid};
     # XXX - handle errors...
     my $res = $Self->backend_cmd('create_mailbox', $imapname);
-    if ($res->[1]) ne 'ok') {
+    if ($res->[1] ne 'ok') {
       delete $todo{$cid};
       $notcreated{$cid} = {type => 'internalError', description => $res->[2]};
     }
@@ -1540,7 +1540,7 @@ sub update_mailboxes {
       $parentId = $idmap->($data->{parentId});
     }
 
-    my ($oldname) = $Self->dbh->selectrow_array("SELECT imapname FROM ifolders WHERE jmailboxid = ?", {}, $id);
+    my ($oldname) = $Self->dbh->selectrow_array("SELECT imapname FROM ifolders WHERE jmailboxid = ?", {}, $jid);
 
     if ($parentId) {
       my ($parentName, $sep) = $Self->dbh->selectrow_array("SELECT imapname, sep FROM ifolders WHERE jmailboxid = ?", {}, $parentId);
@@ -1548,12 +1548,12 @@ sub update_mailboxes {
         $notchanged{$jid} = {type => 'invalidProperties', description => "parent folder not found"};
         next;
       }
-      $namemap{$oldname} = ["$parentName$sep$imapname", $jid];
+      $namemap{$oldname} = [$parentName . $sep . $data->{name}, $jid];
     }
     else {
       my ($prefix) = $Self->dbh->selectrow_array("SELECT imapPrefix FROM iserver");
       $prefix = '' unless $prefix;
-      $namemap{$oldname} = ["$prefix$imapname", $jid];
+      $namemap{$oldname} = [$prefix . $data->{name}, $jid];
     }
   }
 
@@ -1568,7 +1568,7 @@ sub update_mailboxes {
       next;
     }
 
-    my $res = $Self->backend_cmd('rename_mailbox', $oldname, $imapname)
+    my $res = $Self->backend_cmd('rename_mailbox', $oldname, $imapname);
     if ($res->[1] eq 'ok') {
       push @changed, $jid;
     }
