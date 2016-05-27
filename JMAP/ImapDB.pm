@@ -1472,7 +1472,12 @@ sub create_mailboxes {
       $notcreated{$cid} = {type => 'invalidProperties', description => "name is required"};
       next;
     }
-    # XXX - other validations ?
+
+    my $encname = eval { encode('IMAP-UTF-7', $mailbox->{name}) };
+    unless (defined $encname) {
+      $notcreated{$cid} = {type => 'invalidProperties', description => "name can't be used with IMAP proxy"};
+      next;
+    }
 
     if ($mailbox->{parentId}) {
       my ($parentName, $sep) = $Self->dbh->selectrow_array("SELECT imapname, sep FROM ifolders WHERE jmailboxid = ?", {}, $mailbox->{parentId});
@@ -1481,12 +1486,12 @@ sub create_mailboxes {
         $notcreated{$cid} = {type => 'notFound', description => "parent folder not found"};
         next;
       }
-      $todo{$cid} = $parentName . $sep . $mailbox->{name};
+      $todo{$cid} = $parentName . $sep . $encname;
     }
     else {
       my ($prefix) = $Self->dbh->selectrow_array("SELECT imapPrefix FROM iserver");
       $prefix = '' unless defined $prefix;
-      $todo{$cid} = $prefix . $mailbox->{name};
+      $todo{$cid} = $prefix . $encname;
     }
   }
 
@@ -1494,7 +1499,7 @@ sub create_mailboxes {
 
   foreach my $cid (sort { $todo{$a} <=> $todo{$b} } keys %todo) {
     my $imapname = $todo{$cid};
-    # XXX - handle errors...
+    # XXX - check if already exists?
     my $res = $Self->backend_cmd('create_mailbox', $imapname);
     if ($res->[1] ne 'ok') {
       delete $todo{$cid};
@@ -1553,6 +1558,12 @@ sub update_mailboxes {
       $parentId = $idmap->($data->{parentId});
     }
 
+    my $encname = eval { encode('IMAP-UTF-7', $data->{name}) };
+    unless (defined $encname) {
+      $notchanged{$jid} = {type => 'invalidProperties', description => "name can't be used with IMAP proxy"};
+      next;
+    }
+
     my ($oldname) = $Self->dbh->selectrow_array("SELECT imapname FROM ifolders WHERE jmailboxid = ?", {}, $jid);
 
     if ($parentId) {
@@ -1561,12 +1572,12 @@ sub update_mailboxes {
         $notchanged{$jid} = {type => 'invalidProperties', description => "parent folder not found"};
         next;
       }
-      $namemap{$oldname} = [$parentName . $sep . $data->{name}, $jid];
+      $namemap{$oldname} = [$parentName . $sep . $encname, $jid];
     }
     else {
       my ($prefix) = $Self->dbh->selectrow_array("SELECT imapPrefix FROM iserver");
       $prefix = '' unless $prefix;
-      $namemap{$oldname} = [$prefix . $data->{name}, $jid];
+      $namemap{$oldname} = [$prefix . $encname, $jid];
     }
   }
 
