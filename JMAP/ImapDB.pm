@@ -14,6 +14,7 @@ use OAuth2::Tiny;
 use Digest::SHA qw(sha1_hex);
 use Encode;
 use Encode::MIME::Header;
+use Encode::IMAPUTF7;
 use AnyEvent;
 use AnyEvent::Socket;
 use Date::Format;
@@ -217,7 +218,7 @@ sub sync_jmailboxes {
     next if lc $folder->{label} eq "\\allmail"; # we don't show this folder
     my $fname = $folder->{imapname};
     # check for roles first
-    my @bits = split "[$folder->{sep}]", $fname;
+    my @bits = map { decode('IMAP-UTF-7', $_) } split "[$folder->{sep}]", $fname;
     shift @bits if ($bits[0] eq 'INBOX' and $bits[1]); # really we should be stripping the actual prefix, if any
     shift @bits if $bits[0] eq '[Gmail]'; # we special case this GMail magic
     next unless @bits; # also skip the magic '[Gmail]' top-level

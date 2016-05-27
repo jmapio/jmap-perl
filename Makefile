@@ -19,6 +19,7 @@ PACKAGES=                   \
   libhttp-tiny-perl         \
   libimage-size-perl        \
   libio-socket-ssl-perl     \
+  libencode-imaputf7-perl   \
   libjson-perl              \
   libjson-xs-perl           \
   liblocale-gettext-perl    \
