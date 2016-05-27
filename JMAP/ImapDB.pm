@@ -748,7 +748,8 @@ sub calcmsgid {
 
   my $replyto = _trimh($envelope->{'In-Reply-To'});
   my $messageid = _trimh($envelope->{'Message-ID'});
-  my $encsub = Encode::decode('MIME-Header', $envelope->{Subject});
+  my $encsub = eval { Encode::decode('MIME-Header', $envelope->{Subject}) };
+  $encsub = $envelope->{Subject} unless defined $encsub;
   my $sortsub = _normalsubject($encsub);
   my ($thrid) = $Self->dbh->selectrow_array("SELECT DISTINCT thrid FROM ithread WHERE messageid IN (?, ?) AND sortsubject = ?", {}, $replyto, $messageid, $sortsub);
   # XXX - merging?  subject-checking?  We have a subject here
@@ -1315,7 +1316,8 @@ sub _normalsubject {
 sub _envelopedata {
   my $data = shift;
   my $envelope = decode_json($data || "{}");
-  my $encsub = Encode::decode('MIME-Header', $envelope->{Subject});
+  my $encsub = eval { Encode::decode('MIME-Header', $envelope->{Subject}) };
+  $encsub = $envelope->{Subject} unless defined $encsub;
   my $sortsub = _normalsubject($encsub);
   return (
     msgsubject => $encsub,
