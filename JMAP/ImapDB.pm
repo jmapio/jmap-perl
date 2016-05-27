@@ -2033,6 +2033,7 @@ CREATE TABLE IF NOT EXISTS imessages (
 );
 EOF
 
+  $dbh->do("CREATE UNIQUE INDEX IF NOT EXISTS imsgfrom ON imessages (ifolderid, uid)");
   $dbh->do("CREATE INDEX IF NOT EXISTS imessageid ON imessages (msgid)");
   $dbh->do("CREATE INDEX IF NOT EXISTS imessagethrid ON imessages (thrid)");
 
