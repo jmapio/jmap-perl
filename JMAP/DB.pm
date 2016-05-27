@@ -331,7 +331,7 @@ sub attachments {
       $extra{height} = $h;
     }
     my $cid = $sub->header('Content-ID');
-    if ($cid =~ /<(.+)>/) {
+    if ($cid and $cid =~ /<(.+)>/) {
       $extra{cid} = "$1";
     }
     my $accountid = $Self->accountid();
