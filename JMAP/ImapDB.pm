@@ -1043,9 +1043,12 @@ sub update_messages {
   my %updatemap;
   my %notchanged;
   foreach my $msgid (keys %$changes) {
-    my ($ifolderid, $uid) = $Self->dbh->selectrow_array("SELECT ifolderid, uid FROM imessages WHERE msgid = ?", {}, $msgid);
-    if ($ifolderid and $uid) {
-      $updatemap{$ifolderid}{$uid} = $msgid;
+    my $data = $Self->dbh->selectall_arrayref("SELECT ifolderid, uid FROM imessages WHERE msgid = ?", {}, $msgid);
+    if (@$data) {
+      foreach my $row (@$data) {
+        my ($ifolderid, $uid) = @$row;
+        $updatemap{$ifolderid}{$uid} = $msgid;
+      }
     }
     else {
       $notchanged{$msgid} = {type => 'notFound', description => "No such message on server"};
@@ -1115,13 +1118,16 @@ sub update_messages {
           goto done unless $updateid;
           my ($updatemsgid) = $Self->dbh->selectrow_array("SELECT msgid FROM jmessages WHERE msgmessageid = ?", {}, $updateid);
           goto done unless $updatemsgid;
-          my ($ifolderid, $updateuid) = $Self->dbh->selectrow_array("SELECT ifolderid, uid FROM imessages WHERE msgid = ?", {}, $updatemsgid);
+          my $data = $Self->dbh->selectall_arrayref("SELECT ifolderid, uid FROM imessages WHERE msgid = ?", {}, $updatemsgid);
           goto done unless $ifolderid;
-          my $updatename = $foldermap{$ifolderid}{imapname};
-          my $updatevalidity = $foldermap{$ifolderid}{uidvalidity};
-          goto done unless $updatename;
           $Self->commit();
-          $Self->backend_cmd('imap_update', $updatename, $updatevalidity, $updateuid, 1, ["\\Answered"]);
+          foreach my $row (@$data) {
+            my ($ifolderid, $updateuid) = @$row;
+            my $updatename = $foldermap{$ifolderid}{imapname};
+            next unless $updatename;
+            my $updatevalidity = $foldermap{$ifolderid}{uidvalidity};
+            $Self->backend_cmd('imap_update', $updatename, $updatevalidity, $updateuid, 1, ["\\Answered"]);
+          }
         }
         done:
         $Self->reset();  # bogus, but otherwise we need to commit on all the done commands
@@ -1155,9 +1161,12 @@ sub destroy_messages {
   my %destroymap;
   my %notdestroyed;
   foreach my $msgid (@$ids) {
-    my ($ifolderid, $uid) = $Self->dbh->selectrow_array("SELECT ifolderid, uid FROM imessages WHERE msgid = ?", {}, $msgid);
-    if ($ifolderid and $uid) {
-      $destroymap{$ifolderid}{$uid} = $msgid;
+    my $data = $Self->dbh->selectall_arrayref("SELECT ifolderid, uid FROM imessages WHERE msgid = ?", {}, $msgid);
+    if (@$data) {
+      foreach my $row (@$data) {
+        my ($ifolderid, $uid) = @$row;
+        $destroymap{$ifolderid}{$uid} = $msgid;
+      }
     }
     else {
       $notdestroyed{$msgid} = {type => 'notFound', description => "No such message on server"};
@@ -1217,7 +1226,8 @@ sub new_record {
     size => $size,
   };
 
-  # XXX - what about dupes?
+  # delete first to correctly handle msgid changes (shouldn't be possible, but whatever)
+  $Self->deleted_record($ifolderid, $uid);
   $Self->dinsert('imessages', $data);
 
   $Self->mark_sync($msgid);
@@ -1352,7 +1362,8 @@ sub fill_messages {
   if (@need) {
     my $uids = $Self->dbh->selectall_arrayref("SELECT ifolderid, uid, msgid FROM imessages WHERE msgid IN (" . join(', ', map { "?" } @need) . ")", {}, @need);
     foreach my $row (@$uids) {
-      $udata{$row->[0]}{$row->[1]} = $row->[2];
+      my ($ifolderid, $uid, $msgno) = @$row;
+      $udata{$ifolderid}{$uid} = $msgno;
     }
   }
 
@@ -1388,7 +1399,7 @@ sub fill_messages {
       my $msgid = $uhash->{$uid};
       next if $result{$msgid};
       my $eml = Email::MIME->new($rfc822);
-      $parsed{$msgid} = $Self->parse_message($msgid, $eml);
+      $result{$msgid} = $parsed{$msgid} = $Self->parse_message($msgid, $eml);
     }
   }
 
@@ -1400,7 +1411,6 @@ sub fill_messages {
      parsed => $json->encode($message),
      hasAttachment => $message->{hasAttachment},
     });
-    $result{$msgid} = $parsed{$msgid};
   }
   $Self->commit();
 
