@@ -14,5 +14,5 @@ A separate backend for Gmail is provided, because Gmail has native server-side
 thread support, meaning that threading does not need to be calculated locally.
 
 NOTE: this library does not ship with the cloned FastMail web interface which
-is running on https://proxy.jmap.io/.  The licencing situation for that code is
+is running on https://proxy.jmap.io/.  The licensing situation for that code is
 not yet resolved.
