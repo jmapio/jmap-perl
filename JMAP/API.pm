@@ -638,7 +638,7 @@ sub getMessageList {
   if ($args->{anchor}) {
     # need to calculate the position
     for (0..$#$data) {
-      next unless $data->[$_][0] eq $args->{anchor};
+      next unless $data->[$_]{msgid} eq $args->{anchor};
       $start = $_ + $args->{anchorOffset};
       $start = 0 if $start < 0;
       goto gotit;
