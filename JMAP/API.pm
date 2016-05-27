@@ -370,6 +370,9 @@ sub setMailboxes {
 
   $Self->{db}->begin_superlock();
 
+  # make sure our DB is up to date
+  $Self->{db}->sync_folders();
+
   my ($created, $notCreated) = $Self->{db}->create_mailboxes($create);
   $Self->setid($_, $created->{$_}{id}) for keys %$created;
   my ($updated, $notUpdated) = $Self->{db}->update_mailboxes($update, sub { $Self->idmap(shift) });
@@ -1166,6 +1169,9 @@ sub setMessages {
   my $destroy = $args->{destroy} || [];
 
   $Self->{db}->begin_superlock();
+
+  $Self->{db}->sync_folders();
+  $Self->{db}->sync_imap();
 
   my ($created, $notCreated) = $Self->{db}->create_messages($create);
   $Self->setid($_, $created->{$_}{id}) for keys %$created;
@@ -2223,6 +2229,8 @@ sub setContactGroups {
 
   $Self->{db}->begin_superlock();
 
+  $Self->{db}->sync_addressbooks();
+
   my ($created, $notCreated) = $Self->{db}->create_contact_groups($create);
   $Self->setid($_, $created->{$_}{id}) for keys %$created;
   my ($updated, $notUpdated) = $Self->{db}->update_contact_groups($update, sub { $Self->idmap(shift) });
@@ -2266,6 +2274,8 @@ sub setContacts {
   my $destroy = $args->{destroy} || [];
 
   $Self->{db}->begin_superlock();
+
+  $Self->{db}->sync_addressbooks();
 
   my ($created, $notCreated) = $Self->{db}->create_contacts($create);
   $Self->setid($_, $created->{$_}{id}) for keys %$created;
@@ -2311,6 +2321,8 @@ sub setCalendarEvents {
 
   $Self->{db}->begin_superlock();
 
+  $Self->{db}->sync_calendars();
+
   my ($created, $notCreated) = $Self->{db}->create_calendar_events($create);
   $Self->setid($_, $created->{$_}{id}) for keys %$created;
   my ($updated, $notUpdated) = $Self->{db}->update_calendar_events($update, sub { $Self->idmap(shift) });
@@ -2354,6 +2366,8 @@ sub setCalendars {
   my $destroy = $args->{destroy} || [];
 
   $Self->{db}->begin_superlock();
+
+  $Self->{db}->sync_calendars();
 
   my ($created, $notCreated) = $Self->{db}->create_calendars($create);
   $Self->setid($_, $created->{$_}{id}) for keys %$created;
