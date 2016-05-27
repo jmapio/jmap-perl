@@ -1103,6 +1103,8 @@ CREATE TABLE IF NOT EXISTS jevents (
 );
 EOF
 
+  $dbh->do("CREATE INDEX IF NOT EXISTS jeventcal ON jevents (jcalendarid)");
+
   $dbh->do(<<EOF);
 CREATE TABLE IF NOT EXISTS jaddressbooks (
   jaddressbookid INTEGER PRIMARY KEY,
@@ -1133,6 +1135,8 @@ CREATE TABLE IF NOT EXISTS jcontactgroups (
 );
 EOF
 
+  $dbh->do("CREATE INDEX IF NOT EXISTS jgroupbook ON jcontactgroups (jaddressbookid)");
+
   $dbh->do(<<EOF);
 CREATE TABLE IF NOT EXISTS jcontactgroupmap (
   groupuid TEXT,
@@ -1156,6 +1160,8 @@ CREATE TABLE IF NOT EXISTS jcontacts (
   active BOOLEAN
 );
 EOF
+
+  $dbh->do("CREATE INDEX IF NOT EXISTS jcontactbook ON jcontacts (jaddressbookid)");
 
 }
 

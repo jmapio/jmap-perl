@@ -2010,6 +2010,10 @@ CREATE TABLE IF NOT EXISTS ifolders (
 );
 EOF
 
+  $dbh->do("CREATE INDEX IF NOT EXISTS ifolderj ON ifolders (jmailboxid)");
+  $dbh->do("CREATE INDEX IF NOT EXISTS ifolderlabel ON ifolders (label)");
+
+
   $dbh->do(<<EOF);
 CREATE TABLE IF NOT EXISTS imessages (
   imessageid INTEGER PRIMARY KEY NOT NULL,
@@ -2028,6 +2032,9 @@ CREATE TABLE IF NOT EXISTS imessages (
 );
 EOF
 
+  $dbh->do("CREATE INDEX IF NOT EXISTS imessageid ON imessages (msgid)");
+  $dbh->do("CREATE INDEX IF NOT EXISTS imessagethrid ON imessages (thrid)");
+
 # not used for Gmail, but it doesn't hurt to have it
   $dbh->do(<<EOF);
 CREATE TABLE IF NOT EXISTS ithread (
@@ -2036,6 +2043,8 @@ CREATE TABLE IF NOT EXISTS ithread (
   thrid TEXT
 );
 EOF
+
+  $dbh->do("CREATE INDEX IF NOT EXISTS ithrid ON ithread (thrid)");
 
   $dbh->do(<<EOF);
 CREATE TABLE IF NOT EXISTS icalendars (
@@ -2062,6 +2071,7 @@ CREATE TABLE IF NOT EXISTS ievents (
 );
 EOF
 
+  $dbh->do("CREATE INDEX IF NOT EXISTS ieventcal ON ievents (icalendarid)");
   $dbh->do("CREATE INDEX IF NOT EXISTS ieventuid ON ievents (uid)");
 
   $dbh->do(<<EOF);
@@ -2091,6 +2101,7 @@ CREATE TABLE IF NOT EXISTS icards (
 );
 EOF
 
+  $dbh->do("CREATE INDEX IF NOT EXISTS icardbook ON icards (iaddressbookid)");
   $dbh->do("CREATE INDEX IF NOT EXISTS icarduid ON icards (uid)");
 
   $dbh->do("CREATE TABLE IF NOT EXISTS imsgidtodo (msgid TEXT PRIMARY KEY NOT NULL)");
