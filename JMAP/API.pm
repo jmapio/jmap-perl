@@ -214,7 +214,7 @@ sub getMailboxes {
     my %rec = (
       id => "$item->{jmailboxid}",
       parentId => ($item->{parentId} ? "$item->{parentId}" : undef),
-      name => $item->{name},
+      name => Encode::decode_utf8($item->{name}),
       role => $item->{role},
       sortOrder => $item->{sortOrder},
       (map { $_ => ($item->{$_} ? $JSON::true : $JSON::false) } qw(mustBeOnlyMailbox mayReadItems mayAddItems mayRemoveItems mayCreateChild mayRename mayDelete)),
