@@ -1207,6 +1207,10 @@ sub importMessage {
   my $Self = shift;
   my $args = shift;
 
+  my ($type, $message) = $Self->{db}->get_file($args->{file});
+  return $Self->_transError(['error', {type => 'notFound'}])
+    if (not $type or $type ne 'message/rfc822');
+
   $Self->begin();
 
   my $user = $Self->{db}->get_user();
@@ -1218,10 +1222,6 @@ sub importMessage {
     if not $args->{file};
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if not $args->{mailboxIds};
-
-  my ($type, $message) = $Self->{db}->get_file($args->{file});
-  return $Self->_transError(['error', {type => 'notFound'}])
-    if (not $type or $type ne 'message/rfc822');
 
   $Self->commit();
 
