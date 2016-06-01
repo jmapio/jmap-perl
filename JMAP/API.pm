@@ -1227,7 +1227,7 @@ sub importMessage {
 
   # import to a normal mailbox (or boxes)
   my @ids = map { $Self->idmap($_) } @{$args->{mailboxIds}};
-  my ($msgid, $thrid) = $Self->import_message($message, \@ids,
+  my ($msgid, $thrid) = $Self->{db}->import_message($message, \@ids,
     isUnread => $args->{isUnread},
     isFlagged => $args->{isFlagged},
     isAnswered => $args->{isAnswered},
