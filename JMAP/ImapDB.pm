@@ -1013,7 +1013,7 @@ sub import_message {
   }
 
   $Self->begin();
-  my ($msgid, $thrid) = $Self->dbh->selectrow_array("SELECT msgid, thrid FROM imessages WHERE ifolderid = ? AND uid = ?", {}, $jmailmap{$id}{ifolderid}, $uid);
+  my ($msgid, $thrid, $size) = $Self->dbh->selectrow_array("SELECT msgid, thrid, size FROM imessages WHERE ifolderid = ? AND uid = ?", {}, $jmailmap{$id}{ifolderid}, $uid);
   $Self->commit();
 
   # save us having to download it again - drop out of transaction so we don't wait on the parse
@@ -1028,7 +1028,7 @@ sub import_message {
   });
   $Self->commit();
 
-  return ($msgid, $thrid);
+  return ($msgid, $thrid, $size);
 }
 
 sub update_messages {

@@ -1203,13 +1203,12 @@ sub setMessages {
   return @res;
 }
 
-sub importMessage {
+sub importMessages {
   my $Self = shift;
   my $args = shift;
 
-  my ($type, $message) = $Self->{db}->get_file($args->{file});
-  return $Self->_transError(['error', {type => 'notFound'}])
-    if (not $type or $type ne 'message/rfc822');
+  my %created;
+  my %notcreated;
 
   $Self->begin();
 
@@ -1219,25 +1218,67 @@ sub importMessage {
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
   return $Self->_transError(['error', {type => 'invalidArguments'}])
-    if not $args->{file};
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
-    if not $args->{mailboxIds};
+    if (not $args->{messages} or ref($args->{messages}) ne 'HASH');
+
+  my $dbh = $Self->{db}->dbh();
+  my $mailboxdata = $dbh->selectall_arrayref("SELECT * FROM jmailboxes WHERE active = 1", {Slice => {}});
+  my %validids = map { $_->{jmailboxid} => 1 } @$mailboxdata;
+
+  foreach my $id (keys %{$args->{messages}}) {
+    my $message = $args->{messages}{$id};
+    # sanity check
+    return $Self->_transError(['error', {type => 'invalidArguments'}])
+      if (not $message->{mailboxIds} or ref($message->{mailboxIds}) ne 'ARRAY');
+    return $Self->_transError(['error', {type => 'invalidArguments'}])
+      if (not $message->{blobId});
+  }
 
   $Self->commit();
 
-  # import to a normal mailbox (or boxes)
-  my @ids = map { $Self->idmap($_) } @{$args->{mailboxIds}};
-  my ($msgid, $thrid) = $Self->{db}->import_message($message, \@ids,
-    isUnread => $args->{isUnread},
-    isFlagged => $args->{isFlagged},
-    isAnswered => $args->{isAnswered},
-  );
+  my %todo;
+  foreach my $id (keys %{$args->{messages}}) {
+    my $message = $args->{messages}{$id};
+    my @ids = map { $Self->idmap($_) } @{$message->{mailboxIds}};
+    if (grep { not $validids{$_} } @ids) {
+      $notcreated{$id} = { type => 'invalidMailboxes' };
+      next;
+    }
+
+    my ($type, $file) = $Self->{db}->get_file($message->{blobId});
+    unless ($file) {
+      $notcreated{$id} = { type => 'notFound' };
+      next;
+    }
+
+    unless ($type eq 'message/rfc822') {
+      $notcreated{$id} = { type => 'notFound', description => "incorrect type $type for $message->{blobId}" };
+      next;
+    }
+
+    my ($msgid, $thrid, $size) = eval { $Self->{db}->import_message($file, \@ids,
+      isDraft => $message->{isDraft},
+      isUnread => $message->{isUnread},
+      isFlagged => $message->{isFlagged},
+      isAnswered => $message->{isAnswered},
+    )};
+    if ($@) {
+      $notcreated{$id} = { type => 'internalError', description => $@ };
+      next;
+    }
+
+    $created{$id} = {
+      id => $msgid,
+      blobId => $message->{blobId},
+      threadId => $thrid,
+      size => $size,
+    };
+  }
 
   my @res;
-  push @res, ['messageImported', {
+  push @res, ['messagesImported', {
     accountId => $accountid,
-    messageId => $msgid,
-    threadId => $thrid,
+    created => \%created,
+    notCreated => \%notcreated,
   }];
 
   return @res;
