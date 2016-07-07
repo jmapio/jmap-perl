@@ -648,11 +648,9 @@ sub do_addressbooks {
 
 sub labels {
   my $Self = shift;
-  unless ($Self->{labels}) {
-    my $data = $Self->dget('ifolders');
-    $Self->{labels} = { map { $_->{label} => [$_->{ifolderid}, $_->{jmailboxid}, $_->{imapname}] } @$data };
-  }
-  return $Self->{labels};
+
+  my $data = $Self->dget('ifolders');
+  return { map { $_->{label} => [$_->{ifolderid}, $_->{jmailboxid}, $_->{imapname}] } @$data };
 }
 
 sub sync_imap {
@@ -870,6 +868,7 @@ sub do_folder {
         @labels = ($forcelabel);
       }
       $Self->new_record($ifolderid, $uid, $new->{$uid}{'flags'}, \@labels, $new->{$uid}{envelope}, str2time($new->{$uid}{internaldate}), $msgid, $thrid, $new->{$uid}{'rfc822.size'});
+      $Self->sync_jmap_msgid($msgid);
     }
   }
 
