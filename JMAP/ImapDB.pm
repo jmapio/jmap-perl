@@ -1497,7 +1497,7 @@ sub create_mailboxes {
 
   $Self->commit();
 
-  foreach my $cid (sort { $todo{$a} <=> $todo{$b} } keys %todo) {
+  foreach my $cid (sort { $todo{$a} cmp $todo{$b} } keys %todo) {
     my $imapname = $todo{$cid};
     # XXX - check if already exists?
     my $res = $Self->backend_cmd('create_mailbox', $imapname);
