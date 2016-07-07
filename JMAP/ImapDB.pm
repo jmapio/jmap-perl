@@ -870,6 +870,7 @@ sub do_folder {
         @labels = ($forcelabel);
       }
       $Self->new_record($ifolderid, $uid, $new->{$uid}{'flags'}, \@labels, $new->{$uid}{envelope}, str2time($new->{$uid}{internaldate}), $msgid, $thrid, $new->{$uid}{'rfc822.size'});
+      $Self->sync_jmap_msgid($msgid);
     }
   }
 
