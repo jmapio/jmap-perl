@@ -1210,6 +1210,11 @@ sub importMessages {
   my %created;
   my %notcreated;
 
+  $Self->{db}->begin_superlock();
+
+  # make sure our DB is up to date
+  $Self->{db}->sync_folders();
+
   $Self->begin();
 
   my $user = $Self->{db}->get_user();
@@ -1273,6 +1278,10 @@ sub importMessages {
       size => $size,
     };
   }
+
+  $Self->{db}->sync_imap();
+
+  $Self->{db}->end_superlock();
 
   my @res;
   push @res, ['messagesImported', {
