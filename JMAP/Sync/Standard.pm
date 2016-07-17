@@ -74,6 +74,9 @@ sub connect_imap {
       Password => $Self->{auth}{password},
       UseSSL   => $usessl,
       UseBlocking => $usessl,
+      ($ENV{IGNORE_INVALID_CERT}
+        ? (SSL_verify_mode => 0, verify_hostname => 0)
+        : ()),
     );
     next unless $Self->{imap};
     $Self->{lastused} = time();
