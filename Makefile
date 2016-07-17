@@ -37,6 +37,7 @@ PERLPACKAGES=                     \
   HTML::GenerateUtil              \
   IO::All                         \
   IO::LockedFile                  \
+  JMAP::Validation                \
   Mail::IMAPTalk                  \
   Moose                           \
   Net::CalDAVTalk                 \
