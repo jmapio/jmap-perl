@@ -35,7 +35,6 @@ PERLPACKAGES=                     \
   Email::Sender::Simple           \
   Email::Sender::Transport::SMTPS \
   HTML::GenerateUtil              \
-  IO::All                         \
   IO::LockedFile                  \
   Mail::IMAPTalk                  \
   Moose                           \

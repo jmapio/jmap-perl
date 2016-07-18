@@ -17,7 +17,6 @@ use Digest::SHA qw(sha1_hex);
 use AnyEvent;
 use AnyEvent::Socket;
 use Data::Dumper;
-use IO::All;
 use JMAP::Sync::Gmail;
 
 sub new {
