@@ -7,13 +7,9 @@ use strict;
 use warnings;
 use Encode;
 use HTML::GenerateUtil qw(escape_html);
-use JSON::Typist;
 use JSON::XS;
-use JMAP::Validation;
-use JMAP::Validation::Checks::ContactGroup;
 
-my $json   = JSON::XS->new->utf8->canonical();
-my $typist = JSON::Typist->new();
+my $json = JSON::XS->new->utf8->canonical();
 
 sub new {
   my $class = shift;
@@ -2170,14 +2166,6 @@ sub getContactUpdates {
 sub getContactGroups {
   my $Self = shift;
   my $args = shift;
-
-  my $valid_args = JMAP::Validation::validate(
-    $typist->apply_types($args),
-    $JMAP::Validation::Checks::ContactGroup::getContactGroups_args,
-  );
-
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
-    unless $valid_args;
 
   $Self->begin();
   my $dbh = $Self->{db}->dbh();
