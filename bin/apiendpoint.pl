@@ -85,8 +85,6 @@ sub getdb {
 sub process_request {
   my $server = shift;
 
-  close STDIN;
-  close STDOUT;
   $hdl = AnyEvent::Handle->new(
     fh => $server->{server}{client},
     on_error => sub {
