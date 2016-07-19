@@ -36,6 +36,7 @@ PERLPACKAGES=                     \
   Email::Sender::Transport::SMTPS \
   HTML::GenerateUtil              \
   IO::LockedFile                  \
+  JMAP::Validation                \
   Mail::IMAPTalk                  \
   Moose                           \
   Net::CalDAVTalk                 \
