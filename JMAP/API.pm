@@ -692,7 +692,7 @@ gotit:
     push @res, $Self->getMessages({
       ids => \@result,
       properties => $args->{fetchMessageProperties},
-    }) if @result;
+    });
   }
 
   return @res;
