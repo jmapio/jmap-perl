@@ -44,7 +44,8 @@ my $db;
 my $dbh;
 my $accountid;
 
-$0 = '[jmap proxy]';
+$0               = '[jmap proxy]';
+$ENV{jmaphost} ||= 'jmap-proxy.local';
 
 sub set_accountid {
   $accountid = shift;
