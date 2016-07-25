@@ -44,7 +44,8 @@ my $db;
 my $dbh;
 my $accountid;
 
-$0 = '[jmap proxy]';
+$0               = '[jmap proxy]';
+$ENV{jmaphost} ||= 'jmap-proxy.local';
 
 sub set_accountid {
   $accountid = shift;
@@ -85,8 +86,6 @@ sub getdb {
 sub process_request {
   my $server = shift;
 
-  close STDIN;
-  close STDOUT;
   $hdl = AnyEvent::Handle->new(
     fh => $server->{server}{client},
     on_error => sub {
@@ -520,6 +519,9 @@ sub handle_signup {
    Port => $detail->{imapPort},
    UseSSL => ($detail->{imapSSL} > 1),
    UseBlocking => ($detail->{imapSSL} > 1),
+   ($ENV{IGNORE_INVALID_CERT}
+     ? (SSL_verify_mode => 0, verify_hostname => 0)
+     : ()),
   );
   die "UNABLE TO CONNECT for $detail->{username}\n" unless $imap;
 
