@@ -248,7 +248,7 @@ sub sync_jmailboxes {
       name => $name,
       parentId => $parentId,
       sortOrder => $sortOrder,
-      mustBeOnlyMailbox => 1,
+      mustBeOnlyMailbox => 0,
       mayReadItems => 1,
       mayAddItems => 1,
       mayRemoveItems => 1,
@@ -293,7 +293,7 @@ sub sync_jmailboxes {
       name => 'Outbox',
       role => 'outbox',
       sortOrder => 2,
-      mustBeOnlyMailbox => 1,
+      mustBeOnlyMailbox => 0,
       mayReadItems => 1,
       mayAddItems => 1,
       mayRemoveItems => 1,
@@ -316,7 +316,7 @@ sub sync_jmailboxes {
       name => 'Archive',
       role => 'archive',
       sortOrder => 2,
-      mustBeOnlyMailbox => 1,
+      mustBeOnlyMailbox => 0,
       mayReadItems => 1,
       mayAddItems => 1,
       mayRemoveItems => 1,
@@ -1038,14 +1038,16 @@ sub update_messages {
 
   $Self->begin();
 
-  my %updatemap;
   my %notchanged;
+  my @changed;
+
+  my %map;
   foreach my $msgid (keys %$changes) {
     my $data = $Self->dbh->selectall_arrayref("SELECT ifolderid, uid FROM imessages WHERE msgid = ?", {}, $msgid);
     if (@$data) {
       foreach my $row (@$data) {
         my ($ifolderid, $uid) = @$row;
-        $updatemap{$ifolderid}{$uid} = $msgid;
+        $map{$msgid}{$ifolderid}{$uid} = 1;
       }
     }
     else {
@@ -1062,87 +1064,120 @@ sub update_messages {
 
   $Self->commit();
 
-  my @changed;
-  foreach my $ifolderid (keys %updatemap) {
-    # XXX - merge similar actions?
-    my $imapname = $foldermap{$ifolderid}{imapname};
-    my $uidvalidity = $foldermap{$ifolderid}{uidvalidity};
-
-    foreach my $uid (sort keys %{$updatemap{$ifolderid}}) {
-      my $msgid = $updatemap{$ifolderid}{$uid};
-      my $action = $changes->{$msgid};
-      unless ($imapname and $uidvalidity) {
-        $notchanged{$msgid} = {type => 'notFound', description => "No folder found"};
-        next;
-      }
+  foreach my $msgid (keys %map) {
+    my $action = $changes->{$msgid};
+    my $didsomething = 0;
+    foreach my $ifolderid (sort keys %{$map{$msgid}}) {
+      my @uids = sort keys %{$map{$msgid}{$ifolderid}};
+      # XXX - merge similar actions?
+      my $imapname = $foldermap{$ifolderid}{imapname};
+      my $uidvalidity = $foldermap{$ifolderid}{uidvalidity};
+      next unless ($imapname and $uidvalidity);
       if (exists $action->{isUnread}) {
         my $bool = !$action->{isUnread};
         my @flags = ("\\Seen");
-        $Self->log('debug', "STORING $bool @flags for $uid");
-        $Self->backend_cmd('imap_update', $imapname, $uidvalidity, $uid, $bool, \@flags);
+        $Self->log('debug', "STORING $bool @flags for @uids");
+        $Self->backend_cmd('imap_update', $imapname, $uidvalidity, \@uids, $bool, \@flags);
+        $didsomething = 1;
       }
       if (exists $action->{isFlagged}) {
         my $bool = $action->{isFlagged};
         my @flags = ("\\Flagged");
-        $Self->log('debug', "STORING $bool @flags for $uid");
-        $Self->backend_cmd('imap_update', $imapname, $uidvalidity, $uid, $bool, \@flags);
+        $Self->log('debug', "STORING $bool @flags for @uids");
+        $Self->backend_cmd('imap_update', $imapname, $uidvalidity, \@uids, $bool, \@flags);
+        $didsomething = 1;
       }
       if (exists $action->{isAnswered}) {
         my $bool = $action->{isAnswered};
         my @flags = ("\\Answered");
-        $Self->log('debug', "STORING $bool @flags for $uid");
-        $Self->backend_cmd('imap_update', $imapname, $uidvalidity, $uid, $bool, \@flags);
+        $Self->log('debug', "STORING $bool @flags for @uids");
+        $Self->backend_cmd('imap_update', $imapname, $uidvalidity, \@uids, $bool, \@flags);
+        $didsomething = 1;
       }
-      if (exists $action->{mailboxIds}) {
-        # jmailboxid
-        my @mboxes = map { $idmap->($_) } @{$action->{mailboxIds}};
-        my ($has_outbox) = grep { $jidmap{$_} eq 'outbox' } @mboxes;
-        my (@others) = grep { $jidmap{$_} ne 'outbox' } @mboxes;
-        if ($has_outbox) {
-          # move to sent when we're done
-          push @others, $jmailmap{$jrolemap{'sent'}}{jmailboxid};
+    }
+    if (exists $action->{mailboxIds}) {
+      # jmailboxid
+      my @mboxes = map { $idmap->($_) } @{$action->{mailboxIds}};
+      my ($has_outbox) = grep { $jidmap{$_} eq 'outbox' } @mboxes;
+      my (@others) = grep { $jidmap{$_} ne 'outbox' } @mboxes;
+      if ($has_outbox) {
+        # move to sent when we're done
+        push @others, $jmailmap{$jrolemap{'sent'}}{jmailboxid};
 
-          my ($type, $rfc822) = $Self->get_raw_message($msgid);
-          # XXX - add attachments - we might actually want the parsed message and then realise the attachments...
-          $Self->backend_cmd('send_email', $rfc822);
+        my ($type, $rfc822) = $Self->get_raw_message($msgid);
+        # XXX - add attachments - we might actually want the parsed message and then realise the attachments...
+        $Self->backend_cmd('send_email', $rfc822);
+        $didsomething = 1;
 
-          # strip the \Draft flag
-
-          $Self->backend_cmd('imap_update', $imapname, $uidvalidity, $uid, 0, ["\\Draft"]);
-
-          $Self->begin();
-          # add the \Answered flag to our in-reply-to
-          my ($updateid) = $Self->dbh->selectrow_array("SELECT msginreplyto FROM jmessages WHERE msgid = ?", {}, $msgid);
-          goto done unless $updateid;
-          my ($updatemsgid) = $Self->dbh->selectrow_array("SELECT msgid FROM jmessages WHERE msgmessageid = ?", {}, $updateid);
-          goto done unless $updatemsgid;
-          my $data = $Self->dbh->selectall_arrayref("SELECT ifolderid, uid FROM imessages WHERE msgid = ?", {}, $updatemsgid);
-          goto done unless $ifolderid;
-          $Self->commit();
-          foreach my $row (@$data) {
-            my ($ifolderid, $updateuid) = @$row;
-            my $updatename = $foldermap{$ifolderid}{imapname};
-            next unless $updatename;
-            my $updatevalidity = $foldermap{$ifolderid}{uidvalidity};
-            $Self->backend_cmd('imap_update', $updatename, $updatevalidity, $updateuid, 1, ["\\Answered"]);
-          }
+        # strip the \Draft flag
+        foreach my $ifolderid (sort keys %{$map{$msgid}}) {
+          my @uids = sort keys %{$map{$msgid}{$ifolderid}};
+          my $imapname = $foldermap{$ifolderid}{imapname};
+          my $uidvalidity = $foldermap{$ifolderid}{uidvalidity};
+          $Self->backend_cmd('imap_update', $imapname, $uidvalidity, \@uids, 0, ["\\Draft"]);
         }
-        done:
-        $Self->reset();  # bogus, but otherwise we need to commit on all the done commands
-        if ($Self->{is_gmail}) {
-          # because 'archive' is synthetic on gmail we strip it here
-          (@others) = grep { $jidmap{$_} ne 'archive' } @others;
-          my @labels = grep { $_ and lc $_ ne '\\allmail' } map { $jmailmap{$_}{label} } @others;
-          $Self->backend_cmd('imap_labels', $imapname, $uidvalidity, $uid, \@labels);
-        }
-        else {
-          my $id = $others[0];
-          my $newfolder = $jmailmap{$id}{imapname};
-          $Self->backend_cmd('imap_move', $imapname, $uidvalidity, $uid, $newfolder);
+
+        $Self->begin();
+        # add the \Answered flag to our in-reply-to
+        my ($updateid) = $Self->dbh->selectrow_array("SELECT msginreplyto FROM jmessages WHERE msgid = ?", {}, $msgid);
+        goto done unless $updateid;
+        my ($updatemsgid) = $Self->dbh->selectrow_array("SELECT msgid FROM jmessages WHERE msgmessageid = ?", {}, $updateid);
+        goto done unless $updatemsgid;
+        my $data = $Self->dbh->selectall_arrayref("SELECT ifolderid, uid FROM imessages WHERE msgid = ?", {}, $updatemsgid);
+        goto done unless $ifolderid;
+        $Self->commit();
+        foreach my $row (@$data) {
+          my ($ifolderid, $updateuid) = @$row;
+          my $updatename = $foldermap{$ifolderid}{imapname};
+          next unless $updatename;
+          my $updatevalidity = $foldermap{$ifolderid}{uidvalidity};
+          $Self->backend_cmd('imap_update', $updatename, $updatevalidity, $updateuid, 1, ["\\Answered"]);
         }
       }
-      # XXX - handle errors from backend commands
+      done:
+      $Self->reset();  # bogus, but otherwise we need to commit on all the done commands
+      if ($Self->{is_gmail}) {
+        # because 'archive' is synthetic on gmail we strip it here
+        (@others) = grep { $jidmap{$_} ne 'archive' } @others;
+        my @labels = grep { $_ and lc $_ ne '\\allmail' } map { $jmailmap{$_}{label} } @others;
+        $Self->backend_cmd('imap_labels', $imapname, $uidvalidity, $uid, \@labels);
+        $didsomething = 1;
+      }
+      else {
+        # existing ifolderids containing this message
+        my %current = map { $_ => 1 } keys %{$map{$msgid}};
+        # new ifolderids that should contain this message
+        my %new = map { $jmailmap{$_}{ifolderid} => 1 } @others;
+        # identify a message to copy.  current should always have something
+        my ($srcifolderid) = sort keys %current;
+        my $srcimapname = $foldermap{$srcifolderid}{imapname};
+        my $srcuidvalidity = $foldermap{$srcifolderid}{uidvalidity};
+        my ($srcuid) = sort keys %{$map{$msgid}{$srcifolderid}};
+
+        # for all the new folders
+        foreach my $ifolderid (sort keys %new) {
+          # unless there's already a matching message in it
+          next if delete $current{$ifolderid};
+          # copy from the existing message
+          my $newfolder = $foldermap{$ifolderid}{imapname};
+          $Self->backend_cmd('imap_copy', $srcimapname, $srcuidvalidity, $srcuid, $newfolder);
+          $didsomething = 1;
+        }
+        foreach my $ifolderid (sort keys %current) {
+          # these ifolderids didn't exist in %new, so delete all matching UIDs from these folders
+          my $imapname = $foldermap{$ifolderid}{imapname};
+          my $uidvalidity = $foldermap{$ifolderid}{uidvalidity};
+          my @uids = sort keys %{$map{$msgid}{$ifolderid}};
+          $Self->backend_cmd('imap_move', $imapname, $uidvalidity, \@uids);
+          $didsomething = 1;
+        }
+      }
+    }
+    if ($didsomething) {
       push @changed, $msgid;
+    }
+    else {
+      $notchanged{$msgid} = { type => 'notFound', description => 'no matching folder found',
     }
   }
 
