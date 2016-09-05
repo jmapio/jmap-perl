@@ -399,6 +399,43 @@ sub imap_count {
   return \%res;
 }
 
+sub imap_copy {
+  my $Self = shift;
+  my $imapname = shift;
+  my $olduidvalidity = shift || 0;
+  my $uids = shift;
+  my $newname = shift;
+
+  my $imap = $Self->connect_imap();
+
+  my $r = $imap->examine($imapname);
+  die "EXAMINE FAILED $imapname" unless $r;
+
+  my $uidvalidity = $imap->get_response_code('uidvalidity') + 0;
+
+  my %res = (
+    imapname => $imapname,
+    newname => $newname,
+    olduidvalidity => $olduidvalidity,
+    newuidvalidity => $uidvalidity,
+  );
+
+  if ($olduidvalidity != $uidvalidity) {
+    return \%res;
+  }
+
+  my $res = $imap->copy($uids, $newname);
+  unless ($res) {
+    $res{notCopied} = $uids;
+    return \%res;
+  }
+  $Self->_unselect($imap);
+
+  $res{copied} = $uids;
+
+  return \%res;
+}
+
 # no newname == delete
 sub imap_move {
   my $Self = shift;
