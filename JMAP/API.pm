@@ -961,19 +961,11 @@ sub getMessages {
       }
     }
 
-    foreach my $email (qw(to cc bcc)) {
+    foreach my $email (qw(to cc bcc from replyTo)) {
       if (_prop_wanted($args, $email)) {
         my $val;
         my @addrs = $Self->{db}->parse_emails($data->{"msg$email"});
         $item->{$email} = \@addrs;
-      }
-    }
-
-    foreach my $email (qw(from replyTo)) {
-      if (_prop_wanted($args, $email)) {
-        my $val;
-        my @addrs = $Self->{db}->parse_emails($data->{"msg$email"});
-        $item->{$email} = $addrs[0];
       }
     }
 

@@ -490,14 +490,17 @@ sub _makemsg {
   my $isDraft = shift;
 
   my $header = [
-    From => _mkone($args->{from}),
+    From => _mkemail($args->{from}),
     To => _mkemail($args->{to}),
     Cc => _mkemail($args->{cc}),
     Bcc => _mkemail($args->{bcc}),
     Subject => $args->{subject},
     Date => Date::Format::time2str("%a, %d %b %Y %H:%M:%S %z", $args->{msgdate}),
     %{$args->{headers} || {}},
-  ];
+  ]
+  if ($args->{replyTo}) {
+    $header->{'Reply-To'} = _mkemail($args->{replyTo});
+  }
 
   # massive switch
   my $MIME;
