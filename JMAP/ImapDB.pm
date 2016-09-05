@@ -1124,7 +1124,6 @@ sub update_messages {
         my ($updatemsgid) = $Self->dbh->selectrow_array("SELECT msgid FROM jmessages WHERE msgmessageid = ?", {}, $updateid);
         goto done unless $updatemsgid;
         my $data = $Self->dbh->selectall_arrayref("SELECT ifolderid, uid FROM imessages WHERE msgid = ?", {}, $updatemsgid);
-        goto done unless $ifolderid;
         $Self->commit();
         foreach my $row (@$data) {
           my ($ifolderid, $updateuid) = @$row;
@@ -1136,6 +1135,14 @@ sub update_messages {
       }
       done:
       $Self->reset();  # bogus, but otherwise we need to commit on all the done commands
+
+      # existing ifolderids containing this message
+      # identify a source message to work from
+      my ($ifolderid) = sort keys %{$map{$msgid}};
+      my $imapname = $foldermap{$ifolderid}{imapname};
+      my $uidvalidity = $foldermap{$ifolderid}{uidvalidity};
+      my ($uid) = sort keys %{$map{$msgid}{$ifolderid}};
+
       if ($Self->{is_gmail}) {
         # because 'archive' is synthetic on gmail we strip it here
         (@others) = grep { $jidmap{$_} ne 'archive' } @others;
@@ -1144,15 +1151,10 @@ sub update_messages {
         $didsomething = 1;
       }
       else {
-        # existing ifolderids containing this message
+	# existing ifolderids with this message
         my %current = map { $_ => 1 } keys %{$map{$msgid}};
         # new ifolderids that should contain this message
         my %new = map { $jmailmap{$_}{ifolderid} => 1 } @others;
-        # identify a message to copy.  current should always have something
-        my ($srcifolderid) = sort keys %current;
-        my $srcimapname = $foldermap{$srcifolderid}{imapname};
-        my $srcuidvalidity = $foldermap{$srcifolderid}{uidvalidity};
-        my ($srcuid) = sort keys %{$map{$msgid}{$srcifolderid}};
 
         # for all the new folders
         foreach my $ifolderid (sort keys %new) {
@@ -1160,7 +1162,7 @@ sub update_messages {
           next if delete $current{$ifolderid};
           # copy from the existing message
           my $newfolder = $foldermap{$ifolderid}{imapname};
-          $Self->backend_cmd('imap_copy', $srcimapname, $srcuidvalidity, $srcuid, $newfolder);
+          $Self->backend_cmd('imap_copy', $imapname, $uidvalidity, $uid, $newfolder);
           $didsomething = 1;
         }
         foreach my $ifolderid (sort keys %current) {
@@ -1177,7 +1179,7 @@ sub update_messages {
       push @changed, $msgid;
     }
     else {
-      $notchanged{$msgid} = { type => 'notFound', description => 'no matching folder found',
+      $notchanged{$msgid} = { type => 'notFound', description => 'no matching folder found' };
     }
   }
 
