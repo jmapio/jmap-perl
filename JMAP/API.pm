@@ -100,7 +100,7 @@ sub getPreferences {
 
   return ['preferences', {
     defaultPersonalityId => "P1",
-    collapseThreads => $JSON::true,
+    enableConversations => $JSON::true,
   }];
 }
 
