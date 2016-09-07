@@ -683,7 +683,7 @@ sub do_signup {
     my ($data) = @_;
     warn Dumper($data);
     if ($data && $data->[0] eq 'done') {
-      send_backend_request($data->[0], 'sync', $data->[1]);
+      send_backend_request($data->[1], 'sync', $data->[2]);
       my $cookie = bake_cookie("jmap_$data->[1]", {
         value => $data->[2],
         path => '/',
