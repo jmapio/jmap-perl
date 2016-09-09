@@ -543,10 +543,16 @@ sub imap_fetch {
     my $item = $fetch->{$key};
     my $from = $item->[0];
     my $to = $item->[1];
+    my $getimmutable = $item->[2];
     $to = $uidnext - 1 if $to eq '*';
     next if $from > $to;
     my @flags = qw(uid flags);
-    push @flags, @{$item->[2]} if $item->[2];
+    push @flags, qw(x-gm-labels) if $imap->capability->{'x-gm-ext-1'};
+    if ($getimmutable) {
+      push @flags, qw(internaldate envelope rfc822.size);
+      push @flags, qw(x-gm-msgid x-gm-thrid) if $imap->capability->{'x-gm-ext-1'};
+      push @flags, qw(cid digest.sha1) if $imap->capability->{'xconversations'};
+    }
     next if ($highestmodseq and $item->[3] and $item->[3] == $highestmodseq);
     my @extra;
     push @extra, "(changedsince $item->[3])" if ($item->[3] and $imap->capability->{condstore});
