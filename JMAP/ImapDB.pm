@@ -238,7 +238,8 @@ sub sync_jmailboxes {
         if (@bits) {
           # need to create intermediate folder ...
           # XXX  - label noselect?
-          $id = $Self->dmake('jmailboxes', {name => $name, sortOrder => 4, parentId => $parentId});
+          my $id = new_uuid_string();
+          $Self->dmake('jmailboxes', {name => $name, jmailboxid => $id, sortOrder => 4, parentId => $parentId});
           $byname{$parentId}{$name} = $id;
         }
       }
@@ -274,7 +275,8 @@ sub sync_jmailboxes {
         $Self->dmaybedirty('jmailboxes', {active => 1, %details}, {jmailboxid => $id});
       }
       else {
-        $id = $Self->dmake('jmailboxes', {role => $role, %details});
+        my $id = $Self->backend_cmd('imap_getuniqueid', $fname) || new_uuid_string();
+        $Self->dmake('jmailboxes', {role => $role, jmailboxid => $id, %details});
         $byname{$parentId}{$name} = $id;
         $roletoid{$role} = $id if $role;
       }

@@ -999,7 +999,7 @@ EOF
 
   $dbh->do(<<EOF);
 CREATE TABLE IF NOT EXISTS jmailboxes (
-  jmailboxid INTEGER PRIMARY KEY,
+  jmailboxid TEXT NOT NULL PRIMARY KEY,
   parentId INTEGER,
   role TEXT,
   name TEXT,
@@ -1021,7 +1021,7 @@ EOF
 
   $dbh->do(<<EOF);
 CREATE TABLE IF NOT EXISTS jmessagemap (
-  jmailboxid INTEGER,
+  jmailboxid TEXT,
   msgid TEXT,
   jcreated INTEGER,
   jmodseq INTEGER,
