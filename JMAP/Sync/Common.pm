@@ -231,15 +231,15 @@ sub imap_status {
 
 sub imap_getuniqueid {
   my $Self = shift;
-  my $folder = shift;
+  my $folders = shift;
 
   my $imap = $Self->connect_imap();
 
-  return new_uuid_string() unless $imap->capability->{xconversations};  # don't bother unless it's FastMail
+  return {} unless $imap->capability->{xconversations};  # don't bother unless it's FastMail
 
-  my $metadata = $imap->getmetadata($folder, '/vendor/cmu/cyrus-imapd/uniqueid');
+  my $metadata = $imap->multigetmetadata($folders, '/vendor/cmu/cyrus-imapd/uniqueid');
 
-  return $metadata->{$folder}{'/vendor/cmu/cyrus-imapd/uniqueid'};
+  return $metadata;
 }
 
 # no newname == delete
