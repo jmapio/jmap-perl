@@ -757,7 +757,7 @@ sub calcmsgid {
     if ($data->{"x-gm-msgid"} and $data->{"x-gm-thrid"});
 
   return ($data->{"digest.sha1"}, $data->{"cid"})
-    if ($data->{"digest.sha1" and $data->{"cid"});
+    if ($data->{"digest.sha1"} and $data->{"cid"});
 
   my $envelope = $data->{envelope};
   my $coded = $json->encode([$envelope]);
