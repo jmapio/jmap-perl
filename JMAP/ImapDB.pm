@@ -240,8 +240,8 @@ sub sync_jmailboxes {
     shift @bits if $bits[0] eq '[Gmail]'; # we special case this GMail magic
     next unless @bits; # also skip the magic '[Gmail]' top-level
     my $role = $ROLE_MAP{lc $folder->{label}};
-    my $id = 0;
-    my $parentId = 0;
+    my $id = '';
+    my $parentId = '';
     my $name;
     my $sortOrder = 3;
     $sortOrder = 2 if $role;
@@ -308,7 +308,7 @@ sub sync_jmailboxes {
   else {
     # outbox - magic
     my $outbox = {
-      parentId => 0,
+      parentId => '',
       name => 'Outbox',
       role => 'outbox',
       sortOrder => 2,
@@ -331,7 +331,7 @@ sub sync_jmailboxes {
   else {
     # archive - magic
     my $archive = {
-      parentId => 0,
+      parentId => '',
       name => 'Archive',
       role => 'archive',
       sortOrder => 2,
