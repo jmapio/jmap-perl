@@ -275,7 +275,7 @@ sub sync_jmailboxes {
       mayDelete => $role ? 0 : 1,
     );
     if ($id) {
-      if ($role and $roletoid{$role} and $roletoid{$role} != $id) {
+      if ($role and $roletoid{$role} and $roletoid{$role} ne $id) {
         # still gotta move it
         $id = $roletoid{$role};
         $Self->dmaybedirty('jmailboxes', {active => 1, %details}, {jmailboxid => $id});
