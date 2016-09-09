@@ -798,24 +798,18 @@ sub do_folder {
   my $highestmodseq = $data->{highestmodseq};
 
   my %fetches;
-  my @immutable = qw(internaldate envelope rfc822.size);
-  my @mutable;
-  if ($Self->{is_gmail}) {
-    push @immutable, qw(x-gm-msgid x-gm-thrid);
-    push @mutable, qw(x-gm-labels);
-  }
 
   if ($batchsize) {
     if ($uidfirst > 1) {
       my $end = $uidfirst - 1;
       $uidfirst -= $batchsize;
       $uidfirst = 1 if $uidfirst < 1;
-      $fetches{backfill} = [$uidfirst, $end, [@immutable, @mutable]];
+      $fetches{backfill} = [$uidfirst, $end, 1];
     }
   }
   else {
-    $fetches{new} = [$uidnext, '*', [@immutable, @mutable]];
-    $fetches{update} = [$uidfirst, $uidnext - 1, [@mutable], $highestmodseq];
+    $fetches{new} = [$uidnext, '*', 1];
+    $fetches{update} = [$uidfirst, $uidnext - 1, 0, $highestmodseq];
   }
 
   $Self->commit();
