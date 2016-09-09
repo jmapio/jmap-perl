@@ -150,6 +150,7 @@ sub sync_folders {
   my %seen;
 
   my %getstatus;
+  my %getuniqueid;
   foreach my $name (sort keys %$folders) {
     my $sep = $folders->{$name}[0];
     my $label = $folders->{$name}[1];
@@ -164,6 +165,9 @@ sub sync_folders {
     unless ($ibylabel{$label}{uidvalidity}) {
       # no uidvalidity, we need to get status for this one
       $getstatus{$name} = $id;
+    }
+    unless ($ibylabel{$label}{uniqueid}) {
+      $getuniqueid{$name} = $id;
     }
   }
 
@@ -189,6 +193,19 @@ sub sync_folders {
         uidfirst => $status->{uidnext},
         highestmodseq => $status->{highestmodseq},
       }, {ifolderid => $getstatus{$name}});
+    }
+    $Self->commit();
+  }
+
+  if (keys %getuniqueid) {
+    my $data = $Self->backend_cmd('imap_getuniqueid', [keys %getuniqueid]);
+    $Self->begin();
+    foreach my $name (keys %$data) {
+      my $status = $data->{$name};
+      next unless ref($status) eq 'HASH';
+      eval { $Self->dmaybeupdate('ifolders', {
+        uniqueid => $status->{'/vendor/cmu/cyrus-imapd/uniqueid'},
+      }, {ifolderid => $getstatus{$name}}); };
     }
     $Self->commit();
   }
@@ -275,7 +292,7 @@ sub sync_jmailboxes {
         $Self->dmaybedirty('jmailboxes', {active => 1, %details}, {jmailboxid => $id});
       }
       else {
-        my $id = $Self->backend_cmd('imap_getuniqueid', $fname) || new_uuid_string();
+        my $id = $folder->{uniqueid} || new_uuid_string();
         $Self->dmake('jmailboxes', {role => $role, jmailboxid => $id, %details});
         $byname{$parentId}{$name} = $id;
         $roletoid{$role} = $id if $role;
@@ -2059,6 +2076,7 @@ CREATE TABLE IF NOT EXISTS ifolders (
   uidfirst INTEGER,
   uidnext INTEGER,
   highestmodseq INTEGER,
+  uniqueid TEXT,
   mtime DATE NOT NULL
 );
 EOF
