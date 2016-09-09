@@ -5,6 +5,7 @@ use warnings;
 
 package JMAP::Sync::Common;
 
+use Data::UUID::LibUUID;
 use Mail::IMAPTalk;
 use Email::Simple;
 use Email::Sender::Simple qw(sendmail);
@@ -226,6 +227,19 @@ sub imap_status {
   my $data = $imap->multistatus("(@fields)", @$folders);
 
   return $data;
+}
+
+sub imap_getuniqueid {
+  my $Self = shift;
+  my $folder = shift;
+
+  my $imap = $Self->connect_imap();
+
+  return new_uuid_string() unless $imap->capability->{xconversations};  # don't bother unless it's FastMail
+
+  my $metadata = $imap->getmetadata($folder, '/vendor/cmu/cyrus-imapd/uniqueid');
+
+  return $metadata->{$folder}{'/vendor/cmu/cyrus-imapd/uniqueid'};
 }
 
 # no newname == delete
