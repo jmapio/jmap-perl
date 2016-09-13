@@ -292,7 +292,7 @@ sub sync_jmailboxes {
         $Self->dmaybedirty('jmailboxes', {active => 1, %details}, {jmailboxid => $id});
       }
       else {
-        my $id = $folder->{uniqueid} || new_uuid_string();
+        $id = $folder->{uniqueid} || new_uuid_string();
         $Self->dmake('jmailboxes', {role => $role, jmailboxid => $id, %details});
         $byname{$parentId}{$name} = $id;
         $roletoid{$role} = $id if $role;
