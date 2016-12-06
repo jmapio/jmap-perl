@@ -1456,8 +1456,8 @@ sub getThreadUpdates {
   my %threads;
   my %delcheck;
   foreach my $row (@$data) {
-    $threads{$row->{msgid}} = 1;
-    $delcheck{$row->{msgid}} = 1 unless $row->{active};
+    $threads{$row->{thrid}} = 1;
+    $delcheck{$row->{thrid}} = 1 unless $row->{active};
   }
 
   my @removed;
