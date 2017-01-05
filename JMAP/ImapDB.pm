@@ -1047,12 +1047,12 @@ sub update_messages {
   my $changes = shift;
   my $idmap = shift;
 
-  return ([], {}) unless %$changes;
+  return ({}, {}) unless %$changes;
 
   $Self->begin();
 
   my %notchanged;
-  my @changed;
+  my %changed;
 
   my %map;
   foreach my $msgid (keys %$changes) {
@@ -1189,14 +1189,14 @@ sub update_messages {
       }
     }
     if ($didsomething) {
-      push @changed, $msgid;
+      $changed{$msgid} = undef;
     }
     else {
       $notchanged{$msgid} = { type => 'notFound', description => 'no matching folder found' };
     }
   }
 
-  return (\@changed, \%notchanged);
+  return (\%changed, \%notchanged);
 }
 
 sub destroy_messages {
@@ -1582,11 +1582,11 @@ sub update_mailboxes {
   my $update = shift;
   my $idmap = shift;
 
-  return ([], {}) unless %$update;
+  return ({}, {}) unless %$update;
 
   $Self->begin();
 
-  my @changed;
+  my %changed;
   my %notchanged;
   my %namemap;
   # XXX - reorder the crap out of this if renaming multiple mailboxes due to deep rename
@@ -1636,22 +1636,22 @@ sub update_mailboxes {
 
     if ($imapname eq $oldname) {
       # no change, yay
-      push @changed, $jid;
+      $changed{$jid} = undef;
       next;
     }
 
     my $res = $Self->backend_cmd('rename_mailbox', $oldname, $imapname);
     if ($res->[1] eq 'ok') {
-      push @changed, $jid;
+      $changed{$jid} = undef;
     }
     else {
       $notchanged{$jid} = {type => 'serverError', description => $res->[2]};
     }
   }
 
-  $Self->sync_folders() if @changed;
+  $Self->sync_folders() if keys %changed;
 
-  return (\@changed, \%notchanged);
+  return (\%changed, \%notchanged);
 }
 
 sub destroy_mailboxes {
@@ -1734,12 +1734,12 @@ sub update_calendar_events {
   my $update = shift;
   my $idmap = shift;
 
-  return ([], {}) unless %$update;
+  return ({}, {}) unless %$update;
 
   $Self->begin();
 
   my %todo;
-  my @changed;
+  my %changed;
   my %notchanged;
   foreach my $uid (keys %$update) {
     my $calendar = $update->{$uid};
@@ -1751,7 +1751,7 @@ sub update_calendar_events {
 
     $todo{$resource} = $calendar;
 
-    push @changed, $uid;
+    $changed{$uid} = undef;
   }
 
   $Self->commit();
@@ -1760,7 +1760,7 @@ sub update_calendar_events {
     $Self->backend_cmd('update_event', $href, $todo{$href});
   }
 
-  return (\@changed, \%notchanged);
+  return (\%changed, \%notchanged);
 }
 
 sub destroy_calendar_events {
@@ -1844,12 +1844,12 @@ sub update_contact_groups {
   my $changes = shift;
   my $idmap = shift;
 
-  return ([], {}) unless %$changes;
+  return ({}, {}) unless %$changes;
 
   $Self->begin();
 
   my %todo;
-  my @changed;
+  my %changed;
   my %notchanged;
   foreach my $carduid (keys %$changes) {
     my $contact = $changes->{$carduid};
@@ -1867,7 +1867,7 @@ sub update_contact_groups {
     }
 
     $todo{$resource} = $card;
-    push @changed, $carduid;
+    $changed{$carduid} = undef;
   }
 
   $Self->commit();
@@ -1876,7 +1876,7 @@ sub update_contact_groups {
     $Self->backend_cmd('update_card', $href, $todo{$href});
   }
 
-  return (\@changed, \%notchanged);
+  return (\%changed, \%notchanged);
 }
 
 sub destroy_contact_groups {
@@ -1966,12 +1966,12 @@ sub update_contacts {
   my $changes = shift;
   my $idmap = shift;
 
-  return ([], {}) unless %$changes;
+  return ({}, {}) unless %$changes;
 
   $Self->begin();
 
   my %todo;
-  my @changed;
+  my %changed;
   my %notchanged;
   foreach my $carduid (keys %$changes) {
     my $contact = $changes->{$carduid};
@@ -1998,7 +1998,7 @@ sub update_contacts {
     $card->VNotes($contact->{notes}) if exists $contact->{notes};
 
     $todo{$resource} = $card;
-    push @changed, $carduid;
+    $changed{$carduid} = undef;
   }
 
   $Self->commit();
@@ -2007,7 +2007,7 @@ sub update_contacts {
     $Self->backend_cmd('update_card', $href, $todo{$href});
   }
 
-  return (\@changed, \%notchanged);
+  return (\%changed, \%notchanged);
 }
 
 sub destroy_contacts {
