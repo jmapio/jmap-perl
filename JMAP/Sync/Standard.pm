@@ -9,7 +9,7 @@ use base qw(JMAP::Sync::Common);
 use Mail::IMAPTalk;
 use Email::Simple;
 use Email::Sender::Simple qw(sendmail);
-use Email::Sender::Transport::SMTPS;
+use Email::Sender::Transport::SMTP;
 use Net::CalDAVTalk;
 use Net::CardDAVTalk;
 
@@ -105,7 +105,7 @@ sub send_email {
   };
   sendmail($email, {
     from => $Self->{auth}{username},
-    transport => Email::Sender::Transport::SMTPS->new($detail),
+    transport => Email::Sender::Transport::SMTP->new($detail),
   });
 }
 
