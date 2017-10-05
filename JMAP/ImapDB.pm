@@ -302,52 +302,6 @@ sub sync_jmailboxes {
     $Self->dmaybeupdate('ifolders', {jmailboxid => $id}, {ifolderid => $folder->{ifolderid}});
   }
 
-  if ($roletoid{'outbox'}) {
-    $seen{$roletoid{'outbox'}} = 1;
-  }
-  else {
-    # outbox - magic
-    my $outbox = {
-      parentId => '',
-      name => 'Outbox',
-      role => 'outbox',
-      sortOrder => 2,
-      mustBeOnlyMailbox => 0,
-      mayReadItems => 1,
-      mayAddItems => 1,
-      mayRemoveItems => 1,
-      mayCreateChild => 0,
-      mayRename => 0,
-      mayDelete => 0,
-    };
-    my $id = $Self->dmake('jmailboxes', $outbox);
-    $seen{$id} = 1;
-    $roletoid{'outbox'} = $id;
-  }
-
-  if ($roletoid{'archive'}) {
-    $seen{$roletoid{'archive'}} = 1;
-  }
-  else {
-    # archive - magic
-    my $archive = {
-      parentId => '',
-      name => 'Archive',
-      role => 'archive',
-      sortOrder => 2,
-      mustBeOnlyMailbox => 0,
-      mayReadItems => 1,
-      mayAddItems => 1,
-      mayRemoveItems => 1,
-      mayCreateChild => 0,
-      mayRename => 0,
-      mayDelete => 0,
-    };
-    my $id = $Self->dmake('jmailboxes', $archive);
-    $seen{$id} = 1;
-    $roletoid{'archive'} = $id;
-  }
-
   foreach my $mailbox (@$jmailboxes) {
     my $id = $mailbox->{jmailboxid};
     next unless $mailbox->{active};
@@ -1111,63 +1065,19 @@ sub update_messages {
     if (exists $action->{mailboxIds}) {
       # jmailboxid
       my @mboxes = map { $idmap->($_) } @{$action->{mailboxIds}};
-      my ($has_outbox) = grep { $jidmap{$_} eq 'outbox' } @mboxes;
-      my (@others) = grep { $jidmap{$_} ne 'outbox' } @mboxes;
-      if ($has_outbox) {
-        # move to sent when we're done
-        push @others, $jmailmap{$jrolemap{'sent'}}{jmailboxid};
-
-        my ($type, $rfc822) = $Self->get_raw_message($msgid);
-        # XXX - add attachments - we might actually want the parsed message and then realise the attachments...
-        $Self->backend_cmd('send_email', $rfc822);
-        $didsomething = 1;
-
-        # strip the \Draft flag
-        foreach my $ifolderid (sort keys %{$map{$msgid}}) {
-          my @uids = sort keys %{$map{$msgid}{$ifolderid}};
-          my $imapname = $foldermap{$ifolderid}{imapname};
-          my $uidvalidity = $foldermap{$ifolderid}{uidvalidity};
-          $Self->backend_cmd('imap_update', $imapname, $uidvalidity, \@uids, 0, ["\\Draft"]);
-        }
-
-        $Self->begin();
-        # add the \Answered flag to our in-reply-to
-        my ($updateid) = $Self->dbh->selectrow_array("SELECT msginreplyto FROM jmessages WHERE msgid = ?", {}, $msgid);
-        goto done unless $updateid;
-        my ($updatemsgid) = $Self->dbh->selectrow_array("SELECT msgid FROM jmessages WHERE msgmessageid = ?", {}, $updateid);
-        goto done unless $updatemsgid;
-        my $data = $Self->dbh->selectall_arrayref("SELECT ifolderid, uid FROM imessages WHERE msgid = ?", {}, $updatemsgid);
-        $Self->commit();
-        foreach my $row (@$data) {
-          my ($ifolderid, $updateuid) = @$row;
-          my $updatename = $foldermap{$ifolderid}{imapname};
-          next unless $updatename;
-          my $updatevalidity = $foldermap{$ifolderid}{uidvalidity};
-          $Self->backend_cmd('imap_update', $updatename, $updatevalidity, $updateuid, 1, ["\\Answered"]);
-        }
-      }
-      done:
-      $Self->reset();  # bogus, but otherwise we need to commit on all the done commands
-
-      # existing ifolderids containing this message
-      # identify a source message to work from
-      my ($ifolderid) = sort keys %{$map{$msgid}};
-      my $imapname = $foldermap{$ifolderid}{imapname};
-      my $uidvalidity = $foldermap{$ifolderid}{uidvalidity};
-      my ($uid) = sort keys %{$map{$msgid}{$ifolderid}};
 
       if ($Self->{is_gmail}) {
         # because 'archive' is synthetic on gmail we strip it here
-        (@others) = grep { $jidmap{$_} ne 'archive' } @others;
-        my @labels = grep { $_ and lc $_ ne '\\allmail' } map { $jmailmap{$_}{label} } @others;
+        (@mboxes) = grep { $jidmap{$_} ne 'archive' } @mboxes;
+        my @labels = grep { $_ and lc $_ ne '\\allmail' } map { $jmailmap{$_}{label} } @mboxes;
         $Self->backend_cmd('imap_labels', $imapname, $uidvalidity, $uid, \@labels);
         $didsomething = 1;
       }
       else {
-	# existing ifolderids with this message
+        # existing ifolderids with this message
         my %current = map { $_ => 1 } keys %{$map{$msgid}};
         # new ifolderids that should contain this message
-        my %new = map { $jmailmap{$_}{ifolderid} => 1 } @others;
+        my %new = map { $jmailmap{$_}{ifolderid} => 1 } @mboxes;
 
         # for all the new folders
         foreach my $ifolderid (sort keys %new) {
