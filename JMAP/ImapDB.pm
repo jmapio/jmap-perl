@@ -1051,7 +1051,7 @@ sub update_messages {
         push @flags, "\\Seen" if delete $flags{'$Seen'};
         push @flags, sort keys %flags;
         $Self->log('debug', "STORING (@flags) for @uids");
-        $Self->backend_cmd('imap_update', $imapname, $uidvalidity, \@uids, $bool, \@flags);
+        $Self->backend_cmd('imap_update', $imapname, $uidvalidity, \@uids, \@flags);
         $didsomething = 1;
       }
     }
@@ -1237,7 +1237,7 @@ sub sync_jmap_msgid {
 
   if ($old) {
     $Self->log('debug', "changing $msgid");
-    return $Self->change_message($msgid, \%flagdata, \@jmailboxids);
+    return $Self->change_message($msgid, {keywords => \%flagdata}, \@jmailboxids);
   }
   else {
     $Self->log('debug', "adding $msgid");

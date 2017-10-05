@@ -447,8 +447,9 @@ sub delete_message_from_mailbox {
 
 sub change_message {
   my $Self = shift;
-  my ($msgid, $keywords, $newids) = @_;
+  my ($msgid, $data, $newids) = @_;
 
+  my $keywords = $data->{keywords};
   my $bump = $Self->dmaybedirty('jmessages', {
     keywords => $json->encode($keywords),
     isDraft => $keywords->{'$Draft'} ? 1 : 0,
