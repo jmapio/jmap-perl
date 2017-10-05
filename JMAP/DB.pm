@@ -1046,6 +1046,7 @@ CREATE TABLE IF NOT EXISTS account (
   jstateContactGroup TEXT NOT NULL DEFAULT 1,
   jstateCalendar TEXT NOT NULL DEFAULT 1,
   jstateCalendarEvent TEXT NOT NULL DEFAULT 1,
+  jstateMessageSubmission TEXT NOT NULL DEFAULT 1,
   mtime DATE
 );
 EOF
