@@ -184,7 +184,7 @@ sub add_message {
 
   return unless @$mailboxes; # no mailboxes, no message
 
-  $Self->dmake('jmessages', {%$data, $json->encode($data->{keywords})});
+  $Self->dmake('jmessages', {%$data, keywords => $json->encode($data->{keywords})});
   foreach my $mailbox (@$mailboxes) {
     $Self->add_message_to_mailbox($data->{msgid}, $mailbox);
   }
