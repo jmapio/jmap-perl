@@ -1059,6 +1059,13 @@ sub update_messages {
       # jmailboxid
       my @mboxes = map { $idmap->($_) } @{$action->{mailboxIds}};
 
+      # existing ifolderids containing this message
+      # identify a source message to work from
+      my ($ifolderid) = sort keys %{$map{$msgid}};
+      my $imapname = $foldermap{$ifolderid}{imapname};
+      my $uidvalidity = $foldermap{$ifolderid}{uidvalidity};
+      my ($uid) = sort keys %{$map{$msgid}{$ifolderid}};
+
       if ($Self->{is_gmail}) {
         # because 'archive' is synthetic on gmail we strip it here
         (@mboxes) = grep { $jidmap{$_} ne 'archive' } @mboxes;
