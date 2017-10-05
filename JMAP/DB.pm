@@ -447,9 +447,13 @@ sub delete_message_from_mailbox {
 
 sub change_message {
   my $Self = shift;
-  my ($msgid, $data, $newids) = @_;
+  my ($msgid, $keywords, $newids) = @_;
 
-  my $bump = $Self->dmaybedirty('jmessages', $data, {msgid => $msgid});
+  my $bump = $Self->dmaybedirty('jmessages', {
+    keywords => $json->encode($keywords),
+    isDraft => $keywords->{'$Draft'} ? 1 : 0,
+    isUnread => $keywords->{'$Seen'} ? 0 : 1,
+  }, {msgid => $msgid});
 
   my $oldids = $Self->dbh->selectcol_arrayref("SELECT jmailboxid FROM jmessagemap WHERE msgid = ? AND active = 1", {}, $msgid);
   my %old = map { $_ => 1 } @$oldids;
@@ -620,12 +624,7 @@ sub create_messages {
 
   foreach my $cid (keys %todo) {
     my $message = $todo{$cid};
-    my ($msgid, $thrid) = $Self->import_message($message, [$draftid],
-      isUnread => 0,
-      isAnswered => 0,
-      isFlagged => $args->{isFlagged},
-      isDraft => 1,
-    );
+    my ($msgid, $thrid) = $Self->import_message($message, [$draftid], $args->{keywords});
     $created{$cid} = {
       id => $msgid,
       threadId => $thrid,
@@ -973,10 +972,9 @@ CREATE TABLE IF NOT EXISTS jmessages (
   thrid TEXT,
   internaldate INTEGER,
   sha1 TEXT,
-  isUnread BOOLEAN,
-  isFlagged BOOLEAN,
-  isAnswered BOOLEAN,
-  isDraft BOOLEAN,
+  isDraft BOOL,
+  isUnread BOOL,
+  keywords TEXT,
   msgfrom TEXT,
   msgto TEXT,
   msgcc TEXT,

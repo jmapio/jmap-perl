@@ -248,7 +248,6 @@ sub imap_update {
   my $imapname = shift;
   my $olduidvalidity = shift || 0;
   my $uids = shift;
-  my $isAdd = shift;
   my $flags = shift;
 
   my $imap = $Self->connect_imap();
@@ -268,7 +267,7 @@ sub imap_update {
     return \%res;
   }
 
-  $imap->store($uids, $isAdd ? "+flags" : "-flags", "(@$flags)");
+  $imap->store($uids, "flags", "(@$flags)");
   $Self->_unselect($imap);
 
   $res{updated} = $uids;

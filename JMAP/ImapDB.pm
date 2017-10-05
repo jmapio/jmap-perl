@@ -941,7 +941,7 @@ sub import_message {
   my $Self = shift;
   my $rfc822 = shift;
   my $mailboxIds = shift;
-  my %flags = @_;
+  my $keywords = shift;
 
   $Self->begin();
   my $folderdata = $Self->dget('ifolders');
@@ -954,11 +954,13 @@ sub import_message {
   my ($id, @others) = @$mailboxIds;
   my $imapname = $jmailmap{$id}{imapname};
 
+  my %flags = %$keywords;
   my @flags;
-  push @flags, "\\Seen" unless $flags{isUnread};
-  push @flags, "\\Answered" if $flags{isAnswered};
-  push @flags, "\\Flagged" if $flags{isFlagged};
-  push @flags, "\\Draft" if $flags{isDraft};
+  push @flags, "\\Answered" if delete $flags{'$Answered'};
+  push @flags, "\\Flagged" if delete $flags{'$Flagged'};
+  push @flags, "\\Draft" if delete $flags{'$Draft'};
+  push @flags, "\\Seen" if delete $flags{'$Seen'};
+  push @flags, sort keys %flags;
 
   my $internaldate = time(); # XXX - allow setting?
   my $date = Date::Format::time2str('%e-%b-%Y %T %z', $internaldate);
@@ -1040,24 +1042,15 @@ sub update_messages {
       my $imapname = $foldermap{$ifolderid}{imapname};
       my $uidvalidity = $foldermap{$ifolderid}{uidvalidity};
       next unless ($imapname and $uidvalidity);
-      if (exists $action->{isUnread}) {
-        my $bool = !$action->{isUnread};
-        my @flags = ("\\Seen");
-        $Self->log('debug', "STORING $bool @flags for @uids");
-        $Self->backend_cmd('imap_update', $imapname, $uidvalidity, \@uids, $bool, \@flags);
-        $didsomething = 1;
-      }
-      if (exists $action->{isFlagged}) {
-        my $bool = $action->{isFlagged};
-        my @flags = ("\\Flagged");
-        $Self->log('debug', "STORING $bool @flags for @uids");
-        $Self->backend_cmd('imap_update', $imapname, $uidvalidity, \@uids, $bool, \@flags);
-        $didsomething = 1;
-      }
-      if (exists $action->{isAnswered}) {
-        my $bool = $action->{isAnswered};
-        my @flags = ("\\Answered");
-        $Self->log('debug', "STORING $bool @flags for @uids");
+      if (exists $action->{keywords}) {
+        my %flags = %{$action->{keywords}};
+        my @flags;
+        push @flags, "\\Answered" if delete $flags{'$Answered'};
+        push @flags, "\\Flagged" if delete $flags{'$Flagged'};
+        push @flags, "\\Draft" if delete $flags{'$Draft'};
+        push @flags, "\\Seen" if delete $flags{'$Seen'};
+        push @flags, sort keys %flags;
+        $Self->log('debug', "STORING (@flags) for @uids");
         $Self->backend_cmd('imap_update', $imapname, $uidvalidity, \@uids, $bool, \@flags);
         $didsomething = 1;
       }
@@ -1195,13 +1188,6 @@ sub sync_jmap_msgid {
   my $Self = shift;
   my ($msgid) = @_;
 
-  my %flagdata = (
-    isUnread => 1,
-    isFlagged => 0,
-    isAnswered => 0,
-    isDraft => 0,
-  );
-
   my $imessages = $Self->dbh->selectall_arrayref("SELECT flags, labels FROM imessages WHERE msgid = ?", {}, $msgid);
 
   my %labels;
@@ -1214,11 +1200,23 @@ sub sync_jmap_msgid {
     $labels{$_} = 1 for @$labellist;
   }
 
+  my %flagdata;
   foreach my $flag (keys %flags) {
-    $flagdata{isUnread} = 0 if lc $flag eq '\\seen';
-    $flagdata{isFlagged} = 1 if lc $flag eq '\\flagged';
-    $flagdata{isAnswered} = 1 if lc $flag eq '\\answered';
-    $flagdata{isDraft} = 1 if lc $flag eq '\\draft';
+    if (lc $flag eq '\\seen') {
+      $flagdata{'$Seen'} = $JSON::true;
+    }
+    elsif (lc $flag eq '\\flagged') {
+      $flagdata{'$Flagged'} = $JSON::true;
+    }
+    elsif (lc $flag eq '\\draft') {
+      $flagdata{'$Draft'} = $JSON::true;
+    }
+    elsif (lc $flag eq '\\answered') {
+      $flagdata{'$Answered'} = $JSON::true;
+    }
+    else {
+      $flagdata{$flag} = $JSON::true;
+    }
   }
 
   my $labels = $Self->labels();
@@ -1249,8 +1247,10 @@ sub sync_jmap_msgid {
       internaldate => $data->{internaldate},
       thrid => $data->{thrid},
       msgsize => $data->{size},
+      keywords => \%flagdata,
+      isDraft => $flagdata{'$Draft'} ? 1 : 0,
+      isUnread => $flagdata{'$Seen'} ? 0 : 1,
       _envelopedata($data->{envelope}),
-      %flagdata,
     }, \@jmailboxids);
   }
 }

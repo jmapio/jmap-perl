@@ -496,25 +496,12 @@ sub _match {
     return 0 unless $item->{msgsize} < $condition->{maxSize};
   }
 
-  if ($condition->{isFlagged}) {
-    # XXX - threaded versions?
-    return 0 unless $item->{isFlagged};
-  }
-
-  if ($condition->{isUnread}) {
-    # XXX - threaded versions?
-    return 0 unless $item->{isUnread};
-  }
-
-  if ($condition->{isAnswered}) {
-    # XXX - threaded versions?
-    return 0 unless $item->{isAnswered};
-  }
-
-  if ($condition->{isDraft}) {
-    # XXX - threaded versions?
-    return 0 unless $item->{isDraft};
-  }
+  # TODO:
+  # allInThreadHaveKeyword
+  # someInThreadHaveKeyword
+  # noneInThreadHaveKeyword
+  # hasKeyword
+  # notKeyword
 
   if ($condition->{hasAttachment}) {
     $storage->{hasatt} ||= $Self->_load_hasatt();
@@ -956,10 +943,12 @@ sub getMessages {
       $item->{inReplyToMessageId} = $data->{msginreplyto};
     }
 
-    foreach my $bool (qw(isUnread isFlagged isDraft isAnswered hasAttachment)) {
-      if (_prop_wanted($args, $bool)) {
-        $item->{$bool} = $data->{$bool} ? $JSON::true : $JSON::false;
-      }
+    if (_prop_wanted($args, 'hasAttachment')) {
+      $item->{hasAttachment} = $data->{hasAttachment} ? $JSON::true : $JSON::false;
+    }
+
+    if (_prop_wanted($args, 'keywords')) {
+      $item->{keywords} = decode_json($data->{keywords});
     }
 
     foreach my $email (qw(to cc bcc from replyTo)) {
@@ -1271,12 +1260,7 @@ sub importMessages {
       next;
     }
 
-    my ($msgid, $thrid, $size) = eval { $Self->{db}->import_message($file, \@ids,
-      isDraft => $message->{isDraft},
-      isUnread => $message->{isUnread},
-      isFlagged => $message->{isFlagged},
-      isAnswered => $message->{isAnswered},
-    )};
+    my ($msgid, $thrid, $size) = eval { $Self->{db}->import_message($file, \@ids, $message->{keywords}) };
     if ($@) {
       $notcreated{$id} = { type => 'internalError', description => $@ };
       next;
