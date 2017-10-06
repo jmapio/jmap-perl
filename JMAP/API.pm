@@ -480,12 +480,12 @@ sub _match {
 
   if ($condition->{before}) {
     my $time = str2time($condition->{before})->epoch();
-    return 0 unless $time < $item->{internaldate};
+    return 0 unless $item->{internaldate} < $time;
   }
 
   if ($condition->{after}) {
-    my $time = str2time($condition->{before})->epoch();
-    return 0 unless $time >= $item->{internaldate};
+    my $time = str2time($condition->{after})->epoch();
+    return 0 unless $item->{internaldate} >= $time;
   }
 
   if ($condition->{minSize}) {
