@@ -2475,4 +2475,311 @@ sub setCalendars {
   return @res;
 }
 
+sub _mk_submission_sort {
+  my $items = shift // [];
+  return undef unless ref($items) eq 'ARRAY';
+  my @res;
+  foreach my $item (@$items) { 
+    return undef unless defined $item;
+    my ($field, $order) = split / /, $item;
+
+    # invalid order
+    return undef unless ($order eq 'asc' or $order eq 'desc');
+
+    if ($field eq 'messageId') {
+      push @res, "msgid $order";
+    }
+    elsif ($field eq 'threadId') {
+      push @res, "thrid $order";
+    }
+    elsif ($field eq 'sentAt') {
+      push @res, "sentat $order";
+    }
+    else {
+      return undef; # invalid sort
+    }
+  }
+  push @res, 'subid asc';
+  return join(', ', @res);
+}
+
+sub _submission_filter {
+  my $Self = shift;
+  my $data = shift;
+  my $filter = shift;
+  my $storage = shift;
+
+  if ($filter->{messageIds}) {
+    return 0 unless grep { $_ eq $data->[2] } @{$filter->{messageIds}};
+  }
+  if ($filter->{threadIds}) {
+    return 0 unless grep { $_ eq $data->[1] } @{$filter->{threadIds}};
+  }
+  if ($filter->{undoStatus}) {
+    return 0 unless $filter->{undoStatus} eq 'final';
+  }
+  if ($filter->{before}) {
+    my $time = str2time($filter->{before})->epoch();
+    return 0 unless $data->[3] < $time;
+  }
+  if ($filter->{after}) {
+    my $time = str2time($filter->{after})->epoch();
+    return 0 unless $data->[3] >= $time;
+  }
+
+  # true if submitted
+  return 1;
+}
+
+sub getMessageSubmissionList {
+  my $Self = shift;
+  my $args = shift;
+
+  $Self->begin();
+  my $dbh = $Self->{db}->dbh();
+
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  my $newState = "$user->{jstateMessageSubmission}";
+
+  my $start = $args->{position} || 0;
+  return $Self->_transError(['error', {type => 'invalidArguments'}])
+    if $start < 0;
+
+  my $sort = _mk_submission_sort($args->{sort});
+  return $Self->_transError(['error', {type => 'invalidArguments'}])
+    unless $sort;
+
+  my $data = $dbh->selectall_arrayref("SELECT subid,thrid,msgid,sendat FROM jsubmission WHERE active = 1 ORDER BY $sort");
+
+  $data = $Self->_submission_filter($data, $args->{filter}, {}) if $args->{filter};
+  my $total = scalar(@$data);
+
+  my $end = $args->{limit} ? $start + $args->{limit} - 1 : $#$data;
+  $end = $#$data if $end > $#$data;
+
+  my @list = map { $data->[$_] } $start..$end;
+
+  $Self->commit();
+
+  my @res;
+
+  my $subids = [ map { "$_->[0]" } @list ];
+  my $thrids = [ map { "$_->[1]" } @list ];
+  my $msgids = [ map { "$_->[2]" } @list ];
+  push @res, ['messageSubmissionList', {
+    accountId => $accountid,
+    filter => $args->{filter},
+    sort => $args->{sort},
+    state => $newState,
+    canCalculateUpdates => $JSON::true,
+    position => $start,
+    total => $total,
+    messageSubmissionIds => $subids,
+    threadIds => $thrids,
+    messageIds => $msgids,
+  }];
+
+  if ($args->{fetchMessageSubmissions}) {
+    push @res, $Self->getMessageSubmissions({properties => $args->{fetchMessageSubmissionProperties}, ids => $subids});
+  }
+
+  if ($args->{fetchThreads}) {
+    push @res, $Self->getThreads({ids => $thrids});
+  }
+
+  if ($args->{fetchMessages}) {
+    push @res, $Self->getMessages({properties => $args->{fetchMessageProperties}, ids => $msgids});
+  }
+
+  return @res;
+}
+
+sub getMessageSubmissionListUpdates {
+  my $Self = shift;
+  my $args = shift;
+
+  $Self->begin();
+  my $dbh = $Self->{db}->dbh();
+
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  my $newState = "$user->{jstateMessageSubmission}";
+
+  my $sinceState = $args->{sinceState};
+  return $Self->_transError(['error', {type => 'invalidArguments'}])
+    if not $args->{sinceState};
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
+    if ($user->{jdeletedmodseq} and $sinceState <= $user->{jdeletedmodseq});
+
+  #properties: String[] A list of properties to fetch for each message.
+
+  my $sort = _mk_submission_sort($args->{sort});
+  return $Self->_transError(['error', {type => 'invalidArguments'}])
+    unless $sort;
+
+  my $data = $dbh->selectall_arrayref("SELECT subid,thrid,msgid,sendat,jmodseq,active FROM jsubmission ORDER BY $sort");
+
+  $data = $Self->_submission_filter($data, $args->{filter}, {}) if $args->{filter};
+  my $total = scalar(@$data);
+
+  $Self->commit();
+
+  my @added;
+  my @removed;
+
+  my $index = 0;
+  foreach my $item (@$data) {
+    if ($item->[4] <= $sinceState) {
+      $index++ if $item->[5];
+      next;
+    }
+    # changed
+    push @removed, "$item->[0]";
+    next unless $item->[5];
+    push @added, { id => "$item->[0]", index => $index };
+    $index++;
+  }
+
+  return ['messageSubmissionListUpdates', {
+    accountId => $accountid,
+    filter => $args->{filter},
+    sort => $args->{sort},
+    oldState => $sinceState,
+    newState => $newState,
+    total => $total,
+    removed => \@removed,
+    added => \@added,
+  }];
+}
+
+sub getMessageSubmissions {
+  my $Self = shift;
+  my $args = shift;
+
+  $Self->begin();
+  my $dbh = $Self->{db}->dbh();
+
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  my $newState = "$user->{jstateMessageSubmission}";
+
+  return $Self->_transError(['error', {type => 'invalidArguments'}])
+    unless $args->{ids};
+  #properties: String[] A list of properties to fetch for each message.
+
+  my %seenids;
+  my %missingids;
+  my @list;
+  foreach my $subid (map { $Self->idmap($_) } @{$args->{ids}}) {
+    next if $seenids{$subid};
+    $seenids{$subid} = 1;
+    my $data = $dbh->selectrow_hashref("SELECT * FROM jsubmission WHERE jsubid = ?", {}, $subid);
+    unless ($data) {
+      $missingids{$subid} = 1;
+      next;
+    }
+
+    my ($thrid) = $dbh->selectrow_array("SELECT thrid FROM jmessages WHERE msgid = ?", {}, $data->{msgid});
+
+    my $item = {
+      id => $subid,
+      identityId => $data->{identity},
+      messageId => $data->{msgid},
+      threadId => $data->{thrid},
+      envelope => $data->{envelope} ? decode_json($data->{envelope}) : undef,
+      sendAt => scalar($Self->isodate($data->{sendat})),
+      undoStatus => $data->{status},
+      deliveryStatus => undef,
+      dsnBlobIds => [],
+      mdnBlobIds => [],
+    };
+
+    foreach my $key (keys %$item) {
+      delete $item->{$key} unless _prop_wanted($args, $key);
+    }
+
+    push @list, $item;
+  }
+
+  $Self->commit();
+
+  return ['messageSubmissions', {
+    list => \@list,
+    accountId => $accountid,
+    state => $newState,
+    notFound => (%missingids ? [keys %missingids] : undef),
+  }];
+}
+
+sub getMessageSubmissionUpdates {
+  my $Self = shift;
+  my $args = shift;
+
+  $Self->begin();
+  my $dbh = $Self->{db}->dbh();
+
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  my $newState = "$user->{jstateMessageSubmission}";
+
+  my $sinceState = $args->{sinceState};
+  return $Self->_transError(['error', {type => 'invalidArguments'}])
+    if not $args->{sinceState};
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
+    if ($user->{jdeletedmodseq} and $sinceState <= $user->{jdeletedmodseq});
+
+  my $data = $dbh->selectall_arrayref("SELECT subid,thrid,msgid,sendat,jmodseq,active FROM jsubmission WHERE jmodseq > ? ORDER BY jmodseq ASC", {}, $sinceState);
+
+  $Self->commit();
+
+  my $hasMore = 0;
+  if ($args->{maxChanges} and $#$data >= $args->{maxChanges}) {
+    $#$data = $args->{maxChanges} - 1;
+    $newState = "$data->[-1][4]";
+    $hasMore = 1;
+  }
+
+  my @changed;
+  my @removed;
+
+  foreach my $item (@$data) {
+    # changed
+    if ($item->[5]) {
+      push @changed, "$item->[0]";
+    }
+    else {
+      push @removed, "$item->[0]";
+    }
+  }
+
+  my @res;
+  push @res, ['messageSubmissionUpdates', {
+    accountId => $accountid,
+    oldState => $sinceState,
+    newState => $newState,
+    hasMoreUpdates => $hasMore ? $JSON::true : $JSON::false,
+    changed => \@changed,
+    removed => \@removed,
+  }];
+
+  if ($args->{fetchRecords}) {
+    push @res, $Self->getMessageSubmissions({properties => $args->{fetchRecordProperties}, ids => \@changed});
+  }
+
+  return @res;
+}
+
 1;

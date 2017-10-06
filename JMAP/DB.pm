@@ -1166,6 +1166,20 @@ EOF
 
   $dbh->do("CREATE INDEX IF NOT EXISTS jcontactbook ON jcontacts (jaddressbookid)");
 
+  $dbh->do(<<EOF);
+CREATE TABLE IF NOT EXISTS jsubmission (
+  jsubid INTEGER PRIMARY KEY,
+  msgid TEXT,
+  thrid TEXT,
+  envelope TEXT,
+  sendAt Integer
+  jcreated INTEGER,
+  jmodseq INTEGER,
+  mtime DATE,
+  active BOOLEAN
+);
+EOF
+
 }
 
 1;
