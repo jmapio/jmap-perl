@@ -2782,4 +2782,101 @@ sub getMessageSubmissionUpdates {
   return @res;
 }
 
+sub setMessageSubmissions {
+  my $Self = shift;
+  my $args = shift;
+
+  $Self->begin();
+
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  $Self->commit();
+
+  my $create = $args->{create} || {};
+  my $update = $args->{update} || {};
+  my $destroy = $args->{destroy} || [];
+  my $toUpdate = $args->{onSuccessUpdateMessage} || {};
+  my $toDestroy = $args->{onSuccessDestroyMessage} || [];
+
+  my ($created, $notCreated, $updated, $notUpdated, $destroyed, $notDestroyed);
+
+  # TODO: need to support ifInState for this sucker
+
+  my %updateMessages;
+  my @destroyMessages;
+
+  $Self->{db}->begin_superlock();
+
+  eval {
+    # make sure our DB is up to date
+    $Self->{db}->sync_folders();
+
+    ($created, $notCreated) = $Self->{db}->create_submissions($create);
+    $Self->setid($_, $created->{$_}{id}) for keys %$created;
+    ($updated, $notUpdated) = $Self->{db}->update_submissions($update, sub { $Self->idmap(shift) });
+
+    my @possible = map { $Self->idmap($_) } ((keys %$created), (keys %$updated), @$destroy);
+
+    # we need to convert all the IDs that were successfully created and updated plus any POSSIBLE
+    # one that might be deleted into a map from id to messageid - after create and update, but
+    # before delete.
+    my $result = $self->getMessageSubmissions({ids => \@possible, properties => ['messageId']});
+    my %messageIds;
+    if ($result->[0] eq 'messageSubmissions') {
+      %messageIds = map { $_->{id} => $_->{messageId} } @{$result->[1]{list}};
+    }
+
+    # we can destroy now that we've read in the messageids of everything we intend to destroy... yay
+    ($destroyed, $notDestroyed) = $Self->{db}->destroy_submissions($destroy);
+
+    # OK, we have data on all possible messages that need to be actioned after the messageSubmission
+    # changes
+    my %allowed = map { $Self->idmap($_) => 1 } ((keys %$created), (keys %$updated), @$destroyed);
+
+    foreach my $key (keys %$toUpdate) {
+      my $id = $Self->idmap($key);
+      next unless $allowed{$id};
+      $updateMessages{$messageIds{$id}} = $toUpdate{$key};
+    }
+    foreach my $key (@$toDestroy) {
+      my $id = $Self->idmap($key);
+      next unless $allowed{$id};
+      push @destroyMessages, $messageIds{$id};
+    }
+
+    # XXX - do the setMessages
+
+    $Self->{db}->sync_imap();
+  };
+
+  if ($@) {
+    $Self->{db}->end_superlock();
+    die $@;
+  }
+
+  $Self->{db}->end_superlock();
+
+  my @res;
+  push @res, ['messageSubmissionsSet', {
+    accountId => $accountid,
+    oldState => undef, # proxy can't guarantee the old state
+    newState => undef, # or give a new state
+    created => $created,
+    notCreated => $notCreated,
+    updated => $updated,
+    notUpdated => $notUpdated,
+    destroyed => $destroyed,
+    notDestroyed => $notDestroyed,
+  }];
+
+  if (%updateMessages or @destroyMessages) {
+    push @res, $self->setMessages({update => \%updateMessages, destory => @destroyMessages});
+  }
+
+  return @res;
+}
+
 1;
