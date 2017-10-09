@@ -90,6 +90,17 @@ sub connect_imap {
 sub send_email {
   my $Self = shift;
   my $rfc822 = shift;
+  my $envelope = shift;
+
+  # XXX - die if we don't understand envelope params
+  my %args;
+  if ($envelope) {
+    $args{from} = $envelope->{mailFrom}{email};
+    $args{to} = [ map { $_->{email} } @{$envelope->{rcptTo}} ];
+  }
+  else {
+    $args{from} = $Self->{auth}{username};
+  }
 
   my $ssl;
   $ssl = 'ssl' if $Self->{auth}{smtpSSL} == 2;
@@ -104,7 +115,7 @@ sub send_email {
       sasl_password => $Self->{auth}{password},
   };
   sendmail($email, {
-    from => $Self->{auth}{username},
+    %args,
     transport => Email::Sender::Transport::SMTP->new($detail),
   });
 }

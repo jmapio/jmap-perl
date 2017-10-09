@@ -479,12 +479,12 @@ sub _match {
   }
 
   if ($condition->{before}) {
-    my $time = str2time($condition->{before})->epoch();
+    my $time = str2time($condition->{before});
     return 0 unless $item->{internaldate} < $time;
   }
 
   if ($condition->{after}) {
-    my $time = str2time($condition->{after})->epoch();
+    my $time = str2time($condition->{after});
     return 0 unless $item->{internaldate} >= $time;
   }
 
@@ -2519,11 +2519,11 @@ sub _submission_filter {
     return 0 unless $filter->{undoStatus} eq 'final';
   }
   if ($filter->{before}) {
-    my $time = str2time($filter->{before})->epoch();
+    my $time = str2time($filter->{before});
     return 0 unless $data->[3] < $time;
   }
   if ($filter->{after}) {
-    my $time = str2time($filter->{after})->epoch();
+    my $time = str2time($filter->{after});
     return 0 unless $data->[3] >= $time;
   }
 

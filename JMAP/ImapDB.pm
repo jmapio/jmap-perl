@@ -1957,6 +1957,89 @@ sub destroy_contacts {
   return (\@destroyed, \%notdestroyed);
 }
 
+sub create_submissions {
+  my $Self = shift;
+  my $new = shift;
+
+  return ({}, {}) unless keys %$new;
+
+  $Self->begin();
+
+  my %todo;
+  my %createmap;
+  my %notcreated;
+  foreach my $cid (sort keys %$new) {
+    my $sub = $new->{$cid};
+
+    unless ($sub->{msgid}) {
+      $notcreated{$cid} = { error => "no msgid provided" };
+      next;
+    }
+
+    my ($thrid) = $Self->dbh->selectrow_array("SELECT thrid from jmessages WHERE active = 1 and msgid = ?", {}, $sub->{msgid});
+    unless ($thrid) {
+      $notcreated{$cid} = { error => "message does not exist" };
+      next;
+    }
+
+    my $id = $Self->dmake('jsubmission', {
+      sendat => $sub->{sendAt} ? str2time($sub->{sendAt}) : time(),
+      msgid => $sub->{msgid},
+      thrid => $thrid,
+      envelope => $sub->{envelope} ? $json->encode($sub->{envelope}) : undef,
+    });
+
+    $createmap{$cid} = { id => $id };
+    $todo{$cid} = 1;
+  }
+
+  $Self->commit();
+
+  foreach my $cid (sort keys %todo) {
+    my $sub = $new->{$cid};
+    # XXX - on error?  Should remove $createmap{$cid} and set $notcreated{$cid}
+    my ($type, $rfc822) = $Self->get_raw_message($sub->{msgid});
+    # XXX - does this die on error?
+    $Self->backend_cmd('send_email', $rfc822, $sub->{envelope});
+  }
+
+  return (\%createmap, \%notcreated);
+}
+
+sub change_submissions {
+  my $Self = shift;
+  my $changed = shift;
+
+  return ({}, { map { $_ => "change not supported" } keys %$changed });
+}
+
+sub destroy_submissions {
+  my $Self = shift;
+  my $destroy = shift;
+
+  return ([], {}) unless @$destroy;
+
+  $Self->begin();
+
+  my @destroyed;
+  my %notdestroyed;
+  my %namemap;
+  foreach my $subid (@$destroy) {
+    my ($active) = $Self->dbh->selectrow_array("SELECT active FROM jsubmission WHERE subid = ?", {}, $subid);
+    if ($active) {
+      push @destroyed, $subid;
+      $Self->ddelete('jsubmission', {subid => $subid});
+    }
+    else {
+      $notdestroyed{$subid} = {type => 'notFound', description => "submission not found"};
+    }
+  }
+
+  $Self->commit();
+
+  return (\@destroyed, \%notdestroyed);
+}
+
 sub _initdb {
   my $Self = shift;
   my $dbh = shift;
