@@ -2823,7 +2823,7 @@ sub setMessageSubmissions {
     # we need to convert all the IDs that were successfully created and updated plus any POSSIBLE
     # one that might be deleted into a map from id to messageid - after create and update, but
     # before delete.
-    my $result = $self->getMessageSubmissions({ids => \@possible, properties => ['messageId']});
+    my $result = $Self->getMessageSubmissions({ids => \@possible, properties => ['messageId']});
     my %messageIds;
     if ($result->[0] eq 'messageSubmissions') {
       %messageIds = map { $_->{id} => $_->{messageId} } @{$result->[1]{list}};
@@ -2839,7 +2839,7 @@ sub setMessageSubmissions {
     foreach my $key (keys %$toUpdate) {
       my $id = $Self->idmap($key);
       next unless $allowed{$id};
-      $updateMessages{$messageIds{$id}} = $toUpdate{$key};
+      $updateMessages{$messageIds{$id}} = $toUpdate->{$key};
     }
     foreach my $key (@$toDestroy) {
       my $id = $Self->idmap($key);
@@ -2873,7 +2873,7 @@ sub setMessageSubmissions {
   }];
 
   if (%updateMessages or @destroyMessages) {
-    push @res, $self->setMessages({update => \%updateMessages, destory => @destroyMessages});
+    push @res, $Self->setMessages({update => \%updateMessages, destory => @destroyMessages});
   }
 
   return @res;
