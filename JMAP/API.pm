@@ -452,6 +452,31 @@ sub _load_hasatt {
   return { map { $_ => 1 } @$data };
 }
 
+sub _hasthreadkeyword {
+  my $data = shift;
+  my %res;
+  foreach my $item (@$data) {
+    next unless $item->{active};  # we get called by getMessageListUpdates, which includes inactive messages
+
+    # have already seen a message for this thread
+    if ($res{$item->{$thrid}}) {
+      foreach my $keyword (keys %{$item->{keywords}}) {
+        # if not already known about, it wasn't present on previous messages, so it's a "some"
+        $res{$item->{thrid}}{$keyword} ||= 1;
+      }
+      foreach my $keyword (keys %{$res{$item->{thrid}}}) {
+        # if it was known already, but isn't on this one, it's a some
+        $res{$item->{thrid}}{$keyword} = 1 unless $item->{keywords}{$keyword};
+      }
+    }
+
+    # first message, it's "all" for every keyword
+    else {
+      $res{$item->{thrid}} = { map { $_ => 2 } keys %{$item->{keywords}} };
+    }
+  }
+}
+
 sub _match {
   my $Self = shift;
   my ($item, $condition, $storage) = @_;
@@ -496,12 +521,34 @@ sub _match {
     return 0 unless $item->{msgsize} < $condition->{maxSize};
   }
 
-  # TODO:
-  # allInThreadHaveKeyword
-  # someInThreadHaveKeyword
-  # noneInThreadHaveKeyword
-  # hasKeyword
-  # notKeyword
+  # 2 == all
+  # 1 == some
+  # non-existent means none, of course
+  if ($condition->{allInThreadHaveKeyword}) {
+    # XXX case?
+    $storage->{hasthreadkeyword} ||= _hasthreadkeyword($storage->{data});
+    return 0 unless $storage->{hasthreadkeyword}{$item->{thrid}}{$condition->{allInThreadHaveKeyword}};
+    return 0 unless $storage->{hasthreadkeyword}{$item->{thrid}}{$condition->{allInThreadHaveKeyword}} == 2;
+  }
+
+  if ($condition->{someInThreadHaveKeyword}) {
+    # XXX case?
+    $storage->{hasthreadkeyword} ||= _hasthreadkeyword($storage->{data});
+    return 0 unless $storage->{hasthreadkeyword}{$item->{thrid}}{$condition->{allInThreadHaveKeyword}};
+  }
+
+  if ($condition->{noneInThreadHaveKeyword}) {
+    $storage->{hasthreadkeyword} ||= _hasthreadkeyword($storage->{data});
+    return 0 if $storage->{hasthreadkeyword}{$item->{thrid}}{$condition->{allInThreadHaveKeyword}};
+  }
+
+  if ($condition->{hasKeyword}) {
+    return 0 unless $item->{keywords}->{$condition->{hasKeyword}};
+  }
+
+  if ($condition->{notKeyword}) {
+    return 0 if $item->{keywords}->{$condition->{notKeyword}};
+  }
 
   if ($condition->{hasAttachment}) {
     $storage->{hasatt} ||= $Self->_load_hasatt();
@@ -575,15 +622,10 @@ sub _match_operator {
   die "Invalid operator $filter->{operator}";
 }
 
-sub _filter {
+sub _messages_filter {
   my $Self = shift;
   my ($data, $filter, $storage) = @_;
-  my @res;
-  foreach my $item (@$data) {
-    next unless $Self->_match($item, $filter, $storage);
-    push @res, $item;
-  }
-  return \@res;
+  return [ grep { $Self->_match($_, $filter, $storage) } @$data ];
 }
 
 sub _collapse {
@@ -629,8 +671,9 @@ sub getMessageList {
   # commit before applying the filter, because it might call out for searches
   $Self->commit();
 
-  $data = $Self->_filter($data, $args->{filter}, {}) if $args->{filter};
-  $data = $Self->_collapse($data) if $args->{collapseThreads};
+  map { $_->{keywords} = decode_json($_->{keywords} || {}) } @$data;
+  $data = $Self->_messages_filter($data, $args->{filter}, {data => $data}) if $args->{filter};
+  $data = $Self->_collapse_messages($data) if $args->{collapseThreads};
 
   if ($args->{anchor}) {
     # need to calculate the position
@@ -710,6 +753,8 @@ sub getMessageListUpdates {
 
   $Self->commit();
 
+  map { $_->{keywords} = decode_json($_->{keywords} || {}) } @$data;
+
   # now we have the same sorted data set.  What we DON'T have is knowing that a message used to be in the filter,
   # but no longer is (aka isUnread).  There's no good way to do this :(  So we have to assume that every message
   # which is changed and NOT in the dataset used to be...
@@ -721,7 +766,7 @@ sub getMessageListUpdates {
   my $changes = 0;
   my @added;
   my @removed;
-  my $storage = {};
+  my $storage = { data => $data };
   # just do two entire logic paths, it's different enough to make it easier to write twice
   if ($args->{collapseThreads}) {
     # exemplar - only these messages are in the result set we're building
