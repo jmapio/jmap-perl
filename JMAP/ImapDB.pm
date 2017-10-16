@@ -1057,7 +1057,7 @@ sub update_messages {
     }
     if (exists $action->{mailboxIds}) {
       # jmailboxid
-      my @mboxes = map { $idmap->($_) } @{$action->{mailboxIds}};
+      my @mboxes = map { $idmap->($_) } keys %{$action->{mailboxIds}};
 
       # existing ifolderids containing this message
       # identify a source message to work from

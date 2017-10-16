@@ -591,6 +591,7 @@ sub _makemsg {
 sub create_messages {
   my $Self = shift;
   my $args = shift;
+  my $idmap = shift;
   my %created;
   my %notCreated;
 
@@ -625,7 +626,9 @@ sub create_messages {
 
   foreach my $cid (keys %todo) {
     my $message = $todo{$cid};
-    my ($msgid, $thrid) = $Self->import_message($message, [$draftid], $args->{keywords});
+    my $hash = delete $message->{mailboxIds};
+    my @mailboxes = map { $idmap->($_) } keys %$hash;
+    my ($msgid, $thrid) = $Self->import_message($message, \@mailboxes, $args->{keywords});
     $created{$cid} = {
       id => $msgid,
       threadId => $thrid,

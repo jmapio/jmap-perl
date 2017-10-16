@@ -981,7 +981,7 @@ sub getMessages {
 
     if (_prop_wanted($args, 'mailboxIds')) {
       my $ids = $dbh->selectcol_arrayref("SELECT jmailboxid FROM jmessagemap WHERE msgid = ? AND active = 1", {}, $msgid);
-      $item->{mailboxIds} = [map { "$_" } @$ids];
+      $item->{mailboxIds} = {map { $_ => $JSON::true } @$ids};
     }
 
     if (_prop_wanted($args, 'inReplyToMessageId')) {
@@ -1212,7 +1212,7 @@ sub setMessages {
     $Self->{db}->sync_folders();
     $Self->{db}->sync_imap();
 
-    ($created, $notCreated) = $Self->{db}->create_messages($create);
+    ($created, $notCreated) = $Self->{db}->create_messages($create, sub { $Self->idmap(shift) });
     $Self->setid($_, $created->{$_}{id}) for keys %$created;
     ($updated, $notUpdated) = $Self->{db}->update_messages($update, sub { $Self->idmap(shift) });
     ($destroyed, $notDestroyed) = $Self->{db}->destroy_messages($destroy);
@@ -1278,7 +1278,7 @@ sub importMessages {
     my $message = $args->{messages}{$id};
     # sanity check
     return $Self->_transError(['error', {type => 'invalidArguments'}])
-      if (not $message->{mailboxIds} or ref($message->{mailboxIds}) ne 'ARRAY');
+      if (not $message->{mailboxIds} or ref($message->{mailboxIds}) ne 'HASH');
     return $Self->_transError(['error', {type => 'invalidArguments'}])
       if (not $message->{blobId});
   }
@@ -1288,7 +1288,7 @@ sub importMessages {
   my %todo;
   foreach my $id (keys %{$args->{messages}}) {
     my $message = $args->{messages}{$id};
-    my @ids = map { $Self->idmap($_) } @{$message->{mailboxIds}};
+    my @ids = map { $Self->idmap($_) } keys %{$message->{mailboxIds}};
     if (grep { not $validids{$_} } @ids) {
       $notcreated{$id} = { type => 'invalidMailboxes' };
       next;
