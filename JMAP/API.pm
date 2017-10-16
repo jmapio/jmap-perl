@@ -459,7 +459,7 @@ sub _hasthreadkeyword {
     next unless $item->{active};  # we get called by getMessageListUpdates, which includes inactive messages
 
     # have already seen a message for this thread
-    if ($res{$item->{$thrid}}) {
+    if ($res{$item->{thrid}}) {
       foreach my $keyword (keys %{$item->{keywords}}) {
         # if not already known about, it wasn't present on previous messages, so it's a "some"
         $res{$item->{thrid}}{$keyword} ||= 1;
@@ -628,7 +628,7 @@ sub _messages_filter {
   return [ grep { $Self->_match($_, $filter, $storage) } @$data ];
 }
 
-sub _collapse {
+sub _collapse_messages {
   my $Self = shift;
   my ($data) = @_;
   my @res;
