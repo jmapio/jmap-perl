@@ -449,12 +449,14 @@ sub change_message {
   my $Self = shift;
   my ($msgid, $data, $newids) = @_;
 
+  my %todo = %$data;
+  if (my $keywords = delete $todo{keywords}) {
+    $todo{keywords} = $json->encode($keywords);
+    $todo{isDraft} = $keywords->{'$Draft'} ? 1 : 0;
+    $todo{isUnread} = $keywords->{'$Seen'} ? 0 : 1;
+  }
   my $keywords = $data->{keywords};
-  my $bump = $Self->dmaybedirty('jmessages', {
-    keywords => $json->encode($keywords),
-    isDraft => $keywords->{'$Draft'} ? 1 : 0,
-    isUnread => $keywords->{'$Seen'} ? 0 : 1,
-  }, {msgid => $msgid});
+  my $bump = $Self->dmaybedirty('jmessages', \%todo, {msgid => $msgid});
 
   my $oldids = $Self->dbh->selectcol_arrayref("SELECT jmailboxid FROM jmessagemap WHERE msgid = ? AND active = 1", {}, $msgid);
   my %old = map { $_ => 1 } @$oldids;
