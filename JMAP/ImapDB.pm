@@ -1451,45 +1451,41 @@ sub create_mailboxes {
         $notcreated{$cid} = {type => 'notFound', description => "parent folder not found"};
         next;
       }
-      $todo{$cid} = $parentName . $sep . $encname;
+      $todo{$cid} = [$parentName . $sep . $encname, $sep];
     }
     else {
+      # will probably get INBOX - but meh, close enough.  Sync will fix it if needed.  Better
+      # would be to use namespace to lift it when we lift the prefix
+      my ($sep) = $Self->dbh->selectrow_array("SELECT sep FROM ifolders ORDER BY ifolderid");
       my ($prefix) = $Self->dbh->selectrow_array("SELECT imapPrefix FROM iserver");
       $prefix = '' unless defined $prefix;
-      $todo{$cid} = $prefix . $encname;
+      $todo{$cid} = [$prefix . $encname, $sep];
     }
   }
 
   $Self->commit();
 
+  my %createmap;
   foreach my $cid (sort { $todo{$a} cmp $todo{$b} } keys %todo) {
-    my $imapname = $todo{$cid};
+    my ($imapname, $sep) = @{$todo{$cid}};
     # XXX - check if already exists?
     my $res = $Self->backend_cmd('create_mailbox', $imapname);
-    if ($res->[1] ne 'ok') {
-      delete $todo{$cid};
+    if ($res->[1] eq 'ok') {
+      my $mailbox = $new->{$cid};
+      # yeah, I don't care so much here about the cost of lots of transactions, creating a mailbox is expensive
+      $Self->begin();
+      my $jmailboxid = new_uuid_string();
+      my $ifolderid = $Self->dinsert('ifolders', {sep => $sep, imapname => $imapname, label => $mailbox->{name}, jmailboxid => $jmailboxid});
+      $Self->dmake('jmailboxes', {name => $mailbox->{name}, jmailboxid => $jmailboxid, sortOrder => $mailbox->{sortOrder} || 4, parentId => $mailbox->{parentId}});
+
+      $Self->commit();
+
+      $createmap{$cid} = { id => $jmailboxid };
+    }
+    else {
       $notcreated{$cid} = {type => 'internalError', description => $res->[2]};
     }
-  }
-
-  my %createmap;
-  # (in theory we could save this until the end and resolve the names in after the renames and deletes... but it does mean
-  # we can't use ids as references...)
-  if (keys %todo) {
-    $Self->sync_folders();
-
-    $Self->begin();
-    foreach my $cid (keys %todo) {
-      my $imapname = $todo{$cid};
-      my ($jid) = $Self->dbh->selectrow_array("SELECT jmailboxid FROM ifolders WHERE imapname = ?", {}, $imapname);
-      if ($jid) {
-        $createmap{$cid} = { id => $jid };
-      } else {
-        $notcreated{$cid} = {type => 'internalError', description => "folder missing after sync"};
-      }
-    }
-    $Self->commit();
-  }
+  } 
 
   return (\%createmap, \%notcreated);
 }
@@ -1529,7 +1525,7 @@ sub update_mailboxes {
       next;
     }
 
-    my ($oldname) = $Self->dbh->selectrow_array("SELECT imapname FROM ifolders WHERE jmailboxid = ?", {}, $jid);
+    my ($oldname,$ifolderid) = $Self->dbh->selectrow_array("SELECT imapname,ifolderid FROM ifolders WHERE jmailboxid = ?", {}, $jid);
 
     if ($parentId) {
       my ($parentName, $sep) = $Self->dbh->selectrow_array("SELECT imapname, sep FROM ifolders WHERE jmailboxid = ?", {}, $parentId);
@@ -1537,19 +1533,20 @@ sub update_mailboxes {
         $notchanged{$jid} = {type => 'invalidProperties', description => "parent folder not found"};
         next;
       }
-      $namemap{$oldname} = [$parentName . $sep . $encname, $jid];
+      $namemap{$oldname} = [$parentName . $sep . $encname, $jid, $ifolderid];
     }
     else {
       my ($prefix) = $Self->dbh->selectrow_array("SELECT imapPrefix FROM iserver");
       $prefix = '' unless $prefix;
-      $namemap{$oldname} = [$prefix . $encname, $jid];
+      $namemap{$oldname} = [$prefix . $encname, $jid, $ifolderid];
     }
   }
 
   $Self->commit();
 
+  my %toupdate;
   foreach my $oldname (sort keys %namemap) {
-    my ($imapname, $jid) = @{$namemap{$oldname}};
+    my ($imapname, $jid, $ifolderid) = @{$namemap{$oldname}};
 
     if ($imapname eq $oldname) {
       # no change, yay
@@ -1560,13 +1557,27 @@ sub update_mailboxes {
     my $res = $Self->backend_cmd('rename_mailbox', $oldname, $imapname);
     if ($res->[1] eq 'ok') {
       $changed{$jid} = undef;
+      $toupdate{$jid} = [$imapname, $ifolderid];
     }
     else {
       $notchanged{$jid} = {type => 'serverError', description => $res->[2]};
     }
   }
 
-  $Self->sync_folders() if keys %changed;
+  if (keys %toupdate) {
+    $Self->begin();
+    foreach my $jid (keys %toupdate) {
+      my ($imapname, $ifolderid) = @{$toupdate{$jid}};
+      my $change = $update->{$jid};
+      $Self->dmaybeupdate('ifolders', {imapname => $imapname}, {ifolderid => $ifolderid});
+      my %changes;
+      $changes{name} = $change->{name} if exists $change->{name};
+      $changes{parentId} = $change->{parentId} if exists $change->{parentId};
+      $changes{sortOrder} = $change->{sortOrder} if exists $change->{sortOrder};
+      $Self->dmaybedirty('jmailboxes', \%changes, {jmailboxid => $jid});
+    }
+    $Self->commit();
+  }
 
   return (\%changed, \%notchanged);
 }
@@ -1583,9 +1594,9 @@ sub destroy_mailboxes {
   my %notdestroyed;
   my %namemap;
   foreach my $jid (@$destroy) {
-    my ($oldname) = $Self->dbh->selectrow_array("SELECT imapname FROM ifolders WHERE jmailboxid = ?", {}, $jid);
+    my ($oldname, $ifolderid) = $Self->dbh->selectrow_array("SELECT imapname,ifolderid FROM ifolders WHERE jmailboxid = ?", {}, $jid);
     if ($oldname) {
-      $namemap{$oldname} = $jid;
+      $namemap{$oldname} = [$jid, $ifolderid];
     }
     else {
       $notdestroyed{$jid} = {type => 'invalidProperties', description => "parent folder not found"};
@@ -1595,18 +1606,28 @@ sub destroy_mailboxes {
   $Self->commit();
 
   # we reverse so we delete children before parents
+  my %toremove;
   foreach my $oldname (reverse sort keys %namemap) {
-    my $jid = $namemap{$oldname};
+    my ($jid, $ifolderid) = @{$namemap{$oldname}};
     my $res = $Self->backend_cmd('delete_mailbox', $oldname);
     if ($res->[1] eq 'ok') {
       push @destroyed, $jid;
+      $toremove{$jid} = $ifolderid;
     }
     else {
       $notdestroyed{$jid} = {type => 'serverError', description => $res->[2]};
     }
   }
 
-  $Self->sync_folders() if @destroyed;
+  if (keys %toremove) {
+    $Self->begin();
+    foreach my $jid (sort keys %toremove) {
+      my $ifolderid = $toremove{$jid};
+      $Self->ddelete('ifolders', {ifolderid => $ifolderid});
+      $Self->dupdate('jmailboxes', {active => 0}, {jmailboxid => $jid});
+    }
+    $Self->commit();
+  }
 
   return (\@destroyed, \%notdestroyed);
 }

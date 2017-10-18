@@ -374,15 +374,14 @@ sub setMailboxes {
   $Self->{db}->begin_superlock();
 
   eval {
-    # make sure our DB is up to date
+    # make sure our DB is up to date - happy to enforce this because folder names
+    # are a unique namespace, so we should try to minimise the race time
     $Self->{db}->sync_folders();
 
     ($created, $notCreated) = $Self->{db}->create_mailboxes($create);
     $Self->setid($_, $created->{$_}{id}) for keys %$created;
     ($updated, $notUpdated) = $Self->{db}->update_mailboxes($update, sub { $Self->idmap(shift) });
     ($destroyed, $notDestroyed) = $Self->{db}->destroy_mailboxes($destroy);
-
-    $Self->{db}->sync_imap();
   };
 
   if ($@) {
@@ -1209,15 +1208,10 @@ sub setMessages {
   $Self->{db}->begin_superlock();
 
   eval {
-    $Self->{db}->sync_folders();
-    $Self->{db}->sync_imap();
-
     ($created, $notCreated) = $Self->{db}->create_messages($create, sub { $Self->idmap(shift) });
     $Self->setid($_, $created->{$_}{id}) for keys %$created;
     ($updated, $notUpdated) = $Self->{db}->update_messages($update, sub { $Self->idmap(shift) });
     ($destroyed, $notDestroyed) = $Self->{db}->destroy_messages($destroy);
-
-    $Self->{db}->sync_imap();
   };
 
   if ($@) {
@@ -1318,8 +1312,6 @@ sub importMessages {
       size => $size,
     };
   }
-
-  $Self->{db}->sync_imap();
 
   $Self->{db}->end_superlock();
 
@@ -2892,9 +2884,7 @@ sub setMessageSubmissions {
       push @destroyMessages, $messageIds{$id};
     }
 
-    # XXX - do the setMessages
-
-    $Self->{db}->sync_imap();
+    # TODO - do the setMessages
   };
 
   if ($@) {
