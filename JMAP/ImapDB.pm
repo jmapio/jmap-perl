@@ -1155,12 +1155,12 @@ sub destroy_messages {
 
 sub deleted_record {
   my $Self = shift;
-  my ($folder, $uid) = @_;
+  my ($ifolderid, $uid) = @_;
 
-  my ($msgid) = $Self->dbh->selectrow_array("SELECT msgid FROM imessages WHERE ifolderid = ? AND uid = ?", {}, $folder, $uid);
+  my ($msgid) = $Self->dbh->selectrow_array("SELECT msgid FROM imessages WHERE ifolderid = ? AND uid = ?", {}, $ifolderid, $uid);
   return unless $msgid;
 
-  $Self->ddelete('imessages', {ifolderid => $folder, uid => $uid});
+  $Self->ddelete('imessages', {ifolderid => $ifolderid, uid => $uid});
 
   $Self->mark_sync($msgid);
 }
