@@ -22,6 +22,7 @@ sub handle_request {
   my $Self = shift;
   my $request = shift;
 
+  my @res;
   foreach my $item (@$request) {
     my ($command, $args, $tag) = @$item;
     my @items;
