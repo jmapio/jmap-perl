@@ -589,27 +589,9 @@ sub handle_raw {
 sub handle_jmap {
   my ($db, $request) = @_;
 
-  my @res;
   # need to keep the API object around for the entire request for idmap purposes
   my $api = JMAP::API->new($db);
-  foreach my $item (@$request) {
-    my ($command, $args, $tag) = @$item;
-    my @items;
-    my $FuncRef = $api->can($command);
-    warn "JMAP CMD $command";
-    if ($FuncRef) {
-      @items = eval { $api->$command($args, $tag) };
-      if ($@) {
-        @items = ['error', { type => "serverError", message => "$@" }];
-        eval { $api->rollback() };
-      }
-    }
-    else {
-      @items = ['error', { type => 'unknownMethod' }];
-    }
-    $_->[2] = $tag for @items;
-    push @res, @items;
-  }
+  my @res = $api->handle_request($request);
 
   use Data::Dumper;
   warn Dumper($request, \@res) if $ENV{DEBUGJMAP};

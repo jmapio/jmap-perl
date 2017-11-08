@@ -18,6 +18,33 @@ sub new {
   return bless {db => $db}, ref($class) || $class;
 }
 
+sub handle_request {
+  my $Self = shift;
+  my $request = shift;
+
+  foreach my $item (@$request) {
+    my ($command, $args, $tag) = @$item;
+    my @items;
+    my $FuncRef = $Self->can($command);
+    warn "JMAP CMD $command";
+    if ($FuncRef) {
+      @items = eval { $FuncRef->($args, $tag) };
+      if ($@) {
+        @items = ['error', { type => "serverError", message => "$@" }];
+        eval { $Self->rollback() };
+      }
+    }
+    else {
+      @items = ['error', { type => 'unknownMethod' }];
+    }
+    $_->[2] = $tag for @items;
+    push @res, @items;
+  }
+
+  return @res;
+}
+
+
 sub setid {
   my $Self = shift;
   my $key = shift;
