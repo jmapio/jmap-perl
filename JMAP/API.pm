@@ -78,8 +78,7 @@ sub resolve_args {
   foreach my $key (keys %$args) {
     if ($key =~ m/^\#(.*)/) {
       my $outkey = $1;
-      #my @res = eval { $Self->resolve_backref($args->{$key}{resultOf}, $args->{$key}{path}) };
-      my @res = $Self->resolve_backref($args->{$key}{resultOf}, $args->{$key}{path});
+      my @res = eval { $Self->resolve_backref($args->{$key}{resultOf}, $args->{$key}{path}) };
       if ($@) {
         return (undef, { type => 'resultReference', message => $@ });
       }
@@ -511,7 +510,6 @@ sub _build_sort {
     id => 'msgid',
     date => 'msgdate',
     size => 'msgsize',
-    isflagged => 'isFlagged',
     isunread => 'isUnread',
     subject => 'sortsubject',
     from => 'msgfrom',
@@ -519,15 +517,19 @@ sub _build_sort {
   );
   my @items;
   $sortargs = [$sortargs] unless ref $sortargs;
+  my @extra;
   foreach my $arg (@$sortargs) {
     my ($field, $dir) = split / /, lc $arg;
     $dir ||= 'desc';
     die unless ($dir eq 'asc' or $dir eq 'desc');
+    if ($field =~ m/^(keyword|allThreadKeyword|someThreadKeyword):(.*)/) {
+      push @extra, [$1, $2, $dir];
+    }
     die unless $fieldmap{$field};
     push @items, "$fieldmap{$field} $dir";
   }
   push @items, "msgid desc"; # guarantee stable
-  return join(', ', @items);
+  return (join(', ', @items), \@extra);
 }
 
 sub _load_mailbox {
@@ -776,7 +778,7 @@ sub getMessageList {
   my $start = $args->{position} || 0;
   return $Self->_transError(['error', {type => 'invalidArguments'}]) if $start < 0;
 
-  my $sort = $Self->_build_sort($args->{sort});
+  my ($sort, $extra) = $Self->_build_sort($args->{sort});
   my $data = $dbh->selectall_arrayref("SELECT * FROM jmessages WHERE active = 1 ORDER BY $sort", {Slice => {}});
 
   # commit before applying the filter, because it might call out for searches
@@ -843,7 +845,7 @@ sub getMessageListUpdates {
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if $start < 0;
 
-  my $sort = $Self->_build_sort($args->{sort});
+  my ($sort, $extra) = $Self->_build_sort($args->{sort});
   my $data = $dbh->selectall_arrayref("SELECT * FROM jmessages ORDER BY $sort", {Slice => {}});
 
   $Self->commit();
