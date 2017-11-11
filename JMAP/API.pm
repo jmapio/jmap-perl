@@ -532,6 +532,40 @@ sub _build_sort {
   return (join(', ', @items), \@extra);
 }
 
+sub _post_sort {
+  my $Self = shift;
+  my $data = shift;
+  my $sort = shift; 
+  my $storage = shift;
+
+  if (grep { $_->[0] eq 'allThreadKeyword' or $_->[0] eq 'someThreadKeyword' } @$sort) {
+    $storage->{hasthreadkeyword} ||= _hasthreadkeyword($storage->{data});
+  }
+
+  my @res = sort {
+    foreach my $item (@$sort) {
+      my $av = 0;
+      my $bv = 0;
+      if ($item->[0] eq 'keyword') {
+	$av = 1 if $a->{keywords}{$item->[1]};
+	$bv = 1 if $b->{keywords}{$item->[1]};
+      }
+      if ($item->[0] eq 'allThreadKeyword') {
+        $av = 1 if ($storage->{hasthreadkeyword}{$a->{thrid}}{$item->[1]} || 0) == 2;
+        $bv = 1 if ($storage->{hasthreadkeyword}{$b->{thrid}}{$item->[1]} || 0) == 2;
+      }
+      if ($item->[0] eq 'allThreadKeyword') {
+        $av = 1 if ($storage->{hasthreadkeyword}{$a->{thrid}}{$item->[1]} || 0);
+        $bv = 1 if ($storage->{hasthreadkeyword}{$b->{thrid}}{$item->[1]} || 0);
+      }
+      return ($item->[2] eq 'asc' ? $av - $bv : $bv - $av) if $av != $bv;;
+    }
+    return 0;
+  } @$data;
+
+  return @res;
+}
+
 sub _load_mailbox {
   my $Self = shift;
   my $id = shift;
@@ -785,7 +819,9 @@ sub getMessageList {
   $Self->commit();
 
   map { $_->{keywords} = decode_json($_->{keywords} || {}) } @$data;
-  $data = $Self->_messages_filter($data, $args->{filter}, {data => $data}) if $args->{filter};
+  my $storage = {data => $data};
+  $data = $Self->_post_sort($data, $extra, $storage) if @$extra;
+  $data = $Self->_messages_filter($data, $args->{filter}, $storage) if $args->{filter};
   $data = $Self->_collapse_messages($data) if $args->{collapseThreads};
 
   if ($args->{anchor}) {
@@ -851,6 +887,8 @@ sub getMessageListUpdates {
   $Self->commit();
 
   map { $_->{keywords} = decode_json($_->{keywords} || {}) } @$data;
+  my $storage = {data => $data};
+  $data = $Self->_post_sort($data, $extra, $storage) if @$extra;
 
   # now we have the same sorted data set.  What we DON'T have is knowing that a message used to be in the filter,
   # but no longer is (aka isUnread).  There's no good way to do this :(  So we have to assume that every message
@@ -863,7 +901,6 @@ sub getMessageListUpdates {
   my $changes = 0;
   my @added;
   my @removed;
-  my $storage = { data => $data };
   # just do two entire logic paths, it's different enough to make it easier to write twice
   if ($args->{collapseThreads}) {
     # exemplar - only these messages are in the result set we're building
