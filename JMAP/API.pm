@@ -2946,7 +2946,7 @@ sub setMessageSubmissions {
     $Self->_resolve_patch($update, 'getMessageSubmissions');
     ($updated, $notUpdated) = $Self->{db}->update_submissions($update, sub { $Self->idmap(shift) });
 
-    my @possible = map { $Self->idmap($_) } ((keys %$created), (keys %$updated), @$destroy);
+    my @possible = ((map { $_->{id} } values %$created), (keys %$updated), @$destroy);
 
     # we need to convert all the IDs that were successfully created and updated plus any POSSIBLE
     # one that might be deleted into a map from id to messageid - after create and update, but
@@ -2962,7 +2962,7 @@ sub setMessageSubmissions {
 
     # OK, we have data on all possible messages that need to be actioned after the messageSubmission
     # changes
-    my %allowed = map { $Self->idmap($_) => 1 } ((keys %$created), (keys %$updated), @$destroyed);
+    my %allowed = map { $_ => 1 } ((map { $_->{id} } values %$created), (keys %$updated), @$destroyed);
 
     foreach my $key (keys %$toUpdate) {
       my $id = $Self->idmap($key);
@@ -2981,8 +2981,6 @@ sub setMessageSubmissions {
     die $@;
   }
 
-  $Self->{db}->sync_imap();
-
   $Self->{db}->end_superlock();
 
   my @res;
@@ -2999,8 +2997,10 @@ sub setMessageSubmissions {
   }];
 
   if (%updateMessages or @destroyMessages) {
-    push @res, $Self->setMessages({update => \%updateMessages, destroy => @destroyMessages});
+    push @res, $Self->setMessages({update => \%updateMessages, destroy => \@destroyMessages});
   }
+
+  $Self->{db}->sync_imap();
 
   return @res;
 }
