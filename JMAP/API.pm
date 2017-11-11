@@ -2,6 +2,7 @@
 
 package JMAP::API;
 
+use Carp;
 use JMAP::DB;
 use strict;
 use warnings;
@@ -453,11 +454,17 @@ sub _patchitem {
   my $key = shift;
   my $value = shift;
 
-  die "missing patch target" unless ref($target) eq 'HASH';
+  Carp::confess "missing patch target" unless ref($target) eq 'HASH';
 
-  if ($key =~ s{([^/]+)/}{}) {
-    _patchitem($target->{$1}, $key, $value);
+  if ($key =~ s{^([^/]+)/}{}) {
+    my $item = $1;
+    $item =~ s{~1}{/}g;
+    $item =~ s{~0}{~}g;
+    return _patchitem($target->{$item}, $key, $value);
   }
+
+  $key =~ s{~1}{/}g;
+  $key =~ s{~0}{~}g;
 
   if (defined $value) {
     $target->{$key} = $value;
@@ -484,7 +491,7 @@ sub _resolve_patch {
     next unless $list->[0];
     foreach my $key (keys %keys) {
       $update->{$id}{$key} = $list->[0]{$key};
-      _patchitem($update->{$id}{$key}, $_ => delete $update->{$id}{$_}) for @{$keys{$key}};
+      _patchitem($update->{$id}, $_ => delete $update->{$id}{$_}) for @{$keys{$key}};
     }
   }
 }
