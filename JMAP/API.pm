@@ -18,31 +18,106 @@ sub new {
   return bless {db => $db}, ref($class) || $class;
 }
 
+sub push_results {
+  my $Self = shift;
+  my $tag = shift;
+  foreach my $result (@_) {
+    $result->[2] = $tag;
+    push @{$Self->{results}}, $result;
+    push @{$Self->{resultsbytag}{$tag}}, $result->[1]
+      unless $result->[0] eq 'error';
+  }
+}
+
+sub _parsepath {
+  my $path = shift;
+  my @items = @_;
+
+  return @items unless $path =~ s{^/([^/]+)}{};
+  my $selector = $1;
+
+  my @res;
+
+  foreach my $item (@items) {
+    if ($selector eq '*') {
+      if (not ref $item) {
+        push @res, _parsepath($path, $item);
+      }
+      elsif (ref($item) eq 'ARRAY') {
+        push @res, _parsepath($path, @$item);
+      }
+    }
+    else {
+      if (ref $item eq 'HASH') {
+        push @res, _parsepath($path, $_->{$selector});
+      }
+    }
+  }
+
+  return @res;
+}
+
+sub resolve_backref {
+  my $Self = shift;
+  my $tag = shift;
+  my $path = shift;
+
+  my $result = $Self->{resultsbytag}{$tag};
+  die "No such result $tag" unless $results;
+
+  return _parsepath($path, @$results);
+}
+
+sub resolve_args {
+  my $Self = shift;
+  my $args = shift;
+  my %res;
+  foreach my $key (keys %$args) {
+    if ($key =~ m/^\#(.*)/) {
+      my $outkey = $1;
+      my @res = eval { $Self->resolve_backref($args{$key}{resultOf}, $args->{$key}{path}) };
+      if ($@) {
+        return (undef, { type => 'resultReference', message => $@ });
+      }
+      $res{$outkey} = \@res;
+    }
+    else {
+      $res{$key} = $args->{$key};
+    }
+  }
+  return \%res;
+}
+
 sub handle_request {
   my $Self = shift;
   my $request = shift;
 
-  my @res;
   foreach my $item (@$request) {
     my ($command, $args, $tag) = @$item;
     my @items;
     my $FuncRef = $Self->can($command);
     warn "JMAP CMD $command";
     if ($FuncRef) {
-      @items = eval { $FuncRef->($args, $tag) };
-      if ($@) {
-        @items = ['error', { type => "serverError", message => "$@" }];
-        eval { $Self->rollback() };
+      my ($myargs, $error) = $Self->resolve_args($args);
+      if ($myargs) {
+        @items = eval { $Self->$command($myargs, $tag) };
+        if ($@) {
+          @items = ['error', { type => "serverError", message => "$@" }];
+          eval { $Self->rollback() };
+        }
+      }
+      else {
+        push @items, ['error', $error];
+        next;
       }
     }
     else {
       @items = ['error', { type => 'unknownMethod' }];
     }
-    $_->[2] = $tag for @items;
-    push @res, @items;
+    $Self->push_results($tag, @items);
   }
 
-  return @res;
+  return @{$Self->{results}};
 }
 
 
