@@ -257,7 +257,7 @@ sub sync_jmailboxes {
         if (@bits) {
           # need to create intermediate folder ...
           # XXX  - label noselect?
-          my $id = new_uuid_string();
+          $id = new_uuid_string();
           $Self->dmake('jmailboxes', {name => $name, jmailboxid => $id, sortOrder => 4, parentId => $parentId});
           $byname{$parentId}{$name} = $id;
         }
