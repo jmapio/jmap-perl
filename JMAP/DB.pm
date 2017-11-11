@@ -644,7 +644,9 @@ sub delete_message {
   my $Self = shift;
   my ($msgid) = @_;
 
-  return $Self->change_message($msgid, {active => 0}, []);
+  $Self->dmaybedirty('jmessages', {active => 0}, {msgid => $msgid});
+  my $oldids = $Self->dbh->selectcol_arrayref("SELECT jmailboxid FROM jmessagemap WHERE msgid = ? AND active = 1", {}, $msgid);
+  $Self->delete_message_from_mailbox($msgid, $_) for @$oldids;
 }
 
 # returns reported and notFound as a tuple
