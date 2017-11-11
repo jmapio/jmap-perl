@@ -443,7 +443,7 @@ sub getMailboxUpdates {
     newState => $newState,
     changed => [map { "$_" } @changed],
     removed => [map { "$_" } @removed],
-    onlyCountsChanged => $onlyCounts ? JSON::true : JSON::false,
+    changedProperties => $onlyCounts ? ["totalMessages", "unreadMessages", "totalThreads", "unreadThreads"] : JSON::null,
   }]);
 
   return @res;
