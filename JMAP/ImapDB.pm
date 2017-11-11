@@ -1223,9 +1223,10 @@ sub sync_jmap_msgid {
     }
   }
 
-  my $labels = $Self->labels();
   my @list = keys %labels;
+
   # gmail empty list means archive at our end
+  my $labels = $Self->labels();
   my @jmailboxids = grep { $_ } map { $labels->{$_}[1] } @list;
 
   # check for archive folder for gmail
