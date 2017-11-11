@@ -8,6 +8,7 @@ use warnings;
 use Encode;
 use HTML::GenerateUtil qw(escape_html);
 use JSON::XS;
+use Data::Dumper;
 
 my $json = JSON::XS->new->utf8->canonical();
 
@@ -31,30 +32,32 @@ sub push_results {
 
 sub _parsepath {
   my $path = shift;
-  my @items = @_;
+  my $item = shift;
 
-  return @items unless $path =~ s{^/([^/]+)}{};
+  return $item unless $path =~ s{^/([^/]+)}{};
+  # rfc6501
   my $selector = $1;
+  $selector =~ s{~1}{/}g;
+  $selector =~ s{~0}{~}g;
 
-  my @res;
-
-  foreach my $item (@items) {
+  if (ref($item) eq 'ARRAY') {
     if ($selector eq '*') {
-      if (not ref $item) {
-        push @res, _parsepath($path, $item);
+      my @res;
+      foreach my $one (@$item) {
+	my $res =  _parsepath($path, $one);
+        push @res, ref($res) eq 'ARRAY' ? @$res : $res;
       }
-      elsif (ref($item) eq 'ARRAY') {
-        push @res, _parsepath($path, @$item);
-      }
+      return @res;
     }
-    else {
-      if (ref $item eq 'HASH') {
-        push @res, _parsepath($path, $_->{$selector});
-      }
+    if ($selector =~ m/^\d+$/) {
+      return _parsepath($path, $item->[$selector]);
     }
   }
+  if (ref($item) eq 'HASH') {
+    return _parsepath($path, $item->{$selector});
+  }
 
-  return @res;
+  return $item;
 }
 
 sub resolve_backref {
@@ -62,7 +65,7 @@ sub resolve_backref {
   my $tag = shift;
   my $path = shift;
 
-  my $result = $Self->{resultsbytag}{$tag};
+  my $results = $Self->{resultsbytag}{$tag};
   die "No such result $tag" unless $results;
 
   return _parsepath($path, @$results);
@@ -75,7 +78,8 @@ sub resolve_args {
   foreach my $key (keys %$args) {
     if ($key =~ m/^\#(.*)/) {
       my $outkey = $1;
-      my @res = eval { $Self->resolve_backref($args{$key}{resultOf}, $args->{$key}{path}) };
+      #my @res = eval { $Self->resolve_backref($args->{$key}{resultOf}, $args->{$key}{path}) };
+      my @res = $Self->resolve_backref($args->{$key}{resultOf}, $args->{$key}{path});
       if ($@) {
         return (undef, { type => 'resultReference', message => $@ });
       }
@@ -91,6 +95,10 @@ sub resolve_args {
 sub handle_request {
   my $Self = shift;
   my $request = shift;
+
+  delete $Self->{results};
+  delete $Self->{resultsbytag};
+
 
   foreach my $item (@$request) {
     my ($command, $args, $tag) = @$item;
@@ -438,20 +446,6 @@ sub getMailboxUpdates {
     onlyCountsChanged => $onlyCounts ? JSON::true : JSON::false,
   }]);
 
-  if (@changed and $args->{fetchRecords}) {
-    my %items = (
-      accountid => $accountid,
-      ids => \@changed,
-    );
-    if ($onlyCounts) {
-      $items{properties} = [qw(totalMessages unreadMessages totalThreads unreadThreads)];
-    }
-    elsif ($args->{fetchRecordProperties}) {
-      $items{properties} = $args->{fetchRecordProperties};
-    }
-    push @res, $Self->getMailboxes(\%items);
-  }
-
   return @res;
 }
 
@@ -546,6 +540,20 @@ sub _load_mailbox {
   return { map { $_->[0] => $_ } @$data };
 }
 
+sub _load_msgmap {
+  my $Self = shift;
+  my $id = shift;
+
+  $Self->begin();
+  my $data = $Self->{db}->dbh->selectall_arrayref("SELECT msgid,jmailboxid,jmodseq,active FROM jmessagemap");
+  $Self->commit();
+  my %map;
+  foreach my $row (@$data) {
+    $map{$row->[0]}{$row->[1]} = $row;
+  }
+  return \%map;
+}
+
 sub _load_hasatt {
   my $Self = shift;
   $Self->begin();
@@ -585,21 +593,22 @@ sub _match {
 
   return $Self->_match_operator($item, $condition, $storage) if $condition->{operator};
 
-  if ($condition->{inMailboxes}) {
-    my $inall = 1;
-    foreach my $id (map { $Self->idmap($_) } @{$condition->{inMailboxes}}) {
-      $storage->{mailbox}{$id} ||= $Self->_load_mailbox($id);
-      next if $storage->{mailbox}{$id}{$item->{msgid}}[2]; #active
-      $inall = 0;
-    }
-    return 0 unless $inall;
+  if ($condition->{inMailbox}) {
+    my $id = $Self->idmap($condition->{inMailbox});
+    $storage->{mailbox}{$id} ||= $Self->_load_mailbox($id);
+    return 0 unless $storage->{mailbox}{$id}{$item->{msgid}}[2]; #active
   }
 
-  if ($condition->{notInMailboxes}) {
+  if ($condition->{inMailboxOtherThan}) {
+    $storage->{msgmap} ||= $Self->_load_msgmap();
+    my $cond = $condition->{inMailboxOtherThan};
+    $cond = [$cond] unless ref($cond) eq 'ARRAY';  # spec and possible change
+    my %match = map { $Self->idmap($_) => 1 } @$cond;
+    my $data = $storage->{msgmap}{$item->{msgid}} || {};
     my $inany = 0;
-    foreach my $id (map { $Self->idmap($_) } @{$condition->{notInMailboxes}}) {
-      $storage->{mailbox}{$id} ||= $Self->_load_mailbox($id);
-      next unless $storage->{mailbox}{$id}{$item->{msgid}}[2]; #active
+    foreach my $id (keys %$data) {
+      next if $match{$id};
+      next unless $data->{$id}[3]; # isactive
       $inany = 1;
     }
     return 0 if $inany;
@@ -794,7 +803,6 @@ gotit:
   $end = $#$data if $end > $#$data;
 
   my @result = map { $data->[$_]{msgid} } $start..$end;
-  my @thrid = map { $data->[$_]{thrid} } $start..$end;
 
   my @res;
   push @res, ['messageList', {
@@ -806,23 +814,8 @@ gotit:
     canCalculateUpdates => $JSON::true,
     position => $start,
     total => scalar(@$data),
-    messageIds => [map { "$_" } @result],
-    threadIds => [map { "$_" } @thrid],
+    ids => [map { "$_" } @result],
   }];
-
-  if ($args->{fetchThreads}) {
-    push @res, $Self->getThreads({
-      ids => \@thrid,
-      fetchMessages => $args->{fetchMessages},
-      fetchMessageProperties => $args->{fetchMessageProperties},
-    }) if @thrid;
-  }
-  elsif ($args->{fetchMessages}) {
-    push @res, $Self->getMessages({
-      ids => \@result,
-      properties => $args->{fetchMessageProperties},
-    }) if @result;
-  }
 
   return @res;
 }
@@ -898,13 +891,13 @@ sub getMessageListUpdates {
       if ($changed) {
         # if it's in AND it's the exemplar, it's been added
         if ($isin and $exemplar{$item->{thrid}} eq $item->{msgid}) {
-          push @added, {messageId => "$item->{msgid}", threadId => "$item->{thrid}", index => $total-1};
-          push @removed, {messageId => "$item->{msgid}", threadId => "$item->{thrid}"};
+          push @added, {id => "$item->{msgid}", index => $total-1};
+          push @removed, "$item->{msgid}";
           $changes++;
         }
         # otherwise it's removed
         else {
-          push @removed, {messageId => "$item->{msgid}", threadId => "$item->{thrid}"};
+          push @removed, "$item->{msgid}";
           $changes++;
         }
       }
@@ -912,7 +905,7 @@ sub getMessageListUpdates {
       elsif ($isin) {
         # remove it unless it's also the current exemplar
         if ($exemplar{$item->{thrid}} ne $item->{msgid}) {
-          push @removed, {messageId => "$item->{msgid}", threadId => "$item->{thrid}"};
+          push @removed, "$item->{msgid}";
           $changes++;
         }
         # and we're done
@@ -946,12 +939,12 @@ sub getMessageListUpdates {
 
       if ($changed) {
         if ($isin) {
-          push @added, {messageId => "$item->{msgid}", threadId => "$item->{thrid}", index => $total-1};
-          push @removed, {messageId => "$item->{msgid}", threadId => "$item->{thrid}"};
+          push @added, {id => "$item->{msgid}", index => $total-1};
+          push @removed, "$item->{msgid}";
           $changes++;
         }
         else {
-          push @removed, {messageId => "$item->{msgid}", threadId => "$item->{thrid}"};
+          push @removed, "$item->{msgid}";
           $changes++;
         }
       }
@@ -1278,14 +1271,6 @@ sub getMessageUpdates {
     removed => [map { "$_" } @removed],
   }];
 
-  if ($args->{fetchRecords}) {
-    push @res, $Self->getMessages({
-      accountid => $accountid,
-      ids => \@changed,
-      properties => $args->{fetchRecordProperties},
-    }) if @changed;
-  }
-
   return @res;
 }
 
@@ -1606,13 +1591,6 @@ sub getThreadUpdates {
     removed => \@removed,
   }];
 
-  if ($args->{fetchRecords}) {
-    push @res, $Self->getThreads({
-      accountid => $accountid,
-      ids => \@changed,
-    }) if @changed;
-  }
-
   return @res;
 }
 
@@ -1764,14 +1742,6 @@ sub getCalendarUpdates {
     removed => [map { "$_" } @removed],
   }]);
 
-  if (@changed and $args->{fetchRecords}) {
-    my %items = (
-      accountid => $accountid,
-      ids => \@changed,
-    );
-    push @res, $Self->getCalendars(\%items);
-  }
-
   return @res;
 }
 
@@ -1839,15 +1809,8 @@ sub getCalendarEventList {
     state => $newState,
     position => $start,
     total => scalar(@$data),
-    calendarEventIds => [map { "$_" } @result],
+    ids => [map { "$_" } @result],
   }];
-
-  if ($args->{fetchCalendarEvents}) {
-    push @res, $Self->getCalendarEvents({
-      ids => \@result,
-      properties => $args->{fetchCalendarEventProperties},
-    }) if @result;
-  }
 
   return @res;
 }
@@ -2081,14 +2044,6 @@ sub getAddressbookUpdates {
     removed => [map { "$_" } @removed],
   }]);
 
-  if (@changed and $args->{fetchRecords}) {
-    my %items = (
-      accountid => $accountid,
-      ids => \@changed,
-    );
-    push @res, $Self->getAddressbooks(\%items);
-  }
-
   return @res;
 }
 
@@ -2156,15 +2111,8 @@ sub getContactList {
     state => $newState,
     position => $start,
     total => scalar(@$data),
-    contactIds => [map { "$_" } @result],
+    ids => [map { "$_" } @result],
   }];
-
-  if ($args->{fetchContacts}) {
-    push @res, $Self->getContacts({
-      ids => \@result,
-      properties => $args->{fetchContactProperties},
-    }) if @result;
-  }
 
   return @res;
 }
@@ -2268,14 +2216,6 @@ sub getContactUpdates {
     changed => [map { "$_" } @changed],
     removed => [map { "$_" } @removed],
   }];
-
-  if ($args->{fetchRecords}) {
-    push @res, $Self->getContacts({
-      accountid => $accountid,
-      ids => \@changed,
-      properties => $args->{fetchRecordProperties},
-    }) if @changed;
-  }
 
   return @res;
 }
@@ -2383,14 +2323,6 @@ sub getContactGroupUpdates {
     changed => [map { "$_" } @changed],
     removed => [map { "$_" } @removed],
   }];
-
-  if ($args->{fetchRecords}) {
-    push @res, $Self->getContactGroups({
-      accountid => $accountid,
-      ids => \@changed,
-      properties => $args->{fetchRecordProperties},
-    }) if @changed;
-  }
 
   return @res;
 }
@@ -2708,8 +2640,6 @@ sub getMessageSubmissionList {
   my @res;
 
   my $subids = [ map { "$_->[0]" } @list ];
-  my $thrids = [ map { "$_->[1]" } @list ];
-  my $msgids = [ map { "$_->[2]" } @list ];
   push @res, ['messageSubmissionList', {
     accountId => $accountid,
     filter => $args->{filter},
@@ -2718,22 +2648,8 @@ sub getMessageSubmissionList {
     canCalculateUpdates => $JSON::true,
     position => $start,
     total => $total,
-    messageSubmissionIds => $subids,
-    threadIds => $thrids,
-    messageIds => $msgids,
+    ids => $subids,
   }];
-
-  if ($args->{fetchMessageSubmissions}) {
-    push @res, $Self->getMessageSubmissions({properties => $args->{fetchMessageSubmissionProperties}, ids => $subids});
-  }
-
-  if ($args->{fetchThreads}) {
-    push @res, $Self->getThreads({ids => $thrids});
-  }
-
-  if ($args->{fetchMessages}) {
-    push @res, $Self->getMessages({properties => $args->{fetchMessageProperties}, ids => $msgids});
-  }
 
   return @res;
 }
@@ -2914,10 +2830,6 @@ sub getMessageSubmissionUpdates {
     changed => \@changed,
     removed => \@removed,
   }];
-
-  if ($args->{fetchRecords}) {
-    push @res, $Self->getMessageSubmissions({properties => $args->{fetchRecordProperties}, ids => \@changed});
-  }
 
   return @res;
 }
