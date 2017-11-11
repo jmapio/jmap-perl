@@ -79,11 +79,11 @@ sub resolve_args {
   foreach my $key (keys %$args) {
     if ($key =~ m/^\#(.*)/) {
       my $outkey = $1;
-      my @res = eval { $Self->resolve_backref($args->{$key}{resultOf}, $args->{$key}{path}) };
+      my $res = eval { $Self->resolve_backref($args->{$key}{resultOf}, $args->{$key}{path}) };
       if ($@) {
         return (undef, { type => 'resultReference', message => $@ });
       }
-      $res{$outkey} = \@res;
+      $res{$outkey} = $res;
     }
     else {
       $res{$key} = $args->{$key};
