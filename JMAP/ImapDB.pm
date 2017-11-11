@@ -149,6 +149,8 @@ sub sync_folders {
   my %ibylabel = map { $_->{label} => $_ } @$ifolders;
   my %seen;
 
+  warn Dumper($folders);
+
   my %getstatus;
   my %getuniqueid;
   foreach my $name (sort keys %$folders) {

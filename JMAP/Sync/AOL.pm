@@ -94,6 +94,7 @@ sub connect_imap {
       # not configurable right now...
       UseSSL   => $usessl,
       UseBlocking => $usessl,
+      PreserveINBOX => 1,
     );
     next unless $Self->{imap};
     $Self->{lastused} = time();
