@@ -503,67 +503,67 @@ sub setMailboxes {
   return @res;
 }
 
-sub _build_sort {
-  my $Self = shift;
-  my $sortargs = shift || [];
-  my %fieldmap = (
-    id => 'msgid',
-    date => 'msgdate',
-    size => 'msgsize',
-    isunread => 'isUnread',
-    subject => 'sortsubject',
-    from => 'msgfrom',
-    to => 'msgto',
-  );
-  my @items;
-  $sortargs = [$sortargs] unless ref $sortargs;
-  my @extra;
-  foreach my $arg (@$sortargs) {
-    my ($field, $dir) = split / /, lc $arg;
-    $dir ||= 'desc';
-    die unless ($dir eq 'asc' or $dir eq 'desc');
-    if ($field =~ m/^(keyword|allThreadKeyword|someThreadKeyword):(.*)/) {
-      push @extra, [$1, $2, $dir];
-    }
-    die unless $fieldmap{$field};
-    push @items, "$fieldmap{$field} $dir";
-  }
-  push @items, "msgid desc"; # guarantee stable
-  return (join(', ', @items), \@extra);
-}
-
 sub _post_sort {
   my $Self = shift;
   my $data = shift;
-  my $sort = shift; 
+  my $sortargs = shift; 
   my $storage = shift;
 
-  if (grep { $_->[0] eq 'allThreadKeyword' or $_->[0] eq 'someThreadKeyword' } @$sort) {
-    $storage->{hasthreadkeyword} ||= _hasthreadkeyword($storage->{data});
-  }
+  my %fieldmap = (
+    id => ['msgid', 0],
+    date => ['msgdate', 1],
+    size => ['msgsize', 1],
+    isunread => ['isUnread', 1],
+    subject => ['sortsubject', 0],
+    from => ['msgfrom', 0],
+    to => ['msgto', 0],
+  );
 
   my @res = sort {
-    foreach my $item (@$sort) {
-      my $av = 0;
-      my $bv = 0;
-      if ($item->[0] eq 'keyword') {
-	$av = 1 if $a->{keywords}{$item->[1]};
-	$bv = 1 if $b->{keywords}{$item->[1]};
+    foreach my $arg (@$sortargs) {
+      my ($field, $dir) = split / /, $arg;
+      $dir ||= 'desc';
+      die unless ($dir eq 'asc' or $dir eq 'desc');
+      my $map = $fieldmap{$field};
+      my $res = 0;
+      if ($map) {
+        if ($map->[1]) {
+	  $res = $a->{$map->[0]} cmp $b->{$map->[0]};
+        }
+        else {
+          $res = $a->{$map->[0]} <=> $b->{$map->[0]};
+        }
       }
-      if ($item->[0] eq 'allThreadKeyword') {
-        $av = 1 if ($storage->{hasthreadkeyword}{$a->{thrid}}{$item->[1]} || 0) == 2;
-        $bv = 1 if ($storage->{hasthreadkeyword}{$b->{thrid}}{$item->[1]} || 0) == 2;
+      elsif ($field =~ m/^keyword:(.*)/) {
+        my $keyword = $1;
+	my $av = $a->{keywords}{$keyword} ? 1 : 0;
+	my $bv = $b->{keywords}{$keyword} ? 1 : 0;
+        $res = $av <=> $bv;
       }
-      if ($item->[0] eq 'allThreadKeyword') {
-        $av = 1 if ($storage->{hasthreadkeyword}{$a->{thrid}}{$item->[1]} || 0);
-        $bv = 1 if ($storage->{hasthreadkeyword}{$b->{thrid}}{$item->[1]} || 0);
+      elsif ($field =~ m/^allThreadKeyword:(.*)/) {
+        my $keyword = $1;
+        $storage->{hasthreadkeyword} ||= _hasthreadkeyword($storage->{data});
+        my $av = ($storage->{hasthreadkeyword}{$a->{thrid}}{$keyword} || 0) == 2 ? 1 : 0;
+        my $bv = ($storage->{hasthreadkeyword}{$b->{thrid}}{$keyword} || 0) == 2 ? 1 : 0;
+        $res = $av <=> $bv;
       }
-      return ($item->[2] eq 'asc' ? $av - $bv : $bv - $av) if $av != $bv;;
+      elsif ($field =~ m/^someThreadKeyword:(.*)/) {
+        my $keyword = $1;
+        $storage->{hasthreadkeyword} ||= _hasthreadkeyword($storage->{data});
+        my $av = ($storage->{hasthreadkeyword}{$a->{thrid}}{$keyword} || 0) ? 1 : 0;
+        my $bv = ($storage->{hasthreadkeyword}{$b->{thrid}}{$keyword} || 0) ? 1 : 0;
+        $res = $av <=> $bv;
+      }
+      else {
+        die "unknown field $field";
+      }
+
+      return ($dir eq 'asc' ? $res : -$res) if $res;
     }
-    return 0;
+    return $a->{msgid} cmp $b->{msgid}; # stable sort
   } @$data;
 
-  return @res;
+  return \@res;
 }
 
 sub _load_mailbox {
@@ -621,6 +621,7 @@ sub _hasthreadkeyword {
       $res{$item->{thrid}} = { map { $_ => 2 } keys %{$item->{keywords}} };
     }
   }
+  return \%res;
 }
 
 sub _match {
@@ -812,15 +813,14 @@ sub getMessageList {
   my $start = $args->{position} || 0;
   return $Self->_transError(['error', {type => 'invalidArguments'}]) if $start < 0;
 
-  my ($sort, $extra) = $Self->_build_sort($args->{sort});
-  my $data = $dbh->selectall_arrayref("SELECT * FROM jmessages WHERE active = 1 ORDER BY $sort", {Slice => {}});
+  my $data = $dbh->selectall_arrayref("SELECT * FROM jmessages WHERE active = 1", {Slice => {}});
 
   # commit before applying the filter, because it might call out for searches
   $Self->commit();
 
   map { $_->{keywords} = decode_json($_->{keywords} || {}) } @$data;
   my $storage = {data => $data};
-  $data = $Self->_post_sort($data, $extra, $storage) if @$extra;
+  $data = $Self->_post_sort($data, $args->{sort}, $storage);
   $data = $Self->_messages_filter($data, $args->{filter}, $storage) if $args->{filter};
   $data = $Self->_collapse_messages($data) if $args->{collapseThreads};
 
@@ -881,14 +881,13 @@ sub getMessageListUpdates {
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if $start < 0;
 
-  my ($sort, $extra) = $Self->_build_sort($args->{sort});
-  my $data = $dbh->selectall_arrayref("SELECT * FROM jmessages ORDER BY $sort", {Slice => {}});
+  my $data = $dbh->selectall_arrayref("SELECT * FROM jmessages", {Slice => {}});
 
   $Self->commit();
 
   map { $_->{keywords} = decode_json($_->{keywords} || {}) } @$data;
   my $storage = {data => $data};
-  $data = $Self->_post_sort($data, $extra, $storage) if @$extra;
+  $data = $Self->_post_sort($data, $args->{sort}, $storage);
 
   # now we have the same sorted data set.  What we DON'T have is knowing that a message used to be in the filter,
   # but no longer is (aka isUnread).  There's no good way to do this :(  So we have to assume that every message
