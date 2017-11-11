@@ -240,7 +240,7 @@ sub imap_getuniqueid {
 
   return {} unless $imap->capability->{xconversations};  # don't bother unless it's FastMail
 
-  my $metadata = $imap->multigetmetadata($folders, '/vendor/cmu/cyrus-imapd/uniqueid');
+  my $metadata = $imap->multigetmetadata('/shared/vendor/cmu/cyrus-imapd/uniqueid', $folders);
 
   return $metadata;
 }
