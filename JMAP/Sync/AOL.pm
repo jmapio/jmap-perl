@@ -14,14 +14,15 @@ use Email::Sender::Transport::GmailSMTP;
 use Net::CalDAVTalk;
 use Net::CardDAVTalk;
 use OAuth2::Tiny;
+use IO::File;
 
 my $O;
 sub O {
   unless ($O) {
     local $/;
-    open(FH, '<', "/home/jmap/jmap-perl/config.json");
-    my $config = decode_json(<FH>);
-    close(FH);
+    my $fh = IO::File->new("/home/jmap/jmap-perl/config.json", 'r');
+    my $config = decode_json(<$fh>);
+    close($fh);
     $O = OAuth2::Tiny->new(%{$config->{aol}});
   }
   return $O;
