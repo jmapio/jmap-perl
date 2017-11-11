@@ -831,7 +831,7 @@ sub getMessageList {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  my $newState = "$user->{jstateMailbox}";
+  my $newState = "$user->{jstateMessage}";
 
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if (exists $args->{position} and exists $args->{anchor});
@@ -900,7 +900,7 @@ sub getMessageListUpdates {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  my $newState = "$user->{jstateMailbox}";
+  my $newState = "$user->{jstateMessage}";
 
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if not $args->{sinceState};
