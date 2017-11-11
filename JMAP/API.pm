@@ -48,7 +48,7 @@ sub _parsepath {
 	my $res =  _parsepath($path, $one);
         push @res, ref($res) eq 'ARRAY' ? @$res : $res;
       }
-      return @res;
+      return \@res;
     }
     if ($selector =~ m/^\d+$/) {
       return _parsepath($path, $item->[$selector]);
@@ -69,7 +69,10 @@ sub resolve_backref {
   my $results = $Self->{resultsbytag}{$tag};
   die "No such result $tag" unless $results;
 
-  return _parsepath($path, @$results);
+  my $res = _parsepath($path, @$results);
+
+  $res = [$res] if (defined($res) and ref($res) ne 'ARRAY');
+  return $res;
 }
 
 sub resolve_args {
@@ -210,7 +213,7 @@ sub getPreferences {
   my @list;
 
   return ['preferences', {
-    defaultPersonalityId => "P1",
+    defaultIdentityId => "P1",
     enableConversations => $JSON::true,
   }];
 }
@@ -231,7 +234,7 @@ sub getSavedSearches {
   }];
 }
 
-sub getPersonalities {
+sub getIdentities {
   my $Self = shift;
   my $args = shift;
 
@@ -243,7 +246,7 @@ sub getPersonalities {
   push @list, {
     id => "P1",
     displayName => $user->{displayname} || $user->{email},
-    isDeletable => $JSON::false,
+    mayDelete => $JSON::false,
     email => $user->{email},
     name => $user->{displayname} || $user->{email},
     textSignature => "-- \ntext sig",
@@ -266,7 +269,7 @@ sub getPersonalities {
     popLinkId => undef,
   };
 
-  return ['personalities', {
+  return ['identities', {
     state => 'dummy',
     list => \@list,
   }];
@@ -376,28 +379,6 @@ sub getMailboxes {
     accountId => $accountid,
     state => $newState,
     notFound => (%missingids ? [map { "$_" } keys %missingids] : undef),
-  }];
-}
-
-sub getIdentities {
-  my $Self = shift;
-  my $args = shift;
-
-  $Self->begin();
-  my $user = $Self->{db}->get_user();
-  my $accountid = $Self->{db}->accountid();
-  $Self->commit();
-
-  return ['identities', {
-    accountId => $accountid,
-    list => [
-      {
-        email => $user->{email},
-        name => $user->{displayname},
-        picture => $user->{picture},
-        isDefault => $JSON::true,
-      },
-    ],
   }];
 }
 
