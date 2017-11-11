@@ -2828,7 +2828,7 @@ sub getMessageSubmissions {
       messageId => $data->{msgid},
       threadId => $data->{thrid},
       envelope => $data->{envelope} ? decode_json($data->{envelope}) : undef,
-      sendAt => scalar($Self->isodate($data->{sendat})),
+      sendAt => scalar($Self->{db}->isodate($data->{sendat})),
       undoStatus => $data->{status},
       deliveryStatus => undef,
       dsnBlobIds => [],
