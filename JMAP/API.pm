@@ -1395,6 +1395,8 @@ sub setMessages {
     die $@;
   }
 
+  $Self->{db}->sync_imap();
+
   $Self->{db}->end_superlock();
 
   foreach my $cid (sort keys %$created) {
@@ -2999,6 +3001,8 @@ sub setMessageSubmissions {
     $Self->{db}->end_superlock();
     die $@;
   }
+
+  $Self->{db}->sync_imap();
 
   $Self->{db}->end_superlock();
 
