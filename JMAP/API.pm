@@ -678,7 +678,7 @@ sub _match {
       next unless $data->{$id}[3]; # isactive
       $inany = 1;
     }
-    return 0 if $inany;
+    return 0 unless $inany;
   }
 
   if ($condition->{before}) {
@@ -712,12 +712,12 @@ sub _match {
   if ($condition->{someInThreadHaveKeyword}) {
     # XXX case?
     $storage->{hasthreadkeyword} ||= _hasthreadkeyword($storage->{data});
-    return 0 unless $storage->{hasthreadkeyword}{$item->{thrid}}{$condition->{allInThreadHaveKeyword}};
+    return 0 unless $storage->{hasthreadkeyword}{$item->{thrid}}{$condition->{someInThreadHaveKeyword}};
   }
 
   if ($condition->{noneInThreadHaveKeyword}) {
     $storage->{hasthreadkeyword} ||= _hasthreadkeyword($storage->{data});
-    return 0 if $storage->{hasthreadkeyword}{$item->{thrid}}{$condition->{allInThreadHaveKeyword}};
+    return 0 if $storage->{hasthreadkeyword}{$item->{thrid}}{$condition->{noneInThreadHaveKeyword}};
   }
 
   if ($condition->{hasKeyword}) {
