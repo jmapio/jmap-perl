@@ -38,6 +38,11 @@ use Net::Server::Fork;
 
 use base qw(Net::Server::Fork);
 
+
+$Data::Dumper::Indent = 1;
+$Data::Dumper::Deepcopy = 1;
+$Data::Dumper::Sortkeys = 1;
+
 # we love globals
 my $hdl;
 my $db;
