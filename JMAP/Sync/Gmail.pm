@@ -106,10 +106,21 @@ sub connect_imap {
 sub send_email {
   my $Self = shift;
   my $rfc822 = shift;
+  my $envelope = shift;
+
+  # XXX - die if we don't understand envelope params
+  my %args;
+  if ($envelope) {
+    $args{from} = $envelope->{mailFrom}{email};
+    $args{to} = [ map { $_->{email} } @{$envelope->{rcptTo}} ];
+  }
+  else {
+    $args{from} = $Self->{auth}{username};
+  }
 
   my $email = Email::Simple->new($rfc822);
   sendmail($email, {
-    from => $Self->{auth}{username},
+    %args,
     transport => Email::Sender::Transport::GmailSMTP->new({
       helo => $ENV{jmaphost},
       host => $Self->{auth}{smtpHost},
