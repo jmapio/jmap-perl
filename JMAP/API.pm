@@ -448,6 +448,47 @@ sub getMailboxUpdates {
   return @res;
 }
 
+sub _patchitem {
+  my $target = shift;
+  my $key = shift;
+  my $value = shift;
+
+  die "missing patch target" unless ref($target) eq 'HASH';
+
+  if ($key =~ s{([^/]+)/}{}) {
+    _patchitem($target->{$1}, $key, $value);
+  }
+
+  if (defined $value) {
+    $target->{$key} = $value;
+  }
+  else {
+    delete $target->{$key};
+  }
+}
+
+sub _resolve_patch {
+  my $Self = shift;
+  my $update = shift;
+  my $method = shift;
+  foreach my $id (keys %$update) {
+    my %keys;
+    foreach my $key (sort keys %{$update->{$id}}) {
+      next unless $key =~ m{([^/]+)/};
+      push @{$keys{$1}}, $key;
+    }
+    next unless keys %keys; # nothing patched in this one
+    my $data = $Self->$method({ids => [$id], properties => [keys %keys]});
+    my $list = $data->[1]{list};
+    # XXX - if nothing in the list we SHOULD abort
+    next unless $list->[0];
+    foreach my $key (keys %keys) {
+      $update->{$id}{$key} = $list->[0]{$key};
+      _patchitem($update->{$id}{$key}, $_ => delete $update->{$id}{$_}) for @{$keys{$key}};
+    }
+  }
+}
+
 sub setMailboxes {
   my $Self = shift;
   my $args = shift;
@@ -476,6 +517,7 @@ sub setMailboxes {
 
     ($created, $notCreated) = $Self->{db}->create_mailboxes($create);
     $Self->setid($_, $created->{$_}{id}) for keys %$created;
+    $Self->_resolve_patch($update, 'getMailboxes');
     ($updated, $notUpdated) = $Self->{db}->update_mailboxes($update, sub { $Self->idmap(shift) });
     ($destroyed, $notDestroyed) = $Self->{db}->destroy_mailboxes($destroy);
   };
@@ -1336,6 +1378,7 @@ sub setMessages {
   eval {
     ($created, $notCreated) = $Self->{db}->create_messages($create, sub { $Self->idmap(shift) });
     $Self->setid($_, $created->{$_}{id}) for keys %$created;
+    $Self->_resolve_patch($update, 'getMessages');
     ($updated, $notUpdated) = $Self->{db}->update_messages($update, sub { $Self->idmap(shift) });
     ($destroyed, $notDestroyed) = $Self->{db}->destroy_messages($destroy);
   };
@@ -2391,6 +2434,7 @@ sub setContactGroups {
 
     ($created, $notCreated) = $Self->{db}->create_contact_groups($create);
     $Self->setid($_, $created->{$_}{id}) for keys %$created;
+    $Self->_resolve_patch($update, 'getContactGroups');
     ($updated, $notUpdated) = $Self->{db}->update_contact_groups($update, sub { $Self->idmap(shift) });
     ($destroyed, $notDestroyed) = $Self->{db}->destroy_contact_groups($destroy);
 
@@ -2446,6 +2490,7 @@ sub setContacts {
 
     ($created, $notCreated) = $Self->{db}->create_contacts($create);
     $Self->setid($_, $created->{$_}{id}) for keys %$created;
+    $Self->_resolve_patch($update, 'getContacts');
     ($updated, $notUpdated) = $Self->{db}->update_contacts($update, sub { $Self->idmap(shift) });
     ($destroyed, $notDestroyed) = $Self->{db}->destroy_contacts($destroy);
 
@@ -2501,6 +2546,7 @@ sub setCalendarEvents {
 
     ($created, $notCreated) = $Self->{db}->create_calendar_events($create);
     $Self->setid($_, $created->{$_}{id}) for keys %$created;
+    $Self->_resolve_patch($update, 'getCalendarEvents');
     ($updated, $notUpdated) = $Self->{db}->update_calendar_events($update, sub { $Self->idmap(shift) });
     ($destroyed, $notDestroyed) = $Self->{db}->destroy_calendar_events($destroy);
 
@@ -2556,6 +2602,7 @@ sub setCalendars {
 
     ($created, $notCreated) = $Self->{db}->create_calendars($create);
     $Self->setid($_, $created->{$_}{id}) for keys %$created;
+    $Self->_resolve_patch($update, 'getCalendars');
     ($updated, $notUpdated) = $Self->{db}->update_calendars($update, sub { $Self->idmap(shift) });
     ($destroyed, $notDestroyed) = $Self->{db}->destroy_calendars($destroy);
 
@@ -2906,6 +2953,7 @@ sub setMessageSubmissions {
 
     ($created, $notCreated) = $Self->{db}->create_submissions($create);
     $Self->setid($_, $created->{$_}{id}) for keys %$created;
+    $Self->_resolve_patch($update, 'getMessageSubmissions');
     ($updated, $notUpdated) = $Self->{db}->update_submissions($update, sub { $Self->idmap(shift) });
 
     my @possible = map { $Self->idmap($_) } ((keys %$created), (keys %$updated), @$destroy);
