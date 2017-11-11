@@ -2941,7 +2941,7 @@ sub setMessageSubmissions {
     # make sure our DB is up to date
     $Self->{db}->sync_folders();
 
-    ($created, $notCreated) = $Self->{db}->create_submissions($create);
+    ($created, $notCreated) = $Self->{db}->create_submissions($create, sub { $Self->idmap(shift) });
     $Self->setid($_, $created->{$_}{id}) for keys %$created;
     $Self->_resolve_patch($update, 'getMessageSubmissions');
     ($updated, $notUpdated) = $Self->{db}->update_submissions($update, sub { $Self->idmap(shift) });
@@ -2974,8 +2974,6 @@ sub setMessageSubmissions {
       next unless $allowed{$id};
       push @destroyMessages, $messageIds{$id};
     }
-
-    # TODO - do the setMessages
   };
 
   if ($@) {
@@ -3001,7 +2999,7 @@ sub setMessageSubmissions {
   }];
 
   if (%updateMessages or @destroyMessages) {
-    push @res, $Self->setMessages({update => \%updateMessages, destory => @destroyMessages});
+    push @res, $Self->setMessages({update => \%updateMessages, destroy => @destroyMessages});
   }
 
   return @res;

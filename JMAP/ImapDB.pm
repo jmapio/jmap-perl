@@ -149,8 +149,6 @@ sub sync_folders {
   my %ibylabel = map { $_->{label} => $_ } @$ifolders;
   my %seen;
 
-  warn Dumper($folders);
-
   my %getstatus;
   my %getuniqueid;
   foreach my $name (sort keys %$folders) {
@@ -1980,6 +1978,7 @@ sub destroy_contacts {
 sub create_submissions {
   my $Self = shift;
   my $new = shift;
+  my $idmap = shift;
 
   return ({}, {}) unless keys %$new;
 
@@ -1991,12 +1990,14 @@ sub create_submissions {
   foreach my $cid (sort keys %$new) {
     my $sub = $new->{$cid};
 
-    unless ($sub->{msgid}) {
+    my $msgid = $idmap->($sub->{messageId});
+
+    unless ($msgid) {
       $notcreated{$cid} = { error => "no msgid provided" };
       next;
     }
 
-    my ($thrid) = $Self->dbh->selectrow_array("SELECT thrid from jmessages WHERE active = 1 and msgid = ?", {}, $sub->{msgid});
+    my ($thrid) = $Self->dbh->selectrow_array("SELECT thrid from jmessages WHERE active = 1 and msgid = ?", {}, $msgid);
     unless ($thrid) {
       $notcreated{$cid} = { error => "message does not exist" };
       next;
@@ -2004,13 +2005,13 @@ sub create_submissions {
 
     my $id = $Self->dmake('jsubmission', {
       sendat => $sub->{sendAt} ? str2time($sub->{sendAt}) : time(),
-      msgid => $sub->{msgid},
+      msgid => $msgid,
       thrid => $thrid,
       envelope => $sub->{envelope} ? $json->encode($sub->{envelope}) : undef,
     });
 
     $createmap{$cid} = { id => $id };
-    $todo{$cid} = 1;
+    $todo{$cid} = $msgid;
   }
 
   $Self->commit();
@@ -2018,7 +2019,7 @@ sub create_submissions {
   foreach my $cid (sort keys %todo) {
     my $sub = $new->{$cid};
     # XXX - on error?  Should remove $createmap{$cid} and set $notcreated{$cid}
-    my ($type, $rfc822) = $Self->get_raw_message($sub->{msgid});
+    my ($type, $rfc822) = $Self->get_raw_message($todo{$cid});
     # XXX - does this die on error?
     $Self->backend_cmd('send_email', $rfc822, $sub->{envelope});
   }
@@ -2026,9 +2027,10 @@ sub create_submissions {
   return (\%createmap, \%notcreated);
 }
 
-sub change_submissions {
+sub update_submissions {
   my $Self = shift;
   my $changed = shift;
+  my $idmap = shift;
 
   return ({}, { map { $_ => "change not supported" } keys %$changed });
 }

@@ -605,30 +605,21 @@ sub create_messages {
   my %todo;
   foreach my $cid (keys %$args) {
     my $item = $args->{$cid};
-    if ($item->{inReplyToMessageId}) {
-      my ($replymessageid) = $Self->dbh->selectrow_array("SELECT msgmessageid FROM jmessages WHERE msgid = ?", {}, $item->{inReplyToMessageId});
-      unless ($replymessageid) {
-        $notCreated{$cid} = 'inReplyToNotFound';
-        next;
-      }
-      $item->{headers}{'In-Reply-To'} = $replymessageid;
-      $item->{headers}{'References'} = $replymessageid;
-      # XXX - references
-    }
+    my $mailboxIds = delete $item->{mailboxIds};
+    my $keywords = delete $item->{keywords};
     $item->{msgdate} = time();
     $item->{headers}{'Message-ID'} ||= "<" . new_uuid_string() . ".$item->{msgdate}\@$ENV{jmaphost}>";
     my $message = $Self->_makemsg($item);
     # XXX - let's just assume goodness for now - lots of error handling to add
-    $todo{$cid} = $message;
+    $todo{$cid} = [$message, $mailboxIds, $keywords];
   }
 
   $Self->commit();
 
   foreach my $cid (keys %todo) {
-    my $message = $todo{$cid};
-    my $hash = delete $message->{mailboxIds};
-    my @mailboxes = map { $idmap->($_) } keys %$hash;
-    my ($msgid, $thrid) = $Self->import_message($message, \@mailboxes, $args->{keywords});
+    my ($message, $mailboxIds, $keywords) = @{$todo{$cid}};
+    my @mailboxes = map { $idmap->($_) } keys %$mailboxIds;
+    my ($msgid, $thrid) = $Self->import_message($message, \@mailboxes, $keywords);
     $created{$cid} = {
       id => $msgid,
       threadId => $thrid,
@@ -1175,7 +1166,7 @@ CREATE TABLE IF NOT EXISTS jsubmission (
   msgid TEXT,
   thrid TEXT,
   envelope TEXT,
-  sendAt Integer
+  sendAt INTEGER,
   jcreated INTEGER,
   jmodseq INTEGER,
   mtime DATE,
