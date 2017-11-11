@@ -187,7 +187,10 @@ sub folders {
     my ($role) = grep { not $KNOWN_SPECIALS{lc $_} } @{$folder->[0]};
     my $name = $folder->[2];
     my $label;
-    if ($role) {
+    if (lc $name eq 'inbox') {
+      $label = 'inbox'; # inbox is special
+    }
+    elsif ($role) {
       $label = $role;
     }
     else {
