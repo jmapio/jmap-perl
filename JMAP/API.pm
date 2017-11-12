@@ -494,9 +494,7 @@ sub setMailboxes {
   my $destroy = $args->{destroy} || [];
 
   my ($created, $notCreated, $updated, $notUpdated, $destroyed, $notDestroyed);
-
-  my $oldState;
-  my $newState;
+  my ($oldState, $newState);
 
   $Self->{db}->begin_superlock();
 
@@ -1360,7 +1358,6 @@ sub setMessages {
 
   $Self->begin();
 
-  my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
@@ -1372,6 +1369,7 @@ sub setMessages {
   my $destroy = $args->{destroy} || [];
 
   my ($created, $notCreated, $updated, $notUpdated, $destroyed, $notDestroyed);
+  my ($oldState, $newState);
 
   $Self->{db}->begin_superlock();
 
@@ -1388,8 +1386,6 @@ sub setMessages {
     die $@;
   }
 
-  $Self->{db}->sync_imap();
-
   $Self->{db}->end_superlock();
 
   foreach my $cid (sort keys %$created) {
@@ -1400,8 +1396,8 @@ sub setMessages {
   my @res;
   push @res, ['messagesSet', {
     accountId => $accountid,
-    oldState => undef, # proxy can't guarantee the old state
-    newState => undef, # or give a new state
+    oldState => $oldState,
+    newState => $newState,
     created => $created,
     notCreated => $notCreated,
     updated => $updated,
@@ -2416,7 +2412,6 @@ sub setContactGroups {
 
   $Self->begin();
 
-  my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
@@ -2428,11 +2423,17 @@ sub setContactGroups {
   my $destroy = $args->{destroy} || [];
 
   my ($created, $notCreated, $updated, $notUpdated, $destroyed, $notDestroyed);
+  my ($oldState, $newState);
 
   $Self->{db}->begin_superlock();
 
   eval {
     $Self->{db}->sync_addressbooks();
+
+    $Self->begin();
+    my $user = $Self->{db}->get_user();
+    $oldState = "$user->{jstateContactGroup}";
+    $Self->commit();
 
     ($created, $notCreated) = $Self->{db}->create_contact_groups($create);
     $Self->setid($_, $created->{$_}{id}) for keys %$created;
@@ -2440,7 +2441,10 @@ sub setContactGroups {
     ($updated, $notUpdated) = $Self->{db}->update_contact_groups($update, sub { $Self->idmap(shift) });
     ($destroyed, $notDestroyed) = $Self->{db}->destroy_contact_groups($destroy);
 
-    $Self->{db}->sync_addressbooks();
+    $Self->begin();
+    $user = $Self->{db}->get_user();
+    $newState = "$user->{jstateContactGroup}";
+    $Self->commit();
   };
 
   if ($@) {
@@ -2453,8 +2457,8 @@ sub setContactGroups {
   my @res;
   push @res, ['contactGroupsSet', {
     accountId => $accountid,
-    oldState => undef, # proxy can't guarantee the old state
-    newState => undef, # or give a new state
+    oldState => $oldState,
+    newState => $newState,
     created => $created,
     notCreated => $notCreated,
     updated => $updated,
@@ -2472,7 +2476,6 @@ sub setContacts {
 
   $Self->begin();
 
-  my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
@@ -2484,11 +2487,17 @@ sub setContacts {
   my $destroy = $args->{destroy} || [];
 
   my ($created, $notCreated, $updated, $notUpdated, $destroyed, $notDestroyed);
+  my ($oldState, $newState);
 
   $Self->{db}->begin_superlock();
 
   eval {
     $Self->{db}->sync_addressbooks();
+
+    $Self->begin();
+    my $user = $Self->{db}->get_user();
+    $oldState = "$user->{jstateContacts}";
+    $Self->commit();
 
     ($created, $notCreated) = $Self->{db}->create_contacts($create);
     $Self->setid($_, $created->{$_}{id}) for keys %$created;
@@ -2496,7 +2505,10 @@ sub setContacts {
     ($updated, $notUpdated) = $Self->{db}->update_contacts($update, sub { $Self->idmap(shift) });
     ($destroyed, $notDestroyed) = $Self->{db}->destroy_contacts($destroy);
 
-    $Self->{db}->sync_addressbooks();
+    $Self->begin();
+    $user = $Self->{db}->get_user();
+    $newState = "$user->{jstateContacts}";
+    $Self->commit();
   };
 
   if ($@) {
@@ -2509,8 +2521,8 @@ sub setContacts {
   my @res;
   push @res, ['contactsSet', {
     accountId => $accountid,
-    oldState => undef, # proxy can't guarantee the old state
-    newState => undef, # or give a new state
+    oldState => $oldState,
+    newState => $newState,
     created => $created,
     notCreated => $notCreated,
     updated => $updated,
@@ -2540,11 +2552,17 @@ sub setCalendarEvents {
   my $destroy = $args->{destroy} || [];
 
   my ($created, $notCreated, $updated, $notUpdated, $destroyed, $notDestroyed);
+  my ($oldState, $newState);
 
   $Self->{db}->begin_superlock();
 
   eval {
     $Self->{db}->sync_calendars();
+
+    $Self->begin();
+    my $user = $Self->{db}->get_user();
+    $oldState = "$user->{jstateCalendarEvent}";
+    $Self->commit();
 
     ($created, $notCreated) = $Self->{db}->create_calendar_events($create);
     $Self->setid($_, $created->{$_}{id}) for keys %$created;
@@ -2552,7 +2570,10 @@ sub setCalendarEvents {
     ($updated, $notUpdated) = $Self->{db}->update_calendar_events($update, sub { $Self->idmap(shift) });
     ($destroyed, $notDestroyed) = $Self->{db}->destroy_calendar_events($destroy);
 
-    $Self->{db}->sync_calendars();
+    $Self->begin();
+    $user = $Self->{db}->get_user();
+    $newState = "$user->{jstateCalendarEvent}";
+    $Self->commit();
   };
 
   if ($@) {
@@ -2565,8 +2586,8 @@ sub setCalendarEvents {
   my @res;
   push @res, ['calendarEventsSet', {
     accountId => $accountid,
-    oldState => undef, # proxy can't guarantee the old state
-    newState => undef, # or give a new state
+    oldState => $oldState,
+    newState => $newState,
     created => $created,
     notCreated => $notCreated,
     updated => $updated,
@@ -2584,7 +2605,6 @@ sub setCalendars {
 
   $Self->begin();
 
-  my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
@@ -2602,13 +2622,21 @@ sub setCalendars {
   eval {
     $Self->{db}->sync_calendars();
 
+    $Self->begin();
+    my $user = $Self->{db}->get_user();
+    $oldState = "$user->{jstateCalendar}";
+    $Self->commit();
+
     ($created, $notCreated) = $Self->{db}->create_calendars($create);
     $Self->setid($_, $created->{$_}{id}) for keys %$created;
     $Self->_resolve_patch($update, 'getCalendars');
     ($updated, $notUpdated) = $Self->{db}->update_calendars($update, sub { $Self->idmap(shift) });
     ($destroyed, $notDestroyed) = $Self->{db}->destroy_calendars($destroy);
 
-    $Self->{db}->sync_calendars();
+    $Self->begin();
+    $user = $Self->{db}->get_user();
+    $newState = "$user->{jstateCalendar}";
+    $Self->commit();
   };
 
   if ($@) {
@@ -2621,8 +2649,8 @@ sub setCalendars {
   my @res;
   push @res, ['calendarsSet', {
     accountId => $accountid,
-    oldState => undef, # proxy can't guarantee the old state
-    newState => undef, # or give a new state
+    oldState => $oldState,
+    newState => $newState,
     created => $created,
     notCreated => $notCreated,
     updated => $updated,
@@ -2927,7 +2955,6 @@ sub setMessageSubmissions {
 
   $Self->begin();
 
-  my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
@@ -2941,6 +2968,7 @@ sub setMessageSubmissions {
   my $toDestroy = $args->{onSuccessDestroyMessage} || [];
 
   my ($created, $notCreated, $updated, $notUpdated, $destroyed, $notDestroyed);
+  my ($oldState, $newState);
 
   # TODO: need to support ifInState for this sucker
 
@@ -2952,6 +2980,11 @@ sub setMessageSubmissions {
   eval {
     # make sure our DB is up to date
     $Self->{db}->sync_folders();
+
+    $Self->{db}->begin();
+    my $user = $Self->{db}->get_user();
+    $oldState = "$user->{jstateMessageSubmission}";
+    $Self->{db}->commit();
 
     ($created, $notCreated) = $Self->{db}->create_submissions($create, sub { $Self->idmap(shift) });
     $Self->setid($_, $created->{$_}{id}) for keys %$created;
@@ -2986,6 +3019,11 @@ sub setMessageSubmissions {
       next unless $allowed{$id};
       push @destroyMessages, $messageIds{$id};
     }
+
+    $Self->{db}->begin();
+    $user = $Self->{db}->get_user();
+    $newState = "$user->{jstateMessageSubmission}";
+    $Self->{db}->commit();
   };
 
   if ($@) {
@@ -2998,8 +3036,8 @@ sub setMessageSubmissions {
   my @res;
   push @res, ['messageSubmissionsSet', {
     accountId => $accountid,
-    oldState => undef, # proxy can't guarantee the old state
-    newState => undef, # or give a new state
+    oldState => $oldState,
+    newState => $newState,
     created => $created,
     notCreated => $notCreated,
     updated => $updated,
@@ -3011,8 +3049,6 @@ sub setMessageSubmissions {
   if (%updateMessages or @destroyMessages) {
     push @res, $Self->setMessages({update => \%updateMessages, destroy => \@destroyMessages});
   }
-
-  $Self->{db}->sync_imap();
 
   return @res;
 }
