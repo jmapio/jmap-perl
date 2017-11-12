@@ -483,7 +483,6 @@ sub setMailboxes {
 
   $Self->begin();
 
-  my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
@@ -496,6 +495,9 @@ sub setMailboxes {
 
   my ($created, $notCreated, $updated, $notUpdated, $destroyed, $notDestroyed);
 
+  my $oldState;
+  my $newState;
+
   $Self->{db}->begin_superlock();
 
   eval {
@@ -503,11 +505,21 @@ sub setMailboxes {
     # are a unique namespace, so we should try to minimise the race time
     $Self->{db}->sync_folders();
 
+    $Self->begin();
+    my $user = $Self->{db}->get_user();
+    $Self->commit();
+    $oldState = "$user->{jstateMailbox}";
+
     ($created, $notCreated) = $Self->{db}->create_mailboxes($create);
     $Self->setid($_, $created->{$_}{id}) for keys %$created;
     $Self->_resolve_patch($update, 'getMailboxes');
     ($updated, $notUpdated) = $Self->{db}->update_mailboxes($update, sub { $Self->idmap(shift) });
     ($destroyed, $notDestroyed) = $Self->{db}->destroy_mailboxes($destroy);
+
+    $Self->begin();
+    $user = $Self->{db}->get_user();
+    $Self->commit();
+    $newState = "$user->{jstateMailbox}";
   };
 
   if ($@) {
@@ -520,8 +532,8 @@ sub setMailboxes {
   my @res;
   push @res, ['mailboxesSet', {
     accountId => $accountid,
-    oldState => undef, # proxy can't guarantee the old state
-    newState => undef, # or give a new state
+    oldState => $oldState,
+    newState => $newState,
     created => $created,
     notCreated => $notCreated,
     updated => $updated,
