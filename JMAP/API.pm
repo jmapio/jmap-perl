@@ -1236,7 +1236,7 @@ sub getMessages {
         }
         foreach my $key (keys %{$data->{headers}}) {
           next unless $wanted{lc $key};
-          $item->{header}{$key} = $data->{headers}{$key};
+          $item->{headers}{lc $key} = $data->{headers}{$key};
         }
       }
       if (_prop_wanted($args, 'attachments')) {
