@@ -1380,7 +1380,7 @@ sub setMessages {
     $Self->begin();
     my $user = $Self->{db}->get_user();
     $Self->commit();
-    $oldState = "$user->{jstateMailbox}";
+    $oldState = "$user->{jstateMessage}";
 
     ($created, $notCreated) = $Self->{db}->create_messages($create, sub { $Self->idmap(shift) });
     $Self->setid($_, $created->{$_}{id}) for keys %$created;
@@ -1394,7 +1394,7 @@ sub setMessages {
     $Self->begin();
     $user = $Self->{db}->get_user();
     $Self->commit();
-    $newState = "$user->{jstateMailbox}";
+    $newState = "$user->{jstateMessage}";
   };
 
   if ($@) {
