@@ -2641,6 +2641,7 @@ sub setCalendars {
   my $destroy = $args->{destroy} || [];
 
   my ($created, $notCreated, $updated, $notUpdated, $destroyed, $notDestroyed);
+  my ($oldState, $newState);
 
   $Self->{db}->begin_superlock();
 
