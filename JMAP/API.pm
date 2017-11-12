@@ -1374,11 +1374,27 @@ sub setMessages {
   $Self->{db}->begin_superlock();
 
   eval {
+    # get state up-to-date first
+    $Self->{db}->sync_imap();
+
+    $Self->begin();
+    my $user = $Self->{db}->get_user();
+    $Self->commit();
+    $oldState = "$user->{jstateMailbox}";
+
     ($created, $notCreated) = $Self->{db}->create_messages($create, sub { $Self->idmap(shift) });
     $Self->setid($_, $created->{$_}{id}) for keys %$created;
     $Self->_resolve_patch($update, 'getMessages');
     ($updated, $notUpdated) = $Self->{db}->update_messages($update, sub { $Self->idmap(shift) });
     ($destroyed, $notDestroyed) = $Self->{db}->destroy_messages($destroy);
+
+    # XXX - cheap dumb racy version
+    $Self->{db}->sync_imap();
+
+    $Self->begin();
+    $user = $Self->{db}->get_user();
+    $Self->commit();
+    $newState = "$user->{jstateMailbox}";
   };
 
   if ($@) {
@@ -2441,6 +2457,9 @@ sub setContactGroups {
     ($updated, $notUpdated) = $Self->{db}->update_contact_groups($update, sub { $Self->idmap(shift) });
     ($destroyed, $notDestroyed) = $Self->{db}->destroy_contact_groups($destroy);
 
+    # XXX - cheap dumb racy version
+    $Self->{db}->sync_addressbooks();
+
     $Self->begin();
     $user = $Self->{db}->get_user();
     $newState = "$user->{jstateContactGroup}";
@@ -2504,6 +2523,9 @@ sub setContacts {
     $Self->_resolve_patch($update, 'getContacts');
     ($updated, $notUpdated) = $Self->{db}->update_contacts($update, sub { $Self->idmap(shift) });
     ($destroyed, $notDestroyed) = $Self->{db}->destroy_contacts($destroy);
+
+    # XXX - cheap dumb racy version
+    $Self->{db}->sync_addressbooks();
 
     $Self->begin();
     $user = $Self->{db}->get_user();
@@ -2570,6 +2592,9 @@ sub setCalendarEvents {
     ($updated, $notUpdated) = $Self->{db}->update_calendar_events($update, sub { $Self->idmap(shift) });
     ($destroyed, $notDestroyed) = $Self->{db}->destroy_calendar_events($destroy);
 
+    # XXX - cheap dumb racy version
+    $Self->{db}->sync_calendars();
+
     $Self->begin();
     $user = $Self->{db}->get_user();
     $newState = "$user->{jstateCalendarEvent}";
@@ -2632,6 +2657,9 @@ sub setCalendars {
     $Self->_resolve_patch($update, 'getCalendars');
     ($updated, $notUpdated) = $Self->{db}->update_calendars($update, sub { $Self->idmap(shift) });
     ($destroyed, $notDestroyed) = $Self->{db}->destroy_calendars($destroy);
+
+    # XXX - cheap dumb racy version
+    $Self->{db}->sync_calendars();
 
     $Self->begin();
     $user = $Self->{db}->get_user();
