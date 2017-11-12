@@ -2160,6 +2160,7 @@ CREATE TABLE IF NOT EXISTS ievents (
   ieventid INTEGER PRIMARY KEY NOT NULL,
   icalendarid INTEGER,
   resource TEXT,
+  etag TEXT,
   uid TEXT,
   content TEXT,
   mtime DATE NOT NULL
@@ -2189,6 +2190,7 @@ CREATE TABLE IF NOT EXISTS icards (
   icardid INTEGER PRIMARY KEY NOT NULL,
   iaddressbookid INTEGER,
   resource TEXT,
+  etag TEXT,
   uid TEXT,
   kind TEXT,
   content TEXT,
