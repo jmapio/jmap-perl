@@ -419,7 +419,7 @@ sub do_calendars {
     my $cal = $Self->dgetone('icalendars', {icalendarid => $id});
     next unless $cal;
     my $exists = $Self->dget('ievents', {icalendarid => $id});
-    $exists{$id} = [ $cal, { map { $_->{href} => $_->{etag} } @$exists } ];
+    $exists{$id} = [ $cal, { map { $_->{href} => $_ } @$exists } ];
   }
   $Self->commit();
 
@@ -439,7 +439,7 @@ sub do_calendars {
 
     my @toget;
     foreach my $href (keys %$added) {
-      next if (exists $exists{$id}[1]{$href} and $exists{$id}[1]{$href} eq $added->{$href});
+      next if (exists $exists{$id}[1]{$href} and $exists{$id}[1]{$href}{etag} eq $added->{$href});
       push @toget, $href;
     }
     if (@toget) {
@@ -601,7 +601,7 @@ sub do_addressbooks {
     my $book = $Self->dgetone('iaddressbooks', {iaddressbookid => $id});
     next unless $book;
     my $exists = $Self->dget('icards', {iaddressbookid => $id});
-    $exists{$id} = [ $book, { map { $_->{href} => $_->{etag} } @$exists } ];
+    $exists{$id} = [ $book, { map { $_->{href} => $_ } @$exists } ];
   }
   $Self->commit();
 
@@ -621,7 +621,7 @@ sub do_addressbooks {
 
     my @toget;
     foreach my $href (keys %$added) {
-      next if (exists $exists{$id}[1]{$href} and $exists{$id}[1]{$href} eq $added->{$href});
+      next if (exists $exists{$id}[1]{$href} and $exists{$id}[1]{$href}{etag} eq $added->{$href});
       push @toget, $href;
     }
     if (@toget) {
@@ -648,6 +648,7 @@ sub do_addressbooks {
         my $item = {
           iaddressbookid => $id,
           uid => $change->[2]{uid},
+          kind => $change->[2]{kind},
           href => $href,
           etag => $change->[0],
           content => encode_utf8($change->[1]),
@@ -664,7 +665,7 @@ sub do_addressbooks {
       }
       elsif ($existing) {
         $Self->ddelete('icards', {icardid => $existing->{icardid}});
-        $Self->delete_card($jaddressbookid, $existing->{uid});
+        $Self->delete_card($jaddressbookid, $existing->{uid}, $existing->{kind});
       }
     }
 
@@ -1845,7 +1846,7 @@ sub update_contact_groups {
   my %notchanged;
   foreach my $carduid (keys %$changes) {
     my $contact = $changes->{$carduid};
-    my ($href, $content) = $Self->dbh->selectrow_array("SELECT href, content FROM icards WHERE uid = ?", {}, $carduid);
+    my ($href, $content) = $Self->dbh->selectrow_array("SELECT href, content FROM icards WHERE kind = 'group' AND uid = ?", {}, $carduid);
     unless ($href) {
       $notchanged{$carduid} = {type => 'notFound', description => "No such card on server"};
       next;
@@ -1883,7 +1884,7 @@ sub destroy_contact_groups {
   my @destroyed;
   my %notdestroyed;
   foreach my $carduid (@$destroy) {
-    my ($href, $content) = $Self->dbh->selectrow_array("SELECT href, content FROM icards WHERE uid = ?", {}, $carduid);
+    my ($href, $content) = $Self->dbh->selectrow_array("SELECT href, content FROM icards WHERE kind = 'group' AND uid = ?", {}, $carduid);
     unless ($href) {
       $notdestroyed{$carduid} = {type => 'notFound', description => "No such card on server"};
       next;
@@ -1967,7 +1968,7 @@ sub update_contacts {
   my %notchanged;
   foreach my $carduid (keys %$changes) {
     my $contact = $changes->{$carduid};
-    my ($href, $content) = $Self->dbh->selectrow_array("SELECT href, content FROM icards WHERE uid = ?", {}, $carduid);
+    my ($href, $content) = $Self->dbh->selectrow_array("SELECT href, content FROM icards WHERE kind = 'contact' AND uid = ?", {}, $carduid);
     unless ($href) {
       $notchanged{$carduid} = {type => 'notFound', description => "No such card on server"};
       next;
@@ -2014,7 +2015,7 @@ sub destroy_contacts {
   my @destroyed;
   my %notdestroyed;
   foreach my $carduid (@$destroy) {
-    my ($href, $content) = $Self->dbh->selectrow_array("SELECT href, content FROM icards WHERE uid = ?", {}, $carduid);
+    my ($href, $content) = $Self->dbh->selectrow_array("SELECT href, content FROM icards WHERE kind = 'contact' AND uid = ?", {}, $carduid);
     unless ($href) {
       $notdestroyed{$carduid} = {type => 'notFound', description => "No such card on server"};
       next;
