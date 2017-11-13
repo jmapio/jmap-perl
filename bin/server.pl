@@ -21,6 +21,7 @@ use AnyEvent::HTTP;
 use JMAP::Sync::AOL;
 use JMAP::Sync::Gmail;
 use JSON::XS qw(decode_json);
+use MIME::Base64::URLSafe;
 use Encode qw(encode_utf8);
 use Template;
 
@@ -163,6 +164,7 @@ $httpd->reg_cb (
   '/cb/google' => \&do_cb_google,
   '/signup' => \&do_signup,
   '/files' => \&do_files,
+  '/proxy' => \&do_proxy,
   '/home' => \&home_page,
 );
 
@@ -233,6 +235,29 @@ sub send_backend_request {
   warn "SENDING $accountid $request\n";
   $waiting{$accountid}{$cmd} = [$cb || sub {return 1}, $errcb || sub {return 1}];
   $backend->[0]->push_write(json => [$request, $args, $cmd]);
+}
+
+sub do_proxy {
+  my ($httpd, $req) = @_;
+
+  return invalid_request($req) unless lc $req->method eq 'get';
+
+  my $uri = $req->url();
+  my $path = $uri->path();
+
+  return not_found($req) unless $path =~ m{^/proxy/([^/]+)/(.*)$};
+  my $b64dest = $1;
+  my $name = $2;
+
+  my $dest = urlsafe_b64decode($b64dest);
+
+  $httpd->stop_request();
+
+  http_get($dest, sub {
+    my ($content, $headers) = @_;
+
+    $req->respond([200, 'ok', $headers, $content]);
+  });
 }
 
 sub do_files {
