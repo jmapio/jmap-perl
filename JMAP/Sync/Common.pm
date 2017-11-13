@@ -170,6 +170,39 @@ sub get_cards {
   return \%res;
 }
 
+sub get_cards_multi {
+  my $Self = shift;
+  my $collection = shift;
+  my $hrefs = shift;
+
+  my $talk = $Self->connect_contacts();
+  return unless $talk;
+
+  $collection =~ s{/$}{};
+  my ($data, $errors, $links) = $talk->GetContactsMulti($collection, $hrefs, Full => 1);
+
+  my %res;
+  foreach my $item (@$data) {
+    $res{$item->{href}} = $item->{_raw};
+  }
+
+  return (\%res, $errors, $links);
+}
+
+sub sync_card_links {
+  my $Self = shift;
+  my $collection = shift;
+  my $oldtoken = shift;
+
+  my $talk = $Self->connect_contacts();
+  return unless $talk;
+
+  $collection =~ s{/$}{};
+  my ($added, $removed, $errors, $newtoken) = $talk->SyncContactLinks($collection, syncToken => $oldtoken);
+
+  return ($added, $removed, $errors, $newtoken);
+}
+
 sub new_card {
   my $Self = shift;
   my $collection = shift;
