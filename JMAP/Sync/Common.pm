@@ -105,9 +105,9 @@ sub sync_event_links {
   return unless $talk;
 
   $collection =~ s{/$}{};
-  my ($added, $removed, $newtoken) = $talk->SyncEventLinks($collection, syncToken => $oldtoken);
+  my ($added, $removed, $errors, $newtoken) = $talk->SyncEventLinks($collection, syncToken => $oldtoken);
 
-  return ($added, $removed, $newtoken);
+  return ($added, $removed, $errors, $newtoken);
 }
 
 sub new_event {
