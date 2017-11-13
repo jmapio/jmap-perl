@@ -215,6 +215,7 @@ sub getPreferences {
   return ['preferences', {
     defaultIdentityId => "P1",
     enableConversations => $JSON::true,
+    composeInHTML => $JSON::true,
   }];
 }
 
