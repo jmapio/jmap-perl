@@ -508,25 +508,24 @@ sub sync_addressbooks {
   my %seen;
   my %todo;
   foreach my $addressbook (@$addressbooks) {
-    my $id = $byhref{$addressbook->{href}}{iaddressbookid};
+    my $id = $addressbook->{href} ? $byhref{$addressbook->{href}}{iaddressbookid} : 0;
     my $data = {
       isReadOnly => $addressbook->{isReadOnly},
       href => $addressbook->{href},
       name => $addressbook->{name},
-      syncToken => $addressbook->{syncToken},
     };
     if ($id) {
-      $Self->dmaybeupdate('iaddressbooks', $data, {iaddressbookid => $id});
       my $token = $byhref{$addressbook->{href}}{syncToken};
-      if ($token && $token eq $addressbook->{syncToken}) {
+      if ($token && $addressbook->{syncToken} && $token eq $addressbook->{syncToken}) {
         $seen{$id} = 1;
         next;
       }
+      $Self->dmaybeupdate('iaddressbooks', $data, {iaddressbookid => $id});
     }
     else {
       $id = $Self->dinsert('iaddressbooks', $data);
     }
-    $todo{$id} = $addressbook->{href};
+    $todo{$id} = 1;
     $seen{$id} = 1;
   }
 

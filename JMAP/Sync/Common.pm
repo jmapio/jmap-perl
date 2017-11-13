@@ -179,7 +179,7 @@ sub get_cards_multi {
   return unless $talk;
 
   $collection =~ s{/$}{};
-  my ($data, $errors, $links) = $talk->GetContactsMulti($collection, $hrefs, Full => 1);
+  my ($data, $errors, $links) = $talk->GetContactsMulti($collection, $hrefs, []);
 
   my %res;
   foreach my $item (@$data) {
