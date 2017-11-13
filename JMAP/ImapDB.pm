@@ -467,6 +467,7 @@ sub do_calendars {
           icalendarid => $id,
           uid => $change->[2]{uid},
           href => $href,
+          etag => $change->[0],
           content => encode_utf8($change->[1]),
         };
 
@@ -477,7 +478,7 @@ sub do_calendars {
 	  $Self->dinsert('ievents', $item);
         }
 
-        $Self->set_event($jcalendarid, $change->[1]);
+        $Self->set_event($jcalendarid, $change->[2]);
       }
       elsif ($existing) {
         $Self->ddelete('ievents', {ieventid => $existing->{ieventid}});
