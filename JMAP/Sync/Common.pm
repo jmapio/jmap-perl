@@ -10,8 +10,8 @@ use Mail::IMAPTalk;
 use Email::Simple;
 use Email::Sender::Simple qw(sendmail);
 use Email::Sender::Transport::SMTPS;
-use Net::CalDAVTalk;
-use Net::CardDAVTalk;
+use Net::CalDAVTalk '0.11';
+use Net::CardDAVTalk '0.07';
 use MIME::Base64 qw(decode_base64);
 use MIME::QuotedPrint qw(decode_qp);
 
