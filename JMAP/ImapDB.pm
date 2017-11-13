@@ -1040,17 +1040,20 @@ sub import_message {
   my $uid = $data->[3];
 
   # make sure we're up to date: XXX - imap only
+  my $ifolderid;
   if ($Self->{is_gmail}) {
     my ($am) = grep { lc $_->{label} eq '\\allmail' } @$folderdata;
     $Self->do_folder($am->{ifolderid}, undef);
+    $ifolderid = $am->{ifolderid};
   }
   else {
     my $fdata = $jmailmap{$mailboxIds->[0]};
     $Self->do_folder($fdata->{ifolderid}, $fdata->{label});
+    $ifolderid = $fdata->{ifolderid};
   }
 
   $Self->begin();
-  my ($msgid, $thrid, $size) = $Self->dbh->selectrow_array("SELECT msgid, thrid, size FROM imessages WHERE ifolderid = ? AND uid = ?", {}, $jmailmap{$id}{ifolderid}, $uid);
+  my ($msgid, $thrid, $size) = $Self->dbh->selectrow_array("SELECT msgid, thrid, size FROM imessages WHERE ifolderid = ? AND uid = ?", {}, $ifolderid, $uid);
   $Self->commit();
 
   # save us having to download it again - drop out of transaction so we don't wait on the parse
