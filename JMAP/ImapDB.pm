@@ -333,20 +333,19 @@ sub sync_calendars {
       href => $calendar->{href},
       color => $calendar->{color},
       name => $calendar->{name},
-      syncToken => $calendar->{syncToken},
     };
     if ($id) {
-      $Self->dmaybeupdate('icalendars', $data, {icalendarid => $id});
       my $token = $byhref{$calendar->{href}}{syncToken};
-      if ($token && $token eq $calendar->{syncToken}) {
+      if ($token && $calendar->{syncToken} && $token eq $calendar->{syncToken}) {
         $seen{$id} = 1;
         next;
       }
+      $Self->dmaybeupdate('icalendars', $data, {icalendarid => $id});
     }
     else {
       $id = $Self->dinsert('icalendars', $data);
     }
-    $todo{$id} = $calendar->{href};
+    $todo{$id} = 1;
     $seen{$id} = 1;
   }
 
@@ -413,51 +412,80 @@ sub do_calendars {
   my $Self = shift;
   my $cals = shift;
 
-  my %allparsed;
-  my %allevents;
-  foreach my $href (sort values %$cals) {
-    my $events = $Self->backend_cmd('get_events', $href);
-    # parse events before we lock
-    my %parsed = map { $_ => $Self->parse_event($events->{$_}) } keys %$events;
-    $allparsed{$href} = \%parsed;
-    $allevents{$href} = $events;
+  # filter stage
+  $Self->begin();
+  my %exists;
+  foreach my $id (keys %$cals) {
+    my $cal = $Self->dgetone('icalendars', {icalendarid => $id});
+    next unless $cal;
+    my $exists = $Self->dget('ievents', {icalendarid => $id});
+    $exists{$id} = [ $cal, { map { $_->{href} => $_->{etag} } @$exists } ];
+  }
+  $Self->commit();
+
+  my %todo;
+  foreach my $id (keys %exists) {
+    my $cal = $exists{$id}[0];
+    my $href = $cal->{href};
+    my $oldtoken = $cal->{syncToken};
+    my ($added, $removed, $errors, $newToken) = $Self->backend_cmd('sync_event_links', $href, $oldtoken);
+
+    # token
+    $todo{$id} = [$newToken, {}];
+
+    foreach my $href (@$removed) {
+      $todo{$id}[1]{$href} = undef;
+    }
+
+    my @toget;
+    foreach my $href (keys %$added) {
+      next if (exists $exists{$id}[1]{$href} and $exists{$id}[1]{$href} eq $added->{$href});
+      push @toget, $href;
+    }
+    if (@toget) {
+      my ($events, $errors, $links) = $Self->backend_cmd('get_events_multi', $href, \@toget, Full => 1);
+      foreach my $href (keys %$events) {
+        my $parsed = $Self->parse_event($events->{$href});
+        $todo{$id}[1]{$href} = [$links->{$href}, $events->{$href}, $parsed];
+      }
+    }
   }
 
   $Self->begin();
-  foreach my $id (keys %$cals) {
-    my $href = $cals->{$id};
+  foreach my $id (keys %todo) {
+    my $newtoken = $todo{$id}[0];
+    my $changes = $todo{$id}[1];
+
     my ($jcalendarid) = $Self->dbh->selectrow_array("SELECT jcalendarid FROM icalendars WHERE icalendarid = ?", {}, $id);
-    my $exists = $Self->dget('ievents', {icalendarid => $id});
-    my %res = map { $_->{resource} => $_ } @$exists;
 
-    foreach my $resource (keys %{$allparsed{$href}}) {
-      my $data = delete $res{$resource};
-      my $raw = $allevents{$href}{$resource};
-      my $event = $allparsed{$href}{$resource};
-      my $uid = $event->{uid};
-      my $item = {
-        icalendarid => $id,
-        uid => $uid,
-        resource => $resource,
-        content => encode_utf8($raw),
-      };
-      if ($data) {
-        my $eid = $data->{ieventid};
-        next if $raw eq decode_utf8($data->{content});
-        $Self->dmaybeupdate('ievents', $item, {ieventid => $eid});
+    foreach my $href (keys %$changes) {
+      my $change = $changes->{$href};
+      my $existing = $exists{$id}[1]{$href};
+
+      if ($change) {
+        my $item = {
+          icalendarid => $id,
+          uid => $change->[2]{uid},
+          href => $href,
+          content => encode_utf8($change->[1]),
+        };
+
+        if ($existing) {
+          $Self->dmaybeupdate('ievents', $item, {ieventid => $existing->{ieventid}});
+        }
+        else {
+	  $Self->dinsert('ievents', $item);
+        }
+
+        $Self->set_event($jcalendarid, $change->[1]);
       }
-      else {
-        $Self->dinsert('ievents', $item);
+      elsif ($existing) {
+        $Self->ddelete('ievents', {ieventid => $existing->{ieventid}});
+        $Self->delete_event($jcalendarid, $existing->{uid});
       }
-      $Self->set_event($jcalendarid, $event);
     }
 
-    foreach my $resource (keys %res) {
-      my $data = delete $res{$resource};
-      my $id = $data->{ieventid};
-      $Self->ddelete('ievents', {ieventid => $id});
-      $Self->delete_event($jcalendarid, $data->{uid});
-    }
+    $Self->dupdate('icalendars', {syncToken => $newtoken}, {jcalendarid => $id});
   }
 
   $Self->commit();
@@ -582,17 +610,17 @@ sub do_addressbooks {
     my $href = $books->{$id};
     my ($jaddressbookid) = $Self->dbh->selectrow_array("SELECT jaddressbookid FROM iaddressbooks WHERE iaddressbookid = ?", {}, $id);
     my $exists = $Self->dget('icards', {iaddressbookid => $id});
-    my %res = map { $_->{resource} => $_ } @$exists;
+    my %res = map { $_->{href} => $_ } @$exists;
 
-    foreach my $resource (keys %{$allparsed{$href}}) {
-      my $data = delete $res{$resource};
-      my $raw = $allcards{$href}{$resource};
-      my $card = $allparsed{$href}{$resource};
+    foreach my $href (keys %{$allparsed{$href}}) {
+      my $data = delete $res{$href};
+      my $raw = $allcards{$href}{$href};
+      my $card = $allparsed{$href}{$href};
       my $uid = $card->{uid};
       my $kind = $card->{kind};
       my $item = {
         iaddressbookid => $id,
-        resource => $resource,
+        href => $href,
         uid => $uid,
         kind => $kind,
         content => encode_utf8($raw),
@@ -608,8 +636,8 @@ sub do_addressbooks {
       $Self->set_card($jaddressbookid, $card);
     }
 
-    foreach my $resource (keys %res) {
-      my $data = delete $res{$resource};
+    foreach my $href (keys %res) {
+      my $data = delete $res{$href};
       my $cid = $data->{icardid};
       $Self->ddelete('icards', {icardid => $cid});
       $Self->delete_card($jaddressbookid, $data->{uid}, $data->{kind});
@@ -1679,13 +1707,13 @@ sub update_calendar_events {
   my %notchanged;
   foreach my $uid (keys %$update) {
     my $calendar = $update->{$uid};
-    my ($resource) = $Self->dbh->selectrow_array("SELECT resource FROM ievents WHERE uid = ?", {}, $uid);
-    unless ($resource) {
+    my ($href) = $Self->dbh->selectrow_array("SELECT href FROM ievents WHERE uid = ?", {}, $uid);
+    unless ($href) {
       $notchanged{$uid} = {type => 'notFound', description => "No such event on server"};
       next;
     }
 
-    $todo{$resource} = $calendar;
+    $todo{$href} = $calendar;
 
     $changed{$uid} = undef;
   }
@@ -1711,13 +1739,13 @@ sub destroy_calendar_events {
   my @destroyed;
   my %notdestroyed;
   foreach my $uid (@$destroy) {
-    my ($resource) = $Self->dbh->selectrow_array("SELECT resource FROM ievents WHERE uid = ?", {}, $uid);
-    unless ($resource) {
+    my ($href) = $Self->dbh->selectrow_array("SELECT href FROM ievents WHERE uid = ?", {}, $uid);
+    unless ($href) {
       $notdestroyed{$uid} = {type => 'notFound', description => "No such event on server"};
       next;
     }
 
-    $todo{$resource} = 1;
+    $todo{$href} = 1;
 
     push @destroyed, $uid;
   }
@@ -1789,8 +1817,8 @@ sub update_contact_groups {
   my %notchanged;
   foreach my $carduid (keys %$changes) {
     my $contact = $changes->{$carduid};
-    my ($resource, $content) = $Self->dbh->selectrow_array("SELECT resource, content FROM icards WHERE uid = ?", {}, $carduid);
-    unless ($resource) {
+    my ($href, $content) = $Self->dbh->selectrow_array("SELECT href, content FROM icards WHERE uid = ?", {}, $carduid);
+    unless ($href) {
       $notchanged{$carduid} = {type => 'notFound', description => "No such card on server"};
       next;
     }
@@ -1802,7 +1830,7 @@ sub update_contact_groups {
       $card->VGroupContactUIDs(\@ids);
     }
 
-    $todo{$resource} = $card;
+    $todo{$href} = $card;
     $changed{$carduid} = undef;
   }
 
@@ -1827,12 +1855,12 @@ sub destroy_contact_groups {
   my @destroyed;
   my %notdestroyed;
   foreach my $carduid (@$destroy) {
-    my ($resource, $content) = $Self->dbh->selectrow_array("SELECT resource, content FROM icards WHERE uid = ?", {}, $carduid);
-    unless ($resource) {
+    my ($href, $content) = $Self->dbh->selectrow_array("SELECT href, content FROM icards WHERE uid = ?", {}, $carduid);
+    unless ($href) {
       $notdestroyed{$carduid} = {type => 'notFound', description => "No such card on server"};
       next;
     }
-    $todo{$resource} = 1;
+    $todo{$href} = 1;
     push @destroyed, $carduid;
   }
 
@@ -1911,8 +1939,8 @@ sub update_contacts {
   my %notchanged;
   foreach my $carduid (keys %$changes) {
     my $contact = $changes->{$carduid};
-    my ($resource, $content) = $Self->dbh->selectrow_array("SELECT resource, content FROM icards WHERE uid = ?", {}, $carduid);
-    unless ($resource) {
+    my ($href, $content) = $Self->dbh->selectrow_array("SELECT href, content FROM icards WHERE uid = ?", {}, $carduid);
+    unless ($href) {
       $notchanged{$carduid} = {type => 'notFound', description => "No such card on server"};
       next;
     }
@@ -1933,7 +1961,7 @@ sub update_contacts {
     $card->VBirthday($contact->{birthday}) if exists $contact->{birthday};
     $card->VNotes($contact->{notes}) if exists $contact->{notes};
 
-    $todo{$resource} = $card;
+    $todo{$href} = $card;
     $changed{$carduid} = undef;
   }
 
@@ -1958,12 +1986,12 @@ sub destroy_contacts {
   my @destroyed;
   my %notdestroyed;
   foreach my $carduid (@$destroy) {
-    my ($resource, $content) = $Self->dbh->selectrow_array("SELECT resource, content FROM icards WHERE uid = ?", {}, $carduid);
-    unless ($resource) {
+    my ($href, $content) = $Self->dbh->selectrow_array("SELECT href, content FROM icards WHERE uid = ?", {}, $carduid);
+    unless ($href) {
       $notdestroyed{$carduid} = {type => 'notFound', description => "No such card on server"};
       next;
     }
-    $todo{$resource} = 1;
+    $todo{$href} = 1;
     push @destroyed, $carduid;
   }
 
@@ -2159,7 +2187,7 @@ EOF
 CREATE TABLE IF NOT EXISTS ievents (
   ieventid INTEGER PRIMARY KEY NOT NULL,
   icalendarid INTEGER,
-  resource TEXT,
+  href TEXT,
   etag TEXT,
   uid TEXT,
   content TEXT,
@@ -2189,7 +2217,7 @@ EOF
 CREATE TABLE IF NOT EXISTS icards (
   icardid INTEGER PRIMARY KEY NOT NULL,
   iaddressbookid INTEGER,
-  resource TEXT,
+  href TEXT,
   etag TEXT,
   uid TEXT,
   kind TEXT,

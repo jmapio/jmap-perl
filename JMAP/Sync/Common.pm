@@ -71,10 +71,43 @@ sub get_events {
 
   my %res;
   foreach my $item (@$data) {
-    $res{$item->{id}} = $item->{_raw};
+    $res{$item->{href}} = $item->{_raw};
   }
 
   return \%res;
+}
+
+sub get_events_multi {
+  my $Self = shift;
+  my $collection = shift;
+  my $hrefs = shift;
+
+  my $talk = $Self->connect_calendars();
+  return unless $talk;
+
+  $collection =~ s{/$}{};
+  my ($data, $errors, $links) = $talk->GetEventsMulti($collection, $hrefs, Full => 1);
+
+  my %res;
+  foreach my $item (@$data) {
+    $res{$item->{href}} = $item->{_raw};
+  }
+
+  return (\%res, $errors, $links);
+}
+
+sub sync_event_links {
+  my $Self = shift;
+  my $collection = shift;
+  my $oldtoken = shift;
+
+  my $talk = $Self->connect_calendars();
+  return unless $talk;
+
+  $collection =~ s{/$}{};
+  my ($added, $removed, $newtoken) = $talk->SyncEventLinks($collection, syncToken => $oldtoken);
+
+  return ($added, $removed, $newtoken);
 }
 
 sub new_event {
