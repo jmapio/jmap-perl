@@ -189,6 +189,19 @@ sub get_cards_multi {
   return (\%res, $errors, $links);
 }
 
+sub get_card_links {
+  my $Self = shift;
+  my $collection = shift;
+
+  my $talk = $Self->connect_contacts();
+  return unless $talk;
+
+  $collection =~ s{/$}{};
+  my $links = $talk->GetContactLinks($collection);
+
+  return $links;
+}
+
 sub sync_card_links {
   my $Self = shift;
   my $collection = shift;

@@ -525,7 +525,7 @@ sub sync_addressbooks {
     else {
       $id = $Self->dinsert('iaddressbooks', $data);
     }
-    $todo{$id} = 1;
+    $todo{$id} = $addressbook->{syncToken};
     $seen{$id} = 1;
   }
 
@@ -610,7 +610,20 @@ sub do_addressbooks {
     my $book = $exists{$id}[0];
     my $href = $book->{href};
     my $oldtoken = $book->{syncToken};
-    my ($added, $removed, $errors, $newToken) = $Self->backend_cmd('sync_card_links', $href, $oldtoken);
+    my ($added, $removed, $errors, $newToken);
+    if ($books->{$id}) {
+      ($added, $removed, $errors, $newToken) = $Self->backend_cmd('sync_card_links', $href, $oldtoken);
+    }
+    else {
+      # fake up a sync by getting everything
+      $added = $Self->backend_cmd('get_card_links', $href);
+      $removed = [];
+      $errors = [];
+      # calculate removed by comparing exists to fetched list
+      foreach my $href (keys %{$exists{$id}[1]}) {
+        push @$removed, $href unless $added->{$href};
+      }
+    }
 
     # token
     $todo{$id} = [$newToken, {}];
