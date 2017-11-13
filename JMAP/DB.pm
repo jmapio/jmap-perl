@@ -516,7 +516,7 @@ sub _makemsg {
       content_type => 'text/plain',
       charset => 'UTF-8',
     },
-    body => $text,
+    body => Encode::encode_utf8($text),
   );
   if ($args->{htmlBody}) {
     $htmlpart = Email::MIME->create(
@@ -524,7 +524,7 @@ sub _makemsg {
         content_type => 'text/html',
         charset => 'UTF-8',
       },
-      body => $args->{htmlBody},
+      body => Encode::encode_utf8($args->{htmlBody}),
     );
   }
 
