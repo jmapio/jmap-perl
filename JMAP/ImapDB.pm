@@ -475,7 +475,7 @@ sub do_calendars {
           $Self->dmaybeupdate('ievents', $item, {ieventid => $existing->{ieventid}});
         }
         else {
-	  $Self->dinsert('ievents', $item);
+          $Self->dinsert('ievents', $item);
         }
 
         $Self->set_event($jcalendarid, $change->[2]);
@@ -595,58 +595,86 @@ sub do_addressbooks {
   my $Self = shift;
   my $books = shift;
 
-  my %allcards;
-  my %allparsed;
-  foreach my $href (sort values %$books) {
-    my $cards = $Self->backend_cmd('get_cards', $href);
-    # parse before locking
-    my %parsed = map { $_ => $Self->parse_card($cards->{$_}) } keys %$cards;
-    $allparsed{$href} = \%parsed;
-    $allcards{$href} = $cards;
+  # filter stage
+  $Self->begin();
+  my %exists;
+  foreach my $id (keys %$books) {
+    my $book = $Self->dgetone('iaddressbooks', {iaddressbookid => $id});
+    next unless $book;
+    my $exists = $Self->dget('icards', {iaddressbookid => $id});
+    $exists{$id} = [ $book, { map { $_->{href} => $_->{etag} } @$exists } ];
+  }
+  $Self->commit();
+
+  my %todo;
+  foreach my $id (keys %exists) {
+    my $book = $exists{$id}[0];
+    my $href = $book->{href};
+    my $oldtoken = $book->{syncToken};
+    my ($added, $removed, $errors, $newToken) = $Self->backend_cmd('sync_card_links', $href, $oldtoken);
+
+    # token
+    $todo{$id} = [$newToken, {}];
+
+    foreach my $href (@$removed) {
+      $todo{$id}[1]{$href} = undef;
+    }
+
+    my @toget;
+    foreach my $href (keys %$added) {
+      next if (exists $exists{$id}[1]{$href} and $exists{$id}[1]{$href} eq $added->{$href});
+      push @toget, $href;
+    }
+    if (@toget) {
+      my ($cards, $errors, $links) = $Self->backend_cmd('get_cards_multi', $href, \@toget, Full => 1);
+      foreach my $href (keys %$cards) {
+        my $parsed = $Self->parse_card($cards->{$href});
+        $todo{$id}[1]{$href} = [$links->{$href}, $cards->{$href}, $parsed];
+      }
+    }
   }
 
   $Self->begin();
+  foreach my $id (keys %todo) {
+    my $newtoken = $todo{$id}[0];
+    my $changes = $todo{$id}[1];
 
-  foreach my $id (keys %$books) {
-    my $href = $books->{$id};
     my ($jaddressbookid) = $Self->dbh->selectrow_array("SELECT jaddressbookid FROM iaddressbooks WHERE iaddressbookid = ?", {}, $id);
-    my $exists = $Self->dget('icards', {iaddressbookid => $id});
-    my %res = map { $_->{href} => $_ } @$exists;
 
-    foreach my $href (keys %{$allparsed{$href}}) {
-      my $data = delete $res{$href};
-      my $raw = $allcards{$href}{$href};
-      my $card = $allparsed{$href}{$href};
-      my $uid = $card->{uid};
-      my $kind = $card->{kind};
-      my $item = {
-        iaddressbookid => $id,
-        href => $href,
-        uid => $uid,
-        kind => $kind,
-        content => encode_utf8($raw),
-      };
-      if ($data) {
-        my $cid = $data->{icardid};
-        next if $raw eq decode_utf8($data->{content});
-        $Self->dmaybeupdate('icards', $item, {icardid => $cid});
+    foreach my $href (keys %$changes) {
+      my $change = $changes->{$href};
+      my $existing = $exists{$id}[1]{$href};
+
+      if ($change) {
+        my $item = {
+          iaddressbookid => $id,
+          uid => $change->[2]{uid},
+          href => $href,
+          etag => $change->[0],
+          content => encode_utf8($change->[1]),
+        };
+
+        if ($existing) {
+          $Self->dmaybeupdate('icards', $item, {icardid => $existing->{icardid}});
+        }
+        else {
+          $Self->dinsert('icards', $item);
+        }
+
+        $Self->set_card($jaddressbookid, $change->[2]);
       }
-      else {
-        $Self->dinsert('icards', $item);
+      elsif ($existing) {
+        $Self->ddelete('icards', {icardid => $existing->{icardid}});
+        $Self->delete_card($jaddressbookid, $existing->{uid});
       }
-      $Self->set_card($jaddressbookid, $card);
     }
 
-    foreach my $href (keys %res) {
-      my $data = delete $res{$href};
-      my $cid = $data->{icardid};
-      $Self->ddelete('icards', {icardid => $cid});
-      $Self->delete_card($jaddressbookid, $data->{uid}, $data->{kind});
-    }
+    $Self->dupdate('iaddressbooks', {syncToken => $newtoken}, {jaddressbookid => $id});
   }
 
   $Self->commit();
 }
+
 
 sub labels {
   my $Self = shift;

@@ -709,7 +709,7 @@ sub parse_card {
     $hash{addresses} = [$card->VAddresses()];
     $hash{phones} = [$card->VPhones()];
     $hash{online} = [$card->VOnline()];
-  
+
     $hash{nickname} = $card->VNickname();
     $hash{birthday} = $card->VBirthday();
     $hash{notes} = $card->VNotes();
