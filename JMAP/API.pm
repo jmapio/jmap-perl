@@ -2515,7 +2515,7 @@ sub setContacts {
 
     $Self->begin();
     my $user = $Self->{db}->get_user();
-    $oldState = "$user->{jstateContacts}";
+    $oldState = "$user->{jstateContact}";
     $Self->commit();
 
     ($created, $notCreated) = $Self->{db}->create_contacts($create);
@@ -2529,7 +2529,7 @@ sub setContacts {
 
     $Self->begin();
     $user = $Self->{db}->get_user();
-    $newState = "$user->{jstateContacts}";
+    $newState = "$user->{jstateContact}";
     $Self->commit();
   };
 
