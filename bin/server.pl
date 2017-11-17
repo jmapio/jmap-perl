@@ -22,6 +22,9 @@ use JMAP::Sync::AOL;
 use JMAP::Sync::Gmail;
 use JSON::XS qw(decode_json);
 use MIME::Base64::URLSafe;
+use HTTP::Request;
+use HTTP::Response;
+use URI;
 use Encode qw(encode_utf8);
 use Template;
 
@@ -175,7 +178,7 @@ sub mk_json {
   return sub {
     my ($hdl, $res) = @_;
     if ($res->[0] eq 'push') {
-      PushEvent($accountid, event => "state", data => $res->[1]);
+      PushEvent($accountid, event => 'state', data => $res->[1], id => $res->[2]);
     }
     elsif ($res->[0] eq 'bye') {
       print "SERVER CLOSING $accountid\n";
@@ -529,26 +532,46 @@ my $Timer = AnyEvent->timer(
 
 sub SetTimer {
   my $Handle = shift;
-  $Handle->{Timer} = AnyEvent->timer(after => $Handle->{Interval}, cb => sub {
-    my $Now = time();
-    PushToHandle($Handle, event => "ping", data => {servertimestamp => $Now, interval => $Handle->{Interval}}
-    SetTimer($Handle);
-  });
+  my $Source = shift || '';
+
+  if ($Handle->{Interval}) {
+    $Handle->{Timer} = AnyEvent->timer(after => $Handle->{Interval}, cb => sub {
+      my $Now = time();
+      PushToHandle($Handle, event => "ping", data => {servertimestamp => $Now, interval => $Handle->{Interval}}
+    });
+  }
+
+  if ($Source && $Source eq $Handle->{CloseAfter}) {
+    ShutdownHandle($Handle);
+  }
+}
+
+sub ShutdownUnknown {
+  my $Handle = shift;
+  my $Response = HTTP::Response->new(404, 'Not Found');
+  return ShutdownHandle($Handle, $Response->as_string());
 }
 
 sub HandleEventSource {
-  my ($Handle, $Line, $Eol) = @_;
+  my ($Handle, $Lines, $Eol) = @_;
 
   # At this point we have a proxied connection from the frontend
   #  and have read the headers so time to store this handler
   #  and get ready to send events
-  my ($Request, @Headers) = split /\r?\n/, $Line;
+  my $Request = HTTP::Request->parse($Lines);
 
-  $Request =~ m{^GET /events/(\S+?)\??(.*) HTTP}
-    || return ShutdownHandle($Handle, "500 Invalid request\r\n");
+  my $Uri = $Request->uri;
+  my $Path = $Uri->path();
+
+  return ShutdownUnknown($Handle) unless $Request->method() eq 'GET';
+  return ShutdownUnknown($Handle) unless $Path =~ m{^/events/(\S+)};
   my $Channel = $1;
-  my $args = $2;
-  my %args = map { split /\=/, $_, 2 } split /\&/, $args;
+
+  my $LastEventId = $Uri->header('Last-Event-ID') || '';
+  my $Ping = $Uri->query_param('ping') || 0;
+  my $CloseAfter = $Uri->query_param('closeafter') || '';
+
+  # @Headers: Last-Event-ID
 
   # Set channel cleanup handler
   $Handle->on_eof(\&ShutdownPushChannel);
@@ -557,7 +580,8 @@ sub HandleEventSource {
   $Handle->on_read(sub { $_[0]->{rbuf} = ''; });
 
   $Handle->{Channel} = $Channel;
-  $Handle->{Interval} = int($args{ping}) || 300;
+  $Handle->{Interval} = int($Ping) || 300;
+  $Handle->{CloseAfter} = $CloseAfter;
 
   my $Fd = fileno $Handle->fh;
 
@@ -568,14 +592,20 @@ sub HandleEventSource {
   $Handle->push_write(": new event source connection\r\n\r\n");
 
   send_backend_request($Channel, 'getstate', undef, sub {
-    my ($data) = shift;
-    PushToHandle($Handle, event => 'state', data => $data);
+    my ($res) = shift;
+
+    # XXX - race conditions 'r' us - we may have missed sending a push
+    # in the meantime
+
+    $Handle->{Ready} = 1;
+    PushToHandle($Handle, event => 'state', data => $res->{data}, id => $res->{id})
+      unless $res->{id} eq $LastEventId;
 
     # start up an idler for this connection
     prod_idler($Channel);
   });
 
-  SetTimer($Handle);
+  SetTimer($Handle, 'startup');
 }
 
 sub prod_backfill {
@@ -615,8 +645,9 @@ sub PushToHandle {
   my $Handle = shift;
   my %vals = @_;
   print "PUSH EVENT " . $json->encode(\%vals) . "\n";
-  my @Lines = map { "$_: " . (ref($vals{$_}) ? $json->encode($vals{$_}) : $vals{$_}) } keys %vals;
-  $Handle->push_write(join("\r\n", @Lines) . "\r\n\r\n");
+  my @Lines = map { "$_: " . (ref($vals{$_}) ? $json->encode($vals{$_}) : $vals{$_}) } sort keys %vals;
+  $Handle->push_write(join("\r\n", @Lines) . "\r\n\r\n") if $Handle->{Ready};
+  SetTimer($Handle, 'state'); # XXX - lie, but OK  We just don't want it for startup
 }
 
 sub PushEvent {
@@ -626,7 +657,6 @@ sub PushEvent {
   foreach my $Fd (keys %{$PushMap{$Channel}{handles}}) {
     my $ToHandle = $PushMap{$Channel}{handles}{$Fd};
     PushToHandle($ToHandle, %vals);
-    SetTimer($ToHandle);
   }
 }
 

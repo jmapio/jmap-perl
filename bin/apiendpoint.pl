@@ -166,6 +166,7 @@ sub handle_getstate {
     changed => {
       $db->accountid() => \%map,
     },
+    id => $state,
   };
 
   return ['state', $data];
