@@ -127,7 +127,7 @@ sub commit {
     }
 
     $Self->dupdate('account', \%dbdata);
-    $Self->{change_cb}->($Self, \%map) unless $Self->{t}->{backfilling};
+    $Self->{change_cb}->($Self, \%map, $state) unless $Self->{t}->{backfilling};
   }
 
   $Self->{t}{dbh}->commit();

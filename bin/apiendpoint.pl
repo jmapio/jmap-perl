@@ -131,6 +131,7 @@ JMAP::Backend->run(host => '127.0.0.1', port => 5000);
 sub change_cb {
   my $db = shift;
   my $states = shift;
+  my $id = shift;
 
   my $data = {
     changed => {
@@ -138,7 +139,7 @@ sub change_cb {
     },
   };
 
-  $hdl->push_write(json => ['push', $data]) if $hdl;
+  $hdl->push_write(json => ['push', $data, $id]) if $hdl;
 }
 
 sub handle_ping {
@@ -162,14 +163,16 @@ sub handle_getstate {
     $map{$1} = $user->{$key} || "1";
   }
 
-  my $data = {
-    changed => {
-      $db->accountid() => \%map,
+  my $res = {
+    data => {
+      changed => {
+        $db->accountid() => \%map,
+      },
     },
     id => $state,
   };
 
-  return ['state', $data];
+  return ['state', $res];
 }
 
 sub mk_handler {
