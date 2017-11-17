@@ -498,8 +498,7 @@ my %PushMap;
 # The client may also depend on this value to detect if a
 #  connection has been broken, so don't increase without checking
 #  the AJAX client as well.
-use constant KEEPALIVE_TIME => 300;
-use constant KEEPIDLE_TIME => 300;
+use constant KEEPIDLE_TIME => 900; # idling for 15 minutes without activity
 
 # EventSource connection headers
 my $EventSourceHeaders = <<EOF;
@@ -523,10 +522,19 @@ tcp_server('127.0.0.1', '9001', sub {
 
 # Keep-alive timer
 my $Timer = AnyEvent->timer(
-  after => 29,
-  interval => 29,
+  after => 5,
+  interval => 300,
   cb => \&HandleKeepAlive
 );
+
+sub SetTimer {
+  my $Handle = shift;
+  $Handle->{Timer} = AnyEvent->timer(after => $Handle->{Interval}, cb => sub {
+    my $Now = time();
+    PushToHandle($Handle, event => "ping", data => {servertimestamp => $Now, interval => $Handle->{Interval}}
+    SetTimer($Handle);
+  });
+}
 
 sub HandleEventSource {
   my ($Handle, $Line, $Eol) = @_;
@@ -536,9 +544,11 @@ sub HandleEventSource {
   #  and get ready to send events
   my ($Request, @Headers) = split /\r?\n/, $Line;
 
-  $Request =~ m{^GET /events/(\S+) HTTP}
+  $Request =~ m{^GET /events/(\S+?)\??(.*) HTTP}
     || return ShutdownHandle($Handle, "500 Invalid request\r\n");
   my $Channel = $1;
+  my $args = $2;
+  my %args = map { split /\=/, $_, 2 } split /\&/, $args;
 
   # Set channel cleanup handler
   $Handle->on_eof(\&ShutdownPushChannel);
@@ -547,11 +557,11 @@ sub HandleEventSource {
   $Handle->on_read(sub { $_[0]->{rbuf} = ''; });
 
   $Handle->{Channel} = $Channel;
+  $Handle->{Interval} = int($args{ping}) || 300;
 
   my $Fd = fileno $Handle->fh;
 
   $PushMap{$Channel}{handles}{$Fd} = $Handle;
-  $PushMap{$Channel}{lastwrite} ||= time();
 
   print "NEW PUSH CONNECTION $Channel $Fd\n";
   $Handle->push_write($EventSourceHeaders);
@@ -564,15 +574,16 @@ sub HandleEventSource {
     # start up an idler for this connection
     prod_idler($Channel);
   });
-}
 
+  SetTimer($Handle);
+}
 
 sub prod_backfill {
   my $accountid = shift;
   my $force = shift;
   return if (not $force and $idler{$accountid}{backfilling});
   $idler{$accountid}{backfilling} = 1;
-    
+
   my $timer;
   $timer = AnyEvent->timer(after => 10, cb => sub {
     send_backend_request("$accountid:backfill", 'backfill', $accountid, sub {
@@ -615,8 +626,8 @@ sub PushEvent {
   foreach my $Fd (keys %{$PushMap{$Channel}{handles}}) {
     my $ToHandle = $PushMap{$Channel}{handles}{$Fd};
     PushToHandle($ToHandle, %vals);
+    SetTimer($ToHandle);
   }
-  $PushMap{$Channel}{lastwrite} = time();
 }
 
 sub ShutdownPushChannel {
@@ -642,10 +653,6 @@ sub ShutdownHandle {
 
 sub HandleKeepAlive {
   my $Now = time();
-  foreach my $Channel (keys %PushMap) {
-    next if $PushMap{$Channel}{lastwrite} >= $Now - KEEPALIVE_TIME;
-    PushEvent($Channel, event => "ping", data => {servertimestamp => $Now});
-  }
 
   foreach my $accountid (sort keys %idler) {
     next if $PushMap{$accountid}; # nothing to do
