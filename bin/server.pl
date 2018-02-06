@@ -537,7 +537,7 @@ sub SetTimer {
   if ($Handle->{Interval}) {
     $Handle->{Timer} = AnyEvent->timer(after => $Handle->{Interval}, cb => sub {
       my $Now = time();
-      PushToHandle($Handle, event => "ping", data => {servertimestamp => $Now, interval => $Handle->{Interval}}
+      PushToHandle($Handle, event => "ping", data => {servertimestamp => $Now, interval => $Handle->{Interval}});
     });
   }
 
