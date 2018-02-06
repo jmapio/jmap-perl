@@ -402,7 +402,7 @@ sub do_jmap {
   my $content = $req->content();
   return invalid_request($req) unless $content;
   my $request = eval { $json->decode($content) };
-  return invalid_request($req) unless ($request and ref($request) eq 'ARRAY');
+  return invalid_request($req) unless ($request and ref($request) eq 'HASH');
 
   $httpd->stop_request();
 

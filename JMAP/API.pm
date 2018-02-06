@@ -102,11 +102,14 @@ sub handle_request {
   delete $Self->{results};
   delete $Self->{resultsbytag};
 
+  my $methods = $request->{methodCalls};
 
-  foreach my $item (@$request) {
+  foreach my $item (@$methods) {
     my ($command, $args, $tag) = @$item;
     my @items;
-    my $FuncRef = $Self->can($command);
+    my $can = $command;
+    $can =~ s{/}{_};
+    my $FuncRef = $Self->can("api_$can");
     warn "JMAP CMD $command";
     if ($FuncRef) {
       my ($myargs, $error) = $Self->resolve_args($args);
@@ -128,7 +131,9 @@ sub handle_request {
     $Self->push_results($tag, @items);
   }
 
-  return @{$Self->{results}};
+  return {
+    methodResponses => $Self->{results},
+  };
 }
 
 
@@ -294,7 +299,7 @@ sub _transError {
   return @_;
 }
 
-sub getMailboxes {
+sub api_Mailbox_get {
   my $Self = shift;
   my $args = shift;
 
@@ -375,7 +380,7 @@ sub getMailboxes {
 
   $Self->commit();
 
-  return ['mailboxes', {
+  return ['Mailbox/get', {
     list => \@list,
     accountId => $accountid,
     state => $newState,
@@ -383,7 +388,7 @@ sub getMailboxes {
   }];
 }
 
-sub getMailboxUpdates {
+sub api_Mailbox_changes {
   my $Self = shift;
   my $args = shift;
 
@@ -419,7 +424,7 @@ sub getMailboxUpdates {
 
   $Self->commit();
 
-  my @res = (['mailboxUpdates', {
+  my @res = (['Mailbox/changes', {
     accountId => $accountid,
     oldState => "$sinceState",
     newState => $newState,
@@ -478,7 +483,7 @@ sub _resolve_patch {
   }
 }
 
-sub setMailboxes {
+sub api_Mailbox_set {
   my $Self = shift;
   my $args = shift;
 
@@ -529,7 +534,7 @@ sub setMailboxes {
   $Self->{db}->end_superlock();
 
   my @res;
-  push @res, ['mailboxesSet', {
+  push @res, ['Mailbox/set', {
     accountId => $accountid,
     oldState => $oldState,
     newState => $newState,
@@ -830,7 +835,7 @@ sub _collapse_messages {
   return \@res;
 }
 
-sub getMessageList {
+sub api_Email_query {
   my $Self = shift;
   my $args = shift;
 
@@ -884,7 +889,7 @@ gotit:
   my @result = map { $data->[$_]{msgid} } $start..$end;
 
   my @res;
-  push @res, ['messageList', {
+  push @res, ['Email/query', {
     accountId => $accountid,
     filter => $args->{filter},
     sort => $args->{sort},
@@ -899,7 +904,7 @@ gotit:
   return @res;
 }
 
-sub getMessageListUpdates {
+sub api_Email_queryChanges {
   my $Self = shift;
   my $args = shift;
 
@@ -1040,7 +1045,7 @@ sub getMessageListUpdates {
   }
 
   my @res;
-  push @res, ['messageListUpdates', {
+  push @res, ['Email/queryChanges', {
     accountId => $accountid,
     filter => $args->{filter},
     sort => $args->{sort},
@@ -1066,7 +1071,7 @@ sub _extract_terms {
   return @list;
 }
 
-sub getSearchSnippets {
+sub SearchSnippet_get {
   my $Self = shift;
   my $args = shift;
 
@@ -1077,7 +1082,7 @@ sub getSearchSnippets {
   });
 
   return $messages unless $messages->[0] eq 'messages';
-  $messages->[0] = 'searchSnippets';
+  $messages->[0] = 'SearchSnippet/get';
   delete $messages->[1]{state};
   $messages->[1]{filter} = $args->{filter};
   $messages->[1]{collapseThreads} = $args->{collapseThreads}, # work around client bug
@@ -1107,7 +1112,7 @@ sub getSearchSnippets {
   return $messages;
 }
 
-sub getMessages {
+sub api_Email_get {
   my $Self = shift;
   my $args = shift;
 
@@ -1247,7 +1252,7 @@ sub getMessages {
     }
   }
 
-  return ['messages', {
+  return ['Email/get', {
     list => \@list,
     accountId => $accountid,
     state => $newState,
@@ -1300,7 +1305,7 @@ sub downloadFile {
   return ($type, $content);
 }
 
-sub getMessageUpdates {
+sub api_Email_changes {
   my $Self = shift;
   my $args = shift;
 
@@ -1342,7 +1347,7 @@ sub getMessageUpdates {
   $Self->commit();
 
   my @res;
-  push @res, ['messageUpdates', {
+  push @res, ['Email/changes', {
     accountId => $accountid,
     oldState => "$args->{sinceState}",
     newState => $newState,
@@ -1353,7 +1358,7 @@ sub getMessageUpdates {
   return @res;
 }
 
-sub setMessages {
+sub api_Email_set {
   my $Self = shift;
   my $args = shift;
 
@@ -1411,7 +1416,7 @@ sub setMessages {
   }
 
   my @res;
-  push @res, ['messagesSet', {
+  push @res, ['Email/set', {
     accountId => $accountid,
     oldState => $oldState,
     newState => $newState,
@@ -1426,7 +1431,7 @@ sub setMessages {
   return @res;
 }
 
-sub importMessages {
+sub api_Email_import {
   my $Self = shift;
   my $args = shift;
 
@@ -1500,7 +1505,7 @@ sub importMessages {
   $Self->{db}->end_superlock();
 
   my @res;
-  push @res, ['messagesImported', {
+  push @res, ['Email/import', {
     accountId => $accountid,
     created => \%created,
     notCreated => \%notcreated,
@@ -1509,7 +1514,7 @@ sub importMessages {
   return @res;
 }
 
-sub copyMessages {
+sub api_Email_copy {
   my $Self = shift;
   return $Self->_transError(['error', {type => 'notImplemented'}]);
 }
@@ -1547,7 +1552,7 @@ sub reportMessages {
   return @res;
 }
 
-sub getThreads {
+sub api_Thread_get {
   my $Self = shift;
   my $args = shift;
 
@@ -1609,25 +1614,17 @@ sub getThreads {
   $Self->commit();
 
   my @res;
-  push @res, ['threads', {
+  push @res, ['Thread/get', {
     list => \@list,
     accountId => $accountid,
     state => $newState,
     notFound => (%missingids ? [keys %missingids] : undef),
   }];
 
-  if ($args->{fetchMessages}) {
-    push @res, $Self->getMessages({
-      accountid => $accountid,
-      ids => \@allmsgs,
-      properties => $args->{fetchMessageProperties},
-    }) if @allmsgs;
-  }
-
   return @res;
 }
 
-sub getThreadUpdates {
+sub api_Thread_changes {
   my $Self = shift;
   my $args = shift;
 
@@ -1679,7 +1676,7 @@ sub getThreadUpdates {
   $Self->commit();
 
   my @res;
-  push @res, ['threadUpdates', {
+  push @res, ['Thread_changes', {
     accountId => $accountid,
     oldState => $args->{sinceState},
     newState => $newState,
@@ -1722,7 +1719,7 @@ sub getCalendarPreferences {
   }];
 }
 
-sub getCalendars {
+sub api_Calendar_get {
   my $Self = shift;
   my $args = shift;
 
@@ -1775,7 +1772,7 @@ sub getCalendars {
 
   $Self->commit();
 
-  return ['calendars', {
+  return ['Calendar/get', {
     list => \@list,
     accountId => $accountid,
     state => $newState,
@@ -1783,7 +1780,7 @@ sub getCalendars {
   }];
 }
 
-sub getCalendarUpdates {
+sub api_Calendar_changes {
   my $Self = shift;
   my $args = shift;
 
@@ -1830,7 +1827,7 @@ sub getCalendarUpdates {
 
   $Self->commit();
 
-  my @res = (['calendarUpdates', {
+  my @res = (['Calendar/changes', {
     accountId => $accountid,
     oldState => "$sinceState",
     newState => $newState,
@@ -1869,7 +1866,7 @@ sub _event_filter {
   return \@res;
 }
 
-sub getCalendarEventList {
+sub api_CalendarEvent_query {
   my $Self = shift;
   my $args = shift;
 
@@ -1899,7 +1896,7 @@ sub getCalendarEventList {
   $Self->commit();
 
   my @res;
-  push @res, ['calendarEventList', {
+  push @res, ['CalendarEvent/query', {
     accountId => $accountid,
     filter => $args->{filter},
     state => $newState,
@@ -1911,7 +1908,7 @@ sub getCalendarEventList {
   return @res;
 }
 
-sub getCalendarEvents {
+sub api_CalendarEvent_get {
   my $Self = shift;
   my $args = shift;
 
@@ -1955,7 +1952,7 @@ sub getCalendarEvents {
 
   $Self->commit();
 
-  return ['calendarEvents', {
+  return ['CalendarEvent/get', {
     list => \@list,
     accountId => $accountid,
     state => $newState,
@@ -1963,7 +1960,7 @@ sub getCalendarEvents {
   }];
 }
 
-sub getCalendarEventUpdates {
+sub api_CalendarEvent_changes {
   my $Self = shift;
   my $args = shift;
 
@@ -2005,7 +2002,7 @@ sub getCalendarEventUpdates {
   }
 
   my @res;
-  push @res, ['calendarEventUpdates', {
+  push @res, ['CalendarEvent/changes', {
     accountId => $accountid,
     oldState => "$args->{sinceState}",
     newState => $newState,
@@ -2013,18 +2010,10 @@ sub getCalendarEventUpdates {
     removed => [map { "$_" } @removed],
   }];
 
-  if ($args->{fetchCalendarEvents}) {
-    push @res, $Self->getCalendarEvents({
-      accountid => $accountid,
-      ids => \@changed,
-      properties => $args->{fetchCalendarEventProperties},
-    }) if @changed;
-  }
-
   return @res;
 }
 
-sub getAddressbooks {
+sub api_Addressbook_get {
   my $Self = shift;
   my $args = shift;
 
@@ -2076,7 +2065,7 @@ sub getAddressbooks {
 
   $Self->commit();
 
-  return ['addressbooks', {
+  return ['Addressbook/get', {
     list => \@list,
     accountId => $accountid,
     state => $newState,
@@ -2084,7 +2073,7 @@ sub getAddressbooks {
   }];
 }
 
-sub getAddressbookUpdates {
+sub api_Addressbook_changes {
   my $Self = shift;
   my $args = shift;
 
@@ -2132,7 +2121,7 @@ sub getAddressbookUpdates {
 
   $Self->commit();
 
-  my @res = (['addressbookUpdates', {
+  my @res = (['Addressbook/changes', {
     accountId => $accountid,
     oldState => "$sinceState",
     newState => $newState,
@@ -2171,7 +2160,7 @@ sub _contact_filter {
   return \@res;
 }
 
-sub getContactList {
+sub api_Contact_query {
   my $Self = shift;
   my $args = shift;
 
@@ -2201,7 +2190,7 @@ sub getContactList {
   $Self->commit();
 
   my @res;
-  push @res, ['contactList', {
+  push @res, ['Contact/query', {
     accountId => $accountid,
     filter => $args->{filter},
     state => $newState,
@@ -2213,7 +2202,7 @@ sub getContactList {
   return @res;
 }
 
-sub getContacts {
+sub api_Contact_get {
   my $Self = shift;
   my $args = shift;
 
@@ -2256,7 +2245,7 @@ sub getContacts {
   }
   $Self->commit();
 
-  return ['contacts', {
+  return ['Contact/get', {
     list => \@list,
     accountId => $accountid,
     state => $newState,
@@ -2264,7 +2253,7 @@ sub getContacts {
   }];
 }
 
-sub getContactUpdates {
+sub api_Contact_changes {
   my $Self = shift;
   my $args = shift;
 
@@ -2305,7 +2294,7 @@ sub getContactUpdates {
   }
 
   my @res;
-  push @res, ['contactUpdates', {
+  push @res, ['Contact/changes', {
     accountId => $accountid,
     oldState => "$args->{sinceState}",
     newState => $newState,
@@ -2316,7 +2305,7 @@ sub getContactUpdates {
   return @res;
 }
 
-sub getContactGroups {
+sub api_ContactGroup_get {
   my $Self = shift;
   my $args = shift;
 
@@ -2363,7 +2352,7 @@ sub getContactGroups {
   }
   $Self->commit();
 
-  return ['contactGroups', {
+  return ['ContactGroup/get', {
     list => \@list,
     accountId => $accountid,
     state => $newState,
@@ -2371,7 +2360,7 @@ sub getContactGroups {
   }];
 }
 
-sub getContactGroupUpdates {
+sub api_ContactGroup_changes {
   my $Self = shift;
   my $args = shift;
 
@@ -2412,7 +2401,7 @@ sub getContactGroupUpdates {
   $Self->commit();
 
   my @res;
-  push @res, ['contactGroupUpdates', {
+  push @res, ['ContactGroup/changes', {
     accountId => $accountid,
     oldState => "$args->{sinceState}",
     newState => $newState,
@@ -2423,7 +2412,7 @@ sub getContactGroupUpdates {
   return @res;
 }
 
-sub setContactGroups {
+sub api_ContactGroup_set {
   my $Self = shift;
   my $args = shift;
 
@@ -2475,7 +2464,7 @@ sub setContactGroups {
   $Self->{db}->end_superlock();
 
   my @res;
-  push @res, ['contactGroupsSet', {
+  push @res, ['ContactGroup/set', {
     accountId => $accountid,
     oldState => $oldState,
     newState => $newState,
@@ -2490,7 +2479,7 @@ sub setContactGroups {
   return @res;
 }
 
-sub setContacts {
+sub api_Contact_set {
   my $Self = shift;
   my $args = shift;
 
@@ -2542,7 +2531,7 @@ sub setContacts {
   $Self->{db}->end_superlock();
 
   my @res;
-  push @res, ['contactsSet', {
+  push @res, ['Contact/set', {
     accountId => $accountid,
     oldState => $oldState,
     newState => $newState,
@@ -2557,7 +2546,7 @@ sub setContacts {
   return @res;
 }
 
-sub setCalendarEvents {
+sub api_CalendarEvent_set {
   my $Self = shift;
   my $args = shift;
 
@@ -2610,7 +2599,7 @@ sub setCalendarEvents {
   $Self->{db}->end_superlock();
 
   my @res;
-  push @res, ['calendarEventsSet', {
+  push @res, ['CalendarEvent/set', {
     accountId => $accountid,
     oldState => $oldState,
     newState => $newState,
@@ -2625,7 +2614,7 @@ sub setCalendarEvents {
   return @res;
 }
 
-sub setCalendars {
+sub api_Calendar_set {
   my $Self = shift;
   my $args = shift;
 
@@ -2677,7 +2666,7 @@ sub setCalendars {
   $Self->{db}->end_superlock();
 
   my @res;
-  push @res, ['calendarsSet', {
+  push @res, ['Calendar/set', {
     accountId => $accountid,
     oldState => $oldState,
     newState => $newState,
@@ -2748,7 +2737,7 @@ sub _submission_filter {
   return 1;
 }
 
-sub getMessageSubmissionList {
+sub api_MessageSubmission_query {
   my $Self = shift;
   my $args = shift;
 
@@ -2785,7 +2774,7 @@ sub getMessageSubmissionList {
   my @res;
 
   my $subids = [ map { "$_->[0]" } @list ];
-  push @res, ['messageSubmissionList', {
+  push @res, ['MessageSubmission/query', {
     accountId => $accountid,
     filter => $args->{filter},
     sort => $args->{sort},
@@ -2799,7 +2788,7 @@ sub getMessageSubmissionList {
   return @res;
 }
 
-sub getMessageSubmissionListUpdates {
+sub api_MessageSubmission_queryChanges {
   my $Self = shift;
   my $args = shift;
 
@@ -2848,7 +2837,7 @@ sub getMessageSubmissionListUpdates {
     $index++;
   }
 
-  return ['messageSubmissionListUpdates', {
+  return ['MessageSubmission/queryChanges', {
     accountId => $accountid,
     filter => $args->{filter},
     sort => $args->{sort},
@@ -2860,7 +2849,7 @@ sub getMessageSubmissionListUpdates {
   }];
 }
 
-sub getMessageSubmissions {
+sub api_MessageSubmission_get {
   my $Self = shift;
   my $args = shift;
 
@@ -2914,7 +2903,7 @@ sub getMessageSubmissions {
 
   $Self->commit();
 
-  return ['messageSubmissions', {
+  return ['MessageSubmission/get', {
     list => \@list,
     accountId => $accountid,
     state => $newState,
@@ -2922,7 +2911,7 @@ sub getMessageSubmissions {
   }];
 }
 
-sub getMessageSubmissionUpdates {
+sub api_MessageSubmission_changes {
   my $Self = shift;
   my $args = shift;
 
@@ -2967,7 +2956,7 @@ sub getMessageSubmissionUpdates {
   }
 
   my @res;
-  push @res, ['messageSubmissionUpdates', {
+  push @res, ['MessageSubmission/changes', {
     accountId => $accountid,
     oldState => $sinceState,
     newState => $newState,
@@ -2979,7 +2968,7 @@ sub getMessageSubmissionUpdates {
   return @res;
 }
 
-sub setMessageSubmissions {
+sub api_MessageSubmission_set {
   my $Self = shift;
   my $args = shift;
 
@@ -3064,7 +3053,7 @@ sub setMessageSubmissions {
   $Self->{db}->end_superlock();
 
   my @res;
-  push @res, ['messageSubmissionsSet', {
+  push @res, ['MessageSubmission/set', {
     accountId => $accountid,
     oldState => $oldState,
     newState => $newState,

@@ -600,10 +600,10 @@ sub handle_jmap {
 
   # need to keep the API object around for the entire request for idmap purposes
   my $api = JMAP::API->new($db);
-  my @res = $api->handle_request($request);
+  my $res = $api->handle_request($request);
 
   use Data::Dumper;
-  warn Dumper($request, \@res) if $ENV{DEBUGJMAP};
+  warn Dumper($request, $res) if $ENV{DEBUGJMAP};
 
-  return ['jmap', \@res];
+  return ['jmap', $res];
 }
