@@ -2064,7 +2064,7 @@ sub create_submissions {
   foreach my $cid (sort keys %$new) {
     my $sub = $new->{$cid};
 
-    my $msgid = $idmap->($sub->{messageId});
+    my $msgid = $idmap->($sub->{emailId});
 
     unless ($msgid) {
       $notcreated{$cid} = { error => "no msgid provided" };
