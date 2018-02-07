@@ -128,9 +128,6 @@ sub handle_request {
     else {
       @items = ['error', { type => 'unknownMethod' }];
     }
-    foreach my $item (@items) {
-      $item->[1]{accountId} = 'default' if ref($item->[1]) eq 'HASH';
-    }
     $Self->push_results($tag, @items);
   }
 
@@ -216,6 +213,7 @@ sub api_UserPreferences_get {
 
   $Self->begin();
   my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
   $Self->commit();
 
 # - **remoteServices**: `Object`
@@ -245,7 +243,7 @@ sub api_UserPreferences_get {
 #   If the language or theme preference is set, the response MUST also set the  appropriate cookie.
 
   return ['UserPreferences/get', { 
-    accountId => 'default',
+    accountId => $accountid,
     state => 'dummy',
     list => [{
       id => 'singleton',
@@ -269,6 +267,7 @@ sub api_ClientPreferences_get {
 
   $Self->begin();
   my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
   $Self->commit();
 
 # - **useSystemFont**: `Boolean`
@@ -297,7 +296,7 @@ sub api_ClientPreferences_get {
 #   i.e. the client will set the textOnly parameter to true when calling getMessageDetails.
 
   return ['ClientPreferences/get', {
-    accountId => 'default',
+    accountId => $accountid,
     state => 'dummy',
     list => [{
       id => 'singleton',
@@ -339,10 +338,11 @@ sub api_VacationResponse_get {
 
   $Self->begin();
   my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
   $Self->commit();
 
   return ['VacationReponse/get', {
-    accountId => 'default',
+    accountId => $accountid,
     state => 'dummy',
     list => [{
       id => 'singleton',
@@ -373,6 +373,7 @@ sub api_Quota_get {
 
   $Self->begin();
   my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
   $Self->commit();
 
   my @list = (
@@ -389,7 +390,7 @@ sub api_Quota_get {
   );
 
   return ['Quota/get', {
-    accountId => 'default',
+    accountId => $accountid,
     state => 'dummy',
     list => _filter_list(\@list, $args->{ids}),
   }];
@@ -401,12 +402,13 @@ sub getSavedSearches {
 
   $Self->begin();
   my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
   $Self->commit();
 
   my @list;
 
   return ['savedSearches', {
-    accountId => 'default',
+    accountId => $accountid,
     state => 'dummy',
     list => \@list,
   }];
@@ -418,6 +420,7 @@ sub api_Identity_get {
 
   $Self->begin();
   my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
   $Self->commit();
 
   my @list;
@@ -449,7 +452,7 @@ sub api_Identity_get {
   };
 
   return ['Identity/get', {
-    accountId => 'default',
+    accountId => $accountid,
     state => 'dummy',
     list => \@list,
   }];
