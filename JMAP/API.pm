@@ -3150,7 +3150,7 @@ sub api_EmailSubmission_set {
     # we need to convert all the IDs that were successfully created and updated plus any POSSIBLE
     # one that might be deleted into a map from id to messageid - after create and update, but
     # before delete.
-    my $result = $Self->getEmailSubmissions({ids => \@possible, properties => ['emailId']});
+    my $result = $Self->api_EmailSubmission_get({ids => \@possible, properties => ['emailId']});
     my %emailIds;
     if ($result->[0] eq 'messageSubmissions') {
       %emailIds = map { $_->{id} => $_->{emailId} } @{$result->[1]{list}};
