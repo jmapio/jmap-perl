@@ -734,7 +734,8 @@ sub _post_sort {
 
   my %fieldmap = (
     id => ['msgid', 0],
-    date => ['msgdate', 1],
+    receivedAt => ['internaldate', 1],
+    sentAt => ['msgdate', 1],
     size => ['msgsize', 1],
     isunread => ['isUnread', 1],
     subject => ['sortsubject', 0],
@@ -744,17 +745,15 @@ sub _post_sort {
 
   my @res = sort {
     foreach my $arg (@$sortargs) {
-      my ($field, $dir) = split / /, $arg;
-      $dir ||= 'desc';
-      die unless ($dir eq 'asc' or $dir eq 'desc');
-      my $map = $fieldmap{$field};
       my $res = 0;
+      my $field = $arg->{property};
+      my $map = $fieldmap{$field};
       if ($map) {
         if ($map->[1]) {
-	  $res = $a->{$map->[0]} cmp $b->{$map->[0]};
+	  $res = $a->{$map->[0]} <=> $b->{$map->[0]};
         }
         else {
-          $res = $a->{$map->[0]} <=> $b->{$map->[0]};
+          $res = $a->{$map->[0]} cmp $b->{$map->[0]};
         }
       }
       elsif ($field =~ m/^keyword:(.*)/) {
@@ -781,7 +780,9 @@ sub _post_sort {
         die "unknown field $field";
       }
 
-      return ($dir eq 'asc' ? $res : -$res) if $res;
+      $res = -$res unless $arg->{isAscending};
+
+      return $res if $res;
     }
     return $a->{msgid} cmp $b->{msgid}; # stable sort
   } @$data;
