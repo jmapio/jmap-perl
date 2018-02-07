@@ -1858,7 +1858,7 @@ sub api_Thread_changes {
   $Self->commit();
 
   my @res;
-  push @res, ['Thread_changes', {
+  push @res, ['Thread/changes', {
     accountId => $accountid,
     oldState => $args->{sinceState},
     newState => $newState,
