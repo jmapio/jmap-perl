@@ -366,7 +366,7 @@ sub do_upload {
 
   my $accountid = $1;
 
-  return client_page($req, $accountid) unless lc $req->method eq 'post';
+  return landing_page($req, $accountid) unless lc $req->method eq 'post';
 
   prod_idler($accountid);
 
@@ -395,7 +395,7 @@ sub do_jmap {
 
   my $accountid = $1;
 
-  return client_page($req, $accountid) unless lc $req->method eq 'post';
+  return landing_page($req, $accountid) unless lc $req->method eq 'post';
 
   prod_idler($accountid);
 
@@ -418,6 +418,28 @@ sub do_jmap {
 }
 
 sub client_page {
+  my $req = shift;
+  my $accountid = shift;
+
+  send_backend_request($accountid, 'getinfo', $accountid, sub {
+    my $data = shift;
+
+    prod_idler($accountid);
+    send_backend_request($accountid, 'syncall');
+
+    my $html = '';
+    $TT->process("client.html", {
+      accountid => $accountid,
+      jmaphost => $ENV{jmaphost},
+     }, \$html) || die $Template::ERROR;
+    $req->respond({content => ['text/html', $html]});
+  }, sub {
+    my $cookie = bake_cookie("jmap_$accountid", {value => '', path => '/'});
+    $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "https://$ENV{jmaphost}/" }, "Redirected"]);
+  });
+}
+
+sub landing_page {
   my $req = shift;
   my $accountid = shift;
 

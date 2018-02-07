@@ -9,7 +9,7 @@
 <meta name="msapplication-tap-highlight" content="no">
 <title>FastMail</title>
 <link rel="stylesheet" type="text/css" href="https://www.fastmail.com/static/styles/font.css">
-<link rel="stylesheet" type="text/css" href="bootstrap-raw.css">
+<link rel="stylesheet" type="text/css" href="/fullclient/bootstrap-raw.css">
 </head>
 <body>
 <div id="bootstrap-page" class="fill-parent">
@@ -18,17 +18,17 @@ document.getElementById( 'bootstrap-page' ).setAttribute( 'data-sessions',
     JSON.stringify([{
         username: '',
 	accounts: {
-	    [% uuid %]: {
+	    [% accountid %]: {
 		name: "Default",
 		isPrimary: true,
 		isReadOnly: false,
 	    },
 	},
         accessToken: 'TEMP',
-        apiUrl: '/jmap/[% uuid %]',
-        eventSourceUrl: '/events/[% uuid %]',
-        uploadUrl: '/upload/[% uuid %]',
-        downloadUrl: '/raw/[% uuid %]/{blobId}/{name}',
+        apiUrl: '/jmap/[% accountid %]',
+        eventSourceUrl: '/events/[% accountid %]',
+        uploadUrl: '/upload/[% accountid %]',
+        downloadUrl: '/raw/[% accountid %]/{blobId}/{name}',
         proxyUrl: '/proxy/{url}/{name}',
     }])
 );
@@ -42,7 +42,7 @@ document.getElementById( 'bootstrap-page' ).setAttribute( 'data-sessions',
     <div class="v-Loading-animatedBar v-Loading-animatedBar--5"></div>
 </div>
 </div>
-<script id="bsScript" type="text/javascript" src="bootstrap-raw.js">a794384b</script>
+<script id="bsScript" type="text/javascript" src="/fullclient/bootstrap-raw.js">a794384b</script>
 <p id="browser-support" style="position:relative;margin:50px auto;padding:100px 15px;padding-top:30vh;max-width:400px;line-height:1.4;background:#fff;font-size:16px;">Sorry, your browser does not support the technologies needed to use our web interface. Please make sure you have the latest version, and that JavaScript is enabled. <a href="/help/technical/supportedbrowsers.html">Learn more about our browser requirements</a>.</p>
 </body>
 </html>
