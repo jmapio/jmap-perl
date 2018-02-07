@@ -694,7 +694,7 @@ sub api_Mailbox_set {
 
     ($created, $notCreated) = $Self->{db}->create_mailboxes($create);
     $Self->setid($_, $created->{$_}{id}) for keys %$created;
-    $Self->_resolve_patch($update, 'getMailboxes');
+    $Self->_resolve_patch($update, 'api_Mailbox_get');
     ($updated, $notUpdated) = $Self->{db}->update_mailboxes($update, sub { $Self->idmap(shift) });
     ($destroyed, $notDestroyed) = $Self->{db}->destroy_mailboxes($destroy);
 
@@ -1254,13 +1254,13 @@ sub SearchSnippet_get {
   my $Self = shift;
   my $args = shift;
 
-  my $messages = $Self->getMessages({
+  my $messages = $Self->api_Email_get({
     accountId => $args->{accountId},
     ids => $args->{emailIds},
     properties => ['subject', 'textBody', 'preview'],
   });
 
-  return $messages unless $messages->[0] eq 'messages';
+  return $messages unless $messages->[0] eq 'Email/get';
   $messages->[0] = 'SearchSnippet/get';
   delete $messages->[1]{state};
   $messages->[1]{filter} = $args->{filter};
@@ -1366,8 +1366,12 @@ sub api_Email_get {
       $item->{subject} = Encode::decode_utf8($data->{msgsubject});
     }
 
-    if (_prop_wanted($args, 'date')) {
-      $item->{date} = $Self->{db}->isodate($data->{msgdate});
+    if (_prop_wanted($args, 'sentAt')) {
+      $item->{sentAt} = $Self->{db}->isodate($data->{msgdate});
+    }
+
+    if (_prop_wanted($args, 'receivedAt')) {
+      $item->{receivedAt} = $Self->{db}->isodate($data->{internaldate});
     }
 
     if (_prop_wanted($args, 'size')) {
@@ -1569,7 +1573,7 @@ sub api_Email_set {
 
     ($created, $notCreated) = $Self->{db}->create_messages($create, sub { $Self->idmap(shift) });
     $Self->setid($_, $created->{$_}{id}) for keys %$created;
-    $Self->_resolve_patch($update, 'getMessages');
+    $Self->_resolve_patch($update, 'api_Email_get');
     ($updated, $notUpdated) = $Self->{db}->update_messages($update, sub { $Self->idmap(shift) });
     ($destroyed, $notDestroyed) = $Self->{db}->destroy_messages($destroy);
 
@@ -2622,7 +2626,7 @@ sub api_ContactGroup_set {
 
     ($created, $notCreated) = $Self->{db}->create_contact_groups($create);
     $Self->setid($_, $created->{$_}{id}) for keys %$created;
-    $Self->_resolve_patch($update, 'getContactGroups');
+    $Self->_resolve_patch($update, 'api_ContactGroup_get');
     ($updated, $notUpdated) = $Self->{db}->update_contact_groups($update, sub { $Self->idmap(shift) });
     ($destroyed, $notDestroyed) = $Self->{db}->destroy_contact_groups($destroy);
 
@@ -2689,7 +2693,7 @@ sub api_Contact_set {
 
     ($created, $notCreated) = $Self->{db}->create_contacts($create);
     $Self->setid($_, $created->{$_}{id}) for keys %$created;
-    $Self->_resolve_patch($update, 'getContacts');
+    $Self->_resolve_patch($update, 'api_Contact_get');
     ($updated, $notUpdated) = $Self->{db}->update_contacts($update, sub { $Self->idmap(shift) });
     ($destroyed, $notDestroyed) = $Self->{db}->destroy_contacts($destroy);
 
@@ -2757,7 +2761,7 @@ sub api_CalendarEvent_set {
 
     ($created, $notCreated) = $Self->{db}->create_calendar_events($create);
     $Self->setid($_, $created->{$_}{id}) for keys %$created;
-    $Self->_resolve_patch($update, 'getCalendarEvents');
+    $Self->_resolve_patch($update, 'api_CalendarEvent_get');
     ($updated, $notUpdated) = $Self->{db}->update_calendar_events($update, sub { $Self->idmap(shift) });
     ($destroyed, $notDestroyed) = $Self->{db}->destroy_calendar_events($destroy);
 
@@ -2824,7 +2828,7 @@ sub api_Calendar_set {
 
     ($created, $notCreated) = $Self->{db}->create_calendars($create);
     $Self->setid($_, $created->{$_}{id}) for keys %$created;
-    $Self->_resolve_patch($update, 'getCalendars');
+    $Self->_resolve_patch($update, 'api_Calendar_get');
     ($updated, $notUpdated) = $Self->{db}->update_calendars($update, sub { $Self->idmap(shift) });
     ($destroyed, $notDestroyed) = $Self->{db}->destroy_calendars($destroy);
 
@@ -3186,7 +3190,7 @@ sub api_MessageSubmission_set {
 
     ($created, $notCreated) = $Self->{db}->create_submissions($create, sub { $Self->idmap(shift) });
     $Self->setid($_, $created->{$_}{id}) for keys %$created;
-    $Self->_resolve_patch($update, 'getMessageSubmissions');
+    $Self->_resolve_patch($update, 'api_MessageSubmission_get');
     ($updated, $notUpdated) = $Self->{db}->update_submissions($update, sub { $Self->idmap(shift) });
 
     my @possible = ((map { $_->{id} } values %$created), (keys %$updated), @$destroy);
