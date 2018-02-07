@@ -593,8 +593,6 @@ sub HandleEventSource {
   return ShutdownUnknown($Handle) unless $Path =~ m{^/events/(\S+)};
   my $Channel = $1;
 
-  warn "GOT REQUEST FOR $Channel ($Path) " . $Request->as_string();
-
   my $LastEventId = $Request->header('Last-Event-ID') || '';
   my $Ping = $Uri->query_param('ping') || 0;
   my $CloseAfter = $Uri->query_param('closeafter') || '';
