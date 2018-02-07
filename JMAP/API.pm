@@ -83,6 +83,7 @@ sub resolve_args {
     if ($key =~ m/^\#(.*)/) {
       my $outkey = $1;
       my $res = eval { $Self->resolve_backref($args->{$key}{resultOf}, $args->{$key}{path}) };
+      warn Dumper($args->{$key}, $res);
       if ($@) {
         return (undef, { type => 'resultReference', message => $@ });
       }
@@ -1255,7 +1256,7 @@ sub SearchSnippet_get {
 
   my $messages = $Self->getMessages({
     accountId => $args->{accountId},
-    ids => $args->{messageIds},
+    ids => $args->{emailIds},
     properties => ['subject', 'textBody', 'preview'],
   });
 
@@ -1269,7 +1270,7 @@ sub SearchSnippet_get {
   my $str = join("|", @terms);
   my $tag = 'mark';
   foreach my $item (@{$messages->[1]{list}}) {
-    $item->{messageId} = delete $item->{id};
+    $item->{emailId} = delete $item->{id};
     my $text = delete $item->{textBody};
     $item->{subject} = escape_html($item->{subject});
     $item->{preview} = escape_html($item->{preview});
@@ -1709,14 +1710,14 @@ sub reportMessages {
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
   return $Self->_transError(['error', {type => 'invalidArguments'}])
-    if not $args->{messageIds};
+    if not $args->{emailIds};
 
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if not exists $args->{asSpam};
 
   $Self->commit();
 
-  my @ids = map { $Self->idmap($_) } @{$args->{messageIds}};
+  my @ids = map { $Self->idmap($_) } @{$args->{emailIds}};
   my ($reported, $notfound) = $Self->report_messages(\@ids, $args->{asSpam});
 
   my @res;
@@ -1784,7 +1785,7 @@ sub api_Thread_get {
     }
     push @list, {
       id => "$thrid",
-      messageIds => [map { "$_" } @msgs],
+      emailIds => [map { "$_" } @msgs],
     };
     push @allmsgs, @msgs;
   }
@@ -2870,7 +2871,7 @@ sub _mk_submission_sort {
     # invalid order
     return undef unless ($order eq 'asc' or $order eq 'desc');
 
-    if ($field eq 'messageId') {
+    if ($field eq 'emailId') {
       push @res, "msgid $order";
     }
     elsif ($field eq 'threadId') {
@@ -2893,8 +2894,8 @@ sub _submission_filter {
   my $filter = shift;
   my $storage = shift;
 
-  if ($filter->{messageIds}) {
-    return 0 unless grep { $_ eq $data->[2] } @{$filter->{messageIds}};
+  if ($filter->{emailIds}) {
+    return 0 unless grep { $_ eq $data->[2] } @{$filter->{emailIds}};
   }
   if ($filter->{threadIds}) {
     return 0 unless grep { $_ eq $data->[1] } @{$filter->{threadIds}};
@@ -3062,7 +3063,7 @@ sub api_MessageSubmission_get {
     my $item = {
       id => $subid,
       identityId => $data->{identity},
-      messageId => $data->{msgid},
+      emailId => $data->{msgid},
       threadId => $data->{thrid},
       envelope => $data->{envelope} ? decode_json($data->{envelope}) : undef,
       sendAt => scalar($Self->{db}->isodate($data->{sendat})),
@@ -3193,10 +3194,10 @@ sub api_MessageSubmission_set {
     # we need to convert all the IDs that were successfully created and updated plus any POSSIBLE
     # one that might be deleted into a map from id to messageid - after create and update, but
     # before delete.
-    my $result = $Self->getMessageSubmissions({ids => \@possible, properties => ['messageId']});
-    my %messageIds;
+    my $result = $Self->getMessageSubmissions({ids => \@possible, properties => ['emailId']});
+    my %emailIds;
     if ($result->[0] eq 'messageSubmissions') {
-      %messageIds = map { $_->{id} => $_->{messageId} } @{$result->[1]{list}};
+      %emailIds = map { $_->{id} => $_->{emailId} } @{$result->[1]{list}};
     }
 
     # we can destroy now that we've read in the messageids of everything we intend to destroy... yay
@@ -3209,12 +3210,12 @@ sub api_MessageSubmission_set {
     foreach my $key (keys %$toUpdate) {
       my $id = $Self->idmap($key);
       next unless $allowed{$id};
-      $updateMessages{$messageIds{$id}} = $toUpdate->{$key};
+      $updateMessages{$emailIds{$id}} = $toUpdate->{$key};
     }
     foreach my $key (@$toDestroy) {
       my $id = $Self->idmap($key);
       next unless $allowed{$id};
-      push @destroyMessages, $messageIds{$id};
+      push @destroyMessages, $emailIds{$id};
     }
 
     $Self->{db}->begin();
