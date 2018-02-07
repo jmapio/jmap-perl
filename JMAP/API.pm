@@ -114,7 +114,7 @@ sub handle_request {
     if ($FuncRef) {
       my ($myargs, $error) = $Self->resolve_args($args);
       if ($myargs) {
-        @items = eval { $Self->$command($myargs, $tag) };
+        @items = eval { $Self->$FuncRef($myargs, $tag) };
         if ($@) {
           @items = ['error', { type => "serverError", message => "$@" }];
           eval { $Self->rollback() };
@@ -127,6 +127,9 @@ sub handle_request {
     }
     else {
       @items = ['error', { type => 'unknownMethod' }];
+    }
+    foreach my $item (@items) {
+      $item->[1]{accountId} = 'default' if ref($item->[1]) eq 'HASH';
     }
     $Self->push_results($tag, @items);
   }
@@ -207,7 +210,7 @@ sub refreshSyncedCalendars {
   return ();
 }
 
-sub getPreferences {
+sub api_UserPreferences_get {
   my $Self = shift;
   my $args = shift;
 
@@ -215,12 +218,180 @@ sub getPreferences {
   my $user = $Self->{db}->get_user();
   $Self->commit();
 
-  my @list;
+# - **remoteServices**: `Object`
+#   Maps service type, e.g. 'fs', to an array of services the user has connected to their account, e.g. 'dropbox'.
+# - **displayName**: `String`
+#   The string to display in the header to identify the account. Normally the email address for the account,
+#   but may be different for FastMail users based on a preference).
+# - **language**: `String`
+#   The language code, e.g. "en-gb", of the user's language
+# - **timeZone**: `String`,
+#   The Olsen name for the user's time zone.
+# - **use24hClock**: `String`
+#   One of `'yes'`/`'no'`/`''`. Defaults to '', which means language dependent.
+# - **theme**: `String`
+#   The name of the theme to use
+# - **enableNewsletter**: `booklean`
+#   Send newsletters to this account?
+# - **defaultIdentityId**: `String`
+#   The id of the default personality.
+# - **useDefaultFromOnSMTP**: `Boolean`
+#   If true, when sending via SMTP the From address will always be set to the default personality,
+#   regardless of the address set by the client.
+# - **excludeContactsFromBlacklist**: `Boolean`
+#   Defaults to true, which means skip the blacklist when processing rules, if the sender of the
+#   message is in the user's contacts list.
 
-  return ['preferences', {
-    defaultIdentityId => "P1",
-    enableConversations => $JSON::true,
-    composeInHTML => $JSON::true,
+#   If the language or theme preference is set, the response MUST also set the  appropriate cookie.
+
+  return ['UserPreferences/get', { 
+    accountId => 'default',
+    state => 'dummy',
+    list => [{
+      id => 'singleton',
+      remoteServices => {},
+      displayName => $user->{displayname} || $user->{email},
+      language => 'en-us',
+      timeZone => 'Australia/Melbourne',
+      use24hClock => 'yes',
+      theme => 'default',
+      enableNewsletter => $JSON::true,
+      defaultIdentifyId => 'id1',
+      useDefaultFromOnSMTP => $JSON::false,
+      excludeContactsFromBlacklist => $JSON::false,
+    }],
+  }];
+}
+
+sub api_ClientPreferences_get {
+  my $Self = shift;
+  my $args = shift;
+
+  $Self->begin();
+  my $user = $Self->{db}->get_user();
+  $Self->commit();
+
+# - **useSystemFont**: `Boolean`
+#   Should the system font be used for the UI rather than FastMail's custom font?
+# - **enableKBShortcuts**: `Boolean`
+#   Activate keyboard shortcuts?
+# - **enableConversations**: `Boolean`
+#   Group messages into conversations?
+# - **deleteEntireConversation**: `Boolean`
+#   Should deleting a conversation delete messages from all folders?
+# - **showDeleteWarning**: `Boolean`
+#   Should a warning be shown on delete?
+# - **showSidebar**: `Boolean`
+#   Show a sidebar?
+# - **showReadingPane**: `Boolean`
+#   Show a reading pane or use separate screens?
+# - **showPreview**: `Boolean`
+#   Show a preview line on the mailbox screen?
+# - **showAvatar**: `Boolean`
+#   Show avatars of senders?
+# - **afterActionGoTo**: `String`
+#   One of `"next"`/`"prev"`/`"mailbox"`. Determines which screen to show
+#   next after performing an action in the conversation view.
+# - **viewTextOnly**: `Boolean`
+#   If true, HTML messages will be converted to plain text before being shown,
+#   i.e. the client will set the textOnly parameter to true when calling getMessageDetails.
+
+  return ['ClientPreferences/get', {
+    accountId => 'default',
+    state => 'dummy',
+    list => [{
+      id => 'singleton',
+      useSystemFont => $JSON::false,
+      enableKBShortcuts => $JSON::true,
+      enableConversations => $JSON::true,
+      deleteEntireConversation => $JSON::true,
+      showDeleteWarning => $JSON::true,
+      showSidebar => $JSON::true,
+      showReadingPane => $JSON::false,
+      showPreview => $JSON::true,
+      showAvatar => $JSON::true,
+      afterActionGoTo => 'mailbox',
+      viewTextOnly => $JSON::false,
+      allowExternalContent => 'always',
+      extraHeaders => [],
+      autoSaveContacts => $JSON::true,
+      replyFromDefault => $JSON::true,
+      defaultReplyAll => $JSON::true,
+      composeInHTML => $JSON::true,
+      replyInOrigFormat => $JSON::true,
+      defaultFont => undef,
+      defaultSize => undef,
+      defaultColour => undef,
+      sigPositionOnReply => 'before',
+      sigPositionOnForward => 'before',
+      replyQuoteAs => 'inline',
+      forwardQuoteAs => 'inline',
+      replyAttribution => '',
+      canWriteSharedContacts => $JSON::false,
+      contactsSort => 'lastName',
+    }],
+  }];
+}
+
+sub api_VacationResponse_get {
+  my $Self = shift;
+  my $args = shift;
+
+  $Self->begin();
+  my $user = $Self->{db}->get_user();
+  $Self->commit();
+
+  return ['VacationReponse/get', {
+    accountId => 'default',
+    state => 'dummy',
+    list => [{
+      id => 'singleton',
+      isEnabled => $JSON::false,
+      fromDate => undef,
+      toDate => undef,
+      subject => undef,
+      textBody => undef,
+      htmlBody => undef,
+    }],
+  }];
+}
+
+sub _filter_list {
+  my $list = shift;
+  my $ids = shift;
+
+  return $list unless $ids;
+
+  my %map = map { $_ => 1 } @$ids;
+
+  return [ grep { $map{$_->{id}} } @$list ];
+}
+
+sub api_Quota_get {
+  my $Self = shift;
+  my $args = shift;
+
+  $Self->begin();
+  my $user = $Self->{db}->get_user();
+  $Self->commit();
+
+  my @list = (
+    {
+      id => 'mail',
+      used => 1,
+      total => 2,
+    },
+    {
+      id => 'files',
+      used => 1,
+      total => 2,
+    },
+  );
+
+  return ['Quota/get', {
+    accountId => 'default',
+    state => 'dummy',
+    list => _filter_list(\@list, $args->{ids}),
   }];
 }
 
@@ -235,12 +406,13 @@ sub getSavedSearches {
   my @list;
 
   return ['savedSearches', {
+    accountId => 'default',
     state => 'dummy',
     list => \@list,
   }];
 }
 
-sub getIdentities {
+sub api_Identity_get {
   my $Self = shift;
   my $args = shift;
 
@@ -249,8 +421,9 @@ sub getIdentities {
   $Self->commit();
 
   my @list;
+  # XXX todo fix Identity
   push @list, {
-    id => "P1",
+    id => "id1",
     displayName => $user->{displayname} || $user->{email},
     mayDelete => $JSON::false,
     email => $user->{email},
@@ -275,7 +448,8 @@ sub getIdentities {
     popLinkId => undef,
   };
 
-  return ['identities', {
+  return ['Identity/get', {
+    accountId => 'default',
     state => 'dummy',
     list => \@list,
   }];
