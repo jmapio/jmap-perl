@@ -391,11 +391,12 @@ sub do_jmap {
   my $uri = $req->url();
   my $path = $uri->path();
 
-  return not_found($req) unless $path =~ m{^/jmap/([^/]+)};
+  return not_found($req) unless $path =~ m{^/jmap/([^/]+)(.*)};
 
   my $accountid = $1;
+  my $client = $2;
 
-  return landing_page($req, $accountid) unless lc $req->method eq 'post';
+  return landing_page($req, $accountid, $client) unless lc $req->method eq 'post';
 
   prod_idler($accountid);
 
@@ -442,6 +443,9 @@ sub client_page {
 sub landing_page {
   my $req = shift;
   my $accountid = shift;
+  my $client = shift || '';
+
+  return client_page($req, $accountid) if $client eq '/client';
 
   send_backend_request($accountid, 'getinfo', $accountid, sub {
     my $data = shift;
