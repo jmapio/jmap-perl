@@ -254,7 +254,7 @@ sub api_UserPreferences_get {
       use24hClock => 'yes',
       theme => 'default',
       enableNewsletter => $JSON::true,
-      defaultIdentifyId => 'id1',
+      defaultIdentityId => 'id1',
       useDefaultFromOnSMTP => $JSON::false,
       excludeContactsFromBlacklist => $JSON::false,
     }],
@@ -762,14 +762,14 @@ sub _post_sort {
 	my $bv = $b->{keywords}{$keyword} ? 1 : 0;
         $res = $av <=> $bv;
       }
-      elsif ($field =~ m/^allThreadKeyword:(.*)/) {
+      elsif ($field =~ m/^allInThreadHaveKeyword:(.*)/) {
         my $keyword = $1;
         $storage->{hasthreadkeyword} ||= _hasthreadkeyword($storage->{data});
         my $av = ($storage->{hasthreadkeyword}{$a->{thrid}}{$keyword} || 0) == 2 ? 1 : 0;
         my $bv = ($storage->{hasthreadkeyword}{$b->{thrid}}{$keyword} || 0) == 2 ? 1 : 0;
         $res = $av <=> $bv;
       }
-      elsif ($field =~ m/^someThreadKeyword:(.*)/) {
+      elsif ($field =~ m/^someInThreadHaveKeyword:(.*)/) {
         my $keyword = $1;
         $storage->{hasthreadkeyword} ||= _hasthreadkeyword($storage->{data});
         my $av = ($storage->{hasthreadkeyword}{$a->{thrid}}{$keyword} || 0) ? 1 : 0;
