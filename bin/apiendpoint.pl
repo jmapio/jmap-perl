@@ -132,11 +132,13 @@ sub change_cb {
   my $db = shift;
   my $states = shift;
   my $id = shift;
+  my $trigger = shift || 'unknown';
 
   my $data = {
     changed => {
       $db->accountid() => $states,
     },
+    trigger => $trigger,
   };
 
   $hdl->push_write(json => ['push', $data, $id]) if $hdl;
