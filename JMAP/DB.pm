@@ -30,7 +30,7 @@ use MIME::Base64 qw(encode_base64 decode_base64);
 my $json = JSON::XS->new->utf8->canonical();
 
 my %TABLE2GROUPS = (
-  jmessages => ['Message', 'Thread'],
+  jmessages => ['Email', 'Thread'],
   jmailboxes => ['Mailbox'],
   jmessagemap => ['Mailbox'],
   jrawmessage => [],
@@ -251,7 +251,7 @@ sub parse_message {
     hasAttachment => $hasatt,
     headers => $headers,
     attachments => \@attachments,
-    attachedMessages => $messages,
+    attachedEmails => $messages,
   };
 
   return $data;
@@ -1037,12 +1037,12 @@ CREATE TABLE IF NOT EXISTS account (
   jhighestmodseq INTEGER NOT NULL DEFAULT 1,
   jstateMailbox TEXT NOT NULL DEFAULT 1,
   jstateThread TEXT NOT NULL DEFAULT 1,
-  jstateMessage TEXT NOT NULL DEFAULT 1,
+  jstateEmail TEXT NOT NULL DEFAULT 1,
   jstateContact TEXT NOT NULL DEFAULT 1,
   jstateContactGroup TEXT NOT NULL DEFAULT 1,
   jstateCalendar TEXT NOT NULL DEFAULT 1,
   jstateCalendarEvent TEXT NOT NULL DEFAULT 1,
-  jstateMessageSubmission TEXT NOT NULL DEFAULT 1,
+  jstateEmailSubmission TEXT NOT NULL DEFAULT 1,
   mtime DATE
 );
 EOF

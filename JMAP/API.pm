@@ -152,52 +152,6 @@ sub idmap {
   return $val;
 }
 
-sub getAccounts {
-  my $Self = shift;
-  my $args = shift;
-
-  $Self->begin();
-  my $user = $Self->{db}->get_user();
-  $Self->commit();
-
-  my @list;
-  push @list, {
-    id => $Self->{db}->accountid(),
-    name => $user->{displayname} || $user->{email},
-    isPrimary => $JSON::true,
-    versions => [ 0.20150115 ],
-    extensions => {
-      "io.jmap.proxy" => [ 1, 2 ],
-    },
-    capabilities => {
-      maxSizeUpload => 1073741824,
-    },
-    mail => {
-      isReadOnly => $JSON::false,
-      maxSizeMessageAttachments => 1073741824,
-      canDelaySend => $JSON::false,
-      messageListSortOptions => [ "date", "id" ],
-    },
-    contacts => {
-      isReadOnly => $JSON::false,
-    },
-    calendars => {
-      isReadOnly => $JSON::false,
-    },
-
-    # legacy
-    isReadOnly => $JSON::false,
-    hasMail => $JSON::true,
-    hasContacts => $JSON::true,
-    hasCalendars => $JSON::true,
-  };
-
-  return ['accounts', {
-    state => 'dummy',
-    list => \@list,
-  }];
-}
-
 sub refreshSyncedCalendars {
   my $Self = shift;
 
@@ -293,7 +247,6 @@ sub api_ClientPreferences_get {
 #   next after performing an action in the conversation view.
 # - **viewTextOnly**: `Boolean`
 #   If true, HTML messages will be converted to plain text before being shown,
-#   i.e. the client will set the textOnly parameter to true when calling getMessageDetails.
 
   return ['ClientPreferences/get', {
     accountId => $accountid,
@@ -522,13 +475,13 @@ sub api_Mailbox_get {
       delete $rec{$key} unless _prop_wanted($args, $key);
     }
 
-    if (_prop_wanted($args, 'totalMessages')) {
-      ($rec{totalMessages}) = $dbh->selectrow_array("SELECT COUNT(DISTINCT msgid) FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmailboxid = ? AND jmessages.active = 1 AND jmessagemap.active = 1", {}, $item->{jmailboxid});
-      $rec{totalMessages} += 0;
+    if (_prop_wanted($args, 'totalEmails')) {
+      ($rec{totalEmails}) = $dbh->selectrow_array("SELECT COUNT(DISTINCT msgid) FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmailboxid = ? AND jmessages.active = 1 AND jmessagemap.active = 1", {}, $item->{jmailboxid});
+      $rec{totalEmails} += 0;
     }
-    if (_prop_wanted($args, 'unreadMessages')) {
-      ($rec{unreadMessages}) = $dbh->selectrow_array("SELECT COUNT(DISTINCT msgid) FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmailboxid = ? AND jmessages.isUnread = 1 AND jmessages.active = 1 AND jmessagemap.active = 1", {}, $item->{jmailboxid});
-      $rec{unreadMessages} += 0;
+    if (_prop_wanted($args, 'unreadEmails')) {
+      ($rec{unreadEmails}) = $dbh->selectrow_array("SELECT COUNT(DISTINCT msgid) FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmailboxid = ? AND jmessages.isUnread = 1 AND jmessages.active = 1 AND jmessagemap.active = 1", {}, $item->{jmailboxid});
+      $rec{unreadEmails} += 0;
     }
 
     if (_prop_wanted($args, 'totalThreads')) {
@@ -607,7 +560,7 @@ sub api_Mailbox_changes {
     newState => $newState,
     changed => [map { "$_" } @changed],
     removed => [map { "$_" } @removed],
-    changedProperties => $onlyCounts ? ["totalMessages", "unreadMessages", "totalThreads", "unreadThreads"] : JSON::null,
+    changedProperties => $onlyCounts ? ["totalEmails", "unreadEmails", "totalThreads", "unreadThreads"] : JSON::null,
   }]);
 
   return @res;
@@ -826,7 +779,7 @@ sub _hasthreadkeyword {
   my $data = shift;
   my %res;
   foreach my $item (@$data) {
-    next unless $item->{active};  # we get called by getMessageListUpdates, which includes inactive messages
+    next unless $item->{active};  # we get called by getEmailListUpdates, which includes inactive messages
 
     # have already seen a message for this thread
     if ($res{$item->{thrid}}) {
@@ -1025,7 +978,7 @@ sub api_Email_query {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  my $newState = "$user->{jstateMessage}";
+  my $newState = "$user->{jstateEmail}";
 
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if (exists $args->{position} and exists $args->{anchor});
@@ -1094,7 +1047,7 @@ sub api_Email_queryChanges {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  my $newState = "$user->{jstateMessage}";
+  my $newState = "$user->{jstateEmail}";
 
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if not $args->{sinceState};
@@ -1178,7 +1131,7 @@ sub api_Email_queryChanges {
         return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
       }
 
-      if ($args->{upToMessageId} and $args->{upToMessageId} eq $item->{msgid}) {
+      if ($args->{upToEmailId} and $args->{upToEmailId} eq $item->{msgid}) {
         # stop mentioning changes
         $tell = 0;
       }
@@ -1215,7 +1168,7 @@ sub api_Email_queryChanges {
         return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
       }
 
-      if ($args->{upToMessageId} and $args->{upToMessageId} eq $item->{msgid}) {
+      if ($args->{upToEmailId} and $args->{upToEmailId} eq $item->{msgid}) {
         # stop mentioning changes
         $tell = 0;
       }
@@ -1302,7 +1255,7 @@ sub api_Email_get {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  my $newState = "$user->{jstateMessage}";
+  my $newState = "$user->{jstateEmail}";
 
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     unless $args->{ids};
@@ -1313,7 +1266,7 @@ sub api_Email_get {
   my %missingids;
   my @list;
   my $need_content = 0;
-  foreach my $prop (qw(hasAttachment headers preview textBody htmlBody attachments attachedMessages)) {
+  foreach my $prop (qw(hasAttachment headers preview textBody htmlBody attachments attachedEmails)) {
     $need_content = 1 if _prop_wanted($args, $prop);
   }
   $need_content = 1 if ($args->{properties} and grep { m/^headers\./ } @{$args->{properties}});
@@ -1341,8 +1294,8 @@ sub api_Email_get {
       $item->{mailboxIds} = {map { $_ => $JSON::true } @$ids};
     }
 
-    if (_prop_wanted($args, 'inReplyToMessageId')) {
-      $item->{inReplyToMessageId} = $data->{msginreplyto};
+    if (_prop_wanted($args, 'inReplyToEmailId')) {
+      $item->{inReplyToEmailId} = $data->{msginreplyto};
     }
 
     if (_prop_wanted($args, 'hasAttachment')) {
@@ -1428,8 +1381,8 @@ sub api_Email_get {
       if (_prop_wanted($args, 'attachments')) {
         $item->{attachments} = $data->{attachments};
       }
-      if (_prop_wanted($args, 'attachedMessages')) {
-        $item->{attachedMessages} = $data->{attachedMessages};
+      if (_prop_wanted($args, 'attachedEmails')) {
+        $item->{attachedEmails} = $data->{attachedEmails};
       }
     }
   }
@@ -1443,7 +1396,7 @@ sub api_Email_get {
 }
 
 # NOT AN API CALL as such...
-sub getRawMessage {
+sub getRawEmail {
   my $Self = shift;
   my $selector = shift;
 
@@ -1499,7 +1452,7 @@ sub api_Email_changes {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  my $newState = "$user->{jstateMessage}";
+  my $newState = "$user->{jstateEmail}";
 
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if not $args->{sinceState};
@@ -1568,7 +1521,7 @@ sub api_Email_set {
     $Self->begin();
     my $user = $Self->{db}->get_user();
     $Self->commit();
-    $oldState = "$user->{jstateMessage}";
+    $oldState = "$user->{jstateEmail}";
 
     ($created, $notCreated) = $Self->{db}->create_messages($create, sub { $Self->idmap(shift) });
     $Self->setid($_, $created->{$_}{id}) for keys %$created;
@@ -1582,7 +1535,7 @@ sub api_Email_set {
     $Self->begin();
     $user = $Self->{db}->get_user();
     $Self->commit();
-    $newState = "$user->{jstateMessage}";
+    $newState = "$user->{jstateEmail}";
   };
 
   if ($@) {
@@ -1701,7 +1654,7 @@ sub api_Email_copy {
   return $Self->_transError(['error', {type => 'notImplemented'}]);
 }
 
-sub reportMessages {
+sub reportEmails {
   my $Self = shift;
   my $args = shift;
 
@@ -2919,7 +2872,7 @@ sub _submission_filter {
   return 1;
 }
 
-sub api_MessageSubmission_query {
+sub api_EmailSubmission_query {
   my $Self = shift;
   my $args = shift;
 
@@ -2931,7 +2884,7 @@ sub api_MessageSubmission_query {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  my $newState = "$user->{jstateMessageSubmission}";
+  my $newState = "$user->{jstateEmailSubmission}";
 
   my $start = $args->{position} || 0;
   return $Self->_transError(['error', {type => 'invalidArguments'}])
@@ -2956,7 +2909,7 @@ sub api_MessageSubmission_query {
   my @res;
 
   my $subids = [ map { "$_->[0]" } @list ];
-  push @res, ['MessageSubmission/query', {
+  push @res, ['EmailSubmission/query', {
     accountId => $accountid,
     filter => $args->{filter},
     sort => $args->{sort},
@@ -2970,7 +2923,7 @@ sub api_MessageSubmission_query {
   return @res;
 }
 
-sub api_MessageSubmission_queryChanges {
+sub api_EmailSubmission_queryChanges {
   my $Self = shift;
   my $args = shift;
 
@@ -2982,7 +2935,7 @@ sub api_MessageSubmission_queryChanges {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  my $newState = "$user->{jstateMessageSubmission}";
+  my $newState = "$user->{jstateEmailSubmission}";
 
   my $sinceState = $args->{sinceState};
   return $Self->_transError(['error', {type => 'invalidArguments'}])
@@ -3019,7 +2972,7 @@ sub api_MessageSubmission_queryChanges {
     $index++;
   }
 
-  return ['MessageSubmission/queryChanges', {
+  return ['EmailSubmission/queryChanges', {
     accountId => $accountid,
     filter => $args->{filter},
     sort => $args->{sort},
@@ -3031,7 +2984,7 @@ sub api_MessageSubmission_queryChanges {
   }];
 }
 
-sub api_MessageSubmission_get {
+sub api_EmailSubmission_get {
   my $Self = shift;
   my $args = shift;
 
@@ -3043,7 +2996,7 @@ sub api_MessageSubmission_get {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  my $newState = "$user->{jstateMessageSubmission}";
+  my $newState = "$user->{jstateEmailSubmission}";
 
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     unless $args->{ids};
@@ -3085,7 +3038,7 @@ sub api_MessageSubmission_get {
 
   $Self->commit();
 
-  return ['MessageSubmission/get', {
+  return ['EmailSubmission/get', {
     list => \@list,
     accountId => $accountid,
     state => $newState,
@@ -3093,7 +3046,7 @@ sub api_MessageSubmission_get {
   }];
 }
 
-sub api_MessageSubmission_changes {
+sub api_EmailSubmission_changes {
   my $Self = shift;
   my $args = shift;
 
@@ -3105,7 +3058,7 @@ sub api_MessageSubmission_changes {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  my $newState = "$user->{jstateMessageSubmission}";
+  my $newState = "$user->{jstateEmailSubmission}";
 
   my $sinceState = $args->{sinceState};
   return $Self->_transError(['error', {type => 'invalidArguments'}])
@@ -3138,7 +3091,7 @@ sub api_MessageSubmission_changes {
   }
 
   my @res;
-  push @res, ['MessageSubmission/changes', {
+  push @res, ['EmailSubmission/changes', {
     accountId => $accountid,
     oldState => $sinceState,
     newState => $newState,
@@ -3150,7 +3103,7 @@ sub api_MessageSubmission_changes {
   return @res;
 }
 
-sub api_MessageSubmission_set {
+sub api_EmailSubmission_set {
   my $Self = shift;
   my $args = shift;
 
@@ -3165,16 +3118,16 @@ sub api_MessageSubmission_set {
   my $create = $args->{create} || {};
   my $update = $args->{update} || {};
   my $destroy = $args->{destroy} || [];
-  my $toUpdate = $args->{onSuccessUpdateMessage} || {};
-  my $toDestroy = $args->{onSuccessDestroyMessage} || [];
+  my $toUpdate = $args->{onSuccessUpdateEmail} || {};
+  my $toDestroy = $args->{onSuccessDestroyEmail} || [];
 
   my ($created, $notCreated, $updated, $notUpdated, $destroyed, $notDestroyed);
   my ($oldState, $newState);
 
   # TODO: need to support ifInState for this sucker
 
-  my %updateMessages;
-  my @destroyMessages;
+  my %updateEmails;
+  my @destroyEmails;
 
   $Self->{db}->begin_superlock();
 
@@ -3184,12 +3137,12 @@ sub api_MessageSubmission_set {
 
     $Self->{db}->begin();
     my $user = $Self->{db}->get_user();
-    $oldState = "$user->{jstateMessageSubmission}";
+    $oldState = "$user->{jstateEmailSubmission}";
     $Self->{db}->commit();
 
     ($created, $notCreated) = $Self->{db}->create_submissions($create, sub { $Self->idmap(shift) });
     $Self->setid($_, $created->{$_}{id}) for keys %$created;
-    $Self->_resolve_patch($update, 'api_MessageSubmission_get');
+    $Self->_resolve_patch($update, 'api_EmailSubmission_get');
     ($updated, $notUpdated) = $Self->{db}->update_submissions($update, sub { $Self->idmap(shift) });
 
     my @possible = ((map { $_->{id} } values %$created), (keys %$updated), @$destroy);
@@ -3197,7 +3150,7 @@ sub api_MessageSubmission_set {
     # we need to convert all the IDs that were successfully created and updated plus any POSSIBLE
     # one that might be deleted into a map from id to messageid - after create and update, but
     # before delete.
-    my $result = $Self->getMessageSubmissions({ids => \@possible, properties => ['emailId']});
+    my $result = $Self->getEmailSubmissions({ids => \@possible, properties => ['emailId']});
     my %emailIds;
     if ($result->[0] eq 'messageSubmissions') {
       %emailIds = map { $_->{id} => $_->{emailId} } @{$result->[1]{list}};
@@ -3213,17 +3166,17 @@ sub api_MessageSubmission_set {
     foreach my $key (keys %$toUpdate) {
       my $id = $Self->idmap($key);
       next unless $allowed{$id};
-      $updateMessages{$emailIds{$id}} = $toUpdate->{$key};
+      $updateEmails{$emailIds{$id}} = $toUpdate->{$key};
     }
     foreach my $key (@$toDestroy) {
       my $id = $Self->idmap($key);
       next unless $allowed{$id};
-      push @destroyMessages, $emailIds{$id};
+      push @destroyEmails, $emailIds{$id};
     }
 
     $Self->{db}->begin();
     $user = $Self->{db}->get_user();
-    $newState = "$user->{jstateMessageSubmission}";
+    $newState = "$user->{jstateEmailSubmission}";
     $Self->{db}->commit();
   };
 
@@ -3235,7 +3188,7 @@ sub api_MessageSubmission_set {
   $Self->{db}->end_superlock();
 
   my @res;
-  push @res, ['MessageSubmission/set', {
+  push @res, ['EmailSubmission/set', {
     accountId => $accountid,
     oldState => $oldState,
     newState => $newState,
@@ -3247,8 +3200,8 @@ sub api_MessageSubmission_set {
     notDestroyed => $notDestroyed,
   }];
 
-  if (%updateMessages or @destroyMessages) {
-    push @res, $Self->setMessages({update => \%updateMessages, destroy => \@destroyMessages});
+  if (%updateEmails or @destroyEmails) {
+    push @res, $Self->api_Email_set({update => \%updateEmails, destroy => \@destroyEmails});
   }
 
   return @res;
