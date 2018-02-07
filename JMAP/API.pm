@@ -83,7 +83,6 @@ sub resolve_args {
     if ($key =~ m/^\#(.*)/) {
       my $outkey = $1;
       my $res = eval { $Self->resolve_backref($args->{$key}{resultOf}, $args->{$key}{path}) };
-      warn Dumper($args->{$key}, $res);
       if ($@) {
         return (undef, { type => 'resultReference', message => $@ });
       }
