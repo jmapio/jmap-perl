@@ -33,6 +33,7 @@ use EV;
 use JSON::XS qw(decode_json);
 use Net::DNS;
 use Net::DNS::Resolver;
+use Time::HiRes qw(gettimeofday tv_interval);
 
 use Net::Server::Fork;
 
@@ -190,6 +191,7 @@ sub mk_handler {
 
   return sub {
     my ($hdl, $json) = @_;
+    my $t0 = [gettimeofday];
     $hdl->push_read(json => mk_handler($n+1));
 
     # make sure we have a connection
@@ -254,7 +256,8 @@ sub mk_handler {
     }
     $res->[2] = $tag;
     $hdl->push_write(json => $res) if $res->[0];
-    warn "HANDLED $cmd ($tag) => $res->[0] ($accountid)\n" ;
+    my $elapsed = tv_interval($t0);
+    warn "HANDLED $cmd ($tag) => $res->[0] ($accountid) in $elapsed\n" ;
     if ($res->[0] eq 'error') {
       warn Dumper($res);
       warn "DIED AFTER COMMAND $n";

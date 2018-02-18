@@ -10,6 +10,7 @@ use Encode;
 use HTML::GenerateUtil qw(escape_html);
 use JSON::XS;
 use Data::Dumper;
+use Time::HiRes qw(gettimeofday tv_interval);
 
 my $json = JSON::XS->new->utf8->canonical();
 
@@ -105,6 +106,7 @@ sub handle_request {
   my $methods = $request->{methodCalls};
 
   foreach my $item (@$methods) {
+    my $t0 = [gettimeofday];
     my ($command, $args, $tag) = @$item;
     my @items;
     my $can = $command;
@@ -129,6 +131,8 @@ sub handle_request {
       @items = ['error', { type => 'unknownMethod' }];
     }
     $Self->push_results($tag, @items);
+    my $elapsed = tv_interval ($t0);
+    warn "  took " . $elapsed;
   }
 
   return {
