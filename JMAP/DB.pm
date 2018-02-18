@@ -220,7 +220,14 @@ thrid);
     $seenmsgs{$item->{msgid}} = 1;
   }
 
-  $Self->dmaybedirty('jthreads', {active => 1, data => $json->encode(\@msgs)}, {thrid => $thrid});
+  # have to handle doesn't exist case dammit, dmaybdirty isn't good for that
+  my ($exists) = $dbh->selectrow_array("SELECT jcreated FROM jthreads WHERE thrid = ?", {}, $thrid);
+  if ($exists) {
+    $Self->dmaybedirty('jthreads', {active => 1, data => $json->encode(\@msgs)}, {thrid => $thrid});
+  }
+  else {
+    $Self->dmake('jthreads', {thrid => $thrid, data => $json->encode(\@msgs)});
+  }
 }
 
 sub add_message {
