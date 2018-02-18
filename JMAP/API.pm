@@ -1706,44 +1706,19 @@ sub api_Thread_get {
   my @list;
   my %seenids;
   my %missingids;
-  my @allmsgs;
   foreach my $thrid (map { $Self->idmap($_) } @{$args->{ids}}) {
     next if $seenids{$thrid};
     $seenids{$thrid} = 1;
-    my $data = $dbh->selectall_arrayref("SELECT * FROM jmessages WHERE thrid = ? AND active = 1 ORDER BY internaldate", {Slice => {}}, $thrid);
-    unless (@$data) {
+    my ($data) = $dbh->selectrow_array("SELECT data FROM jthreads WHERE thrid = ? AND active = 1", {}, $thrid);
+    unless ($data) {
       $missingids{$thrid} = 1;
       next;
     }
-    my %drafts;
-    my @msgs;
-    my %seenmsgs;
-    foreach my $item (@$data) {
-      next unless $item->{isDraft};
-      next unless $item->{msginreplyto};  # push the rest of the drafts to the end
-      push @{$drafts{$item->{msginreplyto}}}, $item->{msgid};
-    }
-    foreach my $item (@$data) {
-      next if $item->{isDraft};
-      push @msgs, $item->{msgid};
-      $seenmsgs{$item->{msgid}} = 1;
-      next unless $item->{msgmessageid};
-      if (my $draftmsgs = $drafts{$item->{msgmessageid}}) {
-        push @msgs, @$draftmsgs;
-        $seenmsgs{$_} = 1 for @$draftmsgs;
-      }
-    }
-    # make sure unlinked drafts aren't forgotten!
-    foreach my $item (@$data) {
-      next if $seenmsgs{$item->{msgid}};
-      push @msgs, $item->{msgid};
-      $seenmsgs{$item->{msgid}} = 1;
-    }
+    my $jdata = $json->decode($data);
     push @list, {
       id => "$thrid",
-      emailIds => [map { "$_" } @msgs],
+      emailIds => [ map { "$_" } @$jdata ],
     };
-    push @allmsgs, @msgs;
   }
 
   $Self->commit();
@@ -1778,35 +1753,22 @@ sub api_Thread_changes {
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
 
-  my $sql = "SELECT * FROM jmessages WHERE jmodseq > ?";
-
-  if ($args->{maxChanges}) {
-    $sql .= " LIMIT " . (int($args->{maxChanges}) + 1);
-  }
-
-  my $data = $dbh->selectall_arrayref($sql, {Slice => {}}, $args->{sinceState});
+  my $data = $dbh->selectall_arrayref("SELECT thrid,active FROM jthreads WHERE jmodseq > ?", {}, $args->{sinceState});
 
   if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
     return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
   }
 
-  my %threads;
-  my %delcheck;
-  foreach my $row (@$data) {
-    $threads{$row->{thrid}} = 1;
-    $delcheck{$row->{thrid}} = 1 unless $row->{active};
-  }
-
+  my @changed;
   my @removed;
-  foreach my $key (keys %delcheck) {
-    my ($exists) = $dbh->selectrow_array("SELECT COUNT(DISTINCT jmessages.msgid) FROM jmessages JOIN jmessagemap WHERE thrid = ? AND jmessages.active = 1 AND jmessagemap.active = 1", {}, $key);
-    unless ($exists) {
-      delete $threads{$key};
-      push @removed, $key;
+  foreach my $row (@$data) {
+    if ($row->[1]) {
+      push @changed, $row->[0];
+    }
+    else {
+      push @removed, $row->[0];
     }
   }
-
-  my @changed = keys %threads;
 
   $Self->commit();
 
