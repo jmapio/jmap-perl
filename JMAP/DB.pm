@@ -30,7 +30,8 @@ use MIME::Base64 qw(encode_base64 decode_base64);
 my $json = JSON::XS->new->utf8->canonical();
 
 my %TABLE2GROUPS = (
-  jmessages => ['Email', 'Thread'],
+  jmessages => ['Email'],
+  jthreads => ['Thread'],
   jmailboxes => ['Mailbox'],
   jmessagemap => ['Mailbox'],
   jrawmessage => [],
@@ -178,6 +179,50 @@ sub get_user {
   return $Self->{t}{user};
 }
 
+sub touch_thread_by_msgid {
+  my $Self = shift;
+  my $msgid = shift;
+
+  my $dbh = $Self->dbh();
+
+  my ($thrid) = $dbh->selectrow_array("SELECT thrid FROM jmessages WHERE msgid = ?", {}, $msgid);
+  return unless $thrid;
+
+  my $data = $dbh->selectall_arrayref("SELECT * FROM jmessages WHERE thrid = ? AND active = 1 ORDER BY internaldate", {Slice => {}}, $
+thrid);
+  unless (@$data) {
+    $Self->dmaybedirty('jthreads', {active => 0, data => '[]'}, {thrid => $thrid});
+    return;
+  }
+
+  my %drafts;
+  my @msgs;
+  my %seenmsgs;
+  foreach my $item (@$data) {
+    next unless $item->{isDraft};
+    next unless $item->{msginreplyto};  # push the rest of the drafts to the end
+    push @{$drafts{$item->{msginreplyto}}}, $item->{msgid};
+  }
+  foreach my $item (@$data) {
+    next if $item->{isDraft};
+    push @msgs, $item->{msgid};
+    $seenmsgs{$item->{msgid}} = 1;
+    next unless $item->{msgmessageid};
+    if (my $draftmsgs = $drafts{$item->{msgmessageid}}) {
+      push @msgs, @$draftmsgs;
+      $seenmsgs{$_} = 1 for @$draftmsgs;
+    }
+  }
+  # make sure unlinked drafts aren't forgotten!
+    foreach my $item (@$data) {
+    next if $seenmsgs{$item->{msgid}};
+    push @msgs, $item->{msgid};
+    $seenmsgs{$item->{msgid}} = 1;
+  }
+
+  $Self->dmaybedirty('jthreads', {active => 1, data => $json->encode(\@msgs)}, {thrid => $thrid});
+}
+
 sub add_message {
   my $Self = shift;
   my ($data, $mailboxes) = @_;
@@ -188,6 +233,7 @@ sub add_message {
   foreach my $mailbox (@$mailboxes) {
     $Self->add_message_to_mailbox($data->{msgid}, $mailbox);
   }
+  $Self->touch_thread_by_msgid($data->{msgid});
 }
 
 sub add_message_to_mailbox {
@@ -472,6 +518,7 @@ sub change_message {
   foreach my $jmailboxid (keys %old) {
     $Self->delete_message_from_mailbox($msgid, $jmailboxid);
   }
+  $Self->touch_thread_by_msgid($msgid);
 }
 
 sub _mkone {
@@ -647,6 +694,7 @@ sub delete_message {
   $Self->dmaybedirty('jmessages', {active => 0}, {msgid => $msgid});
   my $oldids = $Self->dbh->selectcol_arrayref("SELECT jmailboxid FROM jmessagemap WHERE msgid = ? AND active = 1", {}, $msgid);
   $Self->delete_message_from_mailbox($msgid, $_) for @$oldids;
+  $Self->touch_thread_by_msgid($msgid);
 }
 
 # returns reported and notFound as a tuple
@@ -991,6 +1039,17 @@ EOF
 
   $dbh->do("CREATE INDEX IF NOT EXISTS jthrid ON jmessages (thrid)");
   $dbh->do("CREATE INDEX IF NOT EXISTS jmsgmessageid ON jmessages (msgmessageid)");
+
+  $dbh->do(<<EOF);
+CREATE TABLE IF NOT EXISTS jthreads (
+  thrid TEXT PRIMARY KEY,
+  data TEXT,
+  jcreated INTEGER,
+  jmodseq INTEGER,
+  mtime DATE,
+  active BOOLEAN
+);
+EOF
 
   $dbh->do(<<EOF);
 CREATE TABLE IF NOT EXISTS jmailboxes (
