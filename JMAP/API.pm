@@ -112,10 +112,29 @@ sub handle_request {
     my $can = $command;
     $can =~ s{/}{_};
     my $FuncRef = $Self->can("api_$can");
-    warn "JMAP CMD $command";
+    my $logbit = '';
     if ($FuncRef) {
       my ($myargs, $error) = $Self->resolve_args($args);
       if ($myargs) {
+        if ($myargs->{ids}) {
+	  my @list = @{$myargs->{ids}};
+          if (@list > 4) {
+            my $len = @list;
+	    $#list = 3;
+	    $list[3] = '...' . $len;
+          }
+          $logbit .= " [" . join(",", @list) . "]";
+        }
+        if ($myargs->{properties}) {
+	  my @list = @{$myargs->{properties}};
+          if (@list > 4) {
+            my $len = @list;
+	    $#list = 3;
+	    $list[3] = '...' . $len;
+          }
+          $logbit .= " (" . join(",", @list) . ")";
+        }
+
         @items = eval { $Self->$FuncRef($myargs, $tag) };
         if ($@) {
           @items = ['error', { type => "serverError", message => "$@" }];
@@ -132,7 +151,7 @@ sub handle_request {
     }
     $Self->push_results($tag, @items);
     my $elapsed = tv_interval ($t0);
-    warn "  took " . $elapsed;
+    warn "JMAP CMD $command$logbit took " . $elapsed . "\n";
   }
 
   return {
