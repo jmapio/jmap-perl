@@ -3137,7 +3137,7 @@ sub api_EmailSubmission_set {
     # before delete.
     my $result = $Self->api_EmailSubmission_get({ids => \@possible, properties => ['emailId']});
     my %emailIds;
-    if ($result->[0] eq 'messageSubmissions') {
+    if ($result->[0] eq 'EmailSubmission/get') {
       %emailIds = map { $_->{id} => $_->{emailId} } @{$result->[1]{list}};
     }
 
