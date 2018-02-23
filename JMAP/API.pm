@@ -942,8 +942,9 @@ sub _match {
   if ($condition->{header}) {
     my $cond = $condition->{header};
     $cond->[1] = '' if @$cond == 1;
-    $storage->{headersearch}{"@$cond"} ||= $Self->{db}->imap_search('header', @$cond);
-    return 0 unless $storage->{headersearch}{"@$cond"}{$item->{msgid}};
+    my $storekey = join(',', @$cond);
+    $storage->{headersearch}{$storekey} ||= $Self->{db}->imap_search('header', @$cond);
+    return 0 unless $storage->{headersearch}{$storekey}{$item->{msgid}};
   }
 
   return 1;
