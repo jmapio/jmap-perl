@@ -115,10 +115,11 @@ sub send_email {
       sasl_username => $Self->{auth}{username},
       sasl_password => $Self->{auth}{password},
   };
-  sendmail($email, {
+  my $res = sendmail($email, {
     %args,
     transport => Email::Sender::Transport::SMTP->new($detail),
   });
+  warn "EMAIL from $args{from} => " . $res->{message};
 }
 
 1;
