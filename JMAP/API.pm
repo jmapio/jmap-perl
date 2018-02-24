@@ -490,32 +490,11 @@ sub api_Mailbox_get {
       role => $item->{role},
       sortOrder => $item->{sortOrder},
       (map { $_ => ($item->{$_} ? $JSON::true : $JSON::false) } qw(mustBeOnlyMailbox mayReadItems mayAddItems mayRemoveItems mayCreateChild mayRename mayDelete)),
+      (map { $_ => $item->{$_} + 0 } qw(totalEmails unreadEmails totalThreads unreadThreads)),
     );
 
     foreach my $key (keys %rec) {
       delete $rec{$key} unless _prop_wanted($args, $key);
-    }
-
-    if (_prop_wanted($args, 'totalEmails')) {
-      ($rec{totalEmails}) = $dbh->selectrow_array("SELECT COUNT(DISTINCT msgid) FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmailboxid = ? AND jmessages.active = 1 AND jmessagemap.active = 1", {}, $item->{jmailboxid});
-      $rec{totalEmails} += 0;
-    }
-    if (_prop_wanted($args, 'unreadEmails')) {
-      ($rec{unreadEmails}) = $dbh->selectrow_array("SELECT COUNT(DISTINCT msgid) FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmailboxid = ? AND jmessages.isUnread = 1 AND jmessages.active = 1 AND jmessagemap.active = 1", {}, $item->{jmailboxid});
-      $rec{unreadEmails} += 0;
-    }
-
-    if (_prop_wanted($args, 'totalThreads')) {
-      ($rec{totalThreads}) = $dbh->selectrow_array("SELECT COUNT(DISTINCT thrid) FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmailboxid = ? AND jmessages.active = 1 AND jmessagemap.active = 1", {}, $item->{jmailboxid});
-      $rec{totalThreads} += 0;
-    }
-
-    # for 'unreadThreads' we need to know threads with ANY unread messages,
-    # so long as they aren't in an ONLY_MAILBOXES folder
-    if (_prop_wanted($args, 'unreadThreads')) {
-      my $sql ="SELECT COUNT(DISTINCT thrid) FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmailboxid = ? AND jmessages.active = 1 AND jmessagemap.active = 1 AND thrid IN (SELECT thrid FROM jmessages JOIN jmessagemap USING (msgid) WHERE isUnread = 1 AND jmessages.active = 1 AND jmessagemap.active = 1)";
-      ($rec{unreadThreads}) = $dbh->selectrow_array($sql, {}, $item->{jmailboxid});
-      $rec{unreadThreads} += 0;
     }
 
     push @list, \%rec;
