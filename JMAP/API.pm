@@ -490,7 +490,7 @@ sub api_Mailbox_get {
       role => $item->{role},
       sortOrder => $item->{sortOrder},
       (map { $_ => ($item->{$_} ? $JSON::true : $JSON::false) } qw(mustBeOnlyMailbox mayReadItems mayAddItems mayRemoveItems mayCreateChild mayRename mayDelete)),
-      (map { $_ => $item->{$_} + 0 } qw(totalEmails unreadEmails totalThreads unreadThreads)),
+      (map { $_ => $item->{$_} || 0 } qw(totalEmails unreadEmails totalThreads unreadThreads)),
     );
 
     foreach my $key (keys %rec) {

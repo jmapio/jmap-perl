@@ -828,9 +828,11 @@ sub do_folder {
   my $batchsize = shift;
 
   Carp::confess("NO FOLDERID") unless $ifolderid;
-  $Self->begin();
 
+  $Self->begin();
   my $data = $Self->dgetone('ifolders', {ifolderid => $ifolderid});
+  $Self->commit();
+
   die "NO SUCH FOLDER $ifolderid" unless $data;
   my $imapname = $data->{imapname};
   my $uidfirst = $data->{uidfirst};
@@ -853,8 +855,6 @@ sub do_folder {
     $fetches{update} = [$uidfirst, $uidnext - 1, 0, $highestmodseq];
   }
 
-  $Self->commit();
-
   return unless keys %fetches;
 
   my $res = $Self->backend_cmd('imap_fetch', $imapname, {
@@ -874,16 +874,7 @@ sub do_folder {
   my $didold = 0;
   if ($res->{backfill}) {
     my $new = $res->{backfill}[1];
-    my $count = 0;
     foreach my $uid (sort { $a <=> $b } keys %$new) {
-      $count++;
-      # release the lock frequently so we don't starve the API
-      if ($count > 50) {
-        $Self->commit();
-        $Self->begin();
-        $Self->{t}{backfilling} = 1;
-        $count = 0;
-      }
       my ($msgid, $thrid) = $Self->calcmsgid($imapname, $uid, $new->{$uid});
       my @labels = $Self->calclabels($forcelabel, $new->{$uid});
       $didold++;
@@ -918,6 +909,7 @@ sub do_folder {
   $Self->begin();
   my ($count) = $Self->dbh->selectrow_array("SELECT COUNT(*) FROM imessages WHERE ifolderid = ?", {}, $ifolderid);
   $Self->commit();
+
   # if we don't know everything, we have to ALWAYS check or moves break
   if ($uidfirst != 1 or $count != $res->{newstate}{exists}) {
     # welcome to the future
