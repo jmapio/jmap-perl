@@ -480,10 +480,8 @@ sub api_Mailbox_get {
 
   my @list;
 
-  my %ONLY_MAILBOXES;
   foreach my $item (@$data) {
     next unless delete $ids{$item->{jmailboxid}};
-    $ONLY_MAILBOXES{$item->{jmailboxid}} = $item->{mustBeOnlyMailbox};
 
     my %rec = (
       id => "$item->{jmailboxid}",
@@ -515,14 +513,7 @@ sub api_Mailbox_get {
     # for 'unreadThreads' we need to know threads with ANY unread messages,
     # so long as they aren't in an ONLY_MAILBOXES folder
     if (_prop_wanted($args, 'unreadThreads')) {
-      my $folderlimit = '';
-      if ($ONLY_MAILBOXES{$item->{jmailboxid}}) {
-        $folderlimit = "AND jmessagemap.jmailboxid = " . $dbh->quote($item->{jmailboxid});
-      } else {
-        my @ids = grep { $ONLY_MAILBOXES{$_} } sort keys %ONLY_MAILBOXES;
-        $folderlimit = "AND jmessagemap.jmailboxid NOT IN (" . join(',', map { $dbh->quote($_) } @ids) . ")" if @ids;
-      }
-      my $sql ="SELECT COUNT(DISTINCT thrid) FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmailboxid = ? AND jmessages.active = 1 AND jmessagemap.active = 1 AND thrid IN (SELECT thrid FROM jmessages JOIN jmessagemap USING (msgid) WHERE isUnread = 1 AND jmessages.active = 1 AND jmessagemap.active = 1 $folderlimit)";
+      my $sql ="SELECT COUNT(DISTINCT thrid) FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmailboxid = ? AND jmessages.active = 1 AND jmessagemap.active = 1 AND thrid IN (SELECT thrid FROM jmessages JOIN jmessagemap USING (msgid) WHERE isUnread = 1 AND jmessages.active = 1 AND jmessagemap.active = 1)";
       ($rec{unreadThreads}) = $dbh->selectrow_array($sql, {}, $item->{jmailboxid});
       $rec{unreadThreads} += 0;
     }
