@@ -243,13 +243,20 @@ sub add_message {
   $Self->touch_thread_by_msgid($data->{msgid});
 }
 
+sub update_mailbox_counts {
+  my $Self = shift;
+  my ($jmailboxid, $jmodseq) = @_;
+
+  $Self->dmaybeupdate('jmailboxes', {jcountsmodseq => $jmodseq}, {jmailboxid => $jmailboxid});
+}
+
 sub add_message_to_mailbox {
   my $Self = shift;
   my ($msgid, $jmailboxid) = @_;
 
   my $data = {msgid => $msgid, jmailboxid => $jmailboxid};
   $Self->dmake('jmessagemap', $data);
-  $Self->dmaybeupdate('jmailboxes', {jcountsmodseq => $data->{jmodseq}}, {jmailboxid => $jmailboxid});
+  $Self->update_mailbox_counts($jmailboxid, $data->{jmodseq});
   $Self->ddirty('jmessages', {}, {msgid => $msgid});
 }
 
@@ -494,7 +501,7 @@ sub delete_message_from_mailbox {
 
   my $data = {active => 0};
   $Self->dmaybedirty('jmessagemap', $data, {msgid => $msgid, jmailboxid => $jmailboxid});
-  $Self->dmaybeupdate('jmailboxes', {jcountsmodseq => $data->{jmodseq}}, {jmailboxid => $jmailboxid});
+  $Self->update_mailbox_counts($jmailboxid, $data->{jmodseq});
   $Self->ddirty('jmessages', {}, {msgid => $msgid});
 }
 
@@ -515,7 +522,7 @@ sub change_message {
   foreach my $jmailboxid (@$newids) {
     if (delete $old{$jmailboxid}) {
       # just bump the modseq
-      $Self->dmaybeupdate('jmailboxes', {jcountsmodseq => $data->{jmodseq}}, {jmailboxid => $jmailboxid}) if $bump;
+      $Self->update_mailbox_counts($jmailboxid, $data->{jmodseq}) if $bump;
     }
     else {
       $Self->add_message_to_mailbox($msgid, $jmailboxid);
