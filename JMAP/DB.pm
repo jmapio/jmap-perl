@@ -247,7 +247,17 @@ sub update_mailbox_counts {
   my $Self = shift;
   my ($jmailboxid, $jmodseq) = @_;
 
-  $Self->dmaybeupdate('jmailboxes', {jcountsmodseq => $jmodseq}, {jmailboxid => $jmailboxid});
+  my %update = (jcountsmodseq => $jmodseq);
+
+  # re-calculate all the counts.  In theory we could do something clever with delta updates, but this will work
+  ($update{totalEmails}) = $Self->dbh->selectrow_array("SELECT COUNT(DISTINCT msgid) FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmailboxid = ? AND jmessages.active = 1 AND jmessagemap.active = 1", {}, $jmailboxid);
+  ($update{unreadEmails}) = $Self->dbh->selectrow_array("SELECT COUNT(DISTINCT msgid) FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmailboxid = ? AND jmessages.isUnread = 1 AND jmessages.active = 1 AND jmessagemap.active = 1", {}, $jmailboxid);
+  ($update{totalThreads}) = $Self->dbh->selectrow_array("SELECT COUNT(DISTINCT thrid) FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmailboxid = ? AND jmessages.active = 1 AND jmessagemap.active = 1", {}, $jmailboxid);
+  ($update{unreadThreads}) = $Self->dbh->selectrow_array("SELECT COUNT(DISTINCT thrid) FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmailboxid = ? AND jmessages.active = 1 AND jmessagemap.active = 1 AND thrid IN (SELECT thrid FROM jmessages JOIN jmessagemap USING (msgid) WHERE isUnread = 1 AND jmessages.active = 1 AND jmessagemap.active = 1)", {}, $jmailboxid);
+
+  $update{$_} += 0 for keys %update;  # make sure they're numeric
+
+  $Self->dmaybeupdate('jmailboxes', \%update, {jmailboxid => $jmailboxid});
 }
 
 sub add_message_to_mailbox {
