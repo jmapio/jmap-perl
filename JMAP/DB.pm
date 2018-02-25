@@ -120,8 +120,7 @@ sub commit {
   my $mbupdates = delete $t->{update_mailbox_counts};
   if ($mbupdates) {
     foreach my $jmailboxid (keys %$mbupdates) {
-      my %update = (jcountsmodseq => $mbupdates->{$jmailboxid});
-
+      my %update;
       # re-calculate all the counts.  In theory we could do something clever with delta updates, but this will work
       ($update{totalEmails}) = $Self->dbh->selectrow_array("SELECT COUNT(DISTINCT msgid) FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmailboxid = ? AND jmessages.active = 1 AND jmessagemap.active = 1", {}, $jmailboxid);
       ($update{unreadEmails}) = $Self->dbh->selectrow_array("SELECT COUNT(DISTINCT msgid) FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmailboxid = ? AND jmessages.isUnread = 1 AND jmessages.active = 1 AND jmessagemap.active = 1", {}, $jmailboxid);
@@ -130,7 +129,7 @@ sub commit {
 
       $update{$_} += 0 for keys %update;  # make sure they're numeric
 
-      $Self->dmaybeupdate('jmailboxes', \%update, {jmailboxid => $jmailboxid});
+      $Self->dmaybedirty('jmailboxes', \%update, {jmailboxid => $jmailboxid});
     }
   }
   if ($t->{modseq} and $Self->{change_cb}) {
@@ -912,10 +911,11 @@ sub dinsert {
 # dinsert with a modseq
 sub dmake {
   my $Self = shift;
-  my ($table, $values) = @_;
+  my ($table, $values, @modseqfields) = @_;
   my $modseq = $Self->dirty($table);
-  $values->{jcreated} = $modseq;
-  $values->{jmodseq} = $modseq;
+  foreach my $field ('jcreated', 'jmodseq', @modseqfields) {
+    $values->{$field} = $modseq;
+  }
   $values->{active} = 1;
   return $Self->dinsert($table, $values);
 }
@@ -981,12 +981,16 @@ sub ddirty {
 
 sub dmaybedirty {
   my $Self = shift;
-  my ($table, $values, $limit) = @_;
+  my ($table, $values, $limit, @modseqfields) = @_;
 
   my $filtered = $Self->filter_values($table, $values, $limit);
   return unless %$filtered;
 
-  $filtered->{jmodseq} = $values->{jmodseq} = $Self->dirty($table);
+  my $modseq = $Self->dirty($table);
+  foreach my $field ('jmodseq', @modseqfields) {
+    $filtered->{$field} = $values->{$field} = $modseq;
+  }
+
   return $Self->dupdate($table, $filtered, $limit);
 }
 
@@ -1103,7 +1107,7 @@ CREATE TABLE IF NOT EXISTS jmailboxes (
   unreadThreads INTEGER,
   jcreated INTEGER,
   jmodseq INTEGER,
-  jcountsmodseq INTEGER,
+  jnoncountsmodseq INTEGER,
   mtime DATE,
   active BOOLEAN
 );

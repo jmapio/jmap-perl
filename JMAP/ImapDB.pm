@@ -256,7 +256,7 @@ sub sync_jmailboxes {
           # need to create intermediate folder ...
           # XXX  - label noselect?
           $id = new_uuid_string();
-          $Self->dmake('jmailboxes', {name => $name, jmailboxid => $id, sortOrder => 4, parentId => $parentId});
+          $Self->dmake('jmailboxes', {name => $name, jmailboxid => $id, sortOrder => 4, parentId => $parentId}, 'jnoncountsmodseq');
           $byname{$parentId}{$name} = $id;
         }
       }
@@ -278,22 +278,22 @@ sub sync_jmailboxes {
       if ($role and $roletoid{$role} and $roletoid{$role} ne $id) {
         # still gotta move it
         $id = $roletoid{$role};
-        $Self->dmaybedirty('jmailboxes', {active => 1, %details}, {jmailboxid => $id});
+        $Self->dmaybedirty('jmailboxes', {active => 1, %details}, {jmailboxid => $id}, 'jnoncountsmodseq');
       }
       elsif (not $folder->{active}) {
         # reactivate!
-        $Self->dmaybedirty('jmailboxes', {active => 1}, {jmailboxid => $id});
+        $Self->dmaybedirty('jmailboxes', {active => 1}, {jmailboxid => $id}, 'jnoncountsmodseq');
       }
     }
     else {
       # case: role - we need to see if there's a case for moving this thing
       if ($role and $roletoid{$role}) {
         $id = $roletoid{$role};
-        $Self->dmaybedirty('jmailboxes', {active => 1, %details}, {jmailboxid => $id});
+        $Self->dmaybedirty('jmailboxes', {active => 1, %details}, {jmailboxid => $id}, 'jnoncountsmodseq');
       }
       else {
         $id = $folder->{uniqueid} || new_uuid_string();
-        $Self->dmake('jmailboxes', {role => $role, jmailboxid => $id, %details});
+        $Self->dmake('jmailboxes', {role => $role, jmailboxid => $id, %details}, 'jnoncountsmodseq');
         $byname{$parentId}{$name} = $id;
         $roletoid{$role} = $id if $role;
       }
@@ -306,7 +306,7 @@ sub sync_jmailboxes {
     my $id = $mailbox->{jmailboxid};
     next unless $mailbox->{active};
     next if $seen{$id};
-    $Self->dupdate('jmailboxes', {active => 0}, {jmailboxid => $id});
+    $Self->dmaybeupdate('jmailboxes', {active => 0}, {jmailboxid => $id}, 'jnoncountsmodseq');
   }
 
   $Self->commit();
@@ -1539,7 +1539,7 @@ sub create_mailboxes {
       $Self->begin();
       my $jmailboxid = new_uuid_string();
       my $ifolderid = $Self->dinsert('ifolders', {sep => $sep, imapname => $imapname, label => $mailbox->{name}, jmailboxid => $jmailboxid});
-      $Self->dmake('jmailboxes', {name => $mailbox->{name}, jmailboxid => $jmailboxid, sortOrder => $mailbox->{sortOrder} || 4, parentId => $mailbox->{parentId}});
+      $Self->dmake('jmailboxes', {name => $mailbox->{name}, jmailboxid => $jmailboxid, sortOrder => $mailbox->{sortOrder} || 4, parentId => $mailbox->{parentId}}, 'jnoncountsmodseq');
 
       $Self->commit();
 

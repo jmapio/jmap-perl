@@ -530,7 +530,7 @@ sub api_Mailbox_changes {
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $sinceState <= $user->{jdeletedmodseq});
 
-  my $data = $dbh->selectall_arrayref("SELECT * FROM jmailboxes WHERE jmodseq > ?1 OR jcountsmodseq > ?1", {Slice => {}}, $sinceState);
+  my $data = $dbh->selectall_arrayref("SELECT * FROM jmailboxes WHERE jmodseq > ?", {Slice => {}}, $sinceState);
 
   my @changed;
   my @removed;
@@ -538,7 +538,7 @@ sub api_Mailbox_changes {
   foreach my $item (@$data) {
     if ($item->{active}) {
       push @changed, $item->{jmailboxid};
-      $onlyCounts = 0 if $item->{jmodseq} > $sinceState;
+      $onlyCounts = 0 if $item->{jnoncountsmodseq} > $sinceState;
     }
     else {
       push @removed, $item->{jmailboxid};
