@@ -259,7 +259,9 @@ sub do_proxy {
   http_get($dest, sub {
     my ($content, $headers) = @_;
 
-    $req->respond([200, 'ok', $headers, $content]);
+    warn "PROXY $headers->{URL} => $headers->{Status} $headers->{Reason}\n";
+
+    $req->respond([$headers->{Status}, 'ok', $headers, $content]);
   });
 }
 
@@ -657,6 +659,8 @@ sub prod_idler {
   unless ($idler{$accountid}) {
     idler($accountid,
       sub {
+        my $arg = shift;
+        warn "IDLER: $arg\n";
         send_backend_request("$accountid:sync", 'sync', $accountid);
       },
     );
