@@ -354,18 +354,6 @@ sub attachments {
   my $num = 0;
   my @res;
 
-  my $draftatt = $eml->header('X-JMAP-Draft-Attachments');
-  if ($draftatt) {
-    eval {
-      my $json = decode_base64($draftatt);
-      my $attach = decode_json($json);
-      push @res, @$attach;
-    };
-    if ($@) {
-      warn "FAILED TO PARSE $draftatt => $@";
-    }
-  }
-
   foreach my $sub ($eml->subparts()) {
     $num++;
     my $type = $sub->content_type();
@@ -504,7 +492,6 @@ sub hasatt {
   my $eml = shift;
   my $type = $eml->content_type() || 'text/plain';
   return 1 if $type =~ m{(image|video|application)/};
-  return 1 if $eml->header('X-JMAP-Draft-Attachments');
   foreach my $sub ($eml->subparts()) {
     my $res = hasatt($sub);
     return $res if $res;
@@ -570,7 +557,6 @@ sub _mkemail {
 sub _makemsg {
   my $Self = shift;
   my $args = shift;
-  my $isDraft = shift;
 
   my $header = [
     From => _mkemail($args->{from}),
@@ -607,12 +593,6 @@ sub _makemsg {
   }
 
   my @attachments = $args->{attachments} ? @{$args->{attachments}} : ();
-
-  if (@attachments and not $isDraft) {
-    my $encoded = encode_base64($json->encode(\@attachments), '');
-    push @$header, "X-JMAP-Draft-Attachments" => $encoded;
-    @attachments = ();
-  }
 
   if (@attachments) {
     # most complex case
