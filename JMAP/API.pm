@@ -1990,6 +1990,7 @@ sub api_CalendarEvent_query {
   push @res, ['CalendarEvent/query', {
     accountId => $accountid,
     filter => $args->{filter},
+    sort => $args->{sort},
     state => $newState,
     position => $start,
     total => scalar(@$data),
@@ -2284,6 +2285,7 @@ sub api_Contact_query {
   push @res, ['Contact/query', {
     accountId => $accountid,
     filter => $args->{filter},
+    sort => $args->{sort},
     state => $newState,
     position => $start,
     total => scalar(@$data),
@@ -3254,6 +3256,7 @@ sub api_StorageNode_query {
   return ['StorageNode/query', {
     accountId => $accountid,
     filter => $args->{filter},
+    sort => $args->{sort},
     state => $newState,
     position => $start,
     total => scalar(@$data),
@@ -3277,7 +3280,7 @@ sub api_StorageNode_get {
 
   #properties: String[] A list of properties to fetch for each message.
 
-  my $data = map { $_->{id} => $_ } dummy_storage_node_data();
+  my $data = { map { $_->{id} => $_ } dummy_storage_node_data() };
 
   my %want;
   if ($args->{ids}) {
