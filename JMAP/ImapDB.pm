@@ -1535,10 +1535,20 @@ sub create_mailboxes {
     my $res = $Self->backend_cmd('create_mailbox', $imapname);
     if ($res->[1] eq 'ok') {
       my $mailbox = $new->{$cid};
+      my $status = $res->[2];
       # yeah, I don't care so much here about the cost of lots of transactions, creating a mailbox is expensive
       $Self->begin();
       my $jmailboxid = new_uuid_string();
-      my $ifolderid = $Self->dinsert('ifolders', {sep => $sep, imapname => $imapname, label => $mailbox->{name}, jmailboxid => $jmailboxid});
+      my $ifolderid = $Self->dinsert('ifolders', {
+	sep => $sep,
+        imapname => $imapname,
+        label => $mailbox->{name},
+        jmailboxid => $jmailboxid,
+        uidvalidity => $status->{uidvalidity},
+        uidnext => $status->{uidnext},
+        uidfirst => $status->{uidnext},
+        highestmodseq => $status->{highestmodseq},
+      });
       $Self->dmake('jmailboxes', {name => $mailbox->{name}, jmailboxid => $jmailboxid, sortOrder => $mailbox->{sortOrder} || 4, parentId => $mailbox->{parentId}}, 'jnoncountsmodseq');
 
       $Self->commit();

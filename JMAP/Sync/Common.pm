@@ -697,15 +697,17 @@ sub create_mailbox {
 
   my $res = $imap->create($imapname);
 
-  my @res = ($res);
-  unless ($res) {
+  unless ($res and $res eq 'ok') {
     my $err = $imap->get_last_error();
     if ($err =~ m/Response was : (\w+) - (.*)/) {
-      @res = ($1, $2);
+      return ['create', $1, $2];
     }
+    return ['create', $res];
   }
 
-  return ['create', @res];
+  my $data = $Self->imap_status([$imapname]);
+
+  return ['create', 'ok', $data->{$imapname}];
 }
 
 sub rename_mailbox {
