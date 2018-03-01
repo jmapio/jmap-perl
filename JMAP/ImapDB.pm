@@ -227,7 +227,7 @@ sub sync_jmailboxes {
   foreach my $mailbox (@$jmailboxes) {
     $jbyid{$mailbox->{jmailboxid}} = $mailbox;
     $roletoid{$mailbox->{role}} = $mailbox->{jmailboxid} if $mailbox->{role};
-    $byname{$mailbox->{parentId}}{$mailbox->{name}} = $mailbox->{jmailboxid};
+    $byname{$mailbox->{parentId} // ''}{$mailbox->{name}} = $mailbox->{jmailboxid};
   }
 
   my %seen;
@@ -256,7 +256,12 @@ sub sync_jmailboxes {
           # need to create intermediate folder ...
           # XXX  - label noselect?
           $id = new_uuid_string();
-          $Self->dmake('jmailboxes', {name => $name, jmailboxid => $id, sortOrder => 4, parentId => $parentId}, 'jnoncountsmodseq');
+          $Self->dmake('jmailboxes', {
+            name => $name,
+            jmailboxid => $id,
+            sortOrder => 4,
+            parentId => $parentId,
+          }, 'jnoncountsmodseq');
           $byname{$parentId}{$name} = $id;
         }
       }
@@ -1550,7 +1555,12 @@ sub create_mailboxes {
         uidfirst => $status->{uidnext},
         highestmodseq => $status->{highestmodseq},
       });
-      $Self->dmake('jmailboxes', {name => $mailbox->{name}, jmailboxid => $jmailboxid, sortOrder => $mailbox->{sortOrder} || 4, parentId => $mailbox->{parentId}}, 'jnoncountsmodseq');
+      $Self->dmake('jmailboxes', {
+        name => $mailbox->{name},
+        jmailboxid => $jmailboxid,
+        sortOrder => $mailbox->{sortOrder} // 4,
+        parentId => $mailbox->{parentId} // '',
+      }, 'jnoncountsmodseq');
 
       $Self->commit();
 
