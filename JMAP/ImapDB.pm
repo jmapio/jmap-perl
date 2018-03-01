@@ -865,7 +865,8 @@ sub do_folder {
 
   if ($res->{newstate}{uidvalidity} != $uidvalidity) {
     # going to want to nuke everything for the existing folder and create this - but for now, just die
-    die "UIDVALIDITY CHANGED $imapname: $uidvalidity => $res->{newstate}{uidvalidity}";
+    use Data::Dumper;
+    die "UIDVALIDITY CHANGED $imapname: $uidvalidity => $res->{newstate}{uidvalidity}" . Dumper($data);
   }
 
   $Self->begin();
