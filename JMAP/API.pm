@@ -258,6 +258,21 @@ sub api_UserPreferences_get {
   }];
 }
 
+sub update_singleton_value {
+  my $Self = shift;
+  my $fun = shift;
+  my $update = shift;
+
+  my $data = $Self->$fun({ids => ['singleton']});
+  warn "UPDATE GOT " . Dumper($data);
+  my $old = $data->[1]{list}[0];
+  foreach my $key (keys %$update) {
+    $old->{$key} = $update->{$key};
+  }
+
+  return $old;
+}
+
 sub api_UserPreferences_set {
   my $Self = shift;
   my $args = shift;
@@ -269,6 +284,8 @@ sub api_UserPreferences_set {
     if ($args->{accountId} and $args->{accountId} ne $accountid);
   $Self->commit();
 
+  my $oldState = "$user->{jstateUserPreferences}";
+
   my $create = $args->{create} || {};
   my $update = $args->{update} || {};
   my $destroy = $args->{destroy} || [];
@@ -279,17 +296,25 @@ sub api_UserPreferences_set {
   my $notUpdated = {};
   foreach my $key (keys %$update) {
     if ($key eq 'singleton') {
-      $updated->{singleton} = eval { $Self->{db}->update_prefs('UserPreferences', $update->{singleton}) };
-      $notUpdated->{singleton} = $@ if $@;
+      my $value = $Self->update_singleton_value('api_UserPreferences_get', $update->{singleton});
+      eval { $Self->{db}->update_prefs('UserPreferences', $value) };
+      if ($@) {
+        $notUpdated->{singleton} = "$@";
+      }
+      else {
+        $updated->{singleton} = $JSON::true,
+      }
     }
     else {
       $notUpdated->{$key} = "Can't update anything except singleton";
     }
   }
   my $destroyed = [];
-  my $notDestroyed = { map { $_ => "Can't delete singleton types" } keys %$destroy };
+  my $notDestroyed = { map { $_ => "Can't delete singleton types" } @$destroy };
 
-  my $oldState = "$user->{jstateUserPreferences}";
+  $Self->begin();
+  $user = $Self->{db}->get_user();
+  $Self->commit();
   my $newState = "$user->{jstateUserPreferences}";
 
   my @res;
@@ -318,7 +343,7 @@ sub api_ClientPreferences_get {
   my $data = $Self->{db}->dbh->selectall_arrayref("SELECT payload FROM jclientprefs");
   $Self->commit();
 
-  my @list = map { decode_json($_) } @$data;
+  my @list = map { eval {decode_json($_)} || () } @$data;
 
   my $state = "$user->{jstateClientPreferences}";
 
@@ -404,13 +429,16 @@ sub api_ClientPreferences_set {
   my $update = $args->{update} || {};
   my $destroy = $args->{destroy} || [];
 
+  my $oldState = "$user->{jstateClientPreferences}";
+
   my $created = {};
   my $notCreated = { map { $_ => "Can't create singleton types" } keys %$create };
   my $updated = {};
   my $notUpdated = {};
   foreach my $key (keys %$update) {
     if ($key eq 'singleton') {
-      $updated->{singleton} = eval { $Self->{db}->update_prefs('ClientPreferences', $update->{singleton}) };
+      my $value = $Self->update_singleton_value('api_ClientPreferences_get', $update->{singleton});
+      $updated->{singleton} = eval { $Self->{db}->update_prefs('ClientPreferences', $value) };
       $notUpdated->{singleton} = $@ if $@;
     }
     else {
@@ -418,9 +446,11 @@ sub api_ClientPreferences_set {
     }
   }
   my $destroyed = [];
-  my $notDestroyed = { map { $_ => "Can't delete singleton types" } keys %$destroy };
+  my $notDestroyed = { map { $_ => "Can't delete singleton types" } @$destroy };
 
-  my $oldState = "$user->{jstateClientPreferences}";
+  $Self->begin();
+  $user = $Self->{db}->get_user();
+  $Self->commit();
   my $newState = "$user->{jstateClientPreferences}";
 
   my @res;
@@ -436,6 +466,8 @@ sub api_ClientPreferences_set {
     notDestroyed => $notDestroyed,
   }];
 
+
+  warn "RETURNING" . Dumper(\@res);
   return @res;
 }
 
@@ -531,6 +563,8 @@ sub api_CalendarPreferences_set {
     if ($args->{accountId} and $args->{accountId} ne $accountid);
   $Self->commit();
 
+  my $oldState = "$user->{jstateCalendarPreferences}";
+
   my $create = $args->{create} || {};
   my $update = $args->{update} || {};
   my $destroy = $args->{destroy} || [];
@@ -541,7 +575,8 @@ sub api_CalendarPreferences_set {
   my $notUpdated = {};
   foreach my $key (keys %$update) {
     if ($key eq 'singleton') {
-      $updated->{singleton} = eval { $Self->{db}->update_prefs('CalendarPreferences', $update->{singleton}) };
+      my $value = $Self->update_singleton_value('api_CalendarPreferences_get', $update->{singleton});
+      $updated->{singleton} = eval { $Self->{db}->update_prefs('CalendarPreferences', $value) };
       $notUpdated->{singleton} = $@ if $@;
     }
     else {
@@ -549,9 +584,12 @@ sub api_CalendarPreferences_set {
     }
   }
   my $destroyed = [];
-  my $notDestroyed = { map { $_ => "Can't delete singleton types" } keys %$destroy };
+  my $notDestroyed = { map { $_ => "Can't delete singleton types" } @$destroy };
 
-  my $oldState = "$user->{jstateCalendarPreferences}";
+  $Self->begin();
+  $user = $Self->{db}->get_user();
+  $Self->commit();
+
   my $newState = "$user->{jstateCalendarPreferences}";
 
   my @res;

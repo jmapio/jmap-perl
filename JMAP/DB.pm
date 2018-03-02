@@ -266,14 +266,14 @@ sub update_prefs {
   my $type = shift;
   my $data = shift;
 
-  my %map = {
+  my %map = (
     UserPreferences => 'juserprefs',
     ClientPreferences => 'jclientprefs',
     CalendarPreferences => 'jcalendarprefs',
-  };
+  );
 
   $Self->begin();
-  $Self->dmaybeupdate($map{$type}, { payload => $json->encode($data) }, { jprefid => $data->{id} });
+  $Self->dmake($map{$type}, { jprefid => $data->{id}, payload => $json->encode($data) });
   $Self->commit();
 }
 
