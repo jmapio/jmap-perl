@@ -1836,12 +1836,14 @@ sub create_contact_groups {
       $notcreated{$cid} = {type => 'notFound', description => "No such addressbook on server"};
       next;
     }
+    my $name = $contact->{name} || 'Unknown';
+
     my ($card) = Net::CardDAVTalk::VCard->new();
     my $uid = new_uuid_string();
     $card->uid($uid);
     $card->VKind('group');
-    my $name = $contact->{name} || 'Unknown';
     $card->V('n', 'value', $name);
+    $card->VFN($name);
     if (exists $contact->{contactIds}) {
       my @ids = @{$contact->{contactIds}};
       $card->VGroupContactUIDs(\@ids);
