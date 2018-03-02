@@ -1188,6 +1188,7 @@ sub api_Email_queryChanges {
 sub _extract_terms {
   my $filter = shift;
   return () unless $filter;
+  return map { _extract_terms($_) } @$filter if ref($filter) eq 'ARRAY';
   my @list;
   push @list, _extract_terms($filter->{conditions});
   push @list, $filter->{body} if $filter->{body};
