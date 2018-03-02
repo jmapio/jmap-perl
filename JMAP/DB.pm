@@ -261,6 +261,22 @@ sub add_message {
   $Self->touch_thread_by_msgid($data->{msgid});
 }
 
+sub update_prefs {
+  my $Self = shift;
+  my $type = shift;
+  my $data = shift;
+
+  my %map = {
+    UserPreferences => 'juserprefs',
+    ClientPreferences => 'jclientprefs',
+    CalendarPreferences => 'jcalendarprefs',
+  };
+
+  $Self->begin();
+  $Self->dmaybeupdate($map{$type}, { payload => $json->encode($data) }, { jprefid => $data->{id} });
+  $Self->commit();
+}
+
 sub update_mailbox_counts {
   my $Self = shift;
   my ($jmailboxid, $jmodseq) = @_;

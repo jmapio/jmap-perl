@@ -258,6 +258,56 @@ sub api_UserPreferences_get {
   }];
 }
 
+sub api_UserPreferences_set {
+  my $Self = shift;
+  my $args = shift;
+
+  $Self->begin();
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+  $Self->commit();
+
+  my $create = $args->{create} || {};
+  my $update = $args->{update} || {};
+  my $destroy = $args->{destroy} || [];
+
+  my $created = {};
+  my $notCreated = { map { $_ => "Can't create singleton types" } keys %$create };
+  my $updated = {};
+  my $notUpdated = {};
+  foreach my $key (keys %$update) {
+    if ($key eq 'singleton') {
+      $updated->{singleton} = eval { $Self->{db}->update_prefs('UserPreferences', $update->{singleton}) };
+      $notUpdated->{singleton} = $@ if $@;
+    }
+    else {
+      $notUpdated->{$key} = "Can't update anything except singleton";
+    }
+  }
+  my $destroyed = [];
+  my $notDestroyed = { map { $_ => "Can't delete singleton types" } keys %$destroy };
+
+  my $oldState = "$user->{jstateUserPreferences}";
+  my $newState = "$user->{jstateUserPreferences}";
+
+  my @res;
+  push @res, ['UserPreferences/set', {
+    accountId => $accountid,
+    oldState => $oldState,
+    newState => $newState,
+    created => $created,
+    notCreated => $notCreated,
+    updated => $updated,
+    notUpdated => $notUpdated,
+    destroyed => $destroyed,
+    notDestroyed => $notDestroyed,
+  }];
+
+  return @res;
+}
+
 sub api_ClientPreferences_get {
   my $Self = shift;
   my $args = shift;
@@ -339,6 +389,56 @@ sub api_ClientPreferences_get {
   }];
 }
 
+sub api_ClientPreferences_set {
+  my $Self = shift;
+  my $args = shift;
+
+  $Self->begin();
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+  $Self->commit();
+
+  my $create = $args->{create} || {};
+  my $update = $args->{update} || {};
+  my $destroy = $args->{destroy} || [];
+
+  my $created = {};
+  my $notCreated = { map { $_ => "Can't create singleton types" } keys %$create };
+  my $updated = {};
+  my $notUpdated = {};
+  foreach my $key (keys %$update) {
+    if ($key eq 'singleton') {
+      $updated->{singleton} = eval { $Self->{db}->update_prefs('ClientPreferences', $update->{singleton}) };
+      $notUpdated->{singleton} = $@ if $@;
+    }
+    else {
+      $notUpdated->{$key} = "Can't update anything except singleton";
+    }
+  }
+  my $destroyed = [];
+  my $notDestroyed = { map { $_ => "Can't delete singleton types" } keys %$destroy };
+
+  my $oldState = "$user->{jstateClientPreferences}";
+  my $newState = "$user->{jstateClientPreferences}";
+
+  my @res;
+  push @res, ['ClientPreferences/set', {
+    accountId => $accountid,
+    oldState => $oldState,
+    newState => $newState,
+    created => $created,
+    notCreated => $notCreated,
+    updated => $updated,
+    notUpdated => $notUpdated,
+    destroyed => $destroyed,
+    notDestroyed => $notDestroyed,
+  }];
+
+  return @res;
+}
+
 sub api_CalendarPreferences_get {
   my $Self = shift;
   my $args = shift;
@@ -418,6 +518,56 @@ sub api_CalendarPreferences_get {
     state => $state,
     list => _filter_list(\@list, $args->{ids}),
   }];
+}
+
+sub api_CalendarPreferences_set {
+  my $Self = shift;
+  my $args = shift;
+
+  $Self->begin();
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+  $Self->commit();
+
+  my $create = $args->{create} || {};
+  my $update = $args->{update} || {};
+  my $destroy = $args->{destroy} || [];
+
+  my $created = {};
+  my $notCreated = { map { $_ => "Can't create singleton types" } keys %$create };
+  my $updated = {};
+  my $notUpdated = {};
+  foreach my $key (keys %$update) {
+    if ($key eq 'singleton') {
+      $updated->{singleton} = eval { $Self->{db}->update_prefs('CalendarPreferences', $update->{singleton}) };
+      $notUpdated->{singleton} = $@ if $@;
+    }
+    else {
+      $notUpdated->{$key} = "Can't update anything except singleton";
+    }
+  }
+  my $destroyed = [];
+  my $notDestroyed = { map { $_ => "Can't delete singleton types" } keys %$destroy };
+
+  my $oldState = "$user->{jstateCalendarPreferences}";
+  my $newState = "$user->{jstateCalendarPreferences}";
+
+  my @res;
+  push @res, ['CalendarPreferences/set', {
+    accountId => $accountid,
+    oldState => $oldState,
+    newState => $newState,
+    created => $created,
+    notCreated => $notCreated,
+    updated => $updated,
+    notUpdated => $notUpdated,
+    destroyed => $destroyed,
+    notDestroyed => $notDestroyed,
+  }];
+
+  return @res;
 }
 
 sub api_VacationResponse_get {
