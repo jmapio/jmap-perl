@@ -1196,7 +1196,7 @@ sub _extract_terms {
   return @list;
 }
 
-sub SearchSnippet_get {
+sub api_SearchSnippet_get {
   my $Self = shift;
   my $args = shift;
 
