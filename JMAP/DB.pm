@@ -543,16 +543,16 @@ sub get_blob {
   my $Self = shift;
   my $blobId = shift;
 
-  return () unless $blobId =~ m/^([mf])-([^-]+)(?:-(.*))//;
+  return () unless $blobId =~ m/^([mf])-([^-]+)(?:-(.*))?/;
   my $source = $1;
   my $id = $2;
   my $part = $3;
 
   if ($source eq 'f') {
-    return $Self->{db}->get_file($id);
+    return $Self->get_file($id);
   }
   if ($source eq 'm') {
-    return $Self->{db}->get_raw_message($id, $part);
+    return $Self->get_raw_message($id, $part);
   }
 }
 
