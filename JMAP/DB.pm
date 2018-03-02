@@ -42,6 +42,8 @@ my %TABLE2GROUPS = (
   jcontactgroups => ['ContactGroup'],
   jcontactgroupmap => ['ContactGroup'],
   jcontacts => ['Contact'],
+  jclientprefs => ['ClientPreferences'],
+  jcalendarprefs => ['CalendarPreferences'],
 );
 
 sub new {
@@ -1188,7 +1190,9 @@ CREATE TABLE IF NOT EXISTS account (
   jstateContactGroup TEXT NOT NULL DEFAULT 1,
   jstateCalendar TEXT NOT NULL DEFAULT 1,
   jstateCalendarEvent TEXT NOT NULL DEFAULT 1,
-  jstateEmailSubmission TEXT NOT NULL DEFAULT 1,
+  jstateUserPreferences TEXT NOT NULL DEFAULT 1,
+  jstateClientPreferences TEXT NOT NULL DEFAULT 1,
+  jstateCalendarPreferences TEXT NOT NULL DEFAULT 1,
   mtime DATE
 );
 EOF
@@ -1315,6 +1319,39 @@ CREATE TABLE IF NOT EXISTS jsubmission (
   thrid TEXT,
   envelope TEXT,
   sendAt INTEGER,
+  jcreated INTEGER,
+  jmodseq INTEGER,
+  mtime DATE,
+  active BOOLEAN
+);
+EOF
+
+  $dbh->do(<<EOF);
+CREATE TABLE IF NOT EXISTS juserprefs (
+  jprefid TEXT PRIMARY KEY,
+  payload TEXT,
+  jcreated INTEGER,
+  jmodseq INTEGER,
+  mtime DATE,
+  active BOOLEAN
+);
+EOF
+
+  $dbh->do(<<EOF);
+CREATE TABLE IF NOT EXISTS jclientprefs (
+  jprefid TEXT PRIMARY KEY,
+  payload TEXT,
+  jcreated INTEGER,
+  jmodseq INTEGER,
+  mtime DATE,
+  active BOOLEAN
+);
+EOF
+
+  $dbh->do(<<EOF);
+CREATE TABLE IF NOT EXISTS jcalendarprefs (
+  jprefid TEXT PRIMARY KEY,
+  payload TEXT,
   jcreated INTEGER,
   jmodseq INTEGER,
   mtime DATE,

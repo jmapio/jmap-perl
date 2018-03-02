@@ -175,13 +175,24 @@ sub idmap {
   return $val;
 }
 
-sub refreshSyncedCalendars {
+sub api_Calendar_refreshSynced {
   my $Self = shift;
 
   $Self->{db}->sync_calendars();
 
   # no response
-  return ();
+  return ['Calendar/refreshSynced', {}];
+}
+
+sub _filter_list {
+  my $list = shift;
+  my $ids = shift;
+
+  return $list unless $ids;
+
+  my %map = map { $_ => 1 } @$ids;
+
+  return [ grep { $map{$_->{id}} } @$list ];
 }
 
 sub api_UserPreferences_get {
@@ -191,7 +202,12 @@ sub api_UserPreferences_get {
   $Self->begin();
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
+  my $data = $Self->{db}->dbh->selectall_arrayref("SELECT payload FROM juserprefs");
   $Self->commit();
+
+  my @list = map { decode_json($_) } @$data;
+
+  my $state = "$user->{jstateUserPreferences}";
 
 # - **remoteServices**: `Object`
 #   Maps service type, e.g. 'fs', to an array of services the user has connected to their account, e.g. 'dropbox'.
@@ -219,10 +235,8 @@ sub api_UserPreferences_get {
 
 #   If the language or theme preference is set, the response MUST also set the  appropriate cookie.
 
-  return ['UserPreferences/get', { 
-    accountId => $accountid,
-    state => 'dummy',
-    list => [{
+  unless (@list) {
+    push @list, {
       id => 'singleton',
       remoteServices => {},
       displayName => $user->{displayname} || $user->{email},
@@ -234,7 +248,13 @@ sub api_UserPreferences_get {
       defaultIdentityId => 'id1',
       useDefaultFromOnSMTP => $JSON::false,
       excludeContactsFromBlacklist => $JSON::false,
-    }],
+    };
+  }
+
+  return ['UserPreferences/get', { 
+    accountId => $accountid,
+    state => $state,
+    list => _filter_list(\@list, $args->{ids}),
   }];
 }
 
@@ -245,7 +265,14 @@ sub api_ClientPreferences_get {
   $Self->begin();
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
+  my $data = $Self->{db}->dbh->selectall_arrayref("SELECT payload FROM jclientprefs");
   $Self->commit();
+
+  my @list = map { decode_json($_) } @$data;
+
+  my $state = "$user->{jstateClientPreferences}";
+
+# - **remoteServices**: `Object`
 
 # - **useSystemFont**: `Boolean`
 #   Should the system font be used for the UI rather than FastMail's custom font?
@@ -271,10 +298,8 @@ sub api_ClientPreferences_get {
 # - **viewTextOnly**: `Boolean`
 #   If true, HTML messages will be converted to plain text before being shown,
 
-  return ['ClientPreferences/get', {
-    accountId => $accountid,
-    state => 'dummy',
-    list => [{
+  unless (@list) {
+    push @list, {
       id => 'singleton',
       useSystemFont => $JSON::false,
       enableKBShortcuts => $JSON::true,
@@ -304,7 +329,94 @@ sub api_ClientPreferences_get {
       replyAttribution => '',
       canWriteSharedContacts => $JSON::false,
       contactsSort => 'lastName',
-    }],
+    };
+  }
+
+  return ['ClientPreferences/get', {
+    accountId => $accountid,
+    state => $state,
+    list => _filter_list(\@list, $args->{ids}),
+  }];
+}
+
+sub api_CalendarPreferences_get {
+  my $Self = shift;
+  my $args = shift;
+
+  $Self->begin();
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  my $data = $Self->{db}->dbh->selectall_arrayref("SELECT payload FROM jcalendarprefs");
+  my ($defaultCalendar) = $Self->{db}->dbh->selectrow_array("SELECT jcalendarid FROM jcalendars WHERE active = 1 LIMIT 1");
+  my ($archiveId) = $Self->{db}->dbh->selectrow_array("SELECT jmailboxid FROM jmailboxes WHERE role = 'archive' AND active = 1 LIMIT 1");
+  $Self->commit();
+
+  my @list = map { decode_json($_) } @$data;
+
+  my $state = "$user->{jstateCalendarPreferences}";
+
+#- **useTimeZones**: `Boolean`
+#  If true, enables multiple time zone support.
+#- **firstDayOfWeek**: `Number`
+#  0 => Sunday, 1 => Monday, etc. Initially defaults to 1.
+#- **showWeekNumbers**: `Boolean`
+#  If true, shows week number in overview screen.
+#- **showDeclined**: `Boolean`
+#  If true, show events that you have RSVPed "no" to.
+#- **birthdaysAreVisible**: `Boolean`
+#  Should birthdays be shown on the calendar?
+#- **defaultCalendarId**: `String`
+#  The id of the user's default calendar.
+#- **defaultAlerts**: `Alert[]|null`
+#  See getCalendarEvents for description of an Alert object.
+#- **defaultAllDayAlerts**: `Alert[]|null`
+#  See getCalendarEvents for description of an Alert object.
+#- **autoAddInvitations**: `Boolean`
+#  If true, whenever an event invitation is received, add the event to the user's calendar with the id given in *autoAddCalendarId*.
+#- **autoAddCalendarId**: `String`
+#  The id of the calendar to auto-add to.
+#- **onlyAutoAddIfInGroup**: `Boolean`
+#  If true, only automatically add the event if the sender of the invitation is in the contact group given by the *autoAddGroupId* preference.
+#- **autoAddGroupId**: `String|null`
+#  The id of the contact group to auto-add events from, or null for All Contacts.
+#- **markReadAndFileAutoAdd**: `Boolean`
+#  If true, for emails where the event is auto-added to the calendar, mark the email as read and file in the folder specified by *autoAddFileIn*.
+#- **autoAddFileIn**: `String`
+#  The id of the folder to file event invitations in; should default to the Archive folder.
+#- **autoUpdate**: `Boolean`
+#  If true, whenever an update to an event already in the user's calendar is received, update the event in the user's calendar, or delete it if the event is cancelled.
+#- **markReadAndFileAutoUpdate**: `Boolean`
+#  If true, for emails where the event is auto-updated, mark the email as read and file in the folder specified by *autoUpdateFileIn*.
+#- **autoUpdateFileIn**: `String`
+#  The id of the folder to file event updates in; should default to the Archive folder.
+
+  unless (@list) {
+    push @list, {
+      id => 'singleton',
+      useTimeZones => $JSON::false,
+      firstDayOfWeek => 1,
+      showWeekNumbers => $JSON::false,
+      showDeclined => $JSON::false,
+      birthdaysAreVisible => $JSON::true,
+      defaultCalendar => $defaultCalendar,
+      defaultAlerts => undef, 
+      defaultAllDayAlerts => undef,
+      autoAddInvitations => $JSON::false,
+      autoAddCalendar => $JSON::false,
+      onlyAutoAddIfInGroup => $JSON::false,
+      autoAddGroup => undef,
+      markReadAndFileAutoAdd => $JSON::false,
+      autoAddFileIn => $archiveId,
+      autoUpdate => $JSON::false,
+      markReadAndFileAutoUpdate => $JSON::false,
+      autoUpdateFileIn => $archiveId,
+    };
+  }
+
+  return ['CalendarPreferences/get', {
+    accountId => $accountid,
+    state => $state,
+    list => _filter_list(\@list, $args->{ids}),
   }];
 }
 
@@ -330,17 +442,6 @@ sub api_VacationResponse_get {
       htmlBody => undef,
     }],
   }];
-}
-
-sub _filter_list {
-  my $list = shift;
-  my $ids = shift;
-
-  return $list unless $ids;
-
-  my %map = map { $_ => 1 } @$ids;
-
-  return [ grep { $map{$_->{id}} } @$list ];
 }
 
 sub api_Quota_get {
