@@ -595,7 +595,7 @@ sub handle_raw {
   my ($db, $req) = @_;
 
   my $api = JMAP::API->new($db);
-  my ($type, $content, $filename) = $api->getRawEmail($req);
+  my ($type, $content, $filename) = $api->getRawBlob($req);
 
   return ['raw', [$type, $content, $filename]];
 }

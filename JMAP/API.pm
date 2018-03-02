@@ -1390,29 +1390,15 @@ sub api_Email_get {
 }
 
 # NOT AN API CALL as such...
-sub getRawEmail {
+sub getRawBlob {
   my $Self = shift;
   my $selector = shift;
 
-  my $msgid = $selector;
-  return () unless $msgid =~ s/^([mf])-//;
-  my $source = $1;
-  my $part;
-  my $filename;
-  if ($msgid =~ s{/(.*)}{}) {
-    $filename = $1;
-  }
-  if ($msgid =~ s{-(.*)}{}) {
-   $part = $1;
-  }
+  return () unless $selector =~ m{([mf]-[^/]+)/(.*)};
+  my $blobId = $1;
+  my $filename = $2;
 
-  my ($type, $data);
-  if ($source eq 'f') {
-    ($type, $data) = $Self->{db}->get_file($msgid);
-  }
-  else {
-    ($type, $data) = $Self->{db}->get_raw_message($msgid, $part);
-  }
+  my ($type, $data) = $Self->{db}->get_blob($blobId);
 
   return ($type, $data, $filename);
 }

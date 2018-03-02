@@ -539,6 +539,23 @@ sub change_message {
   $Self->touch_thread_by_msgid($msgid);
 }
 
+sub get_blob {
+  my $Self = shift;
+  my $blobId = shift;
+
+  return () unless $blobId =~ m/^([mf])-([^-]+)(?:-(.*))//;
+  my $source = $1;
+  my $id = $2;
+  my $part = $3;
+
+  if ($source eq 'f') {
+    return $Self->{db}->get_file($id);
+  }
+  if ($source eq 'm') {
+    return $Self->{db}->get_raw_message($id, $part);
+  }
+}
+
 sub _mkone {
   my $h = shift;
   if ($h->{name} ne '') {
@@ -552,6 +569,32 @@ sub _mkone {
 sub _mkemail {
   my $a = shift;
   return join(", ", map { _mkone($_) } @$a);
+}
+
+sub _makeatt {
+  my $Self = shift;
+  my $att = shift;
+
+  my %attributes = (
+    content_type => $att->{type},
+    name => $att->{name},
+    filename => $att->{name},
+    disposition => $att->{isInline} ? 'inline' : 'attachment',
+    encoding => 'base64',
+  );
+
+  my %headers;
+  if ($att->{cid}) {
+    $headers{'Content-ID'} = "<$att->{cid}>";
+  }
+
+  my ($type, $content) = $Self->get_blob($att->{blobId});
+
+  return Email::MIME->create(
+    attributes => \%attributes,
+    headers => \%headers,
+    body => $content,
+  );
 }
 
 sub _makemsg {
@@ -595,6 +638,7 @@ sub _makemsg {
   my @attachments = $args->{attachments} ? @{$args->{attachments}} : ();
 
   if (@attachments) {
+    my @attparts = map { $Self->_makeatt($_) } @attachments;
     # most complex case
     if ($htmlpart) {
       my $msgparts = Email::MIME->create(
@@ -606,14 +650,14 @@ sub _makemsg {
       # XXX - attachments
       $MIME = Email::MIME->create(
         header_str => [@$header, 'Content-Type' => 'multipart/mixed'],
-        parts => [$msgparts],
+        parts => [$msgparts, @attparts],
       );
     }
     else {
       # XXX - attachments
       $MIME = Email::MIME->create(
         header_str => [@$header, 'Content-Type' => 'multipart/mixed'],
-        parts => [$textpart],
+        parts => [$textpart, @attparts],
       );
     }
   }
@@ -848,11 +892,11 @@ sub put_file {
 
   return {
     accountId => "$accountid",
-    blobId => "$id",
+    blobId => "f-$id",
     type => $type,
     expires => scalar($Self->isodate($expires)),
     size => $size,
-    url => "https://$ENV{jmaphost}/files/$accountid/$id"
+    url => "https://$ENV{jmaphost}/raw/$accountid/f-$id"
   };
 }
 
