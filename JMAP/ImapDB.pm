@@ -1840,7 +1840,8 @@ sub create_contact_groups {
     my $uid = new_uuid_string();
     $card->uid($uid);
     $card->VKind('group');
-    $card->VFN($contact->{name}) if exists $contact->{name};
+    my $name = $contact->{name} || 'Unknown';
+    $card->V('n', 'value', $name);
     if (exists $contact->{contactIds}) {
       my @ids = @{$contact->{contactIds}};
       $card->VGroupContactUIDs(\@ids);
