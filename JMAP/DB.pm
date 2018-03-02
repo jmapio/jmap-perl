@@ -704,6 +704,8 @@ sub create_messages {
   # XXX - get draft mailbox ID
   my ($draftid) = $Self->dbh->selectrow_array("SELECT jmailboxid FROM jmailboxes WHERE role = ?", {}, "drafts");
 
+  $Self->commit();
+
   my %todo;
   foreach my $cid (keys %$args) {
     my $item = $args->{$cid};
@@ -715,8 +717,6 @@ sub create_messages {
     # XXX - let's just assume goodness for now - lots of error handling to add
     $todo{$cid} = [$message, $mailboxIds, $keywords];
   }
-
-  $Self->commit();
 
   foreach my $cid (keys %todo) {
     my ($message, $mailboxIds, $keywords) = @{$todo{$cid}};
