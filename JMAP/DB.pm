@@ -571,6 +571,28 @@ sub _mkemail {
   return join(", ", map { _mkone($_) } @$a);
 }
 
+sub _detect_encoding {
+  my $content = shift;
+  my $type = shift;
+
+  if ($type =~ m/^message/) {
+    if ($content =~ m/[^\x{20}-\x{7f}]/) {
+      return '8bit';
+    }
+    return '7bit';
+  }
+
+  if ($type =~ m/^text/) {
+    # XXX - also line lengths?
+    if ($content =~ m/[^\x{20}-\x{7f}]/) {
+      return 'quoted-printable';
+    }
+    return '7bit';
+  }
+
+  return 'base64';
+}
+
 sub _makeatt {
   my $Self = shift;
   my $att = shift;
@@ -580,7 +602,6 @@ sub _makeatt {
     name => $att->{name},
     filename => $att->{name},
     disposition => $att->{isInline} ? 'inline' : 'attachment',
-    encoding => 'base64',
   );
 
   my %headers;
@@ -589,6 +610,8 @@ sub _makeatt {
   }
 
   my ($type, $content) = $Self->get_blob($att->{blobId});
+
+  $attributes{encoding} = _detect_encoding($content, $att->{type});
 
   return Email::MIME->create(
     attributes => \%attributes,
