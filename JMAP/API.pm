@@ -465,8 +465,6 @@ sub api_ClientPreferences_set {
     notDestroyed => $notDestroyed,
   }];
 
-
-  warn "RETURNING" . Dumper(\@res);
   return @res;
 }
 
