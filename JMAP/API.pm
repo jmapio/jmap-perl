@@ -264,7 +264,6 @@ sub update_singleton_value {
   my $update = shift;
 
   my $data = $Self->$fun({ids => ['singleton']});
-  warn "UPDATE GOT " . Dumper($data);
   my $old = $data->[1]{list}[0];
   foreach my $key (keys %$update) {
     $old->{$key} = $update->{$key};

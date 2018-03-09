@@ -76,7 +76,7 @@ sub log {
     my ($level, @items) = @_;
     return if (not $ENV{DEBUGDB} and $level eq 'debug');
     my $time = time() - $Self->{start};
-    warn "[$level $time]: @items\n";
+    warn "[$$ $level $time]: @items\n";
   }
 }
 
@@ -275,6 +275,8 @@ sub update_prefs {
   $Self->begin();
   $Self->dmake($map{$type}, { jprefid => $data->{id}, payload => $json->encode($data) });
   $Self->commit();
+
+  return {};
 }
 
 sub update_mailbox_counts {
