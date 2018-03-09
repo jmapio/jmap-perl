@@ -267,6 +267,7 @@ sub sync_jmailboxes {
       }
     }
     next unless $name;
+    # XXX - get MYRIGHTS from the server?
     my %details = (
       name => $name,
       parentId => $parentId,
@@ -275,9 +276,12 @@ sub sync_jmailboxes {
       mayReadItems => 1,
       mayAddItems => 1,
       mayRemoveItems => 1,
+      maySetSeen => 1,
+      maySetKeywords => 1,
       mayCreateChild => 1,
       mayRename => $role ? 0 : 1,
       mayDelete => $role ? 0 : 1,
+      maySubmit => 1,
     );
     if ($id) {
       if ($role and $roletoid{$role} and $roletoid{$role} ne $id) {
