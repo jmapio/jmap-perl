@@ -202,7 +202,7 @@ sub api_UserPreferences_get {
   $Self->begin();
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
-  my $data = $Self->{db}->dbh->selectall_arrayref("SELECT payload FROM juserprefs");
+  my $data = $Self->{db}->dbh->selectcol_arrayref("SELECT payload FROM juserprefs");
   $Self->commit();
 
   my @list = map { decode_json($_) } @$data;
@@ -339,7 +339,7 @@ sub api_ClientPreferences_get {
   $Self->begin();
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
-  my $data = $Self->{db}->dbh->selectall_arrayref("SELECT payload FROM jclientprefs");
+  my $data = $Self->{db}->dbh->selectcol_arrayref("SELECT payload FROM jclientprefs");
   $Self->commit();
 
   my @list = map { eval {decode_json($_)} || () } @$data;
@@ -475,7 +475,7 @@ sub api_CalendarPreferences_get {
   $Self->begin();
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
-  my $data = $Self->{db}->dbh->selectall_arrayref("SELECT payload FROM jcalendarprefs");
+  my $data = $Self->{db}->dbh->selectcol_arrayref("SELECT payload FROM jcalendarprefs");
   my ($defaultCalendar) = $Self->{db}->dbh->selectrow_array("SELECT jcalendarid FROM jcalendars WHERE active = 1 LIMIT 1");
   my ($archiveId) = $Self->{db}->dbh->selectrow_array("SELECT jmailboxid FROM jmailboxes WHERE role = 'archive' AND active = 1 LIMIT 1");
   $Self->commit();
