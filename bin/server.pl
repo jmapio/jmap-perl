@@ -430,7 +430,6 @@ sub client_page {
     my $data = shift;
 
     prod_idler($accountid);
-    send_backend_request($accountid, 'syncall');
 
     my $content = '';
     $TT->process("client.html", {
