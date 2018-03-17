@@ -432,7 +432,7 @@ sub client_page {
     prod_idler($accountid);
 
     my $content = '';
-    $TT->process("client.html", {
+    $TT->process($template, {
       accountid => $accountid,
       jmaphost => $ENV{jmaphost},
       username => $data->[0],
@@ -451,7 +451,7 @@ sub landing_page {
 
   return client_page($req, $accountid, 'application/json', 'auth.jsont') if $client eq '/auth';
   return client_page($req, $accountid, 'text/html', 'client.html') if $client eq '/client';
-  return client_page($req, $accountid, 'text/html', 'osclient.html') if $client eq '/osclient';
+  return client_page($req, $accountid, 'text/html', 'fullclient.html') if $client eq '/fullclient';
 
   send_backend_request($accountid, 'getinfo', $accountid, sub {
     my $data = shift;
