@@ -1,0 +1,17 @@
+{
+        "username" : "jmaptestuser",
+	"accounts" : {
+		"[% accountid %]": {
+			"name" : "Default",
+			"isPrimary" : true,
+			"isReadOnly" : false,
+			"hasDataFor" : ["mail", "contacts", "calendars"],
+		},
+	},
+        "accessToken" : "TEMP",
+        "apiUrl" : "/jmap/[% accountid %]",
+        "eventSourceUrl" : "/events/[% accountid %]",
+        "uploadUrl" : "/upload/[% accountid %]",
+        "downloadUrl" : "/raw/[% accountid %]/{blobId}/{name}",
+        "proxyUrl" : "/proxy/{url}/{name}",
+}
