@@ -1,21 +1,17 @@
 <!DOCTYPE html>
-<html class="font-loaded">
+<html>
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="minimum-scale=1.0, maximum-scale=1.0, initial-scale=1.0, user-scalable=no, minimal-ui">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta id="appname" name="apple-mobile-web-app-title" content="FastMail">
-<meta name="msapplication-tap-highlight" content="no">
-<title>FastMail</title>
-<link rel="stylesheet" type="text/css" href="https://www.fastmail.com/static/styles/font.css">
-<link rel="stylesheet" type="text/css" href="/fullclient/bootstrap-raw.css">
+<title>JMAP Mail Example App</title>
+<link href='https://fonts.googleapis.com/css?family=Source+Sans+Pro:300,400,600,700,400italic' rel='stylesheet' type='text/css'>
+<link rel="stylesheet" type="text/css" href="/client/styles/reset.css">
+<link rel="stylesheet" type="text/css" href="/client/styles/icons.css">
+<link rel="stylesheet" type="text/css" href="/client/styles/app.css">
 </head>
 <body>
-<div id="bootstrap-page" class="fill-parent">
 <script type="text/javascript">
-document.getElementById( 'bootstrap-page' ).setAttribute( 'data-sessions',
-    JSON.stringify([{
+document.body.setAttribute( 'data-session',
+    JSON.stringify({
         username: '',
 	accounts: {
 	    '[% accountid %]': {
@@ -31,19 +27,23 @@ document.getElementById( 'bootstrap-page' ).setAttribute( 'data-sessions',
         uploadUrl: '/upload/[% accountid %]',
         downloadUrl: '/raw/[% accountid %]/{blobId}/{name}',
         proxyUrl: '/proxy/{url}/{name}',
-    }])
+    })
 );
 </script>
-<div id="bootstrap-header"></div>
-<div class="LoadingAnimation">
-    <div class="v-Loading-animatedBar v-Loading-animatedBar--1"></div>
-    <div class="v-Loading-animatedBar v-Loading-animatedBar--2"></div>
-    <div class="v-Loading-animatedBar v-Loading-animatedBar--3"></div>
-    <div class="v-Loading-animatedBar v-Loading-animatedBar--4"></div>
-    <div class="v-Loading-animatedBar v-Loading-animatedBar--5"></div>
-</div>
-</div>
-<script id="bsScript" type="text/javascript" src="/fullclient/bootstrap-raw.js">a794384b</script>
-<p id="browser-support" style="position:relative;margin:50px auto;padding:100px 15px;padding-top:30vh;max-width:400px;line-height:1.4;background:#fff;font-size:16px;">Sorry, your browser does not support the technologies needed to use our web interface. Please make sure you have the latest version, and that JavaScript is enabled. <a href="/help/technical/supportedbrowsers.html">Learn more about our browser requirements</a>.</p>
+
+<script type="text/javascript" src="/client/libs/Overture.js"></script>
+<script type="text/javascript" src="/client/libs/timezones-raw.js"></script>
+<script type="text/javascript" src="/client/libs/JMAP.js"></script>
+<script type="text/javascript" src="/client/libs/DOMPurify.js"></script>
+<script type="text/javascript" src="/client/app/namespace.js"></script>
+<script type="text/javascript" src="/client/app/views/MailboxSourceView.js"></script>
+<script type="text/javascript" src="/client/app/views/MailboxItemView.js"></script>
+<script type="text/javascript" src="/client/app/views/ThreadMessageView.js"></script>
+<script type="text/javascript" src="/client/app/views/MessageView.js"></script>
+<script type="text/javascript" src="/client/app/views/EventItemView.js"></script>
+<script type="text/javascript" src="/client/app/drawHTML.js"></script>
+<script type="text/javascript" src="/client/app/state.js"></script>
+<script type="text/javascript" src="/client/app/actions.js"></script>
+<script type="text/javascript" src="/client/app/view.js"></script>
 </body>
 </html>
