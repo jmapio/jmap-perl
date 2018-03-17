@@ -12,7 +12,7 @@
 <script type="text/javascript">
 document.body.setAttribute( 'data-session',
     JSON.stringify({
-        username: '',
+	username: '',
 	accounts: {
 	    '[% accountid %]': {
 		name: "Default",
@@ -21,12 +21,12 @@ document.body.setAttribute( 'data-session',
 		hasDataFor: ['mail', 'contacts', 'calendars'],
 	    },
 	},
-        accessToken: 'TEMP',
-        apiUrl: '/jmap/[% accountid %]',
-        eventSourceUrl: '/events/[% accountid %]',
-        uploadUrl: '/upload/[% accountid %]',
-        downloadUrl: '/raw/[% accountid %]/{blobId}/{name}',
-        proxyUrl: '/proxy/{url}/{name}',
+	accessToken: 'TEMP',
+	apiUrl: '/jmap/[% accountid %]',
+	eventSourceUrl: '/events/[% accountid %]',
+	uploadUrl: '/upload/[% accountid %]',
+	downloadUrl: '/raw/[% accountid %]/{blobId}/{name}',
+	proxyUrl: '/proxy/{url}/{name}',
     })
 );
 </script>
