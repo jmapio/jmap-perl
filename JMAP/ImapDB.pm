@@ -1028,10 +1028,10 @@ sub import_message {
 
   my %flags = %$keywords;
   my @flags;
-  push @flags, "\\Answered" if delete $flags{'$Answered'};
-  push @flags, "\\Flagged" if delete $flags{'$Flagged'};
-  push @flags, "\\Draft" if delete $flags{'$Draft'};
-  push @flags, "\\Seen" if delete $flags{'$Seen'};
+  push @flags, "\\Answered" if delete $flags{'$answered'};
+  push @flags, "\\Flagged" if delete $flags{'$flagged'};
+  push @flags, "\\Draft" if delete $flags{'$draft'};
+  push @flags, "\\Seen" if delete $flags{'$seen'};
   push @flags, sort keys %flags;
 
   my $internaldate = time(); # XXX - allow setting?
@@ -1120,10 +1120,10 @@ sub update_messages {
 				if (exists $action->{keywords}) {
 					my %flags = %{$action->{keywords}};
 					my @flags;
-					push @flags, "\\Answered" if delete $flags{'$Answered'};
-					push @flags, "\\Flagged" if delete $flags{'$Flagged'};
-					push @flags, "\\Draft" if delete $flags{'$Draft'};
-					push @flags, "\\Seen" if delete $flags{'$Seen'};
+					push @flags, "\\Answered" if delete $flags{'$answered'};
+					push @flags, "\\Flagged" if delete $flags{'$flagged'};
+					push @flags, "\\Draft" if delete $flags{'$draft'};
+					push @flags, "\\Seen" if delete $flags{'$seen'};
 					push @flags, sort keys %flags;
 					$Self->log('debug', "STORING (@flags) for @uids");
 					$Self->backend_cmd('imap_update', $imapname, $uidvalidity, \@uids, \@flags);
@@ -1281,20 +1281,21 @@ sub sync_jmap_msgid {
 
   my %flagdata;
   foreach my $flag (keys %flags) {
-    if (lc $flag eq '\\seen') {
-      $flagdata{'$Seen'} = $JSON::true;
+    my $lcf = lc $flag;
+    if ($lcf eq '\\seen') {
+      $flagdata{'$seen'} = $JSON::true;
     }
-    elsif (lc $flag eq '\\flagged') {
-      $flagdata{'$Flagged'} = $JSON::true;
+    elsif ($lcf eq '\\flagged') {
+      $flagdata{'$flagged'} = $JSON::true;
     }
-    elsif (lc $flag eq '\\draft') {
-      $flagdata{'$Draft'} = $JSON::true;
+    elsif ($lcf eq '\\draft') {
+      $flagdata{'$draft'} = $JSON::true;
     }
-    elsif (lc $flag eq '\\answered') {
-      $flagdata{'$Answered'} = $JSON::true;
+    elsif ($lcf eq '\\answered') {
+      $flagdata{'$answered'} = $JSON::true;
     }
     else {
-      $flagdata{$flag} = $JSON::true;
+      $flagdata{$lcf} = $JSON::true;
     }
   }
 
@@ -1328,8 +1329,8 @@ sub sync_jmap_msgid {
       thrid => $data->{thrid},
       msgsize => $data->{size},
       keywords => \%flagdata,
-      isDraft => $flagdata{'$Draft'} ? 1 : 0,
-      isUnread => $flagdata{'$Seen'} ? 0 : 1,
+      isDraft => $flagdata{'$draft'} ? 1 : 0,
+      isUnread => $flagdata{'$seen'} ? 0 : 1,
       _envelopedata($data->{envelope}),
     }, \@jmailboxids);
   }

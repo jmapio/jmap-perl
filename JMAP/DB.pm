@@ -536,8 +536,8 @@ sub change_message {
   my $keywords = $data->{keywords} || {};
   my $bump = $Self->dmaybedirty('jmessages', {
     keywords => $json->encode($keywords),
-    isDraft => $keywords->{'$Draft'} ? 1 : 0,
-    isUnread => $keywords->{'$Seen'} ? 0 : 1,
+    isDraft => $keywords->{'$draft'} ? 1 : 0,
+    isUnread => $keywords->{'$seen'} ? 0 : 1,
   }, {msgid => $msgid});
 
   my $oldids = $Self->dbh->selectcol_arrayref("SELECT jmailboxid FROM jmessagemap WHERE msgid = ? AND active = 1", {}, $msgid);
