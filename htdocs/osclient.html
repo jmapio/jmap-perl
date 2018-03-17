@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>JMAP Mail Example App</title>
+<link href='https://fonts.googleapis.com/css?family=Source+Sans+Pro:300,400,600,700,400italic' rel='stylesheet' type='text/css'>
+<link rel="stylesheet" type="text/css" href="/client/styles/reset.css">
+<link rel="stylesheet" type="text/css" href="/client/styles/icons.css">
+<link rel="stylesheet" type="text/css" href="/client/styles/app.css">
+</head>
+<body>
+<script type="text/javascript">
+document.body.setAttribute( 'data-session',
+    JSON.stringify({
+        username: '',
+	accounts: {
+	    '[% accountid %]': {
+		name: "Default",
+		isPrimary: true,
+		isReadOnly: false,
+		hasDataFor: ['mail', 'contacts', 'calendars'],
+	    },
+	},
+        accessToken: 'TEMP',
+        apiUrl: '/jmap/[% accountid %]',
+        eventSourceUrl: '/events/[% accountid %]',
+        uploadUrl: '/upload/[% accountid %]',
+        downloadUrl: '/raw/[% accountid %]/{blobId}/{name}',
+        proxyUrl: '/proxy/{url}/{name}',
+    })
+);
+</script>
+
+<script type="text/javascript" src="/client/libs/Overture.js"></script>
+<script type="text/javascript" src="/client/libs/timezones-raw.js"></script>
+<script type="text/javascript" src="/client/libs/JMAP.js"></script>
+<script type="text/javascript" src="/client/libs/DOMPurify.js"></script>
+<script type="text/javascript" src="/client/app/namespace.js"></script>
+<script type="text/javascript" src="/client/app/views/MailboxSourceView.js"></script>
+<script type="text/javascript" src="/client/app/views/MailboxItemView.js"></script>
+<script type="text/javascript" src="/client/app/views/ThreadMessageView.js"></script>
+<script type="text/javascript" src="/client/app/views/MessageView.js"></script>
+<script type="text/javascript" src="/client/app/views/EventItemView.js"></script>
+<script type="text/javascript" src="/client/app/drawHTML.js"></script>
+<script type="text/javascript" src="/client/app/state.js"></script>
+<script type="text/javascript" src="/client/app/actions.js"></script>
+<script type="text/javascript" src="/client/app/view.js"></script>
+</body>
+</html>
