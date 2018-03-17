@@ -423,6 +423,8 @@ sub do_jmap {
 sub client_page {
   my $req = shift;
   my $accountid = shift;
+  my $content_type = shift;
+  my $template = shift;
 
   send_backend_request($accountid, 'getinfo', $accountid, sub {
     my $data = shift;
@@ -430,12 +432,13 @@ sub client_page {
     prod_idler($accountid);
     send_backend_request($accountid, 'syncall');
 
-    my $html = '';
+    my $content = '';
     $TT->process("client.html", {
       accountid => $accountid,
       jmaphost => $ENV{jmaphost},
-     }, \$html) || die $Template::ERROR;
-    $req->respond({content => ['text/html', $html]});
+      username => $data->[0],
+     }, \$content) || die $Template::ERROR;
+    $req->respond({content => [$content_type, $content]});
   }, sub {
     my $cookie = bake_cookie("jmap_$accountid", {value => '', path => '/'});
     $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "https://$ENV{jmaphost}/" }, "Redirected"]);
@@ -447,7 +450,9 @@ sub landing_page {
   my $accountid = shift;
   my $client = shift || '';
 
-  return client_page($req, $accountid) if $client eq '/client';
+  return client_page($req, $accountid, 'application/json', 'auth.jsont') if $client eq '/auth';
+  return client_page($req, $accountid, 'text/html', 'client.html') if $client eq '/client';
+  return client_page($req, $accountid, 'text/html', 'osclient.html') if $client eq '/osclient';
 
   send_backend_request($accountid, 'getinfo', $accountid, sub {
     my $data = shift;
