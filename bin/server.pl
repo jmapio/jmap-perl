@@ -457,7 +457,7 @@ sub landing_page {
     my $data = shift;
 
     prod_idler($accountid);
-    send_backend_request($accountid, 'syncall');
+    send_backend_request("$accountid:sync", 'syncall');
 
     my $html = '';
     $TT->process("landing.html", {
