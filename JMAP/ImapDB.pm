@@ -1345,7 +1345,7 @@ sub sync_jmap_msgid {
 sub sync_jmap {
   my $Self = shift;
   $Self->begin();
-  my $msgids = $Self->getcol('imsgidtodo', {}, 'msgid');
+  my $msgids = $Self->dgetcol('imsgidtodo', {}, 'msgid');
   foreach my $msgid (@$msgids) {
     $Self->sync_jmap_msgid($msgid);
     $Self->ddelete('imsgidtodo', { msgid => $msgid });
