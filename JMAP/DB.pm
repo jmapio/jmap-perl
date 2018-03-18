@@ -1107,6 +1107,13 @@ sub dget {
   return $Self->dbh->selectall_arrayref($sql, {Slice => {}}, @vals);
 }
 
+sub dgetby {
+  my $Self = shift;
+  my ($table, $hashkey, $limit, $fields) = @_;
+  my $data = $Self->dget($table, $limit, $fields);
+  return { map { $_->{$hashkey} => $_ } @$data };
+}
+
 # selectrow_arrayref?  Nah
 sub dgetone {
   my $Self = shift;
