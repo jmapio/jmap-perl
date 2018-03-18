@@ -202,7 +202,7 @@ sub api_UserPreferences_get {
   $Self->begin();
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
-  my $data = $Self->{db}->dbh->selectcol_arrayref("SELECT payload FROM juserprefs");
+  my $data = $Self->{db}->dgetcol("juserprefs", {}, 'payload');
   $Self->commit();
 
   my @list = map { decode_json($_) } @$data;
@@ -339,7 +339,7 @@ sub api_ClientPreferences_get {
   $Self->begin();
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
-  my $data = $Self->{db}->dbh->selectcol_arrayref("SELECT payload FROM jclientprefs");
+  my $data = $Self->{db}->dgetcol("jclientprefs", {}, 'payload');
   $Self->commit();
 
   my @list = map { eval {decode_json($_)} || () } @$data;
@@ -475,9 +475,9 @@ sub api_CalendarPreferences_get {
   $Self->begin();
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
-  my $data = $Self->{db}->dbh->selectcol_arrayref("SELECT payload FROM jcalendarprefs");
-  my ($defaultCalendar) = $Self->{db}->dbh->selectrow_array("SELECT jcalendarid FROM jcalendars WHERE active = 1 LIMIT 1");
-  my ($archiveId) = $Self->{db}->dbh->selectrow_array("SELECT jmailboxid FROM jmailboxes WHERE role = 'archive' AND active = 1 LIMIT 1");
+  my $data = $Self->{db}->dgetcol("jcalendarprefs", {}, 'payload');
+  my $defaultCalendar = $Self->{db}->dgetfield('jcalendars', { active => 1 }, 'jcalendarid');
+  my ($archiveId) = $Self->{db}->dgetfield('jmailboxes', { role => 'archive', active => 1 }, 'jmailboxid');
   $Self->commit();
 
   my @list = map { decode_json($_) } @$data;
@@ -743,7 +743,6 @@ sub api_Mailbox_get {
   my $args = shift;
 
   $Self->begin();
-  my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
@@ -752,7 +751,7 @@ sub api_Mailbox_get {
 
   my $newState = "$user->{jstateMailbox}";
 
-  my $data = $dbh->selectall_arrayref("SELECT * FROM jmailboxes WHERE active = 1", {Slice => {}});
+  my $data = $Self->{db}->dget('jmailboxes', { active => 1 });
 
   my %ids;
   if ($args->{ids}) {
@@ -802,7 +801,6 @@ sub api_Mailbox_changes {
   my $args = shift;
 
   $Self->begin();
-  my $dbh = $Self->{db}->dbh();
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
   return $Self->_transError(['error', {type => 'accountNotFound'}])
@@ -816,7 +814,7 @@ sub api_Mailbox_changes {
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $sinceState <= $user->{jdeletedmodseq});
 
-  my $data = $dbh->selectall_arrayref("SELECT * FROM jmailboxes WHERE jmodseq > ?", {Slice => {}}, $sinceState);
+  my $data = $Self->{db}->dget('jmailboxes', { jmodseq => ['>', $sinceState] });
 
   my @changed;
   my @removed;
@@ -1251,7 +1249,6 @@ sub api_Email_query {
   my $args = shift;
 
   $Self->begin();
-  my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
@@ -1270,7 +1267,7 @@ sub api_Email_query {
   my $start = $args->{position} || 0;
   return $Self->_transError(['error', {type => 'invalidArguments'}]) if $start < 0;
 
-  my $data = $dbh->selectall_arrayref("SELECT * FROM jmessages WHERE active = 1", {Slice => {}});
+  my $data = $Self->{db}->dget('jmessages', { active => 1 });
 
   # commit before applying the filter, because it might call out for searches
   $Self->commit();
@@ -1320,7 +1317,6 @@ sub api_Email_queryChanges {
   my $args = shift;
 
   $Self->begin();
-  my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
@@ -1338,7 +1334,7 @@ sub api_Email_queryChanges {
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if $start < 0;
 
-  my $data = $dbh->selectall_arrayref("SELECT * FROM jmessages", {Slice => {}});
+  my $data = $Self->{db}->dget('jmessages', {});
 
   $Self->commit();
 
@@ -1529,7 +1525,6 @@ sub api_Email_get {
   my $args = shift;
 
   $Self->begin();
-  my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
@@ -1555,7 +1550,7 @@ sub api_Email_get {
   foreach my $msgid (map { $Self->idmap($_) } @{$args->{ids}}) {
     next if $seenids{$msgid};
     $seenids{$msgid} = 1;
-    my $data = $dbh->selectrow_hashref("SELECT * FROM jmessages WHERE msgid = ?", {}, $msgid);
+    my $data = $Self->{db}->dgetone('jmessages', { msgid => $msgid });
     unless ($data) {
       $missingids{$msgid} = 1;
       next;
@@ -1571,7 +1566,7 @@ sub api_Email_get {
     }
 
     if (_prop_wanted($args, 'mailboxIds')) {
-      my $ids = $dbh->selectcol_arrayref("SELECT jmailboxid FROM jmessagemap WHERE msgid = ? AND active = 1", {}, $msgid);
+      my $ids = $Self->{db}->dgetcol('jmessagemap', { msgid => $msgid, active => 1 }, 'jmailboxid');
       $item->{mailboxIds} = {map { $_ => $JSON::true } @$ids};
     }
 
@@ -1712,7 +1707,6 @@ sub api_Email_changes {
   my $args = shift;
 
   $Self->begin();
-  my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
@@ -1726,9 +1720,7 @@ sub api_Email_changes {
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
 
-  my $sql = "SELECT msgid,active FROM jmessages WHERE jmodseq > ?";
-
-  my $data = $dbh->selectall_arrayref($sql, {}, $args->{sinceState});
+  my $data = $Self->{db}->dget('jmessages', { jmodseq => ['>', $args->{sinceState}] }, 'msgid,active');
 
   if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
     return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
@@ -1738,11 +1730,11 @@ sub api_Email_changes {
   my @removed;
 
   foreach my $row (@$data) {
-    if ($row->[1]) {
-      push @changed, $row->[0];
+    if ($row->{active}) {
+      push @changed, $row->{msgid};
     }
     else {
-      push @removed, $row->[0];
+      push @removed, $row->{msgid};
     }
   }
 
@@ -1855,8 +1847,7 @@ sub api_Email_import {
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if (not $args->{messages} or ref($args->{messages}) ne 'HASH');
 
-  my $dbh = $Self->{db}->dbh();
-  my $mailboxdata = $dbh->selectall_arrayref("SELECT * FROM jmailboxes WHERE active = 1", {Slice => {}});
+  my $mailboxdata = $Self->dget('jmailboxes', { active => 1 });
   my %validids = map { $_->{jmailboxid} => 1 } @$mailboxdata;
 
   foreach my $id (keys %{$args->{messages}}) {
@@ -1959,7 +1950,6 @@ sub api_Thread_get {
   my $args = shift;
 
   $Self->begin();
-  my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
@@ -1976,7 +1966,7 @@ sub api_Thread_get {
   foreach my $thrid (map { $Self->idmap($_) } @{$args->{ids}}) {
     next if $seenids{$thrid};
     $seenids{$thrid} = 1;
-    my ($data) = $dbh->selectrow_array("SELECT data FROM jthreads WHERE thrid = ? AND active = 1", {}, $thrid);
+    my $data = $Self->{db}->dgetfield('jthreads', { thrid => $thrid, active => 1 }, 'data');
     unless ($data) {
       $missingids{$thrid} = 1;
       next;
@@ -2006,7 +1996,6 @@ sub api_Thread_changes {
   my $args = shift;
 
   $Self->begin();
-  my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
@@ -2020,7 +2009,7 @@ sub api_Thread_changes {
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
 
-  my $data = $dbh->selectall_arrayref("SELECT thrid,active FROM jthreads WHERE jmodseq > ?", {}, $args->{sinceState});
+  my $data = $Self->{db}->dget('jthreads', { jmodseq => ['>', $args->{sinceState}] }, 'thrid,active');
 
   if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
     return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
@@ -2029,11 +2018,11 @@ sub api_Thread_changes {
   my @changed;
   my @removed;
   foreach my $row (@$data) {
-    if ($row->[1]) {
-      push @changed, $row->[0];
+    if ($row->{active}) {
+      push @changed, $row->{thrid};
     }
     else {
-      push @removed, $row->[0];
+      push @removed, $row->{thrid};
     }
   }
 
@@ -2088,7 +2077,6 @@ sub api_Calendar_get {
   my $args = shift;
 
   $Self->begin();
-  my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
@@ -2097,33 +2085,33 @@ sub api_Calendar_get {
 
   my $newState = "$user->{jstateCalendar}";
 
-  my $data = $dbh->selectall_arrayref("SELECT jcalendarid, name, color, isVisible, mayReadFreeBusy, mayReadItems, mayAddItems, mayModifyItems, mayRemoveItems, mayDelete, mayRename FROM jcalendars WHERE active = 1");
+  my $data = $Self->{db}->dget('jcalendars', { active => 1 });
 
   my %ids;
   if ($args->{ids}) {
     %ids = map { $Self->idmap($_) => 1 } @{$args->{ids}};
   }
   else {
-    %ids = map { $_->[0] => 1 } @$data;
+    %ids = map { $_->{jcalendarid} => 1 } @$data;
   }
 
   my @list;
 
   foreach my $item (@$data) {
-    next unless delete $ids{$item->[0]};
+    next unless delete $ids{$item->{jcalendarid}};
 
     my %rec = (
-      id => "$item->[0]",
-      name => $item->[1],
-      color => $item->[2],
-      isVisible => $item->[3] ? $JSON::true : $JSON::false,
-      mayReadFreeBusy => $item->[4] ? $JSON::true : $JSON::false,
-      mayReadItems => $item->[5] ? $JSON::true : $JSON::false,
-      mayAddItems => $item->[6] ? $JSON::true : $JSON::false,
-      mayModifyItems => $item->[7] ? $JSON::true : $JSON::false,
-      mayRemoveItems => $item->[8] ? $JSON::true : $JSON::false,
-      mayDelete => $item->[9] ? $JSON::true : $JSON::false,
-      mayRename => $item->[10] ? $JSON::true : $JSON::false,
+      id => "$item->{jcalendarid}",
+      name => "$item->{name}",
+      color => "$item->{color}",
+      isVisible => $item->{isVisible} ? $JSON::true : $JSON::false,
+      mayReadFreeBusy => $item->{mayReadFreeBusy} ? $JSON::true : $JSON::false,
+      mayReadItems => $item->{mayReadItems} ? $JSON::true : $JSON::false,
+      mayAddItems => $item->{mayAddItems} ? $JSON::true : $JSON::false,
+      mayModifyItems => $item->{mayModifyItems} ? $JSON::true : $JSON::false,
+      mayRemoveItems => $item->{mayRemoveItems} ? $JSON::true : $JSON::false,
+      mayDelete => $item->{mayDelete} ? $JSON::true : $JSON::false,
+      mayRename => $item->{mayRename} ? $JSON::true : $JSON::false,
     );
 
     foreach my $key (keys %rec) {
@@ -2149,7 +2137,6 @@ sub api_Calendar_changes {
   my $args = shift;
 
   $Self->begin();
-  my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
@@ -2164,27 +2151,17 @@ sub api_Calendar_changes {
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $sinceState <= $user->{jdeletedmodseq});
 
-  my $data = $dbh->selectall_arrayref("SELECT jcalendarid, jmodseq, active FROM jcalendars ORDER BY jcalendarid");
+  my $data = $Self->{db}->dget('jcalendars', {}, 'jcalendarid,jmodseq,active');
 
   my @changed;
   my @removed;
-  my $onlyCounts = 1;
   foreach my $item (@$data) {
-    if ($item->[1] > $sinceState) {
-      if ($item->[3]) {
-        push @changed, $item->[0];
-        $onlyCounts = 0;
+    if ($item->{jmodseq} > $sinceState) {
+      if ($item->{active}) {
+        push @changed, $item->{jcalendarid};
       }
       else {
-        push @removed, $item->[0];
-      }
-    }
-    elsif (($item->[2] || 0) > $sinceState) {
-      if ($item->[3]) {
-        push @changed, $item->[0];
-      }
-      else {
-        push @removed, $item->[0];
+        push @removed, $item->{jcalendarid};
       }
     }
   }
@@ -2210,7 +2187,7 @@ sub _event_match {
   if ($condition->{inCalendars}) {
     my $match = 0;
     foreach my $id (@{$condition->{inCalendars}}) {
-      next unless $item->[1] eq $id;
+      next unless $item->{jcalendarid} eq $id;
       $match = 1;
     }
     return 0 unless $match;
@@ -2235,7 +2212,6 @@ sub api_CalendarEvent_query {
   my $args = shift;
 
   $Self->begin();
-  my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
@@ -2248,14 +2224,14 @@ sub api_CalendarEvent_query {
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if $start < 0;
 
-  my $data = $dbh->selectall_arrayref("SELECT eventuid,jcalendarid FROM jevents WHERE active = 1 ORDER BY eventuid");
+  my $data = $Self->{db}->dget('jevents', { active => 1 }, 'eventuid,jcalendarid');
 
   $data = $Self->_event_filter($data, $args->{filter}, {}) if $args->{filter};
 
   my $end = $args->{limit} ? $start + $args->{limit} - 1 : $#$data;
   $end = $#$data if $end > $#$data;
 
-  my @result = map { $data->[$_][0] } $start..$end;
+  my @result = map { $data->[$_]{eventuid} } $start..$end;
 
   $Self->commit();
 
@@ -2278,7 +2254,6 @@ sub api_CalendarEvent_get {
   my $args = shift;
 
   $Self->begin();
-  my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
@@ -2294,12 +2269,13 @@ sub api_CalendarEvent_get {
   my %seenids;
   my %missingids;
   my @list;
-  foreach my $eventid (map { $Self->idmap($_) } @{$args->{ids}}) {
-    next if $seenids{$eventid};
-    $seenids{$eventid} = 1;
-    my $data = $dbh->selectrow_hashref("SELECT * FROM jevents WHERE eventuid = ?", {}, $eventid);
+  foreach my $eventuid (map { $Self->idmap($_) } @{$args->{ids}}) {
+    next if $seenids{$eventuid};
+    $seenids{$eventuid} = 1;
+
+    my $data = $Self->{db}->dgetone('jevents', { eventuid => $eventuid }, 'jcalendarid,payload');
     unless ($data) {
-      $missingids{$eventid} = 1;
+      $missingids{$eventuid} = 1;
       next;
     }
 
@@ -2309,7 +2285,7 @@ sub api_CalendarEvent_get {
       delete $item->{$key} unless _prop_wanted($args, $key);
     }
 
-    $item->{id} = $eventid;
+    $item->{id} = $eventuid;
     $item->{calendarId} = "$data->{jcalendarid}" if _prop_wanted($args, "calendarId");
 
     push @list, $item;
@@ -2330,7 +2306,6 @@ sub api_CalendarEvent_changes {
   my $args = shift;
 
   $Self->begin();
-  my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
@@ -2344,9 +2319,7 @@ sub api_CalendarEvent_changes {
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
 
-  my $sql = "SELECT eventuid,active FROM jevents WHERE jmodseq > ?";
-
-  my $data = $dbh->selectall_arrayref($sql, {}, $args->{sinceState});
+  my $data = $Self->{db}->dget('jevents', { jmodseq => ['>', $args->{sinceState}] }, 'eventuid,active');
 
   if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
     return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
@@ -2358,11 +2331,11 @@ sub api_CalendarEvent_changes {
   my @removed;
 
   foreach my $row (@$data) {
-    if ($row->[1]) {
-      push @changed, $row->[0];
+    if ($row->{active}) {
+      push @changed, $row->{eventuid};
     }
     else {
-      push @removed, $row->[0];
+      push @removed, $row->{eventuid};
     }
   }
 
@@ -2383,7 +2356,6 @@ sub api_Addressbook_get {
   my $args = shift;
 
   $Self->begin();
-  my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
@@ -2393,14 +2365,14 @@ sub api_Addressbook_get {
   # we have no datatype for this yet
   my $newState = "$user->{jhighestmodseq}";
 
-  my $data = $dbh->selectall_arrayref("SELECT jaddressbookid, name, isVisible, mayReadItems, mayAddItems, mayModifyItems, mayRemoveItems, mayDelete, mayRename FROM jaddressbooks WHERE active = 1");
+  my $data = $Self->{db}->dget('jaddressbooks', { active => 1 });
 
   my %ids;
   if ($args->{ids}) {
     %ids = map { $Self->($_) => 1 } @{$args->{ids}};
   }
   else {
-    %ids = map { $_->[0] => 1 } @$data;
+    %ids = map { $_->{jaddressbookid} => 1 } @$data;
   }
 
   my @list;
@@ -2409,15 +2381,15 @@ sub api_Addressbook_get {
     next unless delete $ids{$item->[0]};
 
     my %rec = (
-      id => "$item->[0]",
-      name => $item->[1],
-      isVisible => $item->[2] ? $JSON::true : $JSON::false,
-      mayReadItems => $item->[3] ? $JSON::true : $JSON::false,
-      mayAddItems => $item->[4] ? $JSON::true : $JSON::false,
-      mayModifyItems => $item->[5] ? $JSON::true : $JSON::false,
-      mayRemoveItems => $item->[6] ? $JSON::true : $JSON::false,
-      mayDelete => $item->[7] ? $JSON::true : $JSON::false,
-      mayRename => $item->[8] ? $JSON::true : $JSON::false,
+      id => "$item->{jaddressbookid}",
+      name => "$item->{name}",
+      isVisible => $item->{isVisible} ? $JSON::true : $JSON::false,
+      mayReadItems => $item->{mayReadItems} ? $JSON::true : $JSON::false,
+      mayAddItems => $item->{mayAddItems} ? $JSON::true : $JSON::false,
+      mayModifyItems => $item->{mayModifyItems} ? $JSON::true : $JSON::false,
+      mayRemoveItems => $item->{mayRemoveItems} ? $JSON::true : $JSON::false,
+      mayDelete => $item->{mayDelete} ? $JSON::true : $JSON::false,
+      mayRename => $item->{mayRename} ? $JSON::true : $JSON::false,
     );
 
     foreach my $key (keys %rec) {
@@ -2443,7 +2415,6 @@ sub api_Addressbook_changes {
   my $args = shift;
 
   $Self->begin();
-  my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
@@ -2459,27 +2430,17 @@ sub api_Addressbook_changes {
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $sinceState <= $user->{jdeletedmodseq});
 
-  my $data = $dbh->selectall_arrayref("SELECT jaddressbookid, jmodseq, active FROM jaddressbooks ORDER BY jaddressbookid");
+  my $data = $Self->{db}->dget('jaddressbooks', {}, 'jaddressbookid,jmodseq,active');
 
   my @changed;
   my @removed;
-  my $onlyCounts = 1;
   foreach my $item (@$data) {
-    if ($item->[1] > $sinceState) {
-      if ($item->[3]) {
-        push @changed, $item->[0];
-        $onlyCounts = 0;
+    if ($item->{jmodseq} > $sinceState) {
+      if ($item->{active}) {
+        push @changed, $item->{jaddressbookid};
       }
       else {
-        push @removed, $item->[0];
-      }
-    }
-    elsif (($item->[2] || 0) > $sinceState) {
-      if ($item->[3]) {
-        push @changed, $item->[0];
-      }
-      else {
-        push @removed, $item->[0];
+        push @removed, $item->{jaddressbookid};
       }
     }
   }
@@ -2505,7 +2466,7 @@ sub _contact_match {
   if ($condition->{inAddressbooks}) {
     my $match = 0;
     foreach my $id (@{$condition->{inAddressbooks}}) {
-      next unless $item->[1] eq $id;
+      next unless $item->{jaddressbookid} eq $id;
       $match = 1;
     }
     return 0 unless $match;
@@ -2530,7 +2491,6 @@ sub api_Contact_query {
   my $args = shift;
 
   $Self->begin();
-  my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
@@ -2543,14 +2503,14 @@ sub api_Contact_query {
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if $start < 0;
 
-  my $data = $dbh->selectall_arrayref("SELECT contactuid,jaddressbookid FROM jcontacts WHERE active = 1 ORDER BY contactuid");
+  my $data = $Self->{db}->dget('jcontacts', { active => 1 }, 'contactuid,jaddressbookid');
 
   $data = $Self->_event_filter($data, $args->{filter}, {}) if $args->{filter};
 
   my $end = $args->{limit} ? $start + $args->{limit} - 1 : $#$data;
   $end = $#$data if $end > $#$data;
 
-  my @result = map { $data->[$_][0] } $start..$end;
+  my @result = map { $data->[$_]{contactuid} } $start..$end;
 
   $Self->commit();
 
@@ -2573,7 +2533,6 @@ sub api_Contact_get {
   my $args = shift;
 
   $Self->begin();
-  my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
@@ -2584,22 +2543,23 @@ sub api_Contact_get {
 
   #properties: String[] A list of properties to fetch for each message.
 
-  my $data = $dbh->selectall_hashref("SELECT * FROM jcontacts WHERE active = 1", 'contactuid', {Slice => {}});
+  my $data = $Self->{db}->dget('jcontacts', { active => 1 });
+  my %contactmap = map { $_->{contactuid} => $_ } @$data;
 
   my %want;
   if ($args->{ids}) {
     %want = map { $Self->idmap($_) => 1 } @{$args->{ids}};
   }
   else {
-    %want = %$data;
+    %want = map { $_ => 1 } keys %contactmap;
   }
 
   my @list;
   foreach my $id (keys %want) {
-    next unless $data->{$id};
+    next unless $contactmap{$id};
     delete $want{$id};
 
-    my $item = decode_json($data->{$id}{payload});
+    my $item = decode_json($contactmap{$id}{payload});
 
     foreach my $key (keys %$item) {
       delete $item->{$key} unless _prop_wanted($args, $key);
@@ -2624,7 +2584,6 @@ sub api_Contact_changes {
   my $args = shift;
 
   $Self->begin();
-  my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
@@ -2638,9 +2597,7 @@ sub api_Contact_changes {
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
 
-  my $sql = "SELECT contactuid,active FROM jcontacts WHERE jmodseq > ?";
-
-  my $data = $dbh->selectall_arrayref($sql, {}, $args->{sinceState});
+  my $data = $Self->{db}->dget('jcontacts', { jmodseq => ['>', $args->{sinceState}] }, 'contactuid,active');
 
   if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
     return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
@@ -2651,11 +2608,11 @@ sub api_Contact_changes {
   my @removed;
 
   foreach my $row (@$data) {
-    if ($row->[1]) {
-      push @changed, $row->[0];
+    if ($row->{active}) {
+      push @changed, $row->{contactuid};
     }
     else {
-      push @removed, $row->[0];
+      push @removed, $row->{contactuid};
     }
   }
 
@@ -2676,7 +2633,6 @@ sub api_ContactGroup_get {
   my $args = shift;
 
   $Self->begin();
-  my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
@@ -2687,31 +2643,31 @@ sub api_ContactGroup_get {
 
   #properties: String[] A list of properties to fetch for each message.
 
-  my $data = $dbh->selectall_hashref("SELECT * FROM jcontactgroups WHERE active = 1", 'groupuid', {Slice => {}});
+  my $data = $Self->{db}->dget('jcontactgroups', { active => 1 });
+  my %groupmap = map { $_->{groupuid} => $_ } @$data;
 
   my %want;
   if ($args->{ids}) {
     %want = map { $Self->idmap($_) => 1 } @{$args->{ids}};
   }
   else {
-    %want = %$data;
+    %want = map { $_ => 1 } keys %groupmap;
   }
 
   my @list;
   foreach my $id (keys %want) {
-    next unless $data->{$id};
+    next unless $groupmap{$id};
     delete $want{$id};
 
     my $item = {};
     $item->{id} = $id;
 
     if (_prop_wanted($args, 'name')) {
-      $item->{name} = $data->{$id}{name};
+      $item->{name} = $groupmap{$id}{name};
     }
 
     if (_prop_wanted($args, 'contactIds')) {
-      my $ids = $dbh->selectcol_arrayref("SELECT contactuid FROM jcontactgroupmap WHERE groupuid = ?", {}, $id);
-      $item->{contactIds} = $ids;
+      $item->{contactIds} = $Self->{db}->dgetcol('jcontactgroupmap', { groupuid => $id }, 'contactuid');
     }
 
     push @list, $item;
@@ -2731,7 +2687,6 @@ sub api_ContactGroup_changes {
   my $args = shift;
 
   $Self->begin();
-  my $dbh = $Self->{db}->dbh();
 
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
@@ -2747,7 +2702,7 @@ sub api_ContactGroup_changes {
 
   my $sql = "SELECT groupuid,active FROM jcontactgroups WHERE jmodseq > ?";
 
-  my $data = $dbh->selectall_arrayref($sql, {}, $args->{sinceState});
+  my $data = $Self->{db}->dget('jcontactgroups', { jmodseq => ['>', $args->{sinceState}] }, 'groupuid,active');
 
   if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
     return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
@@ -2757,11 +2712,11 @@ sub api_ContactGroup_changes {
   my @removed;
 
   foreach my $row (@$data) {
-    if ($row->[1]) {
-      push @changed, $row->[0];
+    if ($row->{active}) {
+      push @changed, $row->{groupuid};
     }
     else {
-      push @removed, $row->[0];
+      push @removed, $row->{groupuid};
     }
   }
   $Self->commit();
