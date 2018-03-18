@@ -1313,12 +1313,12 @@ sub sync_jmap_msgid {
 
   # check for archive folder for gmail
   if ($Self->{is_gmail} and @$imessages and not @list) {
-    @jmailboxids = ($Self->getfield('jmailboxes', { role => 'archive' }, 'jmailboxid'));
+    @jmailboxids = ($Self->dgetfield('jmailboxes', { role => 'archive' }, 'jmailboxid'));
   }
 
   return $Self->delete_message($msgid) if (not @jmailboxids);
 
-  my $old = $Self->getfield('jmessages', { msgid => $msgid, active => 1 }, 'msgid');
+  my $old = $Self->dgetfield('jmessages', { msgid => $msgid, active => 1 }, 'msgid');
 
   $Self->log('debug', "DATA (@jmailboxids) for $msgid");
 
