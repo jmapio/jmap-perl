@@ -465,7 +465,7 @@ sub do_calendars {
     my $newtoken = $todo{$id}[0];
     my $changes = $todo{$id}[1];
 
-    my ($jcalendarid) = $Self->dbh->selectrow_array("SELECT jcalendarid FROM icalendars WHERE icalendarid = ?", {}, $id);
+    my $jcalendarid = $Self->dgetfield('icalendars', { icalendarid => $id }, 'jcalendarid');
 
     foreach my $href (keys %$changes) {
       my $change = $changes->{$href};
@@ -660,7 +660,7 @@ sub do_addressbooks {
     my $newtoken = $todo{$id}[0];
     my $changes = $todo{$id}[1];
 
-    my ($jaddressbookid) = $Self->dbh->selectrow_array("SELECT jaddressbookid FROM iaddressbooks WHERE iaddressbookid = ?", {}, $id);
+    my $jaddressbookid = $Self->dgetfield('iaddressbooks', { iaddressbookid => $id }, 'jaddressbookid');
 
     foreach my $href (keys %$changes) {
       my $change = $changes->{$href};
@@ -733,11 +733,12 @@ sub backfill {
   my $Self = shift;
 
   $Self->begin();
-  my $data = $Self->dbh->selectall_arrayref("SELECT * FROM ifolders WHERE uidnext > 1 AND uidfirst > 1 ORDER BY mtime", {Slice => {}});
+  my $data = $Self->dget('ifolders', { uidnext => ['>', 1], uidfirst => ['>', 1] }, 'mtime,ifolderid,label');
+  $Self->commit();
+
   if ($Self->{is_gmail}) {
     $data = [ grep { lc $_->{label} eq '\\allmail' or lc $_->{label} eq '\\trash' } @$data ];
   }
-  $Self->commit();
 
   return unless @$data;
 
@@ -819,11 +820,13 @@ sub calcmsgid {
   my $encsub = eval { Encode::decode('MIME-Header', $envelope->{Subject}) };
   $encsub = $envelope->{Subject} unless defined $encsub;
   my $sortsub = _normalsubject($encsub);
+  # DBNOTE: because of DISTINCT and IN not being supported
   my ($thrid) = $Self->dbh->selectrow_array("SELECT DISTINCT thrid FROM ithread WHERE messageid IN (?, ?) AND sortsubject = ?", {}, $replyto, $messageid, $sortsub);
   # XXX - merging?  subject-checking?  We have a subject here
   $thrid ||= "t$base";
   foreach my $id ($replyto, $messageid) {
     next if $id eq '';
+    # DBNOTE: because of INSERT OR IGNORE (maybe)
     $Self->dbh->do("INSERT OR IGNORE INTO ithread (messageid, thrid, sortsubject) VALUES (?, ?, ?)", {}, $id, $thrid, $sortsub);
   }
 
@@ -917,6 +920,7 @@ sub do_folder {
 
   # need to make changes before counting
   $Self->begin();
+  # DBNOTE: because of COUNT not being supported
   my ($count) = $Self->dbh->selectrow_array("SELECT COUNT(*) FROM imessages WHERE ifolderid = ?", {}, $ifolderid);
   $Self->commit();
 
@@ -929,6 +933,7 @@ sub do_folder {
     my $res = $Self->backend_cmd('imap_count', $imapname, $uidvalidity, "$uidfirst:$to");
     $Self->begin();
     my $uids = $res->{data};
+    # DBNOTE: because of multiple expressions on same key not being supported
     my $data = $Self->dbh->selectcol_arrayref("SELECT uid FROM imessages WHERE ifolderid = ? AND uid >= ? AND uid <= ?", {}, $ifolderid, $uidfirst, $to);
     my %exists = map { $_ => 1 } @$uids;
     foreach my $uid (@$data) {
@@ -980,7 +985,7 @@ sub imap_search {
     next unless $res->[2] == $item->{uidvalidity};
     $Self->begin();
     foreach my $uid (@{$res->[3]}) {
-      my ($msgid) = $Self->dbh->selectrow_array("SELECT msgid FROM imessages WHERE ifolderid = ? and uid = ?", {}, $item->{ifolderid}, $uid);
+      my $msgid = $Self->dgetfield('imessages', { ifolderid => $item->{ifolderid}, uid => $uid }, 'msgid');
       $matches{$msgid} = 1;
     }
     $Self->commit();
@@ -992,19 +997,20 @@ sub imap_search {
 sub mark_sync {
   my $Self = shift;
   my ($msgid) = @_;
+  # DBNOTE: because of IGNORE not being supported (maybe)
   $Self->dbh->do("INSERT OR IGNORE INTO imsgidtodo (msgid) VALUES (?)", {}, $msgid);
 }
 
 sub changed_record {
   my $Self = shift;
-  my ($folder, $uid, $flaglist, $labellist) = @_;
+  my ($ifolderid, $uid, $flaglist, $labellist) = @_;
 
   my $flags = $json->encode([grep { lc $_ ne '\\recent' } sort @$flaglist]);
   my $labels = $json->encode([sort @$labellist]);
 
-  return unless $Self->dmaybeupdate('imessages', {flags => $flags, labels => $labels}, {ifolderid => $folder, uid => $uid});
+  return unless $Self->dmaybeupdate('imessages', {flags => $flags, labels => $labels}, {ifolderid => $ifolderid, uid => $uid});
 
-  my ($msgid) = $Self->dbh->selectrow_array("SELECT msgid FROM imessages WHERE ifolderid = ? AND uid = ?", {}, $folder, $uid);
+  my $msgid = $Self->dgetfield('imessages', { ifolderid => $ifolderid, uid => $uid }, 'msgid');
 
   $Self->mark_sync($msgid);
 }
@@ -1037,9 +1043,9 @@ sub import_message {
   my $internaldate = time(); # XXX - allow setting?
   my $date = Date::Format::time2str('%e-%b-%Y %T %z', $internaldate);
 
-  my $data = $Self->backend_cmd('imap_append', $imapname, "(@flags)", $date, $rfc822);
-  # XXX - compare $data->[2] with uidvalidity
-  my $uid = $data->[3];
+  my $appendres = $Self->backend_cmd('imap_append', $imapname, "(@flags)", $date, $rfc822);
+  # XXX - compare $appendres->[2] with uidvalidity
+  my $uid = $appendres->[3];
 
   # make sure we're up to date: XXX - imap only
   my $ifolderid;
@@ -1055,22 +1061,25 @@ sub import_message {
   }
 
   $Self->begin();
-  my ($msgid, $thrid, $size) = $Self->dbh->selectrow_array("SELECT msgid, thrid, size FROM imessages WHERE ifolderid = ? AND uid = ?", {}, $ifolderid, $uid);
+  my $msgdata = $Self->dgetone('imessages', { ifolderid => $ifolderid, uid => $uid }, 'msgid,thrid,size');
   $Self->commit();
+
+  # XXX - did we fail to sync this back?  Annoying
+  die "FAILED TO GET BACK STORED MESSAGE FROM IMAP SERVER" unless $msgdata;
 
   # save us having to download it again - drop out of transaction so we don't wait on the parse
   my $eml = Email::MIME->new($rfc822);
-  my $message = $Self->parse_message($msgid, $eml);
+  my $message = $Self->parse_message($msgdata->{msgid}, $eml);
 
   $Self->begin();
   $Self->dinsert('jrawmessage', {
-    msgid => $msgid,
+    msgid => $msgdata->{msgid},
     parsed => $json->encode($message),
     hasAttachment => $message->{hasAttachment},
   });
   $Self->commit();
 
-  return ($msgid, $thrid, $size);
+  return ($msgdata->{msgid}, $msgdata->{thrid}, $msgdata->{size});
 }
 
 sub update_messages {
@@ -1087,11 +1096,10 @@ sub update_messages {
 
   my %map;
   foreach my $msgid (keys %$changes) {
-    my $data = $Self->dbh->selectall_arrayref("SELECT ifolderid, uid FROM imessages WHERE msgid = ?", {}, $msgid);
+    my $data = $Self->dget('imessages', { msgid => $msgid }, 'ifolderid,uid');
     if (@$data) {
       foreach my $row (@$data) {
-        my ($ifolderid, $uid) = @$row;
-        $map{$msgid}{$ifolderid}{$uid} = 1;
+        $map{$msgid}{$row->{ifolderid}}{$row->{uid}} = 1;
       }
     }
     else {
@@ -1191,11 +1199,10 @@ sub destroy_messages {
   my %destroymap;
   my %notdestroyed;
   foreach my $msgid (@$ids) {
-    my $data = $Self->dbh->selectall_arrayref("SELECT ifolderid, uid FROM imessages WHERE msgid = ?", {}, $msgid);
+    my $data = $Self->dget('imessages', { msgid => $msgid }, 'ifolderid,uid');
     if (@$data) {
       foreach my $row (@$data) {
-        my ($ifolderid, $uid) = @$row;
-        $destroymap{$ifolderid}{$uid} = $msgid;
+        $destroymap{$row->{ifolderid}}{$row->{uid}} = $msgid;
       }
     }
     else {
@@ -1229,7 +1236,7 @@ sub deleted_record {
   my $Self = shift;
   my ($ifolderid, $uid) = @_;
 
-  my ($msgid) = $Self->dbh->selectrow_array("SELECT msgid FROM imessages WHERE ifolderid = ? AND uid = ?", {}, $ifolderid, $uid);
+  my $msgid = $Self->dgetfield('imessages', { ifolderid => $ifolderid, uid => $uid }, 'msgid');
   return unless $msgid;
 
   $Self->ddelete('imessages', {ifolderid => $ifolderid, uid => $uid});
@@ -1267,14 +1274,13 @@ sub sync_jmap_msgid {
   my $Self = shift;
   my ($msgid) = @_;
 
-  my $imessages = $Self->dbh->selectall_arrayref("SELECT flags, labels FROM imessages WHERE msgid = ?", {}, $msgid);
+  my $imessages = $Self->dget('imessages', { msgid => $msgid }, 'flags, labels');
 
   my %labels;
   my %flags;
   foreach my $row (@$imessages) {
-    my ($flags, $labels) = @$row;
-    my $flaglist = decode_json($flags);
-    my $labellist = decode_json($labels);
+    my $flaglist = decode_json($row->{flags});
+    my $labellist = decode_json($row->{labels});
     $flags{$_} = 1 for @$flaglist;
     $labels{$_} = 1 for @$labellist;
   }
@@ -1307,12 +1313,12 @@ sub sync_jmap_msgid {
 
   # check for archive folder for gmail
   if ($Self->{is_gmail} and @$imessages and not @list) {
-    @jmailboxids = $Self->dbh->selectrow_array("SELECT jmailboxid FROM jmailboxes WHERE role = 'archive'");
+    @jmailboxids = ($Self->getfield('jmailboxes', { role => 'archive' }, 'jmailboxid'));
   }
 
   return $Self->delete_message($msgid) if (not @jmailboxids);
 
-  my ($old) = $Self->dbh->selectrow_array("SELECT msgid FROM jmessages WHERE msgid = ? AND active = 1", {}, $msgid);
+  my $old = $Self->getfield('jmessages', { msgid => $msgid, active => 1 }, 'msgid');
 
   $Self->log('debug', "DATA (@jmailboxids) for $msgid");
 
@@ -1322,7 +1328,7 @@ sub sync_jmap_msgid {
   }
   else {
     $Self->log('debug', "adding $msgid");
-    my $data = $Self->dbh->selectrow_hashref("SELECT thrid,internaldate,size,envelope FROM imessages WHERE msgid = ?", {}, $msgid);
+    my $data = $Self->dgetone('imessages', { msgid => $msgid }, 'thrid,internaldate,size,envelope');
     return $Self->add_message({
       msgid => $msgid,
       internaldate => $data->{internaldate},
@@ -1339,10 +1345,10 @@ sub sync_jmap_msgid {
 sub sync_jmap {
   my $Self = shift;
   $Self->begin();
-  my $msgids = $Self->dbh->selectcol_arrayref("SELECT msgid FROM imsgidtodo");
+  my $msgids = $Self->getcol('imsgidtodo', {}, 'msgid');
   foreach my $msgid (@$msgids) {
     $Self->sync_jmap_msgid($msgid);
-    $Self->dbh->do("DELETE FROM imsgidtodo WHERE msgid = ?", {}, $msgid);
+    $Self->ddelete('imsgidtodo', { msgid => $msgid });
   }
   $Self->commit();
 }
@@ -1390,6 +1396,7 @@ sub fill_messages {
 
   $Self->begin();
 
+  # DBNOTE: because of IN not being supported
   my $data = $Self->dbh->selectall_arrayref("SELECT msgid, parsed FROM jrawmessage WHERE msgid IN (" . join(', ', map { "?" } @ids) . ")", {}, @ids);
   my %result;
   foreach my $line (@$data) {
@@ -1399,6 +1406,7 @@ sub fill_messages {
 
   my %udata;
   if (@need) {
+    # DBNOTE: because of IN not being supported
     my $uids = $Self->dbh->selectall_arrayref("SELECT ifolderid, uid, msgid FROM imessages WHERE msgid IN (" . join(', ', map { "?" } @need) . ")", {}, @need);
     foreach my $row (@$uids) {
       my ($ifolderid, $uid, $msgno) = @$row;
@@ -1411,9 +1419,9 @@ sub fill_messages {
     my $uhash = $udata{$ifolderid};
     my $uids = join(',', sort { $a <=> $b } grep { not $result{$uhash->{$_}} } keys %$uhash);
     next unless $uids;
-    my ($imapname, $uidvalidity) = $Self->dbh->selectrow_array("SELECT imapname, uidvalidity FROM ifolders WHERE ifolderid = ?", {}, $ifolderid);
-    next unless $imapname;
-    $foldermap{$ifolderid} = [$imapname, $uidvalidity];
+    my $data = $Self->dgetone('ifolders', { ifolderid => $ifolderid }, 'imapname,uidvalidity');
+    next unless $data;
+    $foldermap{$ifolderid} = [$data->{imapname}, $data->{uidvalidity}];
   }
 
   # drop out of transaction to actually fetch the data
@@ -1477,6 +1485,7 @@ sub get_raw_message {
   my $part = shift;
 
   $Self->begin();
+  # DBNOTE: because of JOIN not being supported
   my ($imapname, $uidvalidity, $uid) = $Self->dbh->selectrow_array("SELECT imapname, uidvalidity, uid FROM ifolders JOIN imessages USING (ifolderid) WHERE msgid = ?", {}, $msgid);
   $Self->commit();
   return unless $imapname;
@@ -1519,19 +1528,20 @@ sub create_mailboxes {
     }
 
     if ($mailbox->{parentId}) {
-      my ($parentName, $sep) = $Self->dbh->selectrow_array("SELECT imapname, sep FROM ifolders WHERE jmailboxid = ?", {}, $mailbox->{parentId});
+      my $parent = $Self->dgetone('ifolders', { jmailboxid => $mailbox->{parentId} }, 'imapname,sep');
       # XXX - check "mailCreateChild" on parent mailbox
-      unless ($parentName) {
+      unless ($parent) {
         $notcreated{$cid} = {type => 'notFound', description => "parent folder not found"};
         next;
       }
-      $todo{$cid} = [$parentName . $sep . $encname, $sep];
+      $todo{$cid} = [$parent->{imapname} . $parent->{sep} . $encname, $parent->{sep}];
     }
     else {
       # will probably get INBOX - but meh, close enough.  Sync will fix it if needed.  Better
       # would be to use namespace to lift it when we lift the prefix
+      # DBNOTE: this one is a little weird with use or ORDER BY
       my ($sep) = $Self->dbh->selectrow_array("SELECT sep FROM ifolders ORDER BY ifolderid");
-      my ($prefix) = $Self->dbh->selectrow_array("SELECT imapPrefix FROM iserver");
+      my $prefix = $Self->dgetfield('iserver', {}, 'imapPrefix');
       $prefix = '' unless defined $prefix;
       $todo{$cid} = [$prefix . $encname, $sep];
     }
@@ -1614,20 +1624,20 @@ sub update_mailboxes {
       next;
     }
 
-    my ($oldname,$ifolderid) = $Self->dbh->selectrow_array("SELECT imapname,ifolderid FROM ifolders WHERE jmailboxid = ?", {}, $jid);
+    my $old = $Self->dgetone('ifolders', { jmailboxid => $jid }, 'imapname,ifolderid');
 
     if ($parentId) {
-      my ($parentName, $sep) = $Self->dbh->selectrow_array("SELECT imapname, sep FROM ifolders WHERE jmailboxid = ?", {}, $parentId);
-      unless ($parentName) {
+      my $parent = $Self->dgetone('ifolders', { jmailboxid => $parentId }, 'imapname,sep');
+      unless ($parent) {
         $notchanged{$jid} = {type => 'invalidProperties', description => "parent folder not found"};
         next;
       }
-      $namemap{$oldname} = [$parentName . $sep . $encname, $jid, $ifolderid];
+      $namemap{$old->{imapname}} = [$parent->{imapname} . $parent->{sep} . $encname, $jid, $old->{ifolderid}];
     }
     else {
-      my ($prefix) = $Self->dbh->selectrow_array("SELECT imapPrefix FROM iserver");
+      my $prefix = $Self->dgetfield('iserver', {}, 'imapPrefix');
       $prefix = '' unless $prefix;
-      $namemap{$oldname} = [$prefix . $encname, $jid, $ifolderid];
+      $namemap{$old->{imapname}} = [$prefix . $encname, $jid, $old->{ifolderid}];
     }
   }
 
@@ -1683,9 +1693,9 @@ sub destroy_mailboxes {
   my %notdestroyed;
   my %namemap;
   foreach my $jid (@$destroy) {
-    my ($oldname, $ifolderid) = $Self->dbh->selectrow_array("SELECT imapname,ifolderid FROM ifolders WHERE jmailboxid = ?", {}, $jid);
-    if ($oldname) {
-      $namemap{$oldname} = [$jid, $ifolderid];
+    my $old = $Self->dgetone('ifolders', { jmailboxid => $jid }, 'imapname,ifolderid');
+    if ($old) {
+      $namemap{$old->{imapname}} = [$jid, $old->{ifolderid}];
     }
     else {
       $notdestroyed{$jid} = {type => 'invalidProperties', description => "parent folder not found"};
@@ -1734,7 +1744,7 @@ sub create_calendar_events {
   my %notcreated;
   foreach my $cid (sort keys %$new) {
     my $calendar = $new->{$cid};
-    my ($href) = $Self->dbh->selectrow_array("SELECT href FROM icalendars WHERE icalendarid = ?", {}, $calendar->{calendarId});
+    my $href = $Self->dgetfield('icalendars', { icalendarid => $calendar->{calendarId} }, 'href');
     unless ($href) {
       $notcreated{$cid} = {type => 'notFound', description => "No such calendar on server"};
       next;
@@ -1770,7 +1780,7 @@ sub update_calendar_events {
   my %notchanged;
   foreach my $uid (keys %$update) {
     my $calendar = $update->{$uid};
-    my ($href) = $Self->dbh->selectrow_array("SELECT href FROM ievents WHERE uid = ?", {}, $uid);
+    my $href = $Self->dgetfield('ievents', { uid => $uid }, 'href');
     unless ($href) {
       $notchanged{$uid} = {type => 'notFound', description => "No such event on server"};
       next;
@@ -1802,7 +1812,7 @@ sub destroy_calendar_events {
   my @destroyed;
   my %notdestroyed;
   foreach my $uid (@$destroy) {
-    my ($href) = $Self->dbh->selectrow_array("SELECT href FROM ievents WHERE uid = ?", {}, $uid);
+    my $href = $Self->dgetfield('ievents', { uid => $uid }, 'href');
     unless ($href) {
       $notdestroyed{$uid} = {type => 'notFound', description => "No such event on server"};
       next;
@@ -1835,8 +1845,8 @@ sub create_contact_groups {
   my %notcreated;
   foreach my $cid (keys %$new) {
     my $contact = $new->{$cid};
-    #my ($href) = $Self->dbh->selectrow_array("SELECT href FROM iaddressbooks WHERE iaddressbookid = ?", {}, $contact->{addressbookId});
-    my ($href) = $Self->dbh->selectrow_array("SELECT href FROM iaddressbooks");
+    #my $href = $Self->dgetfield('iaddressbooks', { iaddressbookid => $contact->{addressbookId} }, 'href');
+    my $href = $Self->dgetfield('iaddressbooks', {}, 'href');
     unless ($href) {
       $notcreated{$cid} = {type => 'notFound', description => "No such addressbook on server"};
       next;
@@ -1883,12 +1893,12 @@ sub update_contact_groups {
   my %notchanged;
   foreach my $carduid (keys %$changes) {
     my $contact = $changes->{$carduid};
-    my ($href, $content) = $Self->dbh->selectrow_array("SELECT href, content FROM icards WHERE kind = 'group' AND uid = ?", {}, $carduid);
-    unless ($href) {
+    my $old = $Self->dgetone('icards', { kind => 'group', uid => $carduid }, 'href,content');
+    unless ($old) {
       $notchanged{$carduid} = {type => 'notFound', description => "No such card on server"};
       next;
     }
-    my ($card) = Net::CardDAVTalk::VCard->new_fromstring($content);
+    my ($card) = Net::CardDAVTalk::VCard->new_fromstring($old->{content});
     $card->VKind('group');
     $card->VFN($contact->{name}) if exists $contact->{name};
     if (exists $contact->{contactIds}) {
@@ -1896,7 +1906,7 @@ sub update_contact_groups {
       $card->VGroupContactUIDs(\@ids);
     }
 
-    $todo{$href} = $card;
+    $todo{$old->{href}} = $card;
     $changed{$carduid} = undef;
   }
 
@@ -1921,12 +1931,12 @@ sub destroy_contact_groups {
   my @destroyed;
   my %notdestroyed;
   foreach my $carduid (@$destroy) {
-    my ($href, $content) = $Self->dbh->selectrow_array("SELECT href, content FROM icards WHERE kind = 'group' AND uid = ?", {}, $carduid);
-    unless ($href) {
+    my $old = $Self->dgetone('icards', { kind => 'group', uid => $carduid }, 'href');
+    unless ($old) {
       $notdestroyed{$carduid} = {type => 'notFound', description => "No such card on server"};
       next;
     }
-    $todo{$href} = 1;
+    $todo{$old->{href}} = 1;
     push @destroyed, $carduid;
   }
 
@@ -1952,8 +1962,8 @@ sub create_contacts {
   my %todo;
   foreach my $cid (keys %$new) {
     my $contact = $new->{$cid};
-    my ($href) = $Self->dbh->selectrow_array("SELECT href FROM iaddressbooks");
-    unless ($href) {
+    my $abookhref = $Self->dgetfield('iaddressbooks', {}, 'href');
+    unless ($abookhref) {
       $notcreated{$cid} = {type => 'notFound', description => "No such addressbook on server"};
       next;
     }
@@ -1976,7 +1986,7 @@ sub create_contacts {
     $card->VBirthday($contact->{birthday}) if exists $contact->{birthday};
     $card->VNotes($contact->{notes}) if exists $contact->{notes};
 
-    $todo{$cid} = [$href, $card];
+    $todo{$cid} = [$abookhref, $card];
 
     $createmap{$cid} = { id => $uid };
   }
@@ -2005,12 +2015,12 @@ sub update_contacts {
   my %notchanged;
   foreach my $carduid (keys %$changes) {
     my $contact = $changes->{$carduid};
-    my ($href, $content) = $Self->dbh->selectrow_array("SELECT href, content FROM icards WHERE kind = 'contact' AND uid = ?", {}, $carduid);
-    unless ($href) {
+    my $old = $Self->dgetone('icards', { kind => 'contact', uid => $carduid }, 'href,content');
+    unless ($old) {
       $notchanged{$carduid} = {type => 'notFound', description => "No such card on server"};
       next;
     }
-    my ($card) = Net::CardDAVTalk::VCard->new_fromstring($content);
+    my ($card) = Net::CardDAVTalk::VCard->new_fromstring($old->{content});
     $card->VLastName($contact->{lastName}) if exists $contact->{lastName};
     $card->VFirstName($contact->{firstName}) if exists $contact->{firstName};
     $card->VTitle($contact->{prefix}) if exists $contact->{prefix};
@@ -2027,7 +2037,7 @@ sub update_contacts {
     $card->VBirthday($contact->{birthday}) if exists $contact->{birthday};
     $card->VNotes($contact->{notes}) if exists $contact->{notes};
 
-    $todo{$href} = $card;
+    $todo{$old->{href}} = $card;
     $changed{$carduid} = undef;
   }
 
@@ -2052,12 +2062,12 @@ sub destroy_contacts {
   my @destroyed;
   my %notdestroyed;
   foreach my $carduid (@$destroy) {
-    my ($href, $content) = $Self->dbh->selectrow_array("SELECT href, content FROM icards WHERE kind = 'contact' AND uid = ?", {}, $carduid);
-    unless ($href) {
+    my $old = $Self->dgetone('icards', { kind => 'contact', uid => $carduid }, 'href');
+    unless ($old) {
       $notdestroyed{$carduid} = {type => 'notFound', description => "No such card on server"};
       next;
     }
-    $todo{$href} = 1;
+    $todo{$old->{href}} = 1;
     push @destroyed, $carduid;
   }
 
@@ -2092,7 +2102,7 @@ sub create_submissions {
       next;
     }
 
-    my ($thrid) = $Self->dbh->selectrow_array("SELECT thrid from jmessages WHERE active = 1 and msgid = ?", {}, $msgid);
+    my $thrid = $Self->dgetfield('jmessages', { msgid => $msgid, active => 1 }, 'thrid');
     unless ($thrid) {
       $notcreated{$cid} = { error => "message does not exist" };
       next;
@@ -2142,10 +2152,10 @@ sub destroy_submissions {
   my %notdestroyed;
   my %namemap;
   foreach my $subid (@$destroy) {
-    my ($active) = $Self->dbh->selectrow_array("SELECT active FROM jsubmission WHERE subid = ?", {}, $subid);
+    my $active = $Self->dgetfield('jsubmission', { jsubid => $subid }, 'active');
     if ($active) {
       push @destroyed, $subid;
-      $Self->ddelete('jsubmission', {subid => $subid});
+      $Self->ddelete('jsubmission', { jsubid => $subid });
     }
     else {
       $notdestroyed{$subid} = {type => 'notFound', description => "submission not found"};

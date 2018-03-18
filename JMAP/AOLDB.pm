@@ -29,13 +29,13 @@ sub new {
 sub access_token {
   my $Self = shift;
   $Self->begin();
-  my ($hostname, $username, $password) = $Self->dbh->selectrow_array("SELECT imapHost, username, password FROM iserver");
+  my $server = $Self->dgetone('iserver', {}, 'imapHost,username,password');
   $Self->commit();
 
   my $O = JMAP::Sync::AOL::O();
-  my $data = $O->refresh($password);
+  my $data = $O->refresh($server->{password});
 
-  return [$hostname, $username, $data->{access_token}];
+  return [$server->{imapHost}, $server->{username}, $data->{access_token}];
 }
 
 1;

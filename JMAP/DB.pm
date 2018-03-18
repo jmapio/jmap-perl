@@ -184,7 +184,7 @@ sub dirty {
 sub get_user {
   my $Self = shift;
   unless ($Self->{t}{user}) {
-    $Self->{t}{user} = $Self->dbh->selectrow_hashref("SELECT * FROM account");
+    $Self->{t}{user} = $Self->dgetone('account');
   }
   # bootstrap
   unless ($Self->{t}{user}) {
@@ -201,13 +201,10 @@ sub touch_thread_by_msgid {
   my $Self = shift;
   my $msgid = shift;
 
-  my $dbh = $Self->dbh();
-
-  my ($thrid) = $dbh->selectrow_array("SELECT thrid FROM jmessages WHERE msgid = ?", {}, $msgid);
+  my $thrid = $Self->dgetfield('jmessages', { msgid => $msgid }, 'thrid');
   return unless $thrid;
 
-  my $data = $dbh->selectall_arrayref("SELECT * FROM jmessages WHERE thrid = ? AND active = 1 ORDER BY internaldate", {Slice => {}}, $
-thrid);
+  my $data = $Self->dget('jmessages', { thrid => $thrid, active => 1 });
   unless (@$data) {
     $Self->dmaybedirty('jthreads', {active => 0, data => '[]'}, {thrid => $thrid});
     return;
@@ -239,7 +236,7 @@ thrid);
   }
 
   # have to handle doesn't exist case dammit, dmaybdirty isn't good for that
-  my ($exists) = $dbh->selectrow_array("SELECT jcreated FROM jthreads WHERE thrid = ?", {}, $thrid);
+  my $exists = $Self->dgetfield('jthreads', { thrid => $thrid }, 'jcreated');
   if ($exists) {
     $Self->dmaybedirty('jthreads', {active => 1, data => $json->encode(\@msgs)}, {thrid => $thrid});
   }
@@ -540,7 +537,7 @@ sub change_message {
     isUnread => $keywords->{'$seen'} ? 0 : 1,
   }, {msgid => $msgid});
 
-  my $oldids = $Self->dbh->selectcol_arrayref("SELECT jmailboxid FROM jmessagemap WHERE msgid = ? AND active = 1", {}, $msgid);
+  my $oldids = $Self->dgetcol('jmessagemap', { msgid => $msgid, active => 1 }, 'jmailboxid');
   my %old = map { $_ => 1 } @$oldids;
 
   foreach my $jmailboxid (@$newids) {
@@ -745,7 +742,7 @@ sub create_messages {
   $Self->begin();
 
   # XXX - get draft mailbox ID
-  my ($draftid) = $Self->dbh->selectrow_array("SELECT jmailboxid FROM jmailboxes WHERE role = ?", {}, "drafts");
+  my $draftid = $Self->dgetfield('jmailboxes', { role => 'drafts' }, 'jmailboxid');
 
   $Self->commit();
 
@@ -790,7 +787,7 @@ sub delete_message {
   my ($msgid) = @_;
 
   $Self->dmaybedirty('jmessages', {active => 0}, {msgid => $msgid});
-  my $oldids = $Self->dbh->selectcol_arrayref("SELECT jmailboxid FROM jmessagemap WHERE msgid = ? AND active = 1", {}, $msgid);
+  my $oldids = $Self->dgetcol('jmessagemap', { msgid => $msgid, active => 1 }, 'jmailboxid');
   $Self->delete_message_from_mailbox($msgid, $_) for @$oldids;
   $Self->touch_thread_by_msgid($msgid);
 }
@@ -948,10 +945,11 @@ sub get_file {
   my $id = shift;
 
   $Self->begin();
-  my $data = $Self->dbh->selectrow_arrayref("SELECT type,content FROM jfiles WHERE jfileid = ?", {}, $id);
+  my $data = $Self->dgetone('jfiles', { jfileid => $id }, 'type,content');
   $Self->commit();
 
-  return @$data;
+  return unless $data;
+  return ($data->{type}, $data->{content});
 }
 
 sub _dbl {
@@ -1114,7 +1112,6 @@ sub dgetby {
   return { map { $_->{$hashkey} => $_ } @$data };
 }
 
-# selectrow_arrayref?  Nah
 sub dgetone {
   my $Self = shift;
   my ($table, $limit, $fields) = @_;

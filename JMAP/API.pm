@@ -3025,7 +3025,7 @@ sub _mk_submission_sort {
       return undef; # invalid sort
     }
   }
-  push @res, 'subid asc';
+  push @res, 'jsubid asc';
   return join(', ', @res);
 }
 
@@ -3079,7 +3079,7 @@ sub api_EmailSubmission_query {
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     unless $sort;
 
-  my $data = $dbh->selectall_arrayref("SELECT subid,thrid,msgid,sendat FROM jsubmission WHERE active = 1 ORDER BY $sort");
+  my $data = $dbh->selectall_arrayref("SELECT jsubid,thrid,msgid,sendat FROM jsubmission WHERE active = 1 ORDER BY $sort");
 
   $data = $Self->_submission_filter($data, $args->{filter}, {}) if $args->{filter};
   my $total = scalar(@$data);
@@ -3134,7 +3134,7 @@ sub api_EmailSubmission_queryChanges {
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     unless $sort;
 
-  my $data = $dbh->selectall_arrayref("SELECT subid,thrid,msgid,sendat,jmodseq,active FROM jsubmission ORDER BY $sort");
+  my $data = $dbh->selectall_arrayref("SELECT jsubid,thrid,msgid,sendat,jmodseq,active FROM jsubmission ORDER BY $sort");
 
   $data = $Self->_submission_filter($data, $args->{filter}, {}) if $args->{filter};
   my $total = scalar(@$data);
@@ -3193,19 +3193,19 @@ sub api_EmailSubmission_get {
   foreach my $subid (map { $Self->idmap($_) } @{$args->{ids}}) {
     next if $seenids{$subid};
     $seenids{$subid} = 1;
-    my $data = $dbh->selectrow_hashref("SELECT * FROM jsubmission WHERE jsubid = ?", {}, $subid);
+    my $data = $Self->{db}->dgetone('jsubmission', { jsubid => $subid });
     unless ($data) {
       $missingids{$subid} = 1;
       next;
     }
 
-    my ($thrid) = $dbh->selectrow_array("SELECT thrid FROM jmessages WHERE msgid = ?", {}, $data->{msgid});
+    my $thrid = $Self->{db}->dgetfield('jmessages', { msgid => $data->{msgid} }, 'thrid');
 
     my $item = {
       id => $subid,
       identityId => $data->{identity},
       emailId => $data->{msgid},
-      threadId => $data->{thrid},
+      threadId => $thrid,
       envelope => $data->{envelope} ? decode_json($data->{envelope}) : undef,
       sendAt => scalar($Self->{db}->isodate($data->{sendat})),
       undoStatus => $data->{status},
@@ -3251,7 +3251,7 @@ sub api_EmailSubmission_changes {
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $sinceState <= $user->{jdeletedmodseq});
 
-  my $data = $dbh->selectall_arrayref("SELECT subid,thrid,msgid,sendat,jmodseq,active FROM jsubmission WHERE jmodseq > ? ORDER BY jmodseq ASC", {}, $sinceState);
+  my $data = $dbh->selectall_arrayref("SELECT jsubid,thrid,msgid,sendat,jmodseq,active FROM jsubmission WHERE jmodseq > ? ORDER BY jmodseq ASC", {}, $sinceState);
 
   $Self->commit();
 
