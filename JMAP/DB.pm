@@ -1098,7 +1098,7 @@ sub dget {
   my @lkeys = sort keys %$limit;
   my @lvals = map { $limit->{$_} } @lkeys;
   my $sql = "SELECT $fields FROM $table";
-  $sql .= " WHERE " . join(' AND ', map { ref($limit->{$_}) eq 'ARRAY' ? "$_ $limit->{$_}[0]" : "$_ = ?" } @lkeys) if @lkeys;
+  $sql .= " WHERE " . join(' AND ', map { ref($limit->{$_}) eq 'ARRAY' ? "$_ $limit->{$_}[0] ?" : "$_ = ?" } @lkeys) if @lkeys;
   $sql .= " ORDER BY $fields" unless $fields eq '*';
   my @vals = map { ref($_) eq 'ARRAY' ? $_->[1] : $_ } @lvals;
 
@@ -1117,7 +1117,7 @@ sub dgetone {
   my @lkeys = sort keys %$limit;
   my @lvals = map { $limit->{$_} } @lkeys;
   my $sql = "SELECT $fields FROM $table";
-  $sql .= " WHERE " . join(' AND ', map { ref($limit->{$_}) eq 'ARRAY' ? "$_ $limit->{$_}[0]" : "$_ = ?" } @lkeys) if @lkeys;
+  $sql .= " WHERE " . join(' AND ', map { ref($limit->{$_}) eq 'ARRAY' ? "$_ $limit->{$_}[0] ?" : "$_ = ?" } @lkeys) if @lkeys;
   $sql .= " LIMIT 1";
   my @vals = map { ref($_) eq 'ARRAY' ? $_->[1] : $_ } @lvals;
 
