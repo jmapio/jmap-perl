@@ -1091,23 +1091,53 @@ sub ddelete {
 
 sub dget {
   my $Self = shift;
-  my ($table, $limit) = @_;
+  my ($table, $limit, $fields) = @_;
+
+  $fields ||= '*';
 
   my @lkeys = sort keys %$limit;
-  my $sql = "SELECT * FROM $table";
-  $sql .= " WHERE " . join(' AND ', map { "$_ = ?" } @lkeys) if @lkeys;
+  my @lvals = map { $limit->{$_} } @lkeys;
+  my $sql = "SELECT $fields FROM $table";
+  $sql .= " WHERE " . join(' AND ', map { ref($limit->{$_}) eq 'ARRAY' ? "$_ $limit->{$_}[0]" : "$_ = ?" } @lkeys) if @lkeys;
+  $sql .= " ORDER BY $fields" unless $fields eq '*';
+  my @vals = map { ref($_) eq 'ARRAY' ? $_->[1] : $_ } @lvals;
 
-  $Self->log('debug', $sql, _dbl(map { $limit->{$_} } @lkeys));
+  $Self->log('debug', $sql, _dbl(@vals));
 
-  my $data = $Self->dbh->selectall_arrayref($sql, {Slice => {}}, map { $limit->{$_} } @lkeys);
-  return $data;
+  return $Self->dbh->selectall_arrayref($sql, {Slice => {}}, @vals);
 }
 
 # selectrow_arrayref?  Nah
 sub dgetone {
   my $Self = shift;
-  my $res = $Self->dget(@_);
-  return $res->[0];
+  my ($table, $limit, $fields) = @_;
+
+  $fields ||= '*';
+
+  my @lkeys = sort keys %$limit;
+  my @lvals = map { $limit->{$_} } @lkeys;
+  my $sql = "SELECT $fields FROM $table";
+  $sql .= " WHERE " . join(' AND ', map { ref($limit->{$_}) eq 'ARRAY' ? "$_ $limit->{$_}[0]" : "$_ = ?" } @lkeys) if @lkeys;
+  $sql .= " LIMIT 1";
+  my @vals = map { ref($_) eq 'ARRAY' ? $_->[1] : $_ } @lvals;
+
+  $Self->log('debug', $sql, _dbl(map { $limit->{$_} } @lkeys));
+
+  return $Self->dbh->selectrow_arrayref($sql, {Slice => {}}, @vals);
+}
+
+sub dgetfield {
+  my $Self = shift;
+  my ($table, $limit, $field) = @_;
+  my $res = $Self->dgetone($table, $limit, $field);
+  return $res ? $res->{$field} : undef;
+}
+
+sub dgetcol {
+  my $Self = shift;
+  my ($table, $limit, $field) = @_;
+  my $data = $Self->dget($table, $limit, $field);
+  return [ map { $_->{$field} } @$data ];
 }
 
 sub _initdb {
