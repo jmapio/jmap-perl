@@ -1123,7 +1123,8 @@ sub dgetone {
 
   $Self->log('debug', $sql, _dbl(map { $limit->{$_} } @lkeys));
 
-  return $Self->dbh->selectrow_arrayref($sql, {Slice => {}}, @vals);
+  my $data = $Self->dbh->selectall_arrayref($sql, {Slice => {}}, @vals);
+  return $data->[0];
 }
 
 sub dgetfield {
