@@ -1025,9 +1025,10 @@ sub _load_mailbox {
   my $id = shift;
 
   $Self->begin();
-  my $data = $Self->{db}->dbh->selectall_arrayref("SELECT msgid,jmodseq,active FROM jmessagemap WHERE jmailboxid = ?", {}, $id);
+  my $data = $Self->{db}->dgetby('jmessagemap', 'msgid', { jmailboxid => $id }, 'msgid,jmodseq,active');
   $Self->commit();
-  return { map { $_->[0] => $_ } @$data };
+
+  return $data;
 }
 
 sub _load_msgmap {
@@ -1035,11 +1036,11 @@ sub _load_msgmap {
   my $id = shift;
 
   $Self->begin();
-  my $data = $Self->{db}->dbh->selectall_arrayref("SELECT msgid,jmailboxid,jmodseq,active FROM jmessagemap");
+  my $data = $Self->{db}->dget('jmessagemap', {}, 'msgid,jmailboxid,jmodseq,active');
   $Self->commit();
   my %map;
   foreach my $row (@$data) {
-    $map{$row->[0]}{$row->[1]} = $row;
+    $map{$row->{msgid}}{$row->{jmailboxid}} = $row;
   }
   return \%map;
 }
@@ -1047,7 +1048,7 @@ sub _load_msgmap {
 sub _load_hasatt {
   my $Self = shift;
   $Self->begin();
-  my $data = $Self->{db}->dbh->selectcol_arrayref("SELECT msgid FROM jrawmessage WHERE hasAttachment = 1");
+  my $data = $Self->{db}->dgetcol('jrawmessage', { hasAttachment => 1 }, 'msgid');
   $Self->commit();
   return { map { $_ => 1 } @$data };
 }
@@ -1087,7 +1088,7 @@ sub _match {
   if ($condition->{inMailbox}) {
     my $id = $Self->idmap($condition->{inMailbox});
     $storage->{mailbox}{$id} ||= $Self->_load_mailbox($id);
-    return 0 unless $storage->{mailbox}{$id}{$item->{msgid}}[2]; #active
+    return 0 unless $storage->{mailbox}{$id}{$item->{msgid}}{active};
   }
 
   if ($condition->{inMailboxOtherThan}) {
@@ -1099,7 +1100,7 @@ sub _match {
     my $inany = 0;
     foreach my $id (keys %$data) {
       next if $match{$id};
-      next unless $data->{$id}[3]; # isactive
+      next unless $data->{$id}{active};
       $inany = 1;
     }
     return 0 unless $inany;
@@ -2543,23 +2544,22 @@ sub api_Contact_get {
 
   #properties: String[] A list of properties to fetch for each message.
 
-  my $data = $Self->{db}->dget('jcontacts', { active => 1 });
-  my %contactmap = map { $_->{contactuid} => $_ } @$data;
+  my $data = $Self->{db}->dgetby('jcontacts', 'contactuid', { active => 1 });
 
   my %want;
   if ($args->{ids}) {
     %want = map { $Self->idmap($_) => 1 } @{$args->{ids}};
   }
   else {
-    %want = map { $_ => 1 } keys %contactmap;
+    %want = map { $_ => 1 } keys %$data;
   }
 
   my @list;
   foreach my $id (keys %want) {
-    next unless $contactmap{$id};
+    next unless $data->{$id};
     delete $want{$id};
 
-    my $item = decode_json($contactmap{$id}{payload});
+    my $item = decode_json($data->{$id}{payload});
 
     foreach my $key (keys %$item) {
       delete $item->{$key} unless _prop_wanted($args, $key);
@@ -2643,27 +2643,26 @@ sub api_ContactGroup_get {
 
   #properties: String[] A list of properties to fetch for each message.
 
-  my $data = $Self->{db}->dget('jcontactgroups', { active => 1 });
-  my %groupmap = map { $_->{groupuid} => $_ } @$data;
+  my $data = $Self->{db}->dgetby('jcontactgroups', 'groupuid', { active => 1 });
 
   my %want;
   if ($args->{ids}) {
     %want = map { $Self->idmap($_) => 1 } @{$args->{ids}};
   }
   else {
-    %want = map { $_ => 1 } keys %groupmap;
+    %want = map { $_ => 1 } keys %$data;
   }
 
   my @list;
   foreach my $id (keys %want) {
-    next unless $groupmap{$id};
+    next unless $data->{$id};
     delete $want{$id};
 
     my $item = {};
     $item->{id} = $id;
 
     if (_prop_wanted($args, 'name')) {
-      $item->{name} = $groupmap{$id}{name};
+      $item->{name} = $data->{$id}{name};
     }
 
     if (_prop_wanted($args, 'contactIds')) {
