@@ -437,9 +437,17 @@ sub do_calendars {
     my $cal = $exists{$id}[0];
     my $href = $cal->{href};
     my $oldtoken = $cal->{syncToken};
-    my ($added, $removed, $errors, $newToken) = $Self->backend_cmd('sync_event_links', $href, $oldtoken);
+    my ($added, $removed, $errors, $newToken) = eval { $Self->backend_cmd('sync_event_links', $href, $oldtoken) };
 
-    # token
+    unless ($newToken) {
+      # try fetching from nothing
+      ($added, $removed, $errors, $newToken) = $Self->backend_cmd('sync_event_links', $href);
+      # calculate removed by comparing exists to fetched list
+      foreach my $href (keys %{$exists{$id}[1]}) {
+        push @$removed, $href unless $added->{$href};
+      }
+    }
+
     $todo{$id} = [$newToken, {}];
 
     foreach my $href (@$removed) {
@@ -451,6 +459,7 @@ sub do_calendars {
       next if (exists $exists{$id}[1]{$href} and $exists{$id}[1]{$href}{etag} eq $added->{$href});
       push @toget, $href;
     }
+
     if (@toget) {
       my ($events, $errors, $links) = $Self->backend_cmd('get_events_multi', $href, \@toget, Full => 1);
       foreach my $href (keys %$events) {
@@ -619,15 +628,10 @@ sub do_addressbooks {
     my $book = $exists{$id}[0];
     my $href = $book->{href};
     my $oldtoken = $book->{syncToken};
-    my ($added, $removed, $errors, $newToken);
-    if ($books->{$id}) {
-      ($added, $removed, $errors, $newToken) = $Self->backend_cmd('sync_card_links', $href, $oldtoken);
-    }
-    else {
+    my ($added, $removed, $errors, $newToken) = eval { $Self->backend_cmd('sync_card_links', $href, $oldtoken) };
+    unless ($newToken) {
       # fake up a sync by getting everything
-      $added = $Self->backend_cmd('get_card_links', $href);
-      $removed = [];
-      $errors = [];
+      ($added, $removed, $errors, $newToken) = eval { $Self->backend_cmd('sync_card_links', $href) };
       # calculate removed by comparing exists to fetched list
       foreach my $href (keys %{$exists{$id}[1]}) {
         push @$removed, $href unless $added->{$href};
