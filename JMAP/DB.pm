@@ -26,6 +26,7 @@ use Date::Parse;
 use Net::CalDAVTalk;
 use Net::CardDAVTalk::VCard;
 use MIME::Base64 qw(encode_base64 decode_base64);
+use Scalar::Util qw(weaken);
 
 my $json = JSON::XS->new->utf8->canonical();
 
@@ -94,12 +95,10 @@ sub in_transaction {
 sub begin_superlock {
   my $Self = shift;
   my $accountid = $Self->accountid();
-  $Self->{superlock} = IO::LockedFile->new(">/home/jmap/data/$accountid.lock");
-}
-
-sub end_superlock {
-  my $Self = shift;
-  delete $Self->{superlock};
+  my $lock = IO::LockedFile->new(">/home/jmap/data/$accountid.lock");
+  $Self->{superlock} = $lock;
+  weaken $Self->{superlock};
+  return $lock;
 }
 
 sub begin {

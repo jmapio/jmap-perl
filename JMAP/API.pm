@@ -929,7 +929,7 @@ sub api_Mailbox_set {
   my ($created, $notCreated, $updated, $notUpdated, $destroyed, $notDestroyed);
   my ($oldState, $newState);
 
-  $Self->{db}->begin_superlock();
+  my $scoped_lock = $Self->{db}->begin_superlock();
 
   eval {
     # make sure our DB is up to date - happy to enforce this because folder names
@@ -954,11 +954,8 @@ sub api_Mailbox_set {
   };
 
   if ($@) {
-    $Self->{db}->end_superlock();
     die $@;
   }
-
-  $Self->{db}->end_superlock();
 
   my @res;
   push @res, ['Mailbox/set', {
@@ -1801,7 +1798,7 @@ sub api_Email_set {
   my ($created, $notCreated, $updated, $notUpdated, $destroyed, $notDestroyed);
   my ($oldState, $newState);
 
-  $Self->{db}->begin_superlock();
+  my $scoped_lock = $Self->{db}->begin_superlock();
 
   eval {
     # get state up-to-date first
@@ -1828,11 +1825,8 @@ sub api_Email_set {
   };
 
   if ($@) {
-    $Self->{db}->end_superlock();
     die $@;
   }
-
-  $Self->{db}->end_superlock();
 
   foreach my $cid (sort keys %$created) {
     my $msgid = $created->{$cid}{id};
@@ -1862,7 +1856,7 @@ sub api_Email_import {
   my %created;
   my %notcreated;
 
-  $Self->{db}->begin_superlock();
+  my $scoped_lock = $Self->{db}->begin_superlock();
 
   # make sure our DB is up to date
   $Self->{db}->sync_folders();
@@ -1924,8 +1918,6 @@ sub api_Email_import {
       size => $size,
     };
   }
-
-  $Self->{db}->end_superlock();
 
   my @res;
   push @res, ['Email/import', {
@@ -2854,7 +2846,7 @@ sub api_ContactGroup_set {
   my ($created, $notCreated, $updated, $notUpdated, $destroyed, $notDestroyed);
   my ($oldState, $newState);
 
-  $Self->{db}->begin_superlock();
+  my $scoped_lock = $Self->{db}->begin_superlock();
 
   eval {
     $Self->{db}->sync_addressbooks();
@@ -2880,11 +2872,8 @@ sub api_ContactGroup_set {
   };
 
   if ($@) {
-    $Self->{db}->end_superlock();
     die $@;
   }
-
-  $Self->{db}->end_superlock();
 
   my @res;
   push @res, ['ContactGroup/set', {
@@ -2921,7 +2910,7 @@ sub api_Contact_set {
   my ($created, $notCreated, $updated, $notUpdated, $destroyed, $notDestroyed);
   my ($oldState, $newState);
 
-  $Self->{db}->begin_superlock();
+  my $scoped_lock = $Self->{db}->begin_superlock();
 
   eval {
     $Self->{db}->sync_addressbooks();
@@ -2947,11 +2936,8 @@ sub api_Contact_set {
   };
 
   if ($@) {
-    $Self->{db}->end_superlock();
     die $@;
   }
-
-  $Self->{db}->end_superlock();
 
   my @res;
   push @res, ['Contact/set', {
@@ -2989,7 +2975,7 @@ sub api_CalendarEvent_set {
   my ($created, $notCreated, $updated, $notUpdated, $destroyed, $notDestroyed);
   my ($oldState, $newState);
 
-  $Self->{db}->begin_superlock();
+  my $scoped_lock = $Self->{db}->begin_superlock();
 
   eval {
     $Self->{db}->sync_calendars();
@@ -3015,11 +3001,8 @@ sub api_CalendarEvent_set {
   };
 
   if ($@) {
-    $Self->{db}->end_superlock();
     die $@;
   }
-
-  $Self->{db}->end_superlock();
 
   my @res;
   push @res, ['CalendarEvent/set', {
@@ -3056,7 +3039,7 @@ sub api_Calendar_set {
   my ($created, $notCreated, $updated, $notUpdated, $destroyed, $notDestroyed);
   my ($oldState, $newState);
 
-  $Self->{db}->begin_superlock();
+  my $scoped_lock = $Self->{db}->begin_superlock();
 
   eval {
     $Self->{db}->sync_calendars();
@@ -3082,11 +3065,8 @@ sub api_Calendar_set {
   };
 
   if ($@) {
-    $Self->{db}->end_superlock();
     die $@;
   }
-
-  $Self->{db}->end_superlock();
 
   my @res;
   push @res, ['Calendar/set', {
@@ -3427,7 +3407,7 @@ sub api_EmailSubmission_set {
   my %updateEmails;
   my @destroyEmails;
 
-  $Self->{db}->begin_superlock();
+  my $scoped_lock = $Self->{db}->begin_superlock();
 
   eval {
     # make sure our DB is up to date
@@ -3479,11 +3459,8 @@ sub api_EmailSubmission_set {
   };
 
   if ($@) {
-    $Self->{db}->end_superlock();
     die $@;
   }
-
-  $Self->{db}->end_superlock();
 
   my @res;
   push @res, ['EmailSubmission/set', {
