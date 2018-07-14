@@ -267,12 +267,13 @@ sub sync_jmailboxes {
       }
     }
     next unless $name;
-    # XXX - get MYRIGHTS from the server?
+    # XXX - get MYRIGHTS and SUBSCRIBED from the server?
     my %details = (
       name => $name,
       parentId => $parentId,
       sortOrder => $sortOrder,
       mustBeOnlyMailbox => 0,
+      isSubscribed => 1,
       mayReadItems => 1,
       mayAddItems => 1,
       mayRemoveItems => 1,
