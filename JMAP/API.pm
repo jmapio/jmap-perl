@@ -930,6 +930,8 @@ sub api_Mailbox_query {
   $data = $Self->_mailbox_sort($data, $args->{sort}, $storage);
   $data = $Self->_mailbox_filter($data, $args->{filter}, $storage) if $args->{filter};
 
+  my $start = $args->{position} || 0;
+
   if ($args->{anchor}) {
     # need to calculate the position
     for (0..$#$data) {
