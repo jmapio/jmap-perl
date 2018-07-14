@@ -931,31 +931,25 @@ sub api_Mailbox_set {
 
   my $scoped_lock = $Self->{db}->begin_superlock();
 
-  eval {
-    # make sure our DB is up to date - happy to enforce this because folder names
-    # are a unique namespace, so we should try to minimise the race time
-    $Self->{db}->sync_folders();
+  # make sure our DB is up to date - happy to enforce this because folder names
+  # are a unique namespace, so we should try to minimise the race time
+  $Self->{db}->sync_folders();
 
-    $Self->begin();
-    my $user = $Self->{db}->get_user();
-    $Self->commit();
-    $oldState = "$user->{jstateMailbox}";
+  $Self->begin();
+  my $user = $Self->{db}->get_user();
+  $Self->commit();
+  $oldState = "$user->{jstateMailbox}";
 
-    ($created, $notCreated) = $Self->{db}->create_mailboxes($create);
-    $Self->setid($_, $created->{$_}{id}) for keys %$created;
-    $Self->_resolve_patch($update, 'api_Mailbox_get');
-    ($updated, $notUpdated) = $Self->{db}->update_mailboxes($update, sub { $Self->idmap(shift) });
-    ($destroyed, $notDestroyed) = $Self->{db}->destroy_mailboxes($destroy);
+  ($created, $notCreated) = $Self->{db}->create_mailboxes($create);
+  $Self->setid($_, $created->{$_}{id}) for keys %$created;
+  $Self->_resolve_patch($update, 'api_Mailbox_get');
+  ($updated, $notUpdated) = $Self->{db}->update_mailboxes($update, sub { $Self->idmap(shift) });
+  ($destroyed, $notDestroyed) = $Self->{db}->destroy_mailboxes($destroy);
 
-    $Self->begin();
-    $user = $Self->{db}->get_user();
-    $Self->commit();
-    $newState = "$user->{jstateMailbox}";
-  };
-
-  if ($@) {
-    die $@;
-  }
+  $Self->begin();
+  $user = $Self->{db}->get_user();
+  $Self->commit();
+  $newState = "$user->{jstateMailbox}";
 
   my @res;
   push @res, ['Mailbox/set', {
@@ -1800,33 +1794,27 @@ sub api_Email_set {
 
   my $scoped_lock = $Self->{db}->begin_superlock();
 
-  eval {
-    # get state up-to-date first
-    $Self->{db}->sync_imap();
+  # get state up-to-date first
+  $Self->{db}->sync_imap();
 
-    $Self->begin();
-    my $user = $Self->{db}->get_user();
-    $Self->commit();
-    $oldState = "$user->{jstateEmail}";
+  $Self->begin();
+  my $user = $Self->{db}->get_user();
+  $Self->commit();
+  $oldState = "$user->{jstateEmail}";
 
-    ($created, $notCreated) = $Self->{db}->create_messages($create, sub { $Self->idmap(shift) });
-    $Self->setid($_, $created->{$_}{id}) for keys %$created;
-    $Self->_resolve_patch($update, 'api_Email_get');
-    ($updated, $notUpdated) = $Self->{db}->update_messages($update, sub { $Self->idmap(shift) });
-    ($destroyed, $notDestroyed) = $Self->{db}->destroy_messages($destroy);
+  ($created, $notCreated) = $Self->{db}->create_messages($create, sub { $Self->idmap(shift) });
+  $Self->setid($_, $created->{$_}{id}) for keys %$created;
+  $Self->_resolve_patch($update, 'api_Email_get');
+  ($updated, $notUpdated) = $Self->{db}->update_messages($update, sub { $Self->idmap(shift) });
+  ($destroyed, $notDestroyed) = $Self->{db}->destroy_messages($destroy);
 
-    # XXX - cheap dumb racy version
-    $Self->{db}->sync_imap();
+  # XXX - cheap dumb racy version
+  $Self->{db}->sync_imap();
 
-    $Self->begin();
-    $user = $Self->{db}->get_user();
-    $Self->commit();
-    $newState = "$user->{jstateEmail}";
-  };
-
-  if ($@) {
-    die $@;
-  }
+  $Self->begin();
+  $user = $Self->{db}->get_user();
+  $Self->commit();
+  $newState = "$user->{jstateEmail}";
 
   foreach my $cid (sort keys %$created) {
     my $msgid = $created->{$cid}{id};
@@ -2848,32 +2836,26 @@ sub api_ContactGroup_set {
 
   my $scoped_lock = $Self->{db}->begin_superlock();
 
-  eval {
-    $Self->{db}->sync_addressbooks();
+  $Self->{db}->sync_addressbooks();
 
-    $Self->begin();
-    my $user = $Self->{db}->get_user();
-    $oldState = "$user->{jstateContactGroup}";
-    $Self->commit();
+  $Self->begin();
+  my $user = $Self->{db}->get_user();
+  $oldState = "$user->{jstateContactGroup}";
+  $Self->commit();
 
-    ($created, $notCreated) = $Self->{db}->create_contact_groups($create);
-    $Self->setid($_, $created->{$_}{id}) for keys %$created;
-    $Self->_resolve_patch($update, 'api_ContactGroup_get');
-    ($updated, $notUpdated) = $Self->{db}->update_contact_groups($update, sub { $Self->idmap(shift) });
-    ($destroyed, $notDestroyed) = $Self->{db}->destroy_contact_groups($destroy);
+  ($created, $notCreated) = $Self->{db}->create_contact_groups($create);
+  $Self->setid($_, $created->{$_}{id}) for keys %$created;
+  $Self->_resolve_patch($update, 'api_ContactGroup_get');
+  ($updated, $notUpdated) = $Self->{db}->update_contact_groups($update, sub { $Self->idmap(shift) });
+  ($destroyed, $notDestroyed) = $Self->{db}->destroy_contact_groups($destroy);
 
-    # XXX - cheap dumb racy version
-    $Self->{db}->sync_addressbooks();
+  # XXX - cheap dumb racy version
+  $Self->{db}->sync_addressbooks();
 
-    $Self->begin();
-    $user = $Self->{db}->get_user();
-    $newState = "$user->{jstateContactGroup}";
-    $Self->commit();
-  };
-
-  if ($@) {
-    die $@;
-  }
+  $Self->begin();
+  $user = $Self->{db}->get_user();
+  $newState = "$user->{jstateContactGroup}";
+  $Self->commit();
 
   my @res;
   push @res, ['ContactGroup/set', {
@@ -2912,32 +2894,26 @@ sub api_Contact_set {
 
   my $scoped_lock = $Self->{db}->begin_superlock();
 
-  eval {
-    $Self->{db}->sync_addressbooks();
+  $Self->{db}->sync_addressbooks();
 
-    $Self->begin();
-    my $user = $Self->{db}->get_user();
-    $oldState = "$user->{jstateContact}";
-    $Self->commit();
+  $Self->begin();
+  my $user = $Self->{db}->get_user();
+  $oldState = "$user->{jstateContact}";
+  $Self->commit();
 
-    ($created, $notCreated) = $Self->{db}->create_contacts($create);
-    $Self->setid($_, $created->{$_}{id}) for keys %$created;
-    $Self->_resolve_patch($update, 'api_Contact_get');
-    ($updated, $notUpdated) = $Self->{db}->update_contacts($update, sub { $Self->idmap(shift) });
-    ($destroyed, $notDestroyed) = $Self->{db}->destroy_contacts($destroy);
+  ($created, $notCreated) = $Self->{db}->create_contacts($create);
+  $Self->setid($_, $created->{$_}{id}) for keys %$created;
+  $Self->_resolve_patch($update, 'api_Contact_get');
+  ($updated, $notUpdated) = $Self->{db}->update_contacts($update, sub { $Self->idmap(shift) });
+  ($destroyed, $notDestroyed) = $Self->{db}->destroy_contacts($destroy);
 
-    # XXX - cheap dumb racy version
-    $Self->{db}->sync_addressbooks();
+  # XXX - cheap dumb racy version
+  $Self->{db}->sync_addressbooks();
 
-    $Self->begin();
-    $user = $Self->{db}->get_user();
-    $newState = "$user->{jstateContact}";
-    $Self->commit();
-  };
-
-  if ($@) {
-    die $@;
-  }
+  $Self->begin();
+  $user = $Self->{db}->get_user();
+  $newState = "$user->{jstateContact}";
+  $Self->commit();
 
   my @res;
   push @res, ['Contact/set', {
@@ -2977,32 +2953,26 @@ sub api_CalendarEvent_set {
 
   my $scoped_lock = $Self->{db}->begin_superlock();
 
-  eval {
-    $Self->{db}->sync_calendars();
+  $Self->{db}->sync_calendars();
 
-    $Self->begin();
-    my $user = $Self->{db}->get_user();
-    $oldState = "$user->{jstateCalendarEvent}";
-    $Self->commit();
+  $Self->begin();
+  my $user = $Self->{db}->get_user();
+  $oldState = "$user->{jstateCalendarEvent}";
+  $Self->commit();
 
-    ($created, $notCreated) = $Self->{db}->create_calendar_events($create);
-    $Self->setid($_, $created->{$_}{id}) for keys %$created;
-    $Self->_resolve_patch($update, 'api_CalendarEvent_get');
-    ($updated, $notUpdated) = $Self->{db}->update_calendar_events($update, sub { $Self->idmap(shift) });
-    ($destroyed, $notDestroyed) = $Self->{db}->destroy_calendar_events($destroy);
+  ($created, $notCreated) = $Self->{db}->create_calendar_events($create);
+  $Self->setid($_, $created->{$_}{id}) for keys %$created;
+  $Self->_resolve_patch($update, 'api_CalendarEvent_get');
+  ($updated, $notUpdated) = $Self->{db}->update_calendar_events($update, sub { $Self->idmap(shift) });
+  ($destroyed, $notDestroyed) = $Self->{db}->destroy_calendar_events($destroy);
 
-    # XXX - cheap dumb racy version
-    $Self->{db}->sync_calendars();
+  # XXX - cheap dumb racy version
+  $Self->{db}->sync_calendars();
 
-    $Self->begin();
-    $user = $Self->{db}->get_user();
-    $newState = "$user->{jstateCalendarEvent}";
-    $Self->commit();
-  };
-
-  if ($@) {
-    die $@;
-  }
+  $Self->begin();
+  $user = $Self->{db}->get_user();
+  $newState = "$user->{jstateCalendarEvent}";
+  $Self->commit();
 
   my @res;
   push @res, ['CalendarEvent/set', {
@@ -3041,32 +3011,26 @@ sub api_Calendar_set {
 
   my $scoped_lock = $Self->{db}->begin_superlock();
 
-  eval {
-    $Self->{db}->sync_calendars();
+  $Self->{db}->sync_calendars();
 
-    $Self->begin();
-    my $user = $Self->{db}->get_user();
-    $oldState = "$user->{jstateCalendar}";
-    $Self->commit();
+  $Self->begin();
+  my $user = $Self->{db}->get_user();
+  $oldState = "$user->{jstateCalendar}";
+  $Self->commit();
 
-    ($created, $notCreated) = $Self->{db}->create_calendars($create);
-    $Self->setid($_, $created->{$_}{id}) for keys %$created;
-    $Self->_resolve_patch($update, 'api_Calendar_get');
-    ($updated, $notUpdated) = $Self->{db}->update_calendars($update, sub { $Self->idmap(shift) });
-    ($destroyed, $notDestroyed) = $Self->{db}->destroy_calendars($destroy);
+  ($created, $notCreated) = $Self->{db}->create_calendars($create);
+  $Self->setid($_, $created->{$_}{id}) for keys %$created;
+  $Self->_resolve_patch($update, 'api_Calendar_get');
+  ($updated, $notUpdated) = $Self->{db}->update_calendars($update, sub { $Self->idmap(shift) });
+  ($destroyed, $notDestroyed) = $Self->{db}->destroy_calendars($destroy);
 
-    # XXX - cheap dumb racy version
-    $Self->{db}->sync_calendars();
+  # XXX - cheap dumb racy version
+  $Self->{db}->sync_calendars();
 
-    $Self->begin();
-    $user = $Self->{db}->get_user();
-    $newState = "$user->{jstateCalendar}";
-    $Self->commit();
-  };
-
-  if ($@) {
-    die $@;
-  }
+  $Self->begin();
+  $user = $Self->{db}->get_user();
+  $newState = "$user->{jstateCalendar}";
+  $Self->commit();
 
   my @res;
   push @res, ['Calendar/set', {
@@ -3409,58 +3373,52 @@ sub api_EmailSubmission_set {
 
   my $scoped_lock = $Self->{db}->begin_superlock();
 
-  eval {
-    # make sure our DB is up to date
-    $Self->{db}->sync_folders();
+  # make sure our DB is up to date
+  $Self->{db}->sync_folders();
 
-    $Self->{db}->begin();
-    my $user = $Self->{db}->get_user();
-    $oldState = "$user->{jstateEmailSubmission}";
-    $Self->{db}->commit();
+  $Self->{db}->begin();
+  my $user = $Self->{db}->get_user();
+  $oldState = "$user->{jstateEmailSubmission}";
+  $Self->{db}->commit();
 
-    ($created, $notCreated) = $Self->{db}->create_submissions($create, sub { $Self->idmap(shift) });
-    $Self->setid($_, $created->{$_}{id}) for keys %$created;
-    $Self->_resolve_patch($update, 'api_EmailSubmission_get');
-    ($updated, $notUpdated) = $Self->{db}->update_submissions($update, sub { $Self->idmap(shift) });
+  ($created, $notCreated) = $Self->{db}->create_submissions($create, sub { $Self->idmap(shift) });
+  $Self->setid($_, $created->{$_}{id}) for keys %$created;
+  $Self->_resolve_patch($update, 'api_EmailSubmission_get');
+  ($updated, $notUpdated) = $Self->{db}->update_submissions($update, sub { $Self->idmap(shift) });
 
-    my @possible = ((map { $_->{id} } values %$created), (keys %$updated), @$destroy);
+  my @possible = ((map { $_->{id} } values %$created), (keys %$updated), @$destroy);
 
-    # we need to convert all the IDs that were successfully created and updated plus any POSSIBLE
-    # one that might be deleted into a map from id to messageid - after create and update, but
-    # before delete.
-    my $result = $Self->api_EmailSubmission_get({ids => \@possible, properties => ['emailId']});
-    my %emailIds;
-    if ($result->[0] eq 'EmailSubmission/get') {
-      %emailIds = map { $_->{id} => $_->{emailId} } @{$result->[1]{list}};
-    }
-
-    # we can destroy now that we've read in the messageids of everything we intend to destroy... yay
-    ($destroyed, $notDestroyed) = $Self->{db}->destroy_submissions($destroy);
-
-    # OK, we have data on all possible messages that need to be actioned after the messageSubmission
-    # changes
-    my %allowed = map { $_ => 1 } ((map { $_->{id} } values %$created), (keys %$updated), @$destroyed);
-
-    foreach my $key (keys %$toUpdate) {
-      my $id = $Self->idmap($key);
-      next unless $allowed{$id};
-      $updateEmails{$emailIds{$id}} = $toUpdate->{$key};
-    }
-    foreach my $key (@$toDestroy) {
-      my $id = $Self->idmap($key);
-      next unless $allowed{$id};
-      push @destroyEmails, $emailIds{$id};
-    }
-
-    $Self->{db}->begin();
-    $user = $Self->{db}->get_user();
-    $newState = "$user->{jstateEmailSubmission}";
-    $Self->{db}->commit();
-  };
-
-  if ($@) {
-    die $@;
+  # we need to convert all the IDs that were successfully created and updated plus any POSSIBLE
+  # one that might be deleted into a map from id to messageid - after create and update, but
+  # before delete.
+  my $result = $Self->api_EmailSubmission_get({ids => \@possible, properties => ['emailId']});
+  my %emailIds;
+  if ($result->[0] eq 'EmailSubmission/get') {
+    %emailIds = map { $_->{id} => $_->{emailId} } @{$result->[1]{list}};
   }
+
+  # we can destroy now that we've read in the messageids of everything we intend to destroy... yay
+  ($destroyed, $notDestroyed) = $Self->{db}->destroy_submissions($destroy);
+
+  # OK, we have data on all possible messages that need to be actioned after the messageSubmission
+  # changes
+  my %allowed = map { $_ => 1 } ((map { $_->{id} } values %$created), (keys %$updated), @$destroyed);
+
+  foreach my $key (keys %$toUpdate) {
+    my $id = $Self->idmap($key);
+    next unless $allowed{$id};
+    $updateEmails{$emailIds{$id}} = $toUpdate->{$key};
+  }
+  foreach my $key (@$toDestroy) {
+    my $id = $Self->idmap($key);
+    next unless $allowed{$id};
+    push @destroyEmails, $emailIds{$id};
+  }
+
+  $Self->{db}->begin();
+  $user = $Self->{db}->get_user();
+  $newState = "$user->{jstateEmailSubmission}";
+  $Self->{db}->commit();
 
   my @res;
   push @res, ['EmailSubmission/set', {
