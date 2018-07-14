@@ -822,26 +822,40 @@ sub api_Mailbox_changes {
 
   my $data = $Self->{db}->dget('jmailboxes', { jmodseq => ['>', $sinceState] });
 
-  my @changed;
+  if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
+    return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
+  }
+
+  $Self->commit();
+
+  my @created;
+  my @updated;
   my @removed;
   my $onlyCounts = 1;
   foreach my $item (@$data) {
     if ($item->{active}) {
-      push @changed, $item->{jmailboxid};
-      $onlyCounts = 0 if $item->{jnoncountsmodseq} > $sinceState;
+      if ($item->{jcreated} <= $sinceState) {
+        push @updated, $item->{jmailboxid};
+        $onlyCounts = 0 if $item->{jnoncountsmodseq} > $sinceState;
+      }
+      else {
+        push @created, $item->{jmailboxid};
+      }
     }
     else {
-      push @removed, $item->{jmailboxid};
+      if ($item->{jcreated} <= $sinceState) {
+        push @removed, $item->{jmailboxid};
+      }
+      # otherwise never seen
     }
   }
-
-  $Self->commit();
 
   my @res = (['Mailbox/changes', {
     accountId => $accountid,
     oldState => "$sinceState",
     newState => $newState,
-    changed => [map { "$_" } @changed],
+    created => [map { "$_" } @created],
+    updated => [map { "$_" } @updated],
     removed => [map { "$_" } @removed],
     changedProperties => $onlyCounts ? ["totalEmails", "unreadEmails", "totalThreads", "unreadThreads"] : JSON::null,
   }]);
@@ -1727,32 +1741,41 @@ sub api_Email_changes {
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
 
-  my $data = $Self->{db}->dget('jmessages', { jmodseq => ['>', $args->{sinceState}] }, 'msgid,active');
+  my $data = $Self->{db}->dget('jmessages', { jmodseq => ['>', $args->{sinceState}] }, 'msgid,active,jcreated');
 
   if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
     return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
   }
 
-  my @changed;
+  $Self->commit();
+
+  my @created;
+  my @updated;
   my @removed;
 
   foreach my $row (@$data) {
     if ($row->{active}) {
-      push @changed, $row->{msgid};
+      if ($row->{jcreated} <= $args->{sinceState}) {
+        push @updated, $row->{msgid};
+      } else {
+        push @created, $row->{msgid};
+      }
     }
     else {
-      push @removed, $row->{msgid};
+      if ($row->{jcreated} <= $args->{sinceState}) {
+        push @removed, $row->{msgid};
+      }
+      # otherwise never seen
     }
   }
-
-  $Self->commit();
 
   my @res;
   push @res, ['Email/changes', {
     accountId => $accountid,
     oldState => "$args->{sinceState}",
     newState => $newState,
-    changed => [map { "$_" } @changed],
+    created => [map { "$_" } @created],
+    updated => [map { "$_" } @updated],
     removed => [map { "$_" } @removed],
   }];
 
@@ -2016,31 +2039,41 @@ sub api_Thread_changes {
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
 
-  my $data = $Self->{db}->dget('jthreads', { jmodseq => ['>', $args->{sinceState}] }, 'thrid,active');
+  my $data = $Self->{db}->dget('jthreads', { jmodseq => ['>', $args->{sinceState}] }, 'thrid,active,jcreated');
 
   if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
     return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
   }
 
+  $Self->commit();
+
+  my @created;
   my @changed;
   my @removed;
   foreach my $row (@$data) {
     if ($row->{active}) {
-      push @changed, $row->{thrid};
+      if ($row->{jcreated} <= $args->{sinceState}) {
+        push @updated, $row->{thrid};
+      }
+      else {
+        push @created, $row->{thrid};
+      }
     }
     else {
-      push @removed, $row->{thrid};
+      if ($row->{jcreated} <= $args->{sinceState}) {
+        push @removed, $row->{thrid};
+      }
+      # otherwise never seen
     }
   }
-
-  $Self->commit();
 
   my @res;
   push @res, ['Thread/changes', {
     accountId => $accountid,
     oldState => $args->{sinceState},
     newState => $newState,
-    changed => \@changed,
+    created => \@created,
+    updated => \@updated,
     removed => \@removed,
   }];
 
@@ -2159,28 +2192,42 @@ sub api_Calendar_changes {
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $sinceState <= $user->{jdeletedmodseq});
 
-  my $data = $Self->{db}->dget('jcalendars', {}, 'jcalendarid,jmodseq,active');
+  my $data = $Self->{db}->dget('jcalendars', {}, 'jcalendarid,jmodseq,active,jcreated');
 
-  my @changed;
+  if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
+    return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
+  }
+
+  $Self->commit();
+
+  my @created;
+  my @updated;
   my @removed;
   foreach my $item (@$data) {
     if ($item->{jmodseq} > $sinceState) {
       if ($item->{active}) {
-        push @changed, $item->{jcalendarid};
+        if ($item->{jcreated} <= $sinceState) {
+          push @updated, $item->{jcalendarid};
+        }
+        else {
+          push @created, $item->{jcalendarid};
+        }
       }
       else {
-        push @removed, $item->{jcalendarid};
+        if ($item->{jcreated} <= $sinceState) {
+          push @removed, $item->{jcalendarid};
+        }
+        # otherwise never seen
       }
     }
   }
-
-  $Self->commit();
 
   my @res = (['Calendar/changes', {
     accountId => $accountid,
     oldState => "$sinceState",
     newState => $newState,
-    changed => [map { "$_" } @changed],
+    created => [map { "$_" } @created],
+    updated => [map { "$_" } @updated],
     removed => [map { "$_" } @removed],
   }]);
 
@@ -2327,7 +2374,7 @@ sub api_CalendarEvent_changes {
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
 
-  my $data = $Self->{db}->dget('jevents', { jmodseq => ['>', $args->{sinceState}] }, 'eventuid,active');
+  my $data = $Self->{db}->dget('jevents', { jmodseq => ['>', $args->{sinceState}] }, 'eventuid,active,jcreated');
 
   if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
     return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
@@ -2335,15 +2382,24 @@ sub api_CalendarEvent_changes {
 
   $Self->commit();
 
-  my @changed;
+  my @created;
+  my @updated;
   my @removed;
 
   foreach my $row (@$data) {
     if ($row->{active}) {
-      push @changed, $row->{eventuid};
+      if ($row->{jcreated} <= $args->{sinceState}) {
+        push @updated, $row->{eventuid};
+      }
+      else {
+        push @created, $row->{eventuid};
+      }
     }
     else {
-      push @removed, $row->{eventuid};
+      if ($row->{jcreated} <= $args->{sinceState}) {
+        push @removed, $row->{eventuid};
+      }
+      # otherwise never seen
     }
   }
 
@@ -2352,7 +2408,8 @@ sub api_CalendarEvent_changes {
     accountId => $accountid,
     oldState => "$args->{sinceState}",
     newState => $newState,
-    changed => [map { "$_" } @changed],
+    created => [map { "$_" } @created],
+    updated => [map { "$_" } @updated],
     removed => [map { "$_" } @removed],
   }];
 
@@ -2439,28 +2496,42 @@ sub api_Addressbook_changes {
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $sinceState <= $user->{jdeletedmodseq});
 
-  my $data = $Self->{db}->dget('jaddressbooks', {}, 'jaddressbookid,jmodseq,active');
+  my $data = $Self->{db}->dget('jaddressbooks', {}, 'jaddressbookid,jmodseq,active,jcreated');
 
-  my @changed;
+  if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
+    return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
+  }
+
+  $Self->commit();
+
+  my @created;
+  my @updated;
   my @removed;
   foreach my $item (@$data) {
     if ($item->{jmodseq} > $sinceState) {
       if ($item->{active}) {
-        push @changed, $item->{jaddressbookid};
+        if ($item->{jcreated} <= $sinceState) {
+          push @updated, $item->{jaddressbookid};
+        }
+        else {
+          push @created, $item->{jaddressbookid};
+        }
       }
       else {
-        push @removed, $item->{jaddressbookid};
+        if ($item->{jcreated} <= $sinceState) {
+          push @removed, $item->{jaddressbookid};
+        }
+        # otherwise never seen
       }
     }
   }
-
-  $Self->commit();
 
   my @res = (['Addressbook/changes', {
     accountId => $accountid,
     oldState => "$sinceState",
     newState => $newState,
-    changed => [map { "$_" } @changed],
+    created => [map { "$_" } @created],
+    updated => [map { "$_" } @updated],
     removed => [map { "$_" } @removed],
   }]);
 
@@ -2607,22 +2678,31 @@ sub api_Contact_changes {
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
 
-  my $data = $Self->{db}->dget('jcontacts', { jmodseq => ['>', $args->{sinceState}] }, 'contactuid,active');
+  my $data = $Self->{db}->dget('jcontacts', { jmodseq => ['>', $args->{sinceState}] }, 'contactuid,active,jcreated');
 
   if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
     return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
   }
   $Self->commit();
 
-  my @changed;
+  my @created;
+  my @updated;
   my @removed;
 
   foreach my $row (@$data) {
     if ($row->{active}) {
-      push @changed, $row->{contactuid};
+      if ($row->{jcreated} <= $args->{sinceState}) {
+        push @updated, $row->{contactuid};
+      }
+      else {
+        push @created, $row->{contactuid};
+      }
     }
     else {
-      push @removed, $row->{contactuid};
+      if ($row->{jcreated} <= $args->{sinceState}) {
+        push @removed, $row->{contactuid};
+      }
+      # otherwise never seen
     }
   }
 
@@ -2631,7 +2711,8 @@ sub api_Contact_changes {
     accountId => $accountid,
     oldState => "$args->{sinceState}",
     newState => $newState,
-    changed => [map { "$_" } @changed],
+    created => [map { "$_" } @created],
+    updated => [map { "$_" } @updated],
     removed => [map { "$_" } @removed],
   }];
 
@@ -2713,21 +2794,30 @@ sub api_ContactGroup_changes {
 
   my $sql = "SELECT groupuid,active FROM jcontactgroups WHERE jmodseq > ?";
 
-  my $data = $Self->{db}->dget('jcontactgroups', { jmodseq => ['>', $args->{sinceState}] }, 'groupuid,active');
+  my $data = $Self->{db}->dget('jcontactgroups', { jmodseq => ['>', $args->{sinceState}] }, 'groupuid,active,jcreated');
 
   if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
     return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
   }
 
-  my @changed;
+  my @created;
+  my @updated;
   my @removed;
 
   foreach my $row (@$data) {
     if ($row->{active}) {
-      push @changed, $row->{groupuid};
+      if ($row->{jcreated} <= $args->{sinceState}) {
+        push @updated, $row->{groupuid};
+      }
+      else {
+        push @created, $row->{groupuid};
+      }
     }
     else {
-      push @removed, $row->{groupuid};
+      if ($row->{jcreated} <= $args->{sinceState}) {
+        push @removed, $row->{groupuid};
+      }
+      # otherwise never seen
     }
   }
   $Self->commit();
@@ -2737,7 +2827,8 @@ sub api_ContactGroup_changes {
     accountId => $accountid,
     oldState => "$args->{sinceState}",
     newState => $newState,
-    changed => [map { "$_" } @changed],
+    created => [map { "$_" } @created],
+    updated => [map { "$_" } @updated],
     removed => [map { "$_" } @removed],
   }];
 
@@ -3263,7 +3354,7 @@ sub api_EmailSubmission_changes {
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $sinceState <= $user->{jdeletedmodseq});
 
-  my $data = $dbh->selectall_arrayref("SELECT jsubid,thrid,msgid,sendat,jmodseq,active FROM jsubmission WHERE jmodseq > ? ORDER BY jmodseq ASC", {}, $sinceState);
+  my $data = $dbh->selectall_arrayref("SELECT jsubid,thrid,msgid,sendat,jmodseq,active,jcreated FROM jsubmission WHERE jmodseq > ? ORDER BY jmodseq ASC", {}, $sinceState);
 
   $Self->commit();
 
@@ -3274,16 +3365,25 @@ sub api_EmailSubmission_changes {
     $hasMore = 1;
   }
 
-  my @changed;
+  my @created;
+  my @updated;
   my @removed;
 
   foreach my $item (@$data) {
     # changed
     if ($item->[5]) {
-      push @changed, "$item->[0]";
+      if ($item->[6] <= $args->{sinceState}) {
+        push @updated, "$item->[0]";
+      }
+      else {
+        push @created, "$item->[0]";
+      }
     }
     else {
-      push @removed, "$item->[0]";
+      if ($item->[6] <= $args->{sinceState}) {
+        push @removed, "$item->[0]";
+      }
+      # otherwise never seen
     }
   }
 
@@ -3293,7 +3393,8 @@ sub api_EmailSubmission_changes {
     oldState => $sinceState,
     newState => $newState,
     hasMoreChanges => $hasMore ? $JSON::true : $JSON::false,
-    changed => \@changed,
+    created => \@created,
+    updated => \@updated,
     removed => \@removed,
   }];
 
