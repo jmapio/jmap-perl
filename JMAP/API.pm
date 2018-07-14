@@ -3117,7 +3117,7 @@ sub api_CalendarEvent_set {
   $Self->{db}->sync_calendars();
 
   $Self->begin();
-  my $user = $Self->{db}->get_user();
+  $user = $Self->{db}->get_user();
   $oldState = "$user->{jstateCalendarEvent}";
   $Self->commit();
 
