@@ -251,10 +251,11 @@ sub api_UserPreferences_get {
     };
   }
 
-  return ['UserPreferences/get', { 
+  return ['UserPreferences/get', {
     accountId => $accountid,
     state => $state,
     list => _filter_list(\@list, $args->{ids}),
+    notFound => [],
   }];
 }
 
@@ -410,6 +411,7 @@ sub api_ClientPreferences_get {
     accountId => $accountid,
     state => $state,
     list => _filter_list(\@list, $args->{ids}),
+    notFound => [],
   }];
 }
 
@@ -626,6 +628,7 @@ sub api_VacationResponse_get {
       textBody => undef,
       htmlBody => undef,
     }],
+    notFound => [],
   }];
 }
 
@@ -655,6 +658,7 @@ sub api_Quota_get {
     accountId => $accountid,
     state => 'dummy',
     list => _filter_list(\@list, $args->{ids}),
+    notFound => [],
   }];
 }
 
@@ -717,6 +721,7 @@ sub api_Identity_get {
     accountId => $accountid,
     state => 'dummy',
     list => \@list,
+    notFound => [],
   }];
 }
 
