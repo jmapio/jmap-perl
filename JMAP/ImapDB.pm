@@ -1119,64 +1119,64 @@ sub update_messages {
   foreach my $msgid (keys %map) {
     my $action = $changes->{$msgid};
     eval {
-			foreach my $ifolderid (sort keys %{$map{$msgid}}) {
-				my @uids = sort keys %{$map{$msgid}{$ifolderid}};
-				# XXX - merge similar actions?
-				my $imapname = $foldermap{$ifolderid}{imapname};
-				my $uidvalidity = $foldermap{$ifolderid}{uidvalidity};
-				next unless ($imapname and $uidvalidity);
-				if (exists $action->{keywords}) {
-					my %flags = %{$action->{keywords}};
-					my @flags;
-					push @flags, "\\Answered" if delete $flags{'$answered'};
-					push @flags, "\\Flagged" if delete $flags{'$flagged'};
-					push @flags, "\\Draft" if delete $flags{'$draft'};
-					push @flags, "\\Seen" if delete $flags{'$seen'};
-					push @flags, sort keys %flags;
-					$Self->log('debug', "STORING (@flags) for @uids");
-					$Self->backend_cmd('imap_update', $imapname, $uidvalidity, \@uids, \@flags);
-				}
-			}
-			if (exists $action->{mailboxIds}) {
-				# jmailboxid
-				my @mboxes = map { $idmap->($_) } keys %{$action->{mailboxIds}};
+                        foreach my $ifolderid (sort keys %{$map{$msgid}}) {
+                                my @uids = sort keys %{$map{$msgid}{$ifolderid}};
+                                # XXX - merge similar actions?
+                                my $imapname = $foldermap{$ifolderid}{imapname};
+                                my $uidvalidity = $foldermap{$ifolderid}{uidvalidity};
+                                next unless ($imapname and $uidvalidity);
+                                if (exists $action->{keywords}) {
+                                        my %flags = %{$action->{keywords}};
+                                        my @flags;
+                                        push @flags, "\\Answered" if delete $flags{'$answered'};
+                                        push @flags, "\\Flagged" if delete $flags{'$flagged'};
+                                        push @flags, "\\Draft" if delete $flags{'$draft'};
+                                        push @flags, "\\Seen" if delete $flags{'$seen'};
+                                        push @flags, sort keys %flags;
+                                        $Self->log('debug', "STORING (@flags) for @uids");
+                                        $Self->backend_cmd('imap_update', $imapname, $uidvalidity, \@uids, \@flags);
+                                }
+                        }
+                        if (exists $action->{mailboxIds}) {
+                                # jmailboxid
+                                my @mboxes = map { $idmap->($_) } keys %{$action->{mailboxIds}};
 
-				# existing ifolderids containing this message
-				# identify a source message to work from
-				my ($ifolderid) = sort keys %{$map{$msgid}};
-				my $imapname = $foldermap{$ifolderid}{imapname};
-				my $uidvalidity = $foldermap{$ifolderid}{uidvalidity};
-				my ($uid) = sort keys %{$map{$msgid}{$ifolderid}};
+                                # existing ifolderids containing this message
+                                # identify a source message to work from
+                                my ($ifolderid) = sort keys %{$map{$msgid}};
+                                my $imapname = $foldermap{$ifolderid}{imapname};
+                                my $uidvalidity = $foldermap{$ifolderid}{uidvalidity};
+                                my ($uid) = sort keys %{$map{$msgid}{$ifolderid}};
 
-				if ($Self->{is_gmail}) {
-					# because 'archive' is synthetic on gmail we strip it here
-					(@mboxes) = grep { $jidmap{$_} ne 'archive' } @mboxes;
-					my @labels = grep { $_ and lc $_ ne '\\allmail' } map { $jmailmap{$_}{label} } @mboxes;
-					$Self->backend_cmd('imap_labels', $imapname, $uidvalidity, $uid, \@labels);
-				}
-				else {
-					# existing ifolderids with this message
-					my %current = map { $_ => 1 } keys %{$map{$msgid}};
-					# new ifolderids that should contain this message
-					my %new = map { $jmailmap{$_}{ifolderid} => 1 } @mboxes;
+                                if ($Self->{is_gmail}) {
+                                        # because 'archive' is synthetic on gmail we strip it here
+                                        (@mboxes) = grep { $jidmap{$_} ne 'archive' } @mboxes;
+                                        my @labels = grep { $_ and lc $_ ne '\\allmail' } map { $jmailmap{$_}{label} } @mboxes;
+                                        $Self->backend_cmd('imap_labels', $imapname, $uidvalidity, $uid, \@labels);
+                                }
+                                else {
+                                        # existing ifolderids with this message
+                                        my %current = map { $_ => 1 } keys %{$map{$msgid}};
+                                        # new ifolderids that should contain this message
+                                        my %new = map { $jmailmap{$_}{ifolderid} => 1 } @mboxes;
 
-					# for all the new folders
-					foreach my $ifolderid (sort keys %new) {
-						# unless there's already a matching message in it
-						next if delete $current{$ifolderid};
-						# copy from the existing message
-						my $newfolder = $foldermap{$ifolderid}{imapname};
-						$Self->backend_cmd('imap_copy', $imapname, $uidvalidity, $uid, $newfolder);
-					}
-					foreach my $ifolderid (sort keys %current) {
-						# these ifolderids didn't exist in %new, so delete all matching UIDs from these folders
-						my $imapname = $foldermap{$ifolderid}{imapname};
-						my $uidvalidity = $foldermap{$ifolderid}{uidvalidity};
-						my @uids = sort keys %{$map{$msgid}{$ifolderid}};
-						$Self->backend_cmd('imap_move', $imapname, $uidvalidity, \@uids);
-					}
-				}
-			}
+                                        # for all the new folders
+                                        foreach my $ifolderid (sort keys %new) {
+                                                # unless there's already a matching message in it
+                                                next if delete $current{$ifolderid};
+                                                # copy from the existing message
+                                                my $newfolder = $foldermap{$ifolderid}{imapname};
+                                                $Self->backend_cmd('imap_copy', $imapname, $uidvalidity, $uid, $newfolder);
+                                        }
+                                        foreach my $ifolderid (sort keys %current) {
+                                                # these ifolderids didn't exist in %new, so delete all matching UIDs from these folders
+                                                my $imapname = $foldermap{$ifolderid}{imapname};
+                                                my $uidvalidity = $foldermap{$ifolderid}{uidvalidity};
+                                                my @uids = sort keys %{$map{$msgid}{$ifolderid}};
+                                                $Self->backend_cmd('imap_move', $imapname, $uidvalidity, \@uids);
+                                        }
+                                }
+                        }
     };
     if ($@) {
       $notchanged{$msgid} = { type => 'error', description => $@ };
@@ -1561,7 +1561,7 @@ sub create_mailboxes {
       $Self->begin();
       my $jmailboxid = new_uuid_string();
       my $ifolderid = $Self->dinsert('ifolders', {
-	sep => $sep,
+        sep => $sep,
         imapname => $imapname,
         label => $mailbox->{name},
         jmailboxid => $jmailboxid,

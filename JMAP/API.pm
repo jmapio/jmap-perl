@@ -46,7 +46,7 @@ sub _parsepath {
     if ($selector eq '*') {
       my @res;
       foreach my $one (@$item) {
-	my $res =  _parsepath($path, $one);
+        my $res =  _parsepath($path, $one);
         push @res, ref($res) eq 'ARRAY' ? @$res : $res;
       }
       return \@res;
@@ -117,20 +117,20 @@ sub handle_request {
       my ($myargs, $error) = $Self->resolve_args($args);
       if ($myargs) {
         if ($myargs->{ids}) {
-	  my @list = @{$myargs->{ids}};
+          my @list = @{$myargs->{ids}};
           if (@list > 4) {
             my $len = @list;
-	    $#list = 3;
-	    $list[3] = '...' . $len;
+            $#list = 3;
+            $list[3] = '...' . $len;
           }
           $logbit .= " [" . join(",", @list) . "]";
         }
         if ($myargs->{properties}) {
-	  my @list = @{$myargs->{properties}};
+          my @list = @{$myargs->{properties}};
           if (@list > 4) {
             my $len = @list;
-	    $#list = 3;
-	    $list[3] = '...' . $len;
+            $#list = 3;
+            $list[3] = '...' . $len;
           }
           $logbit .= " (" . join(",", @list) . ")";
         }
@@ -980,7 +980,7 @@ sub _post_sort {
       my $map = $fieldmap{$field};
       if ($map) {
         if ($map->[1]) {
-	  $res = $a->{$map->[0]} <=> $b->{$map->[0]};
+          $res = $a->{$map->[0]} <=> $b->{$map->[0]};
         }
         else {
           $res = $a->{$map->[0]} cmp $b->{$map->[0]};
@@ -988,8 +988,8 @@ sub _post_sort {
       }
       elsif ($field =~ m/^keyword:(.*)/) {
         my $keyword = $1;
-	my $av = $a->{keywords}{$keyword} ? 1 : 0;
-	my $bv = $b->{keywords}{$keyword} ? 1 : 0;
+        my $av = $a->{keywords}{$keyword} ? 1 : 0;
+        my $bv = $b->{keywords}{$keyword} ? 1 : 0;
         $res = $av <=> $bv;
       }
       elsif ($field =~ m/^allInThreadHaveKeyword:(.*)/) {
