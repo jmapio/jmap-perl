@@ -986,39 +986,39 @@ sub dmake {
 
 sub dupdate {
   my $Self = shift;
-  my ($table, $values, $limit) = @_;
+  my ($table, $values, $filter) = @_;
 
   confess("NOT IN TRANSACTION") unless $Self->{t};
 
   $values->{mtime} = time();
 
   my @keys = sort keys %$values;
-  my @lkeys = $limit ? sort keys %$limit : ();
+  my @lkeys = $filter ? sort keys %$filter : ();
 
   my $sql = "UPDATE $table SET " . join (', ', map { "$_ = ?" } @keys);
   $sql .= " WHERE " . join(' AND ', map { "$_ = ?" } @lkeys) if @lkeys;
 
-  $Self->log('debug', $sql, _dbl(map { $values->{$_} } @keys), _dbl(map { $limit->{$_} } @lkeys));
+  $Self->log('debug', $sql, _dbl(map { $values->{$_} } @keys), _dbl(map { $filter->{$_} } @lkeys));
 
-  $Self->dbh->do($sql, {}, (map { $values->{$_} } @keys), (map { $limit->{$_} } @lkeys));
+  $Self->dbh->do($sql, {}, (map { $values->{$_} } @keys), (map { $filter->{$_} } @lkeys));
 }
 
 sub filter_values {
   my $Self = shift;
-  my ($table, $values, $limit) = @_;
+  my ($table, $values, $filter) = @_;
 
   # copy so we don't edit the originals
   my %values = $values ? %$values : ();
 
   my @keys = sort keys %values;
-  my @lkeys = $limit ? sort keys %$limit : ();
+  my @lkeys = $filter ? sort keys %$filter : ();
 
   my $sql = "SELECT " . join(', ', @keys) . " FROM $table";
   $sql .= " WHERE " . join(' AND ', map { "$_ = ?" } @lkeys) if @lkeys;
-  $Self->log('debug', $sql, _dbl(map { $limit->{$_} } @lkeys));
-  my $data = $Self->dbh->selectrow_hashref($sql, {}, map { $limit->{$_} } @lkeys);
+  $Self->log('debug', $sql, _dbl(map { $filter->{$_} } @lkeys));
+  my $data = $Self->dbh->selectrow_hashref($sql, {}, map { $filter->{$_} } @lkeys);
   foreach my $key (@keys) {
-    delete $values{$key} if $limit->{$key}; # in the limit, no point setting again
+    delete $values{$key} if $filter->{$key}; # in the filter, no point setting again
     delete $values{$key} if ($data->{$key} || '') eq ($values{$key} || '');
   }
 
@@ -1027,27 +1027,27 @@ sub filter_values {
 
 sub dmaybeupdate {
   my $Self = shift;
-  my ($table, $values, $limit) = @_;
+  my ($table, $values, $filter) = @_;
 
-  my $filtered = $Self->filter_values($table, $values, $limit);
+  my $filtered = $Self->filter_values($table, $values, $filter);
   return unless %$filtered;
 
-  return $Self->dupdate($table, $filtered, $limit);
+  return $Self->dupdate($table, $filtered, $filter);
 }
 
 # dupdate with a modseq
 sub ddirty {
   my $Self = shift;
-  my ($table, $values, $limit) = @_;
+  my ($table, $values, $filter) = @_;
   $values->{jmodseq} = $Self->dirty($table);
-  return $Self->dupdate($table, $values, $limit);
+  return $Self->dupdate($table, $values, $filter);
 }
 
 sub dmaybedirty {
   my $Self = shift;
-  my ($table, $values, $limit, @modseqfields) = @_;
+  my ($table, $values, $filter, @modseqfields) = @_;
 
-  my $filtered = $Self->filter_values($table, $values, $limit);
+  my $filtered = $Self->filter_values($table, $values, $filter);
   return unless %$filtered;
 
   my $modseq = $Self->dirty($table);
@@ -1055,48 +1055,48 @@ sub dmaybedirty {
     $filtered->{$field} = $values->{$field} = $modseq;
   }
 
-  return $Self->dupdate($table, $filtered, $limit);
+  return $Self->dupdate($table, $filtered, $filter);
 }
 
 sub dnuke {
   my $Self = shift;
-  my ($table, $limit) = @_;
+  my ($table, $filter) = @_;
 
   my $modseq = $Self->dirty($table);
 
-  my @lkeys = sort keys %$limit;
+  my @lkeys = sort keys %$filter;
   my $sql = "UPDATE $table SET active = 0, jmodseq = ? WHERE active = 1";
   $sql .= " AND " . join(' AND ', map { "$_ = ?" } @lkeys) if @lkeys;
 
-  $Self->log('debug', $sql, _dbl($modseq), _dbl(map { $limit->{$_} } @lkeys));
+  $Self->log('debug', $sql, _dbl($modseq), _dbl(map { $filter->{$_} } @lkeys));
 
-  $Self->dbh->do($sql, {}, $modseq, map { $limit->{$_} } @lkeys);
+  $Self->dbh->do($sql, {}, $modseq, map { $filter->{$_} } @lkeys);
 }
 
 sub ddelete {
   my $Self = shift;
-  my ($table, $limit) = @_;
+  my ($table, $filter) = @_;
 
-  my @lkeys = sort keys %$limit;
+  my @lkeys = sort keys %$filter;
   my $sql = "DELETE FROM $table";
   $sql .= " WHERE " . join(' AND ', map { "$_ = ?" } @lkeys) if @lkeys;
 
-  $Self->log('debug', $sql, _dbl(map { $limit->{$_} } @lkeys));
+  $Self->log('debug', $sql, _dbl(map { $filter->{$_} } @lkeys));
 
-  $Self->dbh->do($sql, {}, map { $limit->{$_} } @lkeys);
+  $Self->dbh->do($sql, {}, map { $filter->{$_} } @lkeys);
 }
 
 sub dget {
   my $Self = shift;
-  my ($table, $limit, $fields) = @_;
+  my ($table, $filter, $fields) = @_;
 
   $fields ||= '*';
 
-  my @lkeys = sort keys %$limit;
-  my @lvals = map { $limit->{$_} } @lkeys;
+  my @lkeys = sort keys %$filter;
+  my @lvals = map { $filter->{$_} } @lkeys;
   my $sql = "SELECT $fields FROM $table";
-  $sql .= " WHERE " . join(' AND ', map { ref($limit->{$_}) eq 'ARRAY' ? "$_ $limit->{$_}[0] ?" : "$_ = ?" } @lkeys) if @lkeys;
-  $sql .= " ORDER BY $fields" unless $fields eq '*';
+  $sql .= " WHERE " . join(' AND ', map { ref($filter->{$_}) eq 'ARRAY' ? "$_ $filter->{$_}[0] ?" : "$_ = ?" } @lkeys) if @lkeys;
+  $sql .= " ORDER BY $fields" unless ($fields eq '*' or $fields eq 'COUNT(*)');
   my @vals = map { ref($_) eq 'ARRAY' ? $_->[1] : $_ } @lvals;
 
   $Self->log('debug', $sql, _dbl(@vals));
@@ -1104,27 +1104,42 @@ sub dget {
   return $Self->dbh->selectall_arrayref($sql, {Slice => {}}, @vals);
 }
 
+sub dcount {
+  my $Self = shift;
+  my ($table, $filter) = @_;
+
+  my @lkeys = sort keys %$filter;
+  my @lvals = map { $filter->{$_} } @lkeys;
+  my $sql = "SELECT COUNT(*) FROM $table";
+  $sql .= " WHERE " . join(' AND ', map { ref($filter->{$_}) eq 'ARRAY' ? "$_ $filter->{$_}[0] ?" : "$_ = ?" } @lkeys) if @lkeys;
+  my @vals = map { ref($_) eq 'ARRAY' ? $_->[1] : $_ } @lvals;
+
+  $Self->log('debug', $sql, _dbl(@vals));
+
+  return ($Self->dbh->selectrow_array($sql, {}, @vals));
+}
+
 sub dgetby {
   my $Self = shift;
-  my ($table, $hashkey, $limit, $fields) = @_;
-  my $data = $Self->dget($table, $limit, $fields);
+  my ($table, $hashkey, $filter, $fields) = @_;
+  my $data = $Self->dget($table, $filter, $fields);
   return { map { $_->{$hashkey} => $_ } @$data };
 }
 
 sub dgetone {
   my $Self = shift;
-  my ($table, $limit, $fields) = @_;
+  my ($table, $filter, $fields) = @_;
 
   $fields ||= '*';
 
-  my @lkeys = sort keys %$limit;
-  my @lvals = map { $limit->{$_} } @lkeys;
+  my @lkeys = sort keys %$filter;
+  my @lvals = map { $filter->{$_} } @lkeys;
   my $sql = "SELECT $fields FROM $table";
-  $sql .= " WHERE " . join(' AND ', map { ref($limit->{$_}) eq 'ARRAY' ? "$_ $limit->{$_}[0] ?" : "$_ = ?" } @lkeys) if @lkeys;
+  $sql .= " WHERE " . join(' AND ', map { ref($filter->{$_}) eq 'ARRAY' ? "$_ $filter->{$_}[0] ?" : "$_ = ?" } @lkeys) if @lkeys;
   $sql .= " LIMIT 1";
   my @vals = map { ref($_) eq 'ARRAY' ? $_->[1] : $_ } @lvals;
 
-  $Self->log('debug', $sql, _dbl(map { $limit->{$_} } @lkeys));
+  $Self->log('debug', $sql, _dbl(map { $filter->{$_} } @lkeys));
 
   my $data = $Self->dbh->selectall_arrayref($sql, {Slice => {}}, @vals);
   return $data->[0];
@@ -1132,15 +1147,15 @@ sub dgetone {
 
 sub dgetfield {
   my $Self = shift;
-  my ($table, $limit, $field) = @_;
-  my $res = $Self->dgetone($table, $limit, $field);
+  my ($table, $filter, $field) = @_;
+  my $res = $Self->dgetone($table, $filter, $field);
   return $res ? $res->{$field} : undef;
 }
 
 sub dgetcol {
   my $Self = shift;
-  my ($table, $limit, $field) = @_;
-  my $data = $Self->dget($table, $limit, $field);
+  my ($table, $filter, $field) = @_;
+  my $data = $Self->dget($table, $filter, $field);
   return [ map { $_->{$field} } @$data ];
 }
 
