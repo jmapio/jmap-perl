@@ -2187,7 +2187,7 @@ sub api_Thread_changes {
   $Self->commit();
 
   my @created;
-  my @changed;
+  my @updated;
   my @removed;
   foreach my $row (@$data) {
     if ($row->{active}) {
