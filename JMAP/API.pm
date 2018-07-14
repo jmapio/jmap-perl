@@ -1262,7 +1262,7 @@ sub api_Email_query {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  my $newState = "$user->{jstateEmail}";
+  my $newQueryState = "$user->{jstateEmail}";
 
   return $Self->_transError(['error', {type => 'invalidArguments'}])
     if (exists $args->{position} and exists $args->{anchor});
@@ -1309,7 +1309,7 @@ gotit:
     filter => $args->{filter},
     sort => $args->{sort},
     collapseThreads => $args->{collapseThreads},
-    state => $newState,
+    queryState => $newQueryState,
     canCalculateChanges => $JSON::true,
     position => $start,
     total => scalar(@$data),
@@ -1330,12 +1330,12 @@ sub api_Email_queryChanges {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  my $newState = "$user->{jstateEmail}";
+  my $newQueryState = "$user->{jstateEmail}";
 
   return $Self->_transError(['error', {type => 'invalidArguments'}])
-    if not $args->{sinceState};
-  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
-    if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
+    if not $args->{sinceQueryState};
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newQueryState => $newQueryState}])
+    if ($user->{jdeletedmodseq} and $args->{sinceQueryState} <= $user->{jdeletedmodseq});
 
   my $start = $args->{position} || 0;
   return $Self->_transError(['error', {type => 'invalidArguments'}])
@@ -1382,9 +1382,9 @@ sub api_Email_queryChanges {
       }
       next unless $tell;
 
-      # jmodseq greater than sinceState is a change
-      my $changed = ($item->{jmodseq} > $args->{sinceState});
-      my $isnew = ($item->{jcreated} > $args->{sinceState});
+      # jmodseq greater than sinceQueryState is a change
+      my $changed = ($item->{jmodseq} > $args->{sinceQueryState});
+      my $isnew = ($item->{jcreated} > $args->{sinceQueryState});
 
       if ($changed) {
         # if it's in AND it's the exemplar, it's been added
@@ -1411,7 +1411,7 @@ sub api_Email_queryChanges {
       }
 
       if ($args->{maxChanges} and $changes > $args->{maxChanges}) {
-        return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
+        return $Self->_transError(['error', {type => 'cannotCalculateChanges', newQueryState => $newQueryState}]);
       }
 
       if ($args->{upToEmailId} and $args->{upToEmailId} eq $item->{msgid}) {
@@ -1431,9 +1431,9 @@ sub api_Email_queryChanges {
       $total++ if $isin;
       next unless $tell;
 
-      # jmodseq greater than sinceState is a change
-      my $changed = ($item->{jmodseq} > $args->{sinceState});
-      my $isnew = ($item->{jcreated} > $args->{sinceState});
+      # jmodseq greater than sinceQueryState is a change
+      my $changed = ($item->{jmodseq} > $args->{sinceQueryState});
+      my $isnew = ($item->{jcreated} > $args->{sinceQueryState});
 
       if ($changed) {
         if ($isin) {
@@ -1448,7 +1448,7 @@ sub api_Email_queryChanges {
       }
 
       if ($args->{maxChanges} and $changes > $args->{maxChanges}) {
-        return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
+        return $Self->_transError(['error', {type => 'cannotCalculateChanges', newQueryState => $newQueryState}]);
       }
 
       if ($args->{upToEmailId} and $args->{upToEmailId} eq $item->{msgid}) {
@@ -1464,8 +1464,8 @@ sub api_Email_queryChanges {
     filter => $args->{filter},
     sort => $args->{sort},
     collapseThreads => $args->{collapseThreads},
-    oldState => "$args->{sinceState}",
-    newState => $newState,
+    oldQueryState => "$args->{sinceQueryState}",
+    newQueryState => $newQueryState,
     removed => \@removed,
     added => \@added,
     total => $total,
@@ -2226,7 +2226,7 @@ sub api_CalendarEvent_query {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  my $newState = "$user->{jstateCalendarEvent}";
+  my $newQueryState = "$user->{jstateCalendarEvent}";
 
   my $start = $args->{position} || 0;
   return $Self->_transError(['error', {type => 'invalidArguments'}])
@@ -2248,7 +2248,7 @@ sub api_CalendarEvent_query {
     accountId => $accountid,
     filter => $args->{filter},
     sort => $args->{sort},
-    state => $newState,
+    queryState => $newQueryState,
     position => $start,
     total => scalar(@$data),
     ids => [map { "$_" } @result],
@@ -2506,7 +2506,7 @@ sub api_Contact_query {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  my $newState = "$user->{jstateContact}";
+  my $newQueryState = "$user->{jstateContact}";
 
   my $start = $args->{position} || 0;
   return $Self->_transError(['error', {type => 'invalidArguments'}])
@@ -2528,7 +2528,7 @@ sub api_Contact_query {
     accountId => $accountid,
     filter => $args->{filter},
     sort => $args->{sort},
-    state => $newState,
+    queryState => $newQueryState,
     position => $start,
     total => scalar(@$data),
     ids => [map { "$_" } @result],
@@ -3081,7 +3081,7 @@ sub api_EmailSubmission_query {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  my $newState = "$user->{jstateEmailSubmission}";
+  my $newQueryState = "$user->{jstateEmailSubmission}";
 
   my $start = $args->{position} || 0;
   return $Self->_transError(['error', {type => 'invalidArguments'}])
@@ -3110,7 +3110,7 @@ sub api_EmailSubmission_query {
     accountId => $accountid,
     filter => $args->{filter},
     sort => $args->{sort},
-    state => $newState,
+    queryState => $newQueryState,
     canCalculateChanges => $JSON::true,
     position => $start,
     total => $total,
@@ -3132,13 +3132,13 @@ sub api_EmailSubmission_queryChanges {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  my $newState = "$user->{jstateEmailSubmission}";
+  my $newQueryState = "$user->{jstateEmailSubmission}";
+  my $sinceQueryState = $args->{sinceQueryState};
 
-  my $sinceState = $args->{sinceState};
   return $Self->_transError(['error', {type => 'invalidArguments'}])
-    if not $args->{sinceState};
-  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
-    if ($user->{jdeletedmodseq} and $sinceState <= $user->{jdeletedmodseq});
+    if not $args->{sinceQueryState};
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newQueryState => $newQueryState}])
+    if ($user->{jdeletedmodseq} and $sinceQueryState <= $user->{jdeletedmodseq});
 
   #properties: String[] A list of properties to fetch for each message.
 
@@ -3173,8 +3173,8 @@ sub api_EmailSubmission_queryChanges {
     accountId => $accountid,
     filter => $args->{filter},
     sort => $args->{sort},
-    oldState => $sinceState,
-    newState => $newState,
+    oldQueryState => $sinceQueryState,
+    newQueryState => $newQueryState,
     total => $total,
     removed => \@removed,
     added => \@added,
@@ -3477,7 +3477,7 @@ sub api_StorageNode_query {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  my $newState = 'dummy';
+  my $newQueryState = 'dummy';
 
   my $data = [grep { dummy_node_matches($args->{filter}, $_) } dummy_storage_node_data()];
 
@@ -3496,7 +3496,7 @@ sub api_StorageNode_query {
     accountId => $accountid,
     filter => $args->{filter},
     sort => $args->{sort},
-    state => $newState,
+    queryState => $newQueryState,
     position => $start,
     total => scalar(@$data),
     ids => [map { "$_" } @result],
