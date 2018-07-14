@@ -1103,7 +1103,7 @@ sub api_Mailbox_set {
   $Self->setid($_, $created->{$_}{id}) for keys %$created;
   $Self->_resolve_patch($update, 'api_Mailbox_get');
   ($updated, $notUpdated) = $Self->{db}->update_mailboxes($update, sub { $Self->idmap(shift) });
-  ($destroyed, $notDestroyed) = $Self->{db}->destroy_mailboxes($destroy);
+  ($destroyed, $notDestroyed) = $Self->{db}->destroy_mailboxes($destroy, $Self->{onDestroyRemoveMessages});
 
   $Self->begin();
   $user = $Self->{db}->get_user();

@@ -1688,6 +1688,7 @@ sub update_mailboxes {
 sub destroy_mailboxes {
   my $Self = shift;
   my $destroy = shift;
+  my $destroyMessages = shift;
 
   return ([], {}) unless @$destroy;
 
@@ -1699,6 +1700,14 @@ sub destroy_mailboxes {
   foreach my $jid (@$destroy) {
     my $old = $Self->dgetone('ifolders', { jmailboxid => $jid }, 'imapname,ifolderid');
     if ($old) {
+      unless ($destroyMessages) {
+        # check if empty
+        if ($Self->dcount('imessages', { ifolderid => $old->{ifolderid} })) {
+          $notdestroyed{$jid} = { type => 'mailboxHasEmail' };
+          next;
+        }
+      }
+
       $namemap{$old->{imapname}} = [$jid, $old->{ifolderid}];
     }
     else {
