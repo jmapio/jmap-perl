@@ -3354,7 +3354,7 @@ sub api_EmailSubmission_queryChanges {
 
   my $index = 0;
   foreach my $item (@$data) {
-    if ($item->[4] <= $sinceState) {
+    if ($item->[4] <= $sinceQueryState) {
       $index++ if $item->[5];
       next;
     }
