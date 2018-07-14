@@ -753,12 +753,12 @@ sub api_Mailbox_get {
 
   my $data = $Self->{db}->dget('jmailboxes', { active => 1 });
 
-  my %ids;
+  my %want;
   if ($args->{ids}) {
-    %ids = map { $Self->idmap($_) => 1 } @{$args->{ids}};
+    %want = map { $Self->idmap($_) => 1 } @{$args->{ids}};
   }
   else {
-    %ids = map { $_->{jmailboxid} => 1 } @$data;
+    %want = map { $_->{jmailboxid} => 1 } @$data;
   }
 
   my %byrole = map { $_->{role} => $_->{jmailboxid} } grep { $_->{role} } @$data;
@@ -766,7 +766,7 @@ sub api_Mailbox_get {
   my @list;
 
   foreach my $item (@$data) {
-    next unless delete $ids{$item->{jmailboxid}};
+    next unless delete $want{$item->{jmailboxid}};
 
     my %rec = (
       id => "$item->{jmailboxid}",
@@ -784,15 +784,16 @@ sub api_Mailbox_get {
 
     push @list, \%rec;
   }
-  my %missingids = %ids;
 
   $Self->commit();
+
+  my %missingids = %want;
 
   return ['Mailbox/get', {
     list => \@list,
     accountId => $accountid,
     state => $newState,
-    notFound => (%missingids ? [map { "$_" } keys %missingids] : undef),
+    notFound => [map { "$_" } keys %missingids],
   }];
 }
 
@@ -1668,7 +1669,7 @@ sub api_Email_get {
     list => \@list,
     accountId => $accountid,
     state => $newState,
-    notFound => (%missingids ? [keys %missingids] : undef),
+    notFound => [map { "$_" } keys %missingids],
   }];
 }
 
@@ -1986,7 +1987,7 @@ sub api_Thread_get {
     list => \@list,
     accountId => $accountid,
     state => $newState,
-    notFound => (%missingids ? [keys %missingids] : undef),
+    notFound => [map { "$_" } keys %missingids],
   }];
 
   return @res;
@@ -2088,18 +2089,18 @@ sub api_Calendar_get {
 
   my $data = $Self->{db}->dget('jcalendars', { active => 1 });
 
-  my %ids;
+  my %want;
   if ($args->{ids}) {
-    %ids = map { $Self->idmap($_) => 1 } @{$args->{ids}};
+    %want = map { $Self->idmap($_) => 1 } @{$args->{ids}};
   }
   else {
-    %ids = map { $_->{jcalendarid} => 1 } @$data;
+    %want = map { $_->{jcalendarid} => 1 } @$data;
   }
 
   my @list;
 
   foreach my $item (@$data) {
-    next unless delete $ids{$item->{jcalendarid}};
+    next unless delete $want{$item->{jcalendarid}};
 
     my %rec = (
       id => "$item->{jcalendarid}",
@@ -2121,15 +2122,16 @@ sub api_Calendar_get {
 
     push @list, \%rec;
   }
-  my %missingids = %ids;
 
   $Self->commit();
+
+  my %missingids = %want;
 
   return ['Calendar/get', {
     list => \@list,
     accountId => $accountid,
     state => $newState,
-    notFound => (%missingids ? [map { "$_" } keys %missingids] : undef),
+    notFound => [map { "$_" } keys %missingids],
   }];
 }
 
@@ -2298,7 +2300,7 @@ sub api_CalendarEvent_get {
     list => \@list,
     accountId => $accountid,
     state => $newState,
-    notFound => (%missingids ? [keys %missingids] : undef),
+    notFound => [map { "$_" } keys %missingids],
   }];
 }
 
@@ -2368,18 +2370,18 @@ sub api_Addressbook_get {
 
   my $data = $Self->{db}->dget('jaddressbooks', { active => 1 });
 
-  my %ids;
+  my %want;
   if ($args->{ids}) {
-    %ids = map { $Self->($_) => 1 } @{$args->{ids}};
+    %want = map { $Self->($_) => 1 } @{$args->{ids}};
   }
   else {
-    %ids = map { $_->{jaddressbookid} => 1 } @$data;
+    %want = map { $_->{jaddressbookid} => 1 } @$data;
   }
 
   my @list;
 
   foreach my $item (@$data) {
-    next unless delete $ids{$item->[0]};
+    next unless delete $want{$item->[0]};
 
     my %rec = (
       id => "$item->{jaddressbookid}",
@@ -2399,15 +2401,16 @@ sub api_Addressbook_get {
 
     push @list, \%rec;
   }
-  my %missingids = %ids;
 
   $Self->commit();
+
+  my %missingids = %want;
 
   return ['Addressbook/get', {
     list => \@list,
     accountId => $accountid,
     state => $newState,
-    notFound => (%missingids ? [map { "$_" } keys %missingids] : undef),
+    notFound => [map { "$_" } keys %missingids],
   }];
 }
 
@@ -2571,11 +2574,13 @@ sub api_Contact_get {
   }
   $Self->commit();
 
+  my %missingids = %want;
+
   return ['Contact/get', {
     list => \@list,
     accountId => $accountid,
     state => $newState,
-    notFound => (%want ? [keys %want] : undef),
+    notFound => [map { "$_" } keys %missingids],
   }];
 }
 
@@ -2673,11 +2678,13 @@ sub api_ContactGroup_get {
   }
   $Self->commit();
 
+  my %missingids = %want;
+
   return ['ContactGroup/get', {
     list => \@list,
     accountId => $accountid,
     state => $newState,
-    notFound => (%want ? [keys %want] : undef),
+    notFound => [map { "$_" } keys %missingids],
   }];
 }
 
@@ -3227,7 +3234,7 @@ sub api_EmailSubmission_get {
     list => \@list,
     accountId => $accountid,
     state => $newState,
-    notFound => (%missingids ? [keys %missingids] : undef),
+    notFound => [map { "$_" } keys %missingids],
   }];
 }
 
@@ -3534,11 +3541,13 @@ sub api_StorageNode_get {
   }
   $Self->commit();
 
+  my %missingids = %want;
+
   return ['StorageNode/get', {
     list => \@list,
     accountId => $accountid,
     state => $newState,
-    notFound => (%want ? [keys %want] : undef),
+    notFound => [map { "$_" } keys %missingids],
   }];
 }
 
