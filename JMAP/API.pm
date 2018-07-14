@@ -802,6 +802,163 @@ sub api_Mailbox_get {
   }];
 }
 
+sub _makefullnames {
+  my $data = shift;
+  my %idmap = map { $_->{jmailboxid} => $_ } @$data;
+  my %fullnames;
+
+  delete $idmap{''};  # just in case
+
+  foreach my $id (keys %idmap) {
+    my $item = $idmap{$id};
+    my @name;
+    while ($item) {
+      unshift @name, $item->{name};
+      $item = $idmap{$item->{parentId}||''};
+    }
+
+    $fullnames{$id} = join('\1E', @name);
+  }
+
+  return \%fullnames;
+}
+
+sub _mailbox_sort {
+  my $Self = shift;
+  my $data = shift;
+  my $sortargs = shift;
+  my $storage = shift;
+
+  my %fieldmap = (
+    name => ['name', 0],
+    sortOrder => ['sortOrder', 1],
+  );
+
+  my @res = sort {
+    foreach my $arg (@$sortargs) {
+      my $res = 0;
+      my $field = $arg->{property};
+      if ($field eq 'name') {
+        $res = $a->{name} cmp $b->{name};
+      }
+      elsif ($field eq 'sortOrder') {
+        $res = $a->{sortOrder} <=> $b->{sortOrder};
+      }
+      elsif ($field eq 'parent/name') {
+        # magic synthentic field... 
+        $storage->{fullnames} ||= _makefullnames($storage->{data});
+        $res = $storage->{fullnames}{$a->{jmailboxid}} cmp $storage->{fullnames}{$b->{jmailboxid}};
+      }
+      else {
+        die "unknown field $field";
+      }
+
+      $res = -$res unless $arg->{isAscending};
+
+      return $res if $res;
+    }
+    return $a->{jmailboxid} cmp $b->{jmailboxid}; # stable sort
+  } @$data;
+
+  return \@res;
+}
+
+sub _mailbox_match {
+  my $Self = shift;
+  my $item = shift;
+  my $filter = shift;
+
+  if (exists $filter->{hasRole}) {
+    if ($filter->{hasRole}) {
+      return 0 unless $item->{role};
+    }
+    else {
+      return 0 if $item->{role};
+    }
+  }
+
+  if (exists $filter->{parentId}) {
+    if ($filter->{parentId}) {
+      return 0 unless $item->{parentId};
+      return 0 unless $item->{parentId} eq $filter->{parentId};
+    }
+    else {
+      return 0 if $item->{parentId};
+    }
+  }
+
+  if (exists $filter->{isSubscribed}) {
+    if ($filter->{isSubscribed}) {
+      return 0 unless $item->{isSubscribed};
+    }
+    else {
+      return 0 if $item->{isSubscribed};
+    }
+  }
+
+  return 1;
+}
+
+sub _mailbox_filter {
+  my $Self = shift;
+  my $data = shift;
+  my $filter = shift;
+
+  return [ grep { $Self->_mailbox_match($_, $filter) } @$data ];
+}
+
+sub api_Mailbox_query {
+  my $Self = shift;
+  my $args = shift;
+
+  $Self->begin();
+
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  my $newQueryState = "$user->{jstateMailbox}";
+
+  my $data = $Self->{db}->dget('jmailboxes', { active => 1 });
+
+  $Self->commit();
+
+  my $storage = { data => $data };
+  $data = $Self->_mailbox_sort($data, $args->{sort}, $storage);
+  $data = $Self->_mailbox_filter($data, $args->{filter}, $storage) if $args->{filter};
+
+  if ($args->{anchor}) {
+    # need to calculate the position
+    for (0..$#$data) {
+      next unless $data->[$_]{msgid} eq $args->{anchor};
+      $start = $_ + $args->{anchorOffset};
+      $start = 0 if $start < 0;
+      goto gotit;
+    }
+    return $Self->_transError(['error', {type => 'anchorNotFound'}]);
+  }
+
+  my $end = $args->{limit} ? $start + $args->{limit} - 1 : $#$data;
+  $end = $#$data if $end > $#$data;
+
+  my @result = map { $data->[$_]{jmailboxid} } $start..$end;
+
+  my @res;
+  push @res, ['Mailbox/query', {
+    accountId => $accountid,
+    filter => $args->{filter},
+    sort => $args->{sort},
+    queryState => $newQueryState,
+    canCalculateChanges => $JSON::false,
+    position => $start,
+    total => scalar(@$data),
+    ids => [map { "$_" } @result],
+  }];
+
+  return @res;
+}
+
 sub api_Mailbox_changes {
   my $Self = shift;
   my $args = shift;
