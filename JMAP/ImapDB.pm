@@ -272,7 +272,6 @@ sub sync_jmailboxes {
       name => $name,
       parentId => $parentId,
       sortOrder => $sortOrder,
-      mustBeOnlyMailbox => 0,
       isSubscribed => 1,
       mayReadItems => 1,
       mayAddItems => 1,

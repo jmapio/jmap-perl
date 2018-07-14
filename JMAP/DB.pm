@@ -1196,7 +1196,6 @@ CREATE TABLE IF NOT EXISTS jmailboxes (
   name TEXT,
   sortOrder INTEGER,
   isSubscribed INTEGER,
-  mustBeOnlyMailbox BOOLEAN,
   mayReadItems BOOLEAN,
   mayAddItems BOOLEAN,
   mayRemoveItems BOOLEAN,
