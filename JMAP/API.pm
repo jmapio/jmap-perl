@@ -773,14 +773,16 @@ sub api_Mailbox_get {
   foreach my $item (@$data) {
     next unless delete $want{$item->{jmailboxid}};
 
+    my %rights = map { $_ => ($item->{$_} ? $JSON::true : $JSON::false) } qw(mayReadItems mayAddItems mayRemoveItems maySetSeen maySetKeywords mayCreateChild mayRename mayDelete maySubmit);
     my %rec = (
       id => "$item->{jmailboxid}",
-      parentId => ($item->{parentId} ? "$item->{parentId}" : undef),
       name => Encode::decode_utf8($item->{name}),
+      parentId => ($item->{parentId} ? "$item->{parentId}" : undef),
       role => $item->{role},
-      sortOrder => $item->{sortOrder},
-      (map { $_ => ($item->{$_} ? $JSON::true : $JSON::false) } qw(isSubscribed mayReadItems mayAddItems mayRemoveItems maySetSeen maySetKeywords mayCreateChild mayRename mayDelete maySubmit)),
+      sortOrder => $item->{sortOrder}||0,
       (map { $_ => $item->{$_} || 0 } qw(totalEmails unreadEmails totalThreads unreadThreads)),
+      myRights => \%rights,
+      (map { $_ => ($item->{$_} ? $JSON::true : $JSON::false) } qw(isSubscribed)),
     );
 
     foreach my $key (keys %rec) {
