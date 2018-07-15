@@ -18,10 +18,14 @@ is_deeply(JMAP::EmailObject::asAddresses('"  James Smythe" <james@example.com>, 
 
 my $file = "t/resource/structured.eml";
 my $obj = JMAP::EmailObject::parse(path($file)->slurp);
-use Data::Dumper;
-$Data::Dumper::Indent = 1;
-$Data::Dumper::Sortkeys = 1;
-print Dumper($obj);
-is_deeply($obj, {}, "parse");
+my @textparts = map { $_->{partId} } @{$obj->{textBody}};
+my @htmlparts = map { $_->{partId} } @{$obj->{htmlBody}};
+my @attparts = map { $_->{partId} } @{$obj->{attachments}};
+# textBody => [ A, B, C, D, K ]
+is_deeply(\@textparts, ['1', '2.1.1.1', '2.1.1.2', '2.1.1.3', '3'], 'textBody');
+# htmlBody => [ A, E, K ]
+is_deeply(\@htmlparts, ['1', '2.1.2.1', '3'], 'htmlBody');
+# attachments => [ C, F, G, H, J ]
+is_deeply(\@attparts, ['2.1.1.2', '2.1.2.2', '2.2', '2.3', '2.4'], 'attachments');
 done_testing();
 
