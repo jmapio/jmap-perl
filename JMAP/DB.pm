@@ -18,7 +18,8 @@ use Email::MIME;
 $Email::MIME::ContentType::STRICT_PARAMS = 0;
 use HTML::Strip;
 use Image::Size;
-use Email::Address;
+use Email::Address::XS qw(parse_email_groups);
+use Email::MIME::Header::AddressList;
 use Encode;
 use Encode::MIME::Header;
 use DateTime;
@@ -311,8 +312,32 @@ sub parse_emails {
   my $Self = shift;
   my $emails = shift;
 
-  my @addrs = eval { Email::Address->parse($emails) };
-  return map { { name => Encode::decode('MIME-Header', $_->name()), email => $_->address() } } @addrs;
+  my $addrs = Email::MIME::Header::AddressList->from_mime_string($emails);
+  my @addrs = $addrs->groups();
+  my @res;
+  while (@addrs) {
+    my $group = shift @addrs;
+    my $list = shift @addrs;
+    if (defined $group) {
+      push @res, {
+        name => $group,
+        email => undef,
+      };
+    }
+    foreach my $addr (@list) {
+      push @res, {
+        name => $addr->name(),  # XXX - phrase?
+        email => $addr->address(),
+      };
+    }
+    if (defined $group) {
+      push @res, {
+        name => undef,
+        email => undef,
+      };
+    }
+  }
+  return @res;
 }
 
 sub parse_message {
