@@ -11,7 +11,7 @@ PACKAGES=                   \
   libdatetime-perl          \
   libdbd-sqlite3-perl       \
   libdbi-perl               \
-  libemail-address-perl     \
+  libemail-address-xs-perl  \
   libemail-mime-perl        \
   libhtml-parser-perl       \
   libhtml-strip-perl        \
