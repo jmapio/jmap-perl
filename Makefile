@@ -32,6 +32,7 @@ PERLPACKAGES=                     \
   AnyEvent::IMAP                  \
   Cookie::Baker                   \
   Date::Parse                     \
+  Email::MIME::Header::AddressList \
   Email::Sender::Simple           \
   Email::Sender::Transport::SMTPS \
   HTML::GenerateUtil              \
