@@ -23,7 +23,7 @@ my $json = JSON::XS->new->utf8->canonical();
 
 sub parse {
   my $rfc822 = shift;
-  my $id = Digest::SHA::sha1_hex($rfc822);
+  my $id = shift || Digest::SHA::sha1_hex($rfc822);
   my $eml = Email::MIME->new($rfc822);
   my $res = parse_email($id, $eml);
   $res->{size} = length($rfc822);
