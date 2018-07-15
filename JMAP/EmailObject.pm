@@ -400,8 +400,8 @@ sub _detect_encoding {
 }
 
 sub _makeatt {
-  my $Self = shift;
   my $att = shift;
+  my $getblob = shift;
 
   my %attributes = (
     content_type => $att->{type},
@@ -415,7 +415,7 @@ sub _makeatt {
     $headers{'Content-ID'} = "<$att->{cid}>";
   }
 
-  my ($type, $content) = $Self->get_blob($att->{blobId});
+  my ($type, $content) = $getblob->($att->{blobId});
 
   $attributes{encoding} = _detect_encoding($content, $att->{type});
 
@@ -426,9 +426,9 @@ sub _makeatt {
   );
 }
 
-sub _makemsg {
-  my $Self = shift;
+sub make {
   my $args = shift;
+  my $getblob = shift;
 
   my $header = [
     From => _mkemail($args->{from}),
@@ -446,7 +446,7 @@ sub _makemsg {
   # massive switch
   my $MIME;
   my $htmlpart;
-  my $text = $args->{textBody} ? $args->{textBody} : JMAP::DB::htmltotext($args->{htmlBody});
+  my $text = $args->{textBody} ? $args->{textBody} : htmltotext($args->{htmlBody});
   my $textpart = Email::MIME->create(
     attributes => {
       content_type => 'text/plain',
@@ -467,7 +467,7 @@ sub _makemsg {
   my @attachments = $args->{attachments} ? @{$args->{attachments}} : ();
 
   if (@attachments) {
-    my @attparts = map { $Self->_makeatt($_) } @attachments;
+    my @attparts = map { makeatt($_, $getblob) } @attachments;
     # most complex case
     if ($htmlpart) {
       my $msgparts = Email::MIME->create(
@@ -518,49 +518,6 @@ sub _makemsg {
   return $res;
 }
 
-# NOTE: this can ONLY be used to create draft messages
-sub create_messages {
-  my $Self = shift;
-  my $args = shift;
-  my $idmap = shift;
-  my %created;
-  my %notCreated;
-
-  return ({}, {}) unless %$args;
-
-  $Self->begin();
-
-  # XXX - get draft mailbox ID
-  my $draftid = $Self->dgetfield('jmailboxes', { role => 'drafts' }, 'jmailboxid');
-
-  $Self->commit();
-
-  my %todo;
-  foreach my $cid (keys %$args) {
-    my $item = $args->{$cid};
-    my $mailboxIds = delete $item->{mailboxIds};
-    my $keywords = delete $item->{keywords};
-    $item->{msgdate} = time();
-    $item->{headers}{'Message-ID'} ||= "<" . new_uuid_string() . ".$item->{msgdate}\@$ENV{jmaphost}>";
-    my $message = $Self->_makemsg($item);
-    # XXX - let's just assume goodness for now - lots of error handling to add
-    $todo{$cid} = [$message, $mailboxIds, $keywords];
-  }
-
-  foreach my $cid (keys %todo) {
-    my ($message, $mailboxIds, $keywords) = @{$todo{$cid}};
-    my @mailboxes = map { $idmap->($_) } keys %$mailboxIds;
-    my ($msgid, $thrid) = $Self->import_message($message, \@mailboxes, $keywords);
-    $created{$cid} = {
-      id => $msgid,
-      threadId => $thrid,
-      size => length($message),
-    };
-  }
-
-  return (\%created, \%notCreated);
-}
-
 sub isodate {
   my $epoch = shift || time();
   my $date = DateTime->from_epoch( epoch => $epoch );
@@ -570,6 +527,14 @@ sub isodate {
 sub parse_date {
   my $date = shift;
   return str2time($date);
+}
+
+sub htmltotext {
+  my $html = shift;
+  my $hs = HTML::Strip->new();
+  my $clean_text = $hs->parse( $html );
+  $hs->eof;
+  return $clean_text;
 }
 
 1;
