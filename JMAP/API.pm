@@ -11,6 +11,7 @@ use HTML::GenerateUtil qw(escape_html);
 use JSON::XS;
 use Data::Dumper;
 use Time::HiRes qw(gettimeofday tv_interval);
+use JMAP::EmailObject;
 
 my $json = JSON::XS->new->utf8->canonical();
 
@@ -1757,9 +1758,7 @@ sub api_Email_get {
 
     foreach my $email (qw(to cc bcc from replyTo)) {
       if (_prop_wanted($args, $email)) {
-        my $val;
-        my @addrs = $Self->{db}->parse_emails($data->{"msg$email"});
-        $item->{$email} = \@addrs;
+        $item->{$email} = JMAP::EmailObject::asAddresses($data->{"msg$email"});
       }
     }
 
