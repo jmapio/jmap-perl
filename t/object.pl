@@ -19,7 +19,9 @@ is_deeply(JMAP::EmailObject::asAddresses('"  James Smythe" <james@example.com>, 
 my $file = "t/resource/structured.eml";
 my $obj = JMAP::EmailObject::parse(path($file)->slurp);
 use Data::Dumper;
-die Dumper($obj);
+$Data::Dumper::Indent = 1;
+$Data::Dumper::Sortkeys = 1;
+print Dumper($obj);
 is_deeply($obj, {}, "parse");
 done_testing();
 

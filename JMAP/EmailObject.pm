@@ -103,7 +103,7 @@ sub bodystructure {
       name => $eml->filename(),
       cid => asOneURL($eml->header('Content-Id')),
       language => asCommaList($eml->header('Content-Language')),
-      location => asOneURL($eml->header('Content-Location')),
+      location => asText($eml->header('Content-Location')),
     };
     if ($type =~ m{^text/}) {
       $values->{$partno}{value} = $body;
