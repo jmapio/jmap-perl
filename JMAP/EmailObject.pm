@@ -17,29 +17,35 @@ use DateTime;
 use Date::Parse;
 use MIME::Base64 qw(encode_base64 decode_base64);
 use Scalar::Util qw(weaken);
+use Digest::SHA;
 
 my $json = JSON::XS->new->utf8->canonical();
 
 sub parse {
   my $rfc822 = shift;
+  my $id = Digest::SHA::sha1_hex($rfc822);
   my $eml = Email::MIME->new($rfc822);
-  return parse_email($eml);
+  my $res = parse_email($id, $eml);
+  $res->{size} = length($rfc822);
+  return $res;
 }
 
 sub parse_email {
+  my $id = shift;
   my $eml = shift;
   my $part = shift;
 
   my $preview = preview($eml);
-  my $textpart = textpart($eml);
-  my $htmlpart = htmlpart($eml);
-
-  my $hasatt = hasatt($eml);
   my $headers = headers($eml);
-  my $messages = {};
-  my @attachments = attachments($eml, $part, $messages);
+
+  my %values;
+  my $bodystructure = bodystructure(\%values, $id, $eml);
+  my @textparts = getparts($bodystructure, 'text/plain');
+  my @htmlparts = getparts($bodystructure, 'text/html');
+  my $hasatt = hasatt($bodystructure);
 
   my $data = {
+    id => $id,
     to => asAddresses($eml->header('To')),
     cc => asAddresses($eml->header('Cc')),
     bcc => asAddresses($eml->header('Bcc')),
@@ -48,15 +54,61 @@ sub parse_email {
     subject => asText($eml->header('Subject')),
     date => asDate($eml->header('Date')),
     preview => $preview,
-    textBody => $textpart,
-    htmlBody => $htmlpart,
     hasAttachment => $hasatt,
     headers => $headers,
-    attachments => \@attachments,
-    attachedEmails => $messages,
+    bodyStructure => $bodystructure,
+    bodyValues => \%values,
+    textBody => \@textparts,
+    htmlBody => \@htmlparts,
   };
 
   return $data;
+}
+
+sub bodystructure {
+  my $values = shift;
+  my $id = shift;
+  my $eml = shift;
+  my $partno = shift;
+
+  my $headers = headers($eml);
+  my @parts = $eml->subparts();
+  my $type = $eml->content_type() || 'text/plain';
+  $type =~ s/;.*//;
+  if (@parts) {
+    my @sub;
+    for (my $n = 1; $n <= @parts; $n++) {
+       push @sub, bodystructure($values, $id, $parts[$n-1], $partno ? "$partno.$n" : $n);
+    }
+    return {
+      partId => undef,
+      blobId => undef,
+      type => lc $type,
+      size => 0,
+      headers => $headers,
+      name => undef,
+      cid => undef,
+      subParts => \@sub,
+    };
+  }
+  else {
+    $partno ||= '1';
+    my $body = $eml->body();
+    return {
+      partId => $partno,
+      blobId => "m-$id-$partno",
+      type => lc $type,
+      size => length($body),
+      headers => $headers,
+      name => $eml->filename(),
+      cid => asOneURL($eml->header('Content-Id')),
+      language => asCommaList($eml->header('Content-Language')),
+      location => asOneURL($eml->header('Content-Location')),
+    };
+    if ($type =~ m{^text/}) {
+      $values->{$partno}{value} = $body;
+    }
+  }
 }
 
 # XXX - UTCDate, or?  Maybe need timezone support
@@ -67,6 +119,7 @@ sub asDate {
 
 sub asMessageIds {
   my $val = shift;
+  return undef unless defined $val;
   $val =~ s/^\s+//;
   $val =~ s/\s+$//;
   my @list = split /\s*,\s*/, $val;
@@ -75,14 +128,30 @@ sub asMessageIds {
   return \@list;
 }
 
+sub asCommaList {
+  my $val = shift;
+  return undef unless defined $val;
+  $val =~ s/^\s+//;
+  $val =~ s/\s+$//;
+  my @list = split /\s*,\s*/, $val;
+  return \@list;
+}
+
 # NOTE: this is totally bogus..
 sub asURLs {
   my $val = shift;
+  return undef unless defined $val;
   my @list;
   while ($val =~ m/<([^>]+)>/gs) {
     push @list, $1;
   }
   return \@list;
+}
+
+sub asOneURL {
+  my $val = shift;
+  my $list = asURLs($val) || [];
+  return $list->[-1];
 }
 
 # XXX - more cleaning?
@@ -145,71 +214,6 @@ sub headers {
   return \@res;
 }
 
-sub attachments {
-  my $eml = shift;
-  my $part = shift;
-  my $messages = shift;
-  my $num = 0;
-  my @res;
-
-  foreach my $sub ($eml->subparts()) {
-    $num++;
-    my $type = $sub->content_type();
-    next unless $type;
-    my $disposition = $sub->header('Content-Disposition') || 'inline';
-    my ($typerest, $disrest) = ('', '');
-    if ($type =~ s/;(.*)//) {
-      $typerest = $1;
-    }
-    if ($disposition =~ s/;(.*)//) {
-      $disrest = $1;
-    }
-    my $filename = "unknown";
-    if ($disrest =~ m{filename=([^;]+)} || $typerest =~ m{name=([^;]+)}) {
-      $filename = $1;
-      if ($filename =~ s/^([\'\"])//) {
-        $filename =~ s/$1$//;
-      }
-    }
-    my $isInline = $disposition eq 'inline';
-    if ($isInline) {
-      # these parts, inline, are not attachments
-      next if $type =~ m{^text/plain}i;
-      next if $type =~ m{^text/html}i;
-    }
-    my $id = $part ? "$part.$num" : $num;
-    if ($type =~ m{^message/rfc822}i) {
-      $messages->{$id} = parse_email($sub, $id);
-    }
-    elsif ($sub->subparts) {
-      push @res, attachments($sub, $id, $messages);
-      next;
-    }
-    my $headers = headers($sub);
-    my $body = $sub->body();
-    my %extra;
-    if ($type =~ m{^image/}) {
-      my ($w, $h) = imgsize(\$body);
-      $extra{width} = $w;
-      $extra{height} = $h;
-    }
-    my $cid = $sub->header('Content-ID');
-    if ($cid and $cid =~ /<(.+)>/) {
-      $extra{cid} = "$1";
-    }
-    push @res, {
-      id => $id,
-      type => $type,
-      name => $filename,
-      size => length($body),
-      isInline => $isInline,
-      %extra,
-    };
-  }
-
-  return @res;
-}
-
 sub _clean {
   my ($type, $text) = @_;
   #if ($type =~ m/;\s*charset\s*=\s*([^;]+)/) {
@@ -225,40 +229,7 @@ sub _body_str {
   return Encode::decode('us-ascii', $eml->body_raw());
 }
 
-sub textpart {
-  my $eml = shift;
-  my $type = $eml->content_type() || 'text/plain';
-  if ($type =~ m{^text/plain}i) {
-    return _clean($type, _body_str($eml));
-  }
-  foreach my $sub ($eml->subparts()) {
-    my $res = textpart($sub);
-    return $res if $res;
-  }
-  return undef;
-}
-
-sub htmlpart {
-  my $eml = shift;
-  my $type = $eml->content_type() || 'text/plain';
-  if ($type =~ m{^text/html}i) {
-    return _clean($type, _body_str($eml));
-  }
-  foreach my $sub ($eml->subparts()) {
-    my $res = htmlpart($sub);
-    return $res if $res;
-  }
-  return undef;
-}
-
-sub htmltotext {
-  my $html = shift;
-  my $hs = HTML::Strip->new();
-  my $clean_text = $hs->parse( $html );
-  $hs->eof;
-  return $clean_text;
-}
-
+# XXX: re-define on top of bodyStructure?
 sub preview {
   my $eml = shift;
   my $type = $eml->content_type() || 'text/plain';
@@ -284,14 +255,44 @@ sub make_preview {
 }
 
 sub hasatt {
-  my $eml = shift;
-  my $type = $eml->content_type() || 'text/plain';
-  return 1 if $type =~ m{(image|video|application)/};
-  foreach my $sub ($eml->subparts()) {
-    my $res = hasatt($sub);
-    return $res if $res;
+  my $bs = shift;
+  if ($bs->{subParts}) {
+    foreach my $sub (@{$bs->{subParts}}) {
+      return 1 if hasatt($sub);
+    }
   }
+  return 1 if $bs->{type} =~ m{(image|video|application)/};  # others?
   return 0;
+}
+
+sub getparts {
+  my $bs = shift;
+  my $type = shift;
+  my @array;
+
+  if ($bs->{type} eq 'text/plain' || $bs->{type} eq 'text/html'
+                                  || $bs->{type} =~ m/^audio/
+                                  || $bs->{type} =~ m/^image/
+                                  || $bs->{type} =~ m/^video/) {
+    push @array, $bs;
+  }
+
+  if ($bs->{subParts}) {
+    if ($bs->{type} eq 'multipart/alternative') {
+      # we only want the specific type version
+      my ($found) = grep { $_->{type} eq $type } @{$bs->{subParts}};
+      ($found) = grep { $_->{type} =~ m/^text/ } @{$bs->{subParts}} unless $found;
+      push @array, $found if $found;
+    }
+    else {
+      # mixed? whatever
+      foreach my $sub (@{$bs->{subParts}}) {
+        push @array, getparts($sub, $type);
+      }
+    }
+  }
+
+  return @array;
 }
 
 sub _mkone {
