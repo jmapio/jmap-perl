@@ -1767,11 +1767,11 @@ sub api_Email_get {
     }
 
     if (_prop_wanted($args, 'sentAt')) {
-      $item->{sentAt} = $Self->{db}->isodate($data->{msgdate});
+      $item->{sentAt} = JMAP::EmailObject::isodate($data->{msgdate});
     }
 
     if (_prop_wanted($args, 'receivedAt')) {
-      $item->{receivedAt} = $Self->{db}->isodate($data->{internaldate});
+      $item->{receivedAt} = JMAP::EmailObject::isodate($data->{internaldate});
     }
 
     if (_prop_wanted($args, 'size')) {
@@ -3414,7 +3414,7 @@ sub api_EmailSubmission_get {
       emailId => $data->{msgid},
       threadId => $thrid,
       envelope => $data->{envelope} ? decode_json($data->{envelope}) : undef,
-      sendAt => scalar($Self->{db}->isodate($data->{sendat})),
+      sendAt => JMAP::EmailObject::isodate($data->{sendat}),
       undoStatus => $data->{status},
       deliveryStatus => undef,
       dsnBlobIds => [],

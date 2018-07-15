@@ -558,7 +558,7 @@ sub put_file {
     accountId => "$accountid",
     blobId => "f-$id",
     type => $type,
-    expires => scalar($Self->isodate($expires)),
+    expires => JMAP::EmailObject::isodate($expires),
     size => $size,
     url => "https://$ENV{jmaphost}/raw/$accountid/f-$id"
   };
