@@ -90,14 +90,14 @@ sub bodystructure {
       headers => $headers,
       name => undef,
       cid => undef,
-      disposition => undef,
+      disposition => 'none',
       subParts => \@sub,
     };
   }
   else {
     $partno ||= '1';
     my $body = $eml->body();
-    my $disposition = $eml->header('Content-Disposition') || 'attachment';
+    my $disposition = $eml->header('Content-Disposition') || 'none';
     $disposition =~ s/;.*//;
     return {
       partId => $partno,
@@ -294,7 +294,7 @@ sub parseStructure {
     my $part = $parts->[$i];
     my $isMultipart = $part->{type} =~ m{^multipart/(.*)};
     my $subMultiType = $1;
-    my $isInline = $part->{disposition} ne 'attachment' &&
+    my $isInline = ($part->{disposition}) ne 'attachment' &&
         # Must be one of the allowed body types
         ( $part->{type} eq 'text/plain' ||
           $part->{type} eq 'text/html' ||
@@ -304,7 +304,7 @@ sub parseStructure {
         # multipart, assume it is an attachment
         ($i == 0 ||
             ( $multipartType ne 'related' &&
-                ( isInlineMediaType($part->{type}) || not $part->{name} ) ) );
+                ( isInlineMediaType($part->{type}) || !$part->{name} ) ) );
 
     if ($isMultipart) {
       parseStructure($part->{subParts}, $subMultiType,
