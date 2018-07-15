@@ -40,9 +40,10 @@ sub parse_email {
 
   my %values;
   my $bodystructure = bodystructure(\%values, $id, $eml);
-  my @textparts = getparts($bodystructure, 'text/plain');
-  my @htmlparts = getparts($bodystructure, 'text/html');
-  my $hasatt = hasatt($bodystructure);
+  my $textBody = [];
+  my $htmlBody = [];
+  my $attachments = [];
+  parseStructure([$bodystructure], 'mixed', 0, $textBody, $htmlBody, $attachments);
 
   my $data = {
     id => $id,
@@ -54,12 +55,13 @@ sub parse_email {
     subject => asText($eml->header('Subject')),
     date => asDate($eml->header('Date')),
     preview => $preview,
-    hasAttachment => $hasatt,
+    hasAttachment => scalar(@$attachments) ? $JSON::true : $JSON::false,
     headers => $headers,
     bodyStructure => $bodystructure,
     bodyValues => \%values,
-    textBody => \@textparts,
-    htmlBody => \@htmlparts,
+    textBody => $textBody,
+    htmlBody => $htmlBody,
+    attachments => $attachments,
   };
 
   return $data;
@@ -78,7 +80,7 @@ sub bodystructure {
   if (@parts) {
     my @sub;
     for (my $n = 1; $n <= @parts; $n++) {
-       push @sub, bodystructure($values, $id, $parts[$n-1], $partno ? "$partno.$n" : $n);
+      push @sub, bodystructure($values, $id, $parts[$n-1], $partno ? "$partno.$n" : $n);
     }
     return {
       partId => undef,
@@ -88,12 +90,15 @@ sub bodystructure {
       headers => $headers,
       name => undef,
       cid => undef,
+      disposition => undef,
       subParts => \@sub,
     };
   }
   else {
     $partno ||= '1';
     my $body = $eml->body();
+    my $disposition = $eml->header('Content-Disposition') || 'attachment';
+    $disposition =~ s/;.*//;
     return {
       partId => $partno,
       blobId => "m-$id-$partno",
@@ -104,6 +109,7 @@ sub bodystructure {
       cid => asOneURL($eml->header('Content-Id')),
       language => asCommaList($eml->header('Content-Language')),
       location => asText($eml->header('Content-Location')),
+      disposition => $disposition,
     };
     if ($type =~ m{^text/}) {
       $values->{$partno}{value} = $body;
@@ -265,34 +271,95 @@ sub hasatt {
   return 0;
 }
 
-sub getparts {
-  my $bs = shift;
+sub isInlineMediaType {
   my $type = shift;
-  my @array;
+  return 1 if $type =~ m{^image/};
+  return 1 if $type =~ m{^audio/};
+  return 1 if $type =~ m{^video/};
+  return 0;
+}
 
-  if ($bs->{type} eq 'text/plain' || $bs->{type} eq 'text/html'
-                                  || $bs->{type} =~ m/^audio/
-                                  || $bs->{type} =~ m/^image/
-                                  || $bs->{type} =~ m/^video/) {
-    push @array, $bs;
-  }
+sub parseStructure {
+  my $parts = shift;
+  my $multipartType = shift;
+  my $inAlternative = shift;
+  my $textBody = shift;
+  my $htmlBody = shift;
+  my $attachments = shift;
 
-  if ($bs->{subParts}) {
-    if ($bs->{type} eq 'multipart/alternative') {
-      # we only want the specific type version
-      my ($found) = grep { $_->{type} eq $type } @{$bs->{subParts}};
-      ($found) = grep { $_->{type} =~ m/^text/ } @{$bs->{subParts}} unless $found;
-      push @array, $found if $found;
+  my $textLength = $textBody ? @$textBody : -1;
+  my $htmlLength = $htmlBody ? @$htmlBody : -1;
+
+  for (my $i = 0; $i < @$parts; $i++) {
+    my $part = $parts->[$i];
+    my $isMultipart = $part->{type} =~ m{^multipart/(.*)};
+    my $subMultiType = $1;
+    my $isInline = $part->{disposition} ne 'attachment' &&
+        # Must be one of the allowed body types
+        ( $part->{type} eq 'text/plain' ||
+          $part->{type} eq 'text/html' ||
+          isInlineMediaType($part->{type}) ) &&
+        # If multipart/related, only the first part can be inline
+        # If a text part with a filename, and not the first item in the
+        # multipart, assume it is an attachment
+        ($i == 0 ||
+            ( $multipartType ne 'related' &&
+                ( isInlineMediaType($part->{type}) || not $part->{name} ) ) );
+
+    if ($isMultipart) {
+      parseStructure($part->{subParts}, $subMultiType,
+          $inAlternative || ( $subMultiType eq 'alternative' ),
+          $htmlBody, $textBody, $attachments);
     }
-    else {
-      # mixed? whatever
-      foreach my $sub (@{$bs->{subParts}}) {
-        push @array, getparts($sub, $type);
+    elsif ($isInline) {
+      if ($multipartType eq 'alternative') {
+        if ($part->{type} eq 'text/plain') {
+          push @$textBody, $part;
+        }
+        elsif ($part->{type} eq 'text/html') {
+          push @$htmlBody, $part;
+        }
+        else {
+          push @$attachments, $part;
+        }
+        next;
+      }
+      elsif ($inAlternative) {
+        if ($part->{type} eq 'text/plain') {
+          $htmlBody = undef;
+        }
+        elsif ($part->{type} eq 'text/html') {
+          $textBody = undef;
+        }
+      }
+      if ($textBody) {
+        push @$textBody, $part;
+      }
+      if ($htmlBody) {
+        push @$htmlBody, $part;
+      }
+      if ( ( !$textBody || !$htmlBody ) &&
+              isInlineMediaType($part->{type}) ) {
+        push @$attachments, $part;
       }
     }
+    else {
+      push @$attachments, $part;
+    }
   }
 
-  return @array;
+  if ( $multipartType eq 'alternative' && $textBody && $htmlBody ) {
+    # Found HTML part only
+    if ( $textLength == @$textBody &&
+         $htmlLength != @$htmlBody ) {
+        push @$textBody, @$htmlBody;
+    }
+    # found plain text part only
+    if ( $htmlLength == @$htmlBody &&
+         $textLength != @$textBody ) {
+        push @$htmlBody, @$textBody;
+    }
+  }
 }
 
 sub _mkone {
