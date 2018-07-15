@@ -1072,8 +1072,7 @@ sub import_message {
   die "FAILED TO GET BACK STORED MESSAGE FROM IMAP SERVER" unless $msgdata;
 
   # save us having to download it again - drop out of transaction so we don't wait on the parse
-  my $eml = Email::MIME->new($rfc822);
-  my $message = $Self->parse_message($msgdata->{msgid}, $eml);
+  my $message = JMAP::EmailObject::parse($rfc822, $msgdata->{msgid});
 
   $Self->begin();
   $Self->dinsert('jrawmessage', {
@@ -1449,8 +1448,7 @@ sub fill_messages {
       next unless $rfc822;
       my $msgid = $uhash->{$uid};
       next if $result{$msgid};
-      my $eml = Email::MIME->new($rfc822);
-      $result{$msgid} = $parsed{$msgid} = $Self->parse_message($msgid, $eml);
+      $result{$msgid} = $parsed{$msgid} = JMAP::EmailObject::parse($rfc822, $msgid);
     }
   }
 
