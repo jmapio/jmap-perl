@@ -13,17 +13,19 @@ PACKAGES=                   \
   libdbi-perl               \
   libemail-address-xs-perl  \
   libemail-mime-perl        \
+  libencode-imaputf7-perl   \
+  libexpat1-dev             \
   libhtml-parser-perl       \
   libhtml-strip-perl        \
   libhttp-date-perl         \
   libhttp-tiny-perl         \
   libimage-size-perl        \
   libio-socket-ssl-perl     \
-  libencode-imaputf7-perl   \
   libjson-perl              \
   libjson-xs-perl           \
   liblocale-gettext-perl    \
   libswitch-perl            \
+  libtest-xml-perl          \
   nginx                     \
 
 PERLPACKAGES=                     \
