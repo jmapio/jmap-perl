@@ -431,8 +431,9 @@ sub handle_signup {
     $force = 1;
   }
 
-  else {
+  elsif (not $detail->{imapHost}) {
     my $Resolver = Net::DNS::Resolver->new;
+    $Resolver->tcp_timeout(2);
     my $domain = $detail->{username};
     $domain =~ s/.*\@//;
     my $reply;
@@ -535,7 +536,8 @@ sub handle_signup {
    UseSSL => ($detail->{imapSSL} > 1),
    UseBlocking => ($detail->{imapSSL} > 1),
   );
-  die "UNABLE TO CONNECT for $detail->{username}\n" unless $imap;
+  die "UNABLE TO CONNECT for $detail->{username} @ $detail->{imapHost}\n" unless $imap;
+  # $imap->set_tracing(1);
 
   my $ok = $imap->login($detail->{username}, $detail->{password});
   die "LOGIN FAILED FOR $detail->{username}" unless $ok;
