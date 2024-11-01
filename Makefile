@@ -6,6 +6,7 @@ PUBLICCERT=$(DOMAIN).publiccert
 
 PACKAGES=                   \
   build-essential           \
+  cpanminus                 \
   libanyevent-httpd-perl    \
   libdata-uuid-libuuid-perl \
   libdatetime-perl          \
@@ -13,6 +14,7 @@ PACKAGES=                   \
   libdbi-perl               \
   libemail-address-xs-perl  \
   libemail-mime-perl        \
+  libmodule-pluggable-perl  \
   libhtml-parser-perl       \
   libhtml-strip-perl        \
   libhttp-date-perl         \
@@ -21,6 +23,9 @@ PACKAGES=                   \
   libio-socket-ssl-perl     \
   libencode-imaputf7-perl   \
   libjson-perl              \
+  libxml-parser-perl        \
+  libtest-xml-perl          \
+  libnet-dns-perl           \
   libjson-xs-perl           \
   liblocale-gettext-perl    \
   libswitch-perl            \
@@ -44,6 +49,7 @@ PERLPACKAGES=                     \
   Net::DNS                        \
   Net::Server::Fork               \
   Template                        \
+  MIME::Base64::URLSafe           \
   Test::Requires                  \
 
 all: $(DHPARAM) $(PUBLICCERT)
@@ -59,7 +65,7 @@ $(PRIVATEKEY):
 
 install: all
 	apt-get install -y $(PACKAGES)
-	$(foreach PERLPACKAGE, $(PERLPACKAGES), yes | cpan $(PERLPACKAGE) &&) true
+	$(foreach PERLPACKAGE, $(PERLPACKAGES), yes | cpanm $(PERLPACKAGE) &&) true
 	install -o root -g root -m 755 -d $(DHPARAMDIR)
 	install -o root -g root -m 644 $(DHPARAM) $(DHPARAMDIR)/$(DHPARAM)
 	install -o root -g root -m 644 $(PUBLICCERT) /etc/ssl/certs/$(PUBLICCERT)
@@ -76,6 +82,10 @@ install: all
 	  git clone https://github.com/jmapio/jmap-demo-webmail.git /home/jmap/jmap-perl/htdocs/client;      \
 	  perl -pi -e 's/^/<!--/, s/$$/-->/ if /fixtures.js/' /home/jmap/jmap-perl/htdocs/client/index.html; \
 	fi
+	if [ ! -d /home/jmap/jmap-perl/htdocs/tmail ]; then                                                  \
+	  git clone https://github.com/linagora/tmail-flutter /home/jmap/jmap-perl/htdocs/tmail;             \
+	fi
+
 
 diff: all
 	diff -Nu /etc/nginx/sites-enabled/$(DOMAIN).conf nginx.conf || true

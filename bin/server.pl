@@ -28,7 +28,7 @@ use URI;
 use Encode qw(encode_utf8);
 use Template;
 
-$ENV{jmaphost} ||= 'jmap-proxy.local';
+$ENV{jmaphost} ||= '146.190.52.243';
 
 my $TT   = Template->new(INCLUDE_PATH => '/home/jmap/jmap-perl/htdocs');
 my $json = JSON::XS->new->utf8->canonical();
@@ -452,6 +452,7 @@ sub landing_page {
   return client_page($req, $accountid, 'application/json', 'auth.jsont') if $client eq '/auth';
   return client_page($req, $accountid, 'text/html', 'client.html') if $client eq '/client';
   return client_page($req, $accountid, 'text/html', 'fullclient.html') if $client eq '/fullclient';
+  return client_page($req, $accountid, 'text/html', 'tmail.html') if $client eq '/tmail';
 
   send_backend_request($accountid, 'getinfo', $accountid, sub {
     my $data = shift;
