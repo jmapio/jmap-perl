@@ -29,6 +29,7 @@ PACKAGES=                   \
   libjson-xs-perl           \
   liblocale-gettext-perl    \
   libswitch-perl            \
+	libnet-libidn-perl        \
   nginx                     \
 
 PERLPACKAGES=                     \
