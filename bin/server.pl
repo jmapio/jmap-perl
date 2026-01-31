@@ -464,13 +464,62 @@ sub landing_page {
     prod_idler($accountid);
     send_backend_request("$accountid:sync", 'syncall');
 
-    my $html = '';
-    $TT->process("landing.html", {
-      info => "Account: <b>$data->[0] ($data->[1])</b>",
-      uuid => $accountid,
-      jmaphost => $ENV{jmaphost},
-     }, \$html) || die $Template::ERROR;
-    $req->respond({content => ['text/html', $html]});
+    my $session = {
+      username => $data->[0],
+      accounts => {
+        $accountid => {
+          accountCapabilities => {
+            'urn:ietf:params:jmap:submission' => {
+              'submissionExtensions' => {},
+            },
+            'urn:ietf:params:jmap:contacts' => {},
+            'urn:ietf:params:jmap:calendars' => {},
+            'urn:ietf:params:jmap:mail' => {
+              mayCreateTopLevelMailbox => JSON::true,
+              maxMailboxDepth => undef,
+              maxMailboxesPerEmail => 100,
+              maxSizeMailboxName => 490,
+              emailQuerySortOptions => [qw(receivedAt from to subject size)],
+              maxSizeAttachmentsPerEmail => 10000000,
+            },
+          },
+          isPersonal => JSON::true,
+        },
+      },
+      primaryAccounts => {
+        'urn:ietf:params:jmap:calendars' => $accountid,
+        'urn:ietf:params:jmap:contacts' => $accountid,
+        'urn:ietf:params:jmap:mail' => $accountid,
+        'urn:ietf:params:jmap:submission' => $accountid,
+      },
+      capabilities => {
+        'urn:ietf:params:jmap:submission' => {},
+        'urn:ietf:params:jmap:core' => {
+           'maxObjectsInGet' => 4096,
+           'maxCallsInRequest' => 50,
+           'maxConcurrentRequests' => 10,
+           'maxConcurrentUpload' => 10,
+           'maxObjectsInSet' => 4096,
+           'maxSizeRequest' => 10000000,
+           'collationAlgorithms' => [
+              'i;ascii-numeric',
+              'i;ascii-casemap',
+              'i;octet'
+           ],
+           'maxSizeUpload' => 250000000,
+        },
+        'urn:ietf:params:jmap:mail' => {},
+        'urn:ietf:params:jmap:contacts' => {},
+        'urn:ietf:params:jmap:calendars' => {},
+      },
+      apiUrl => "$BASEURL/jmap/$accountid",
+      eventSourceUrl => "$BASEURL/event/$accountid?types={types}&closeafter={closeafter}&ping={ping}",
+      uploadUrl => "$BASEURL/upload/{accountid}",
+      downloadUrl => "$BASEURL/raw/{accountId}/{blobId}/{name}?type={type}",
+      state => "singleton",
+    };
+    my $res = encode_utf8($json->encode($session));
+    $req->respond({content => ['application/json', $res]});
   }, sub {
     my $cookie = bake_cookie("jmap_$accountid", {value => '', path => '/'});
     $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "$BASEURL/" }, "Redirected"]);
