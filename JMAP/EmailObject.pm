@@ -521,7 +521,7 @@ sub make {
 sub isodate {
   my $epoch = shift || time();
   my $date = DateTime->from_epoch( epoch => $epoch );
-  return $date->iso8601();
+  return $date->iso8601() . 'Z';
 }
 
 sub parse_date {
