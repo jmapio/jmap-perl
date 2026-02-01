@@ -1102,7 +1102,7 @@ sub api_Mailbox_set {
   $Self->commit();
   $oldState = "$user->{jstateMailbox}";
 
-  ($created, $notCreated) = $Self->{db}->create_mailboxes($create);
+  ($created, $notCreated) = $Self->{db}->create_mailboxes($create, sub { $Self->idmap(shift) });
   $Self->setid($_, $created->{$_}{id}) for keys %$created;
   $Self->_resolve_patch($update, 'api_Mailbox_get');
   ($updated, $notUpdated) = $Self->{db}->update_mailboxes($update, sub { $Self->idmap(shift) });

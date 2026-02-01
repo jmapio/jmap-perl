@@ -1507,6 +1507,7 @@ sub get_raw_message {
 sub create_mailboxes {
   my $Self = shift;
   my $new = shift;
+  my $idmap = shift;
 
   return ({}, {}) unless keys %$new;
 
@@ -1516,10 +1517,12 @@ sub create_mailboxes {
   $Self->begin();
   my %todo;
   my %notcreated;
-  foreach my $cid (keys %$new) {
+  my @list = keys %$new;
+  my %fromthis;
+  while (my $cid = shift @list) {
     my $mailbox = $new->{$cid};
 
-    unless (exists $mailbox->{name} and $mailbox->{name} ne '') {
+    unless (defined $mailbox->{name} and $mailbox->{name} ne '') {
       $notcreated{$cid} = {type => 'invalidProperties', description => "name is required"};
       next;
     }
@@ -1530,14 +1533,28 @@ sub create_mailboxes {
       next;
     }
 
-    if ($mailbox->{parentId}) {
-      my $parent = $Self->dgetone('ifolders', { jmailboxid => $mailbox->{parentId} }, 'imapname,sep');
-      # XXX - check "mailCreateChild" on parent mailbox
-      unless ($parent) {
-        $notcreated{$cid} = {type => 'notFound', description => "parent folder not found"};
-        next;
+    my $parentid = $idmap->($mailbox->{parentId});
+
+    if ($parentid) {
+      if ($parentid =~ m/^\#(.*)/) {
+        if ($todo{$1}) {
+          $todo{$cid} = [$todo{$1}[0] . $todo{$1}[1] . $encname, $todo{$1}[1]];
+        }
+        else {
+          # try later
+          push @list, $cid;
+          next;
+        }
       }
-      $todo{$cid} = [$parent->{imapname} . $parent->{sep} . $encname, $parent->{sep}];
+      else {
+        my $parent = $Self->dgetone('ifolders', { jmailboxid => $mailbox->{parentId} }, 'imapname,sep');
+        # XXX - check "mailCreateChild" on parent mailbox
+        unless ($parent) {
+          $notcreated{$cid} = {type => 'notFound', description => "parent folder not found"};
+          next;
+        }
+        $todo{$cid} = [$parent->{imapname} . $parent->{sep} . $encname, $parent->{sep}];
+      }
     }
     else {
       # will probably get INBOX - but meh, close enough.  Sync will fix it if needed.  Better
@@ -1553,13 +1570,23 @@ sub create_mailboxes {
   $Self->commit();
 
   my %createmap;
-  foreach my $cid (sort { $todo{$a} cmp $todo{$b} } keys %todo) {
+  foreach my $cid (sort { $todo{$a}[0] cmp $todo{$b}[0] } keys %todo) {
     my ($imapname, $sep) = @{$todo{$cid}};
     # XXX - check if already exists?
     my $res = $Self->backend_cmd('create_mailbox', $imapname);
     if ($res->[1] eq 'ok') {
       my $mailbox = $new->{$cid};
       my $status = $res->[2];
+      my $parentid = $idmap->($mailbox->{parentId}) // '';
+      if ($parentid =~ m/^\#(.*)/) {
+        if ($createmap{$1}) {
+          $parentid = $createmap{$1}{id};
+        }
+        else {
+          $notcreated{$cid} = {type => 'invalidResultReference', description => "missing create for parentId"};
+          next;
+        }
+      }
       # yeah, I don't care so much here about the cost of lots of transactions, creating a mailbox is expensive
       $Self->begin();
       my $jmailboxid = new_uuid_string();
@@ -1577,7 +1604,7 @@ sub create_mailboxes {
         name => $mailbox->{name},
         jmailboxid => $jmailboxid,
         sortOrder => $mailbox->{sortOrder} // 4,
-        parentId => $mailbox->{parentId} // '',
+        parentId => $parentid,
       }, 'jnoncountsmodseq');
 
       $Self->commit();
@@ -1587,7 +1614,7 @@ sub create_mailboxes {
     else {
       $notcreated{$cid} = {type => 'internalError', description => $res->[2]};
     }
-  } 
+  }
 
   return (\%createmap, \%notcreated);
 }
