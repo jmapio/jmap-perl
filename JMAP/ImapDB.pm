@@ -1023,7 +1023,7 @@ sub import_message {
   my $Self = shift;
   my $rfc822 = shift;
   my $mailboxIds = shift;
-  my $keywords = shift;
+  my $keywords = shift || {};
 
   $Self->begin();
   my $folderdata = $Self->dget('ifolders');
