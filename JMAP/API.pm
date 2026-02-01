@@ -1887,7 +1887,7 @@ sub downloadFile {
   my $Self = shift;
   my $jfileid = shift;
 
-  my ($type, $content) = $Self->{db}->get_file($jfileid);
+  my ($type, $content) = $Self->{db}->get_blob($jfileid);
 
   return ($type, $content);
 }
