@@ -697,7 +697,7 @@ sub create_mailbox {
 
   my $res = $imap->create($imapname);
 
-  unless ($res and $res eq 'ok') {
+  unless ($res) {
     my $err = $imap->get_last_error();
     if ($err =~ m/Response was : (\w+) - (.*)/) {
       return ['create', $1, $2];
