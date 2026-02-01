@@ -1832,6 +1832,9 @@ sub api_Email_get {
       if (_prop_wanted($args, 'attachedEmails')) {
         $item->{attachedEmails} = $data->{attachedEmails};
       }
+      if (_prop_wanted($args, 'bodyStructure')) {
+        $item->{bodyStructure} = createBodyStructure($data->{bodyStructure}, $args->{bodyProperties});
+      }
     }
   }
 
@@ -1855,6 +1858,21 @@ sub getRawBlob {
   my ($type, $data) = $Self->{db}->get_blob($blobId);
 
   return ($type, $data, $filename);
+}
+
+# or this
+sub createBodyStructure {
+  my $data = shift;
+  my $props = shift;
+  return $data unless $props;
+  my %res;
+  for my $prop (@$props) {
+    $res{$prop} = $data->{$prop};
+  }
+  if ($data->{subParts}) {
+    $res{subParts} = [ map { createBodyStructure($_, $props) } @{$data->{subParts}} ];
+  }
+  return \%res;
 }
 
 # or this
