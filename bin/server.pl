@@ -28,7 +28,7 @@ use URI;
 use Encode qw(encode_utf8);
 use Template;
 
-$ENV{jmaphost} ||= '146.190.52.243';
+my $BASEURL = $ENV{BASEURL} || 'https://146.190.52.243';
 
 my $TT   = Template->new(INCLUDE_PATH => '/home/jmap/jmap-perl/htdocs');
 my $json = JSON::XS->new->utf8->canonical();
@@ -434,13 +434,13 @@ sub client_page {
     my $content = '';
     $TT->process($template, {
       accountid => $accountid,
-      jmaphost => $ENV{jmaphost},
+      jmapurl => "$BASEURL/jmap",
       username => $data->[0],
      }, \$content) || die $Template::ERROR;
     $req->respond({content => [$content_type, $content]});
   }, sub {
     my $cookie = bake_cookie("jmap_$accountid", {value => '', path => '/'});
-    $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "https://$ENV{jmaphost}/" }, "Redirected"]);
+    $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "$BASEURL/" }, "Redirected"]);
   });
 }
 
@@ -469,7 +469,7 @@ sub landing_page {
     $req->respond({content => ['text/html', $html]});
   }, sub {
     my $cookie = bake_cookie("jmap_$accountid", {value => '', path => '/'});
-    $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "https://$ENV{jmaphost}/" }, "Redirected"]);
+    $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "$BASEURL/" }, "Redirected"]);
   });
 }
 
@@ -493,14 +493,14 @@ sub home_page {
 </tr>
 EOF
     foreach my $key (sort keys %ids) {
-      $sessiontext .= qq{<tr>\n <td><a href="https://$ENV{jmaphost}/jmap/$key/">$ids{$key}</a>\n </td>\n</tr>\n};
+      $sessiontext .= qq{<tr>\n <td><a href="$BASEURL/jmap/$key/">$ids{$key}</a>\n </td>\n</tr>\n};
     }
     $sessiontext .= "</table>";
   }
   my $html = '';
   $TT->process("index.html", {
     sessions => $sessiontext,
-    jmaphost => $ENV{jmaphost},
+    jmapurl => "$BASEURL/jmap",
    }, \$html) || die $Template::ERROR;
   $req->respond({content => ['text/html', $html]});
 }
@@ -759,7 +759,7 @@ sub do_delete {
   if ($accountid) {
     send_backend_request($accountid, 'delete', $accountid, sub {
       my $cookie = bake_cookie("jmap_$accountid", {value => '', path => '/'});
-      $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "https://$ENV{jmaphost}/" }, "Redirected"]);
+      $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "$BASEURL/" }, "Redirected"]);
     }, mkerr($req));
   }
 };
@@ -786,7 +786,7 @@ sub do_signup {
         path => '/',
         expires => '+3M',
       });
-      $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "https://$ENV{jmaphost}/jmap/$data->[1]" },
+      $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "$BASEURL/jmap/$data->[1]" },
                 "Redirected"]);
       delete $backend{$accountid} unless $data->[1] eq $accountid;
     }
@@ -813,7 +813,7 @@ sub do_cb_aol {
         path => '/',
         expires => '+3M',
       });
-      $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "https://$ENV{jmaphost}/jmap/$data->[0]" },
+      $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "$BASEURL/jmap/$data->[0]" },
                 "Redirected"]);
       delete $backend{$accountid} unless $data->[0] eq $accountid;
       send_backend_request($data->[0], 'sync', $data->[0]);
@@ -839,7 +839,7 @@ sub do_cb_google {
         path => '/',
         expires => '+3M',
       });
-      $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "https://$ENV{jmaphost}/jmap/$data->[0]" },
+      $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "$BASEURL/jmap/$data->[0]" },
                 "Redirected"]);
       delete $backend{$accountid} unless $data->[0] eq $accountid;
       send_backend_request($data->[0], 'sync', $data->[0]);

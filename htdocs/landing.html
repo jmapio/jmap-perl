@@ -25,16 +25,16 @@
 
 <p>[% info %] - (<a href="/">back to proxy login page</a>)</p>
 
-<p>Access your account with the <a href="https://[% jmaphost %]/jmap/[% uuid %]/fullclient?debug=1">closed source client</a>.</p>
+<p>Access your account with the <a href="[% jmapurl %]/[% uuid %]/fullclient?debug=1">closed source client</a>.</p>
 
-<p>Access your account with the <a href="https://[% jmaphost %]/jmap/[% uuid %]/client">open source client</a>.</p>
-<p>Access your account with the <a href="https://[% jmaphost %]/jmap/[% uuid %]/tmail">tmail client</a>.</p>
+<p>Access your account with the <a href="[% jmapurl %]/[% uuid %]/client">open source client</a>.</p>
+<p>Access your account with the <a href="[% jmapurl %]/[% uuid %]/tmail">tmail client</a>.</p>
 
-<p>You can also POST with the JMAP protocol to <a href="https://[% jmaphost %]/jmap/[% uuid %]/">https://[% jmaphost %]/jmap/[% uuid %]/</a> &ndash; there is no need to use any other form of authentication, the UUID is used by itself for privacy. Yes, we know this isn't enough security for a public service (and we need to implement the JMAP auth spec!), but it will do for testing.</p>
+<p>You can also POST with the JMAP protocol to <a href="[% jmapurl %]/[% uuid %]/">[% jmapurl %]/[% uuid %]/</a> &ndash; there is no need to use any other form of authentication, the UUID is used by itself for privacy. Yes, we know this isn't enough security for a public service (and we need to implement the JMAP auth spec!), but it will do for testing.</p>
 
 <p>Please note: it may take a few minutes before the API responds to requests, because it needs to do an initial sync of mailbox envelope data.</p>
 
-<p>If you need to reset your account or want to delete all your data, please go to <a href="https://[% jmaphost %]/delete/[% uuid %]">https://[% jmaphost %]/delete/[% uuid %]</a>.  It will redirect you to the homepage when the account is wiped.</p>
+<p>If you need to reset your account or want to delete all your data, please go to <a href="[% jmapurl %]/[% uuid %]/delete">[% jmapurl %]/[% uuid %]/delete</a>.  It will redirect you to the homepage when the account is wiped.</p>
 
 </article></body>
 </html>

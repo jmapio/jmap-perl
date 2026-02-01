@@ -562,7 +562,6 @@ sub put_file {
     type => $type,
     expires => JMAP::EmailObject::isodate($expires),
     size => $size,
-    url => "https://$ENV{jmaphost}/raw/$accountid/f-$id"
   };
 }
 
