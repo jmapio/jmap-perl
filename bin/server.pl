@@ -162,7 +162,6 @@ $httpd->reg_cb (
   '/raw' => \&do_raw,
   '/register/gmail' => \&do_register_gmail,
   '/register/aol' => \&do_register_aol,
-  '/delete' => \&do_delete,
   '/cb/aol' => \&do_cb_aol,
   '/cb/google' => \&do_cb_google,
   '/signup' => \&do_signup,
@@ -397,6 +396,11 @@ sub do_jmap {
 
   my $accountid = $1;
   my $client = $2;
+
+  return send_backend_request($accountid, 'delete', $accountid, sub {
+    my $cookie = bake_cookie("jmap_$accountid", {value => '', path => '/'});
+    $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "$BASEURL/" }, "Redirected"]);
+  }, mkerr($req)) if $client eq '/delete';
 
   return landing_page($req, $accountid, $client) unless lc $req->method eq 'post';
 
@@ -745,23 +749,6 @@ sub do_register_aol {
   my ($httpd, $req) = @_;
   my $O = JMAP::Sync::AOL::O();
   $req->respond({redirect => $O->start(new_uuid_string())});
-};
-
-sub do_delete {
-  my ($httpd, $req) = @_;
-
-  my $uri = $req->url();
-  my $path = $uri->path();
-
-  return not_found($req) unless $path =~ m{^/delete/([^/]+)};
-
-  my $accountid = $1;
-  if ($accountid) {
-    send_backend_request($accountid, 'delete', $accountid, sub {
-      my $cookie = bake_cookie("jmap_$accountid", {value => '', path => '/'});
-      $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "$BASEURL/" }, "Redirected"]);
-    }, mkerr($req));
-  }
 };
 
 sub do_signup {
