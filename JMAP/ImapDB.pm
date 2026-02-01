@@ -1473,9 +1473,10 @@ sub find_type {
   my $message = shift;
   my $part = shift;
 
-  return $message->{type} if ($message->{id} || '') eq $part;
 
-  foreach my $sub (@{$message->{attachments}}) {
+  return $message->{type} if ($message->{partId} || '') eq $part;
+
+  foreach my $sub (@{$message->{subParts}}) {
     my $type = find_type($sub, $part);
     return $type if $type;
   }
@@ -1495,7 +1496,7 @@ sub get_raw_message {
   my $type = 'message/rfc822';
   if ($part) {
     my $parsed = $Self->fill_messages($msgid);
-    $type = find_type($parsed->{$msgid}, $part);
+    $type = find_type($parsed->{$msgid}{bodyStructure}, $part);
   }
 
   my $res = $Self->backend_cmd('imap_getpart', $imapname, $uidvalidity, $uid, $part);
