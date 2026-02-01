@@ -103,12 +103,13 @@ sub send_email {
     $args{from} = $Self->{auth}{username};
   }
 
+  my $helo = $ENV{HOSTNAME} || hostname();
   my $ssl;
   $ssl = 'ssl' if $Self->{auth}{smtpSSL} == 2;
   $ssl = 'starttls' if $Self->{auth}{smtpSSL} == 3;
   my $email = Email::Simple->new($rfc822);
   my $detail = {
-      helo => $ENV{jmaphost},
+      helo => $helo,
       host => $Self->{auth}{smtpHost},
       port => $Self->{auth}{smtpPort},
       ssl => $ssl,
