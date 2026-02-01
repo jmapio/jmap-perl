@@ -259,7 +259,7 @@ sub sync_jmailboxes {
           $Self->dmake('jmailboxes', {
             name => $name,
             jmailboxid => $id,
-            sortOrder => 4,
+            sortOrder => 10,
             parentId => $parentId,
           }, 'jnoncountsmodseq');
           $byname{$parentId}{$name} = $id;
@@ -1603,7 +1603,7 @@ sub create_mailboxes {
       $Self->dmake('jmailboxes', {
         name => $mailbox->{name},
         jmailboxid => $jmailboxid,
-        sortOrder => $mailbox->{sortOrder} // 4,
+        sortOrder => $mailbox->{sortOrder} // 10,
         parentId => $parentid,
       }, 'jnoncountsmodseq');
 
