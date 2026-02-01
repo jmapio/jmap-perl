@@ -10,6 +10,7 @@ use DBI;
 use DBI qw(:sql_types);
 use Carp qw(confess);
 
+use Sys::Hostname;
 use Data::UUID::LibUUID;
 use IO::LockedFile;
 use JSON::XS qw(decode_json);
@@ -374,8 +375,9 @@ sub create_messages {
     my $item = $args->{$cid};
     my $mailboxIds = delete $item->{mailboxIds};
     my $keywords = delete $item->{keywords};
+    my $hostname = $ENV{HOSTNAME} || hostname();
     $item->{msgdate} = time();
-    $item->{headers}{'Message-ID'} ||= "<" . new_uuid_string() . ".$item->{msgdate}\@$ENV{jmaphost}>";
+    $item->{headers}{'Message-ID'} ||= "<" . new_uuid_string() . ".$item->{msgdate}\@$hostname>";
     my $message = JMAP::EmailObject::make($item, sub { $Self->get_blob(@_) } );
     # XXX - let's just assume goodness for now - lots of error handling to add
     $todo{$cid} = [$message, $mailboxIds, $keywords];
