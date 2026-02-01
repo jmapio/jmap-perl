@@ -2022,6 +2022,8 @@ sub api_Email_import {
   my %created;
   my %notcreated;
 
+  my ($oldState, $newState);
+
   my $scoped_lock = $Self->{db}->begin_superlock();
 
   # make sure our DB is up to date
@@ -2035,13 +2037,13 @@ sub api_Email_import {
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
   return $Self->_transError(['error', {type => 'invalidArguments'}])
-    if (not $args->{messages} or ref($args->{messages}) ne 'HASH');
+    if (not $args->{emails} or ref($args->{emails}) ne 'HASH');
 
-  my $mailboxdata = $Self->dget('jmailboxes', { active => 1 });
+  my $mailboxdata = $Self->{db}->dget('jmailboxes', { active => 1 });
   my %validids = map { $_->{jmailboxid} => 1 } @$mailboxdata;
 
-  foreach my $id (keys %{$args->{messages}}) {
-    my $message = $args->{messages}{$id};
+  foreach my $id (keys %{$args->{emails}}) {
+    my $message = $args->{emails}{$id};
     # sanity check
     return $Self->_transError(['error', {type => 'invalidArguments'}])
       if (not $message->{mailboxIds} or ref($message->{mailboxIds}) ne 'HASH');
@@ -2050,19 +2052,20 @@ sub api_Email_import {
   }
 
   $Self->commit();
+  $oldState = "$user->{jstateEmail}";
 
   my %todo;
-  foreach my $id (keys %{$args->{messages}}) {
-    my $message = $args->{messages}{$id};
+  foreach my $id (keys %{$args->{emails}}) {
+    my $message = $args->{emails}{$id};
     my @ids = map { $Self->idmap($_) } keys %{$message->{mailboxIds}};
     if (grep { not $validids{$_} } @ids) {
       $notcreated{$id} = { type => 'invalidMailboxes' };
       next;
     }
 
-    my ($type, $file) = $Self->{db}->get_file($message->{blobId});
+    my ($type, $file) = $Self->{db}->get_blob($message->{blobId});
     unless ($file) {
-      $notcreated{$id} = { type => 'notFound' };
+      $notcreated{$id} = { type => 'notFound', description => "failed to find $message->{blobId}" };
       next;
     }
 
@@ -2085,11 +2088,20 @@ sub api_Email_import {
     };
   }
 
+  $Self->{db}->sync_imap();
+
+  $Self->begin();
+  $user = $Self->{db}->get_user();
+  $Self->commit();
+  $newState = "$user->{jstateEmail}";
+
   my @res;
   push @res, ['Email/import', {
     accountId => $accountid,
     created => \%created,
     notCreated => \%notcreated,
+    oldState => $oldState,
+    newState => $newState,
   }];
 
   return @res;
