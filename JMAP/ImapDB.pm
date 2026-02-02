@@ -1871,6 +1871,7 @@ sub destroy_mailboxes {
     foreach my $jid (sort keys %toremove) {
       my $ifolderid = $toremove{$jid};
       $Self->ddelete('ifolders', {ifolderid => $ifolderid});
+      $Self->ddelete('imessages', {ifolderid => $ifolderid});
       my $tocheck = $Self->dget('jmessagemap', {active => 1, jmailboxid => $jid}, 'active,msgid');
       $Self->dupdate('jmailboxes', {active => 0}, {jmailboxid => $jid});
       $Self->dupdate('jmessagemap', {active => 0}, {jmailboxid => $jid});
