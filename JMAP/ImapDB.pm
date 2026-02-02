@@ -1844,8 +1844,9 @@ sub destroy_mailboxes {
     my $children = $Self->dget('jmailboxes', { parentId => $jid, active => 1 }, 'jmailboxid');
     for my $child (@$children) {
       # OK if it's already being destroyed
-      next if grep { $child->{jmailboxes} eq $_ and not $notdestroyed{$_} } @$destroy;
-      $notdestroyed{$jid} = { type => 'mailboxHasChildren' };
+      next if grep { $child->{jmailboxid} eq $_ and not $notdestroyed{$_} } @$destroy;
+      $notdestroyed{$jid} = { type => 'mailboxHasChild' };
+      delete $namemap{$oldname};
     }
   }
 
@@ -1871,6 +1872,8 @@ sub destroy_mailboxes {
       my $ifolderid = $toremove{$jid};
       $Self->ddelete('ifolders', {ifolderid => $ifolderid});
       $Self->dupdate('jmailboxes', {active => 0}, {jmailboxid => $jid});
+      $Self->dupdate('jmessagemap', {active => 0}, {jmailboxid => $jid});
+      # XXX - do we need to zero out thes messages with no more references?
     }
     $Self->commit();
   }
