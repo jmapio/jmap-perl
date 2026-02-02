@@ -1835,6 +1835,15 @@ sub api_Email_get {
       if (_prop_wanted($args, 'bodyStructure')) {
         $item->{bodyStructure} = createBodyStructure($data->{bodyStructure}, $args->{bodyProperties});
       }
+      if (_prop_wanted($args, 'messageId')) {
+        $item->{messageId} = $data->{messageId};
+      }
+      if (_prop_wanted($args, 'references')) {
+        $item->{references} = $data->{references};
+      }
+      if (_prop_wanted($args, 'inReplyTo')) {
+        $item->{inReplyTo} = $data->{inReplyTo};
+      }
     }
   }
 
