@@ -1019,6 +1019,7 @@ sub api_Mailbox_changes {
     created => [map { "$_" } @created],
     updated => [map { "$_" } @updated],
     destroyed => [map { "$_" } @destroyed],
+    hasMoreChanges => JSON::false,
     changedProperties => $onlyCounts ? ["totalEmails", "unreadEmails", "totalThreads", "unreadThreads"] : JSON::null,
   }]);
 
@@ -1955,6 +1956,7 @@ sub api_Email_changes {
     created => [map { "$_" } @created],
     updated => [map { "$_" } @updated],
     destroyed => [map { "$_" } @destroyed],
+    hasMoreChanges => JSON::false,
   }];
 
   return @res;
@@ -2254,6 +2256,7 @@ sub api_Thread_changes {
     created => \@created,
     updated => \@updated,
     destroyed => \@destroyed,
+    hasMoreChanges => JSON::false,
   }];
 
   return @res;
@@ -2408,6 +2411,7 @@ sub api_Calendar_changes {
     created => [map { "$_" } @created],
     updated => [map { "$_" } @updated],
     destroyed => [map { "$_" } @destroyed],
+    hasMoreChanges => JSON::false,
   }]);
 
   return @res;
@@ -2590,6 +2594,7 @@ sub api_CalendarEvent_changes {
     created => [map { "$_" } @created],
     updated => [map { "$_" } @updated],
     destroyed => [map { "$_" } @destroyed],
+    hasMoreChanges => JSON::false,
   }];
 
   return @res;
@@ -2712,6 +2717,7 @@ sub api_Addressbook_changes {
     created => [map { "$_" } @created],
     updated => [map { "$_" } @updated],
     destroyed => [map { "$_" } @destroyed],
+    hasMoreChanges => JSON::false,
   }]);
 
   return @res;
@@ -2893,6 +2899,7 @@ sub api_Contact_changes {
     created => [map { "$_" } @created],
     updated => [map { "$_" } @updated],
     destroyed => [map { "$_" } @destroyed],
+    hasMoreChanges => JSON::false,
   }];
 
   return @res;
@@ -3009,6 +3016,7 @@ sub api_ContactGroup_changes {
     created => [map { "$_" } @created],
     updated => [map { "$_" } @updated],
     destroyed => [map { "$_" } @destroyed],
+    hasMoreChanges => JSON::false,
   }];
 
   return @res;
@@ -3539,6 +3547,7 @@ sub api_EmailSubmission_changes {
     created => \@created,
     updated => \@updated,
     destroyed => \@destroyed,
+    hasMoreChanges => JSON::false,
   }];
 
   return @res;
