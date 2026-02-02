@@ -2121,7 +2121,7 @@ sub api_Email_import {
     my $message = $args->{emails}{$id};
     my @ids = map { $Self->idmap($_) } keys %{$message->{mailboxIds}};
     if (grep { not $validids{$_} } @ids) {
-      $notcreated{$id} = { type => 'invalidMailboxes' };
+      $notcreated{$id} = { type => 'invalidProperties', properties => ['mailboxIds'] };
       next;
     }
 

@@ -367,6 +367,8 @@ sub create_messages {
 
   # XXX - get draft mailbox ID
   my $draftid = $Self->dgetfield('jmailboxes', { role => 'drafts' }, 'jmailboxid');
+  my $mailboxdata = $Self->{db}->dget('jmailboxes', { active => 1 });
+  my %validids = map { $_->{jmailboxid} => 1 } @$mailboxdata;
 
   $Self->commit();
 
@@ -386,6 +388,10 @@ sub create_messages {
   foreach my $cid (keys %todo) {
     my ($message, $mailboxIds, $keywords, $date) = @{$todo{$cid}};
     my @mailboxes = map { $idmap->($_) } keys %$mailboxIds;
+    if (grep { not $validids{$_} } @mailboxes) {
+      $notCreated{$cid} = { type => 'invalidProperties', properties => ['mailboxIds'] };
+      next;
+    }
     my ($msgid, $thrid) = $Self->import_message($message, \@mailboxes, $keywords, $date);
     $created{$cid} = {
       id => $msgid,
