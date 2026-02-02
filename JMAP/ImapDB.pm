@@ -96,7 +96,7 @@ sub access_token {
   my $data = $Self->dgetone('iserver');
   $Self->commit();
 
-  return [$data->{imapHost}, $data->{username}, $data->{password}];
+  return [$data->{imapHost}, $data->{username}, $data->{password}, $data->{imapPort}, $data->{imapSSL}];
 }
 
 sub access_data {

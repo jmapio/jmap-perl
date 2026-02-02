@@ -29,13 +29,13 @@ sub new {
 sub access_token {
   my $Self = shift;
   $Self->begin();
-  my $server = $Self->dgetone('iserver', {}, 'imapHost,username,password');
+  my $server = $Self->dgetone('iserver');
   $Self->commit();
 
   my $O = JMAP::Sync::Gmail::O();
   my $data = $O->refresh($server->{password});
 
-  return [$server->{imapHost}, $server->{username}, $data->{access_token}];
+  return [$server->{imapHost}, $server->{username}, $data->{access_token}, $server->{imapPort}, $server->{imapSSL}];
 }
 
 1;
