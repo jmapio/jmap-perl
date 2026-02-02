@@ -57,20 +57,20 @@ sub idler {
         host => 'imap.gmail.com',
         user => $data->[1],
         token => $data->[2],
-        port => 993,
-        ssl => 1,
+        port => $data->[3],
+        ssl => ($data->[4] > 1),
       ) : $data->[0] eq 'imap.aol.com' ? AnyEvent::Gmail->new(
         host => 'imap.aol.com',
         user => $data->[1],
         token => $data->[2],
-        port => 993,
-        ssl => 1,
+        port => $data->[3],
+        ssl => ($data->[4] > 1),
       ) : AnyEvent::IMAP->new(
         host => $data->[0],
         user => $data->[1],
         pass => $data->[2],
-        port => 993,
-        ssl => 1,
+        port => $data->[3],
+        ssl => ($data->[4] > 1),
       );
 
       $imap->reg_cb(
