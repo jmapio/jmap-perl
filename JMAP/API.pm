@@ -1726,7 +1726,7 @@ sub api_Email_get {
   foreach my $msgid (map { $Self->idmap($_) } @{$args->{ids}}) {
     next if $seenids{$msgid};
     $seenids{$msgid} = 1;
-    my $data = $Self->{db}->dgetone('jmessages', { msgid => $msgid });
+    my $data = $Self->{db}->dgetone('jmessages', { msgid => $msgid, active => 1 });
     unless ($data) {
       $missingids{$msgid} = 1;
       next;
