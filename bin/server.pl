@@ -809,7 +809,7 @@ sub do_signup {
   my $path = $uri->path();
 
   my %opts;
-  foreach my $key (qw(username password imapHost imapPort imapSSL smtpHost smtpPort smtpSSL caldavURL carddavURL force)) {
+  foreach my $key (qw(username password imapHost imapPort imapSSL smtpHost smtpPort smtpSSL caldavURL carddavURL force noResolve)) {
     $opts{$key} = $req->parm($key);
   }
 

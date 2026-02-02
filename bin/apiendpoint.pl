@@ -431,7 +431,7 @@ sub handle_signup {
     $force = 1;
   }
 
-  else {
+  elsif (not $detail->{noResolve}) {
     my $Resolver = Net::DNS::Resolver->new;
     my $domain = $detail->{username};
     $domain =~ s/.*\@//;
