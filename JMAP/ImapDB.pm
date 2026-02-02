@@ -1024,6 +1024,7 @@ sub import_message {
   my $rfc822 = shift;
   my $mailboxIds = shift;
   my $keywords = shift || {};
+  my $internaldate = shift;
 
   $Self->begin();
   my $folderdata = $Self->dget('ifolders');
@@ -1044,7 +1045,6 @@ sub import_message {
   push @flags, "\\Seen" if delete $flags{'$seen'};
   push @flags, sort keys %flags;
 
-  my $internaldate = time(); # XXX - allow setting?
   my $date = Date::Format::time2str('%e-%b-%Y %T %z', $internaldate);
 
   my $appendres = $Self->backend_cmd('imap_append', $imapname, "(@flags)", $date, $rfc822);

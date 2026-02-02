@@ -12,6 +12,7 @@ use JSON::XS;
 use Data::Dumper;
 use Time::HiRes qw(gettimeofday tv_interval);
 use JMAP::EmailObject;
+use Date::Parse;
 
 my $json = JSON::XS->new->utf8->canonical();
 
@@ -2135,7 +2136,9 @@ sub api_Email_import {
       next;
     }
 
-    my ($msgid, $thrid, $size) = eval { $Self->{db}->import_message($file, \@ids, $message->{keywords}) };
+    my $date = $message->{receivedAt} ? str2time($message->{receivedAt}) : time();
+
+    my ($msgid, $thrid, $size) = eval { $Self->{db}->import_message($file, \@ids, $message->{keywords}, $date) };
     if ($@) {
       $notcreated{$id} = { type => 'internalError', description => $@ };
       next;

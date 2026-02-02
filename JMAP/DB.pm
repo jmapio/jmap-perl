@@ -376,17 +376,17 @@ sub create_messages {
     my $mailboxIds = delete $item->{mailboxIds};
     my $keywords = delete $item->{keywords};
     my $hostname = $ENV{HOSTNAME} || hostname();
-    $item->{msgdate} = time();
+    $item->{msgdate} = $item->{receivedAt} ? str2time($item->{receivedAt}) : time();
     $item->{headers}{'Message-ID'} ||= "<" . new_uuid_string() . ".$item->{msgdate}\@$hostname>";
     my $message = JMAP::EmailObject::make($item, sub { $Self->get_blob(@_) } );
     # XXX - let's just assume goodness for now - lots of error handling to add
-    $todo{$cid} = [$message, $mailboxIds, $keywords];
+    $todo{$cid} = [$message, $mailboxIds, $keywords, $item->{msgdate}];
   }
 
   foreach my $cid (keys %todo) {
-    my ($message, $mailboxIds, $keywords) = @{$todo{$cid}};
+    my ($message, $mailboxIds, $keywords, $date) = @{$todo{$cid}};
     my @mailboxes = map { $idmap->($_) } keys %$mailboxIds;
-    my ($msgid, $thrid) = $Self->import_message($message, \@mailboxes, $keywords);
+    my ($msgid, $thrid) = $Self->import_message($message, \@mailboxes, $keywords, $date);
     $created{$cid} = {
       id => $msgid,
       threadId => $thrid,
