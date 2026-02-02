@@ -1003,6 +1003,7 @@ sub api_Mailbox_changes {
       }
       else {
         push @created, $item->{jmailboxid};
+        $onlyCounts = 0;
       }
     }
     else {
@@ -1012,6 +1013,7 @@ sub api_Mailbox_changes {
       # otherwise never seen
     }
   }
+  $onlyCounts = 0 unless @updated;
 
   my @res = (['Mailbox/changes', {
     accountId => $accountid,
@@ -1021,7 +1023,7 @@ sub api_Mailbox_changes {
     updated => [map { "$_" } @updated],
     destroyed => [map { "$_" } @destroyed],
     hasMoreChanges => JSON::false,
-    changedProperties => $onlyCounts ? ["totalEmails", "unreadEmails", "totalThreads", "unreadThreads"] : JSON::null,
+    updatedProperties => $onlyCounts ? ["totalEmails", "unreadEmails", "totalThreads", "unreadThreads"] : JSON::null,
   }]);
 
   return @res;

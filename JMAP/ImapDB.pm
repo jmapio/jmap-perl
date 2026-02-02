@@ -240,17 +240,17 @@ sub sync_jmailboxes {
     shift @bits if $bits[0] eq '[Gmail]'; # we special case this GMail magic
     next unless @bits; # also skip the magic '[Gmail]' top-level
     my $role = $ROLE_MAP{lc $folder->{label}};
-    my $id = '';
-    my $parentId = '';
+    my $id = undef;
+    my $parentId = undef;
     my $name;
     my $sortOrder = 3;
     $sortOrder = 2 if $role;
     $sortOrder = 1 if ($role||'') eq 'inbox';
     while (my $item = shift @bits) {
-      $seen{$id} = 1 if $id;
+      $seen{$id//''} = 1 if $id;
       $name = $item;
       $parentId = $id;
-      $id = $byname{$parentId}{$name};
+      $id = $byname{$parentId//''}{$name};
       unless ($id) {
         if (@bits) {
           # need to create intermediate folder ...
@@ -262,7 +262,7 @@ sub sync_jmailboxes {
             sortOrder => 10,
             parentId => $parentId,
           }, 'jnoncountsmodseq');
-          $byname{$parentId}{$name} = $id;
+          $byname{$parentId//''}{$name} = $id;
         }
       }
     }
@@ -307,7 +307,7 @@ sub sync_jmailboxes {
         $roletoid{$role} = $id if $role;
       }
     }
-    $seen{$id} = 1;
+    $seen{$id//''} = 1;
     $Self->dmaybeupdate('ifolders', {jmailboxid => $id}, {ifolderid => $folder->{ifolderid}});
   }
 
@@ -1685,7 +1685,13 @@ sub update_mailboxes {
     my $mailbox = $update->{$jid};
     my %bad;
 
-    my $data = $Self->dgetone('jmailboxes', {jmailboxid => $jid});
+    my $data = $Self->dgetone('jmailboxes', {jmailboxid => $jid, active => 1});
+    my $old = $Self->dgetone('ifolders', { jmailboxid => $jid }, 'imapname,ifolderid');
+    unless ($data and $old) {
+      $notchanged{$jid} = { type => 'notFound' };
+      next;
+    }
+
     my %immutable = (
       id => $jid,
       totalEmails => $data->{totalEmails},
@@ -1727,22 +1733,22 @@ sub update_mailboxes {
     my $encname = eval { encode('IMAP-UTF-7', $data->{name}) };
     unless (defined $encname) {
       $bad{name} = 1;
+      $encname = ''; # quiet warnings
     }
-
-    my $old = $Self->dgetone('ifolders', { jmailboxid => $jid }, 'imapname,ifolderid');
 
     my $parentid = $data->{parentId};
     if (defined $data->{parentId}) {
       $parentid = $idmap->($parentid);
       my $parent = $Self->dgetone('ifolders', { jmailboxid => $parentid }, 'imapname,sep');
+      warn "PARENT: " . Dumper($parent, $parentid, $data);
       if ($parent) {
-        $namemap{$old->{imapname}} = [$parent->{imapname} . $parent->{sep} . $encname, $jid, $old->{ifolderid}] unless %bad;
+        $namemap{$old->{imapname}} = [$parent->{imapname} . $parent->{sep} . $encname, $jid, $old->{ifolderid}];
       }
       else {
         $bad{parentId} = 1;
       }
     }
-    elsif (not %bad) {
+    else {
       my $prefix = $Self->dgetfield('iserver', {}, 'imapPrefix');
       $prefix = '' unless $prefix;
       $namemap{$old->{imapname}} = [$prefix . $encname, $jid, $old->{ifolderid}];
@@ -1758,6 +1764,7 @@ sub update_mailboxes {
   my %toupdate;
   foreach my $oldname (sort keys %namemap) {
     my ($imapname, $jid, $ifolderid) = @{$namemap{$oldname}};
+    next if $notchanged{$jid};
 
     if ($imapname eq $oldname) {
       # no change, yay
