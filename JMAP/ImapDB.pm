@@ -1834,7 +1834,18 @@ sub destroy_mailboxes {
       $namemap{$old->{imapname}} = [$jid, $old->{ifolderid}];
     }
     else {
-      $notdestroyed{$jid} = {type => 'invalidProperties', description => "parent folder not found"};
+      $notdestroyed{$jid} = {type => 'notFound'};
+    }
+  }
+
+  # look for children not being deleted
+  foreach my $oldname (reverse sort keys %namemap) {
+    my ($jid, $ifolderid) = @{$namemap{$oldname}};
+    my $children = $Self->dget('jmailboxes', { parentId => $jid, active => 1 }, 'jmailboxid');
+    for my $child (@$children) {
+      # OK if it's already being destroyed
+      next if grep { $child->{jmailboxes} eq $_ and not $notdestroyed{$_} } @$destroy;
+      $notdestroyed{$jid} = { type => 'mailboxHasChildren' };
     }
   }
 
