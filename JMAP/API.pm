@@ -1818,13 +1818,60 @@ sub api_Email_get {
       elsif ($args->{properties}) {
         my %wanted;
         foreach my $prop (@{$args->{properties}}) {
-          next unless $prop =~ m/^headers\.(.*)/;
-          $item->{headers} ||= {}; # avoid zero matched headers bug
-          $wanted{lc $1} = 1;
-        }
-        foreach my $key (keys %{$data->{headers}}) {
-          next unless $wanted{lc $key};
-          $item->{headers}{lc $key} = $data->{headers}{$key};
+          next unless $prop =~ m/^header:([^:]+)(.*)/;
+          my $headername = lc $1;
+          my $rest = $2;
+          my @values = map { $_->{Value} } grep { lc $_->{Name} eq $headername } @{$data->{headers}||[]};
+          unless (@values) {
+            $item->{$prop} = undef;
+            next;
+          }
+          if ($rest =~ s/:all$//) {
+            if ($rest eq ':asText') {
+              $item->{$prop} = [map { JMAP::EmailObject::asText($_) } @values ];
+            }
+            elsif ($rest eq ':asAddresses') {
+              $item->{$prop} = [map { JMAP::EmailObject::asAddresses($_) } @values ];
+            }
+            elsif ($rest eq ':asGroupedAddresses') {
+              $item->{$prop} = [map { JMAP::EmailObject::asGroupedAddresses($_) } @values ];
+            }
+            elsif ($rest eq ':asMessageIds') {
+              $item->{$prop} = [map { JMAP::EmailObject::asMessageIds($_) } @values ];
+            }
+            elsif ($rest eq ':asDate') {
+              $item->{$prop} = [map { JMAP::EmailObject::asDate($_) } @values ];
+            }
+            elsif ($rest eq ':asURLs') {
+              $item->{$prop} = [map { JMAP::EmailObject::asURLs($_) } @values ];
+            }
+            else {  # :asRaw or nothing
+              $item->{$prop} = \@values;
+            }
+          }
+          else {
+            if ($rest eq ':asText') {
+              $item->{$prop} = JMAP::EmailObject::asText($values[-1]);
+            }
+            elsif ($rest eq ':asAddresses') {
+              $item->{$prop} = JMAP::EmailObject::asAddresses($values[-1]);
+            }
+            elsif ($rest eq ':asGroupedAddresses') {
+              $item->{$prop} = JMAP::EmailObject::asGroupedAddresses($values[-1]);
+            }
+            elsif ($rest eq ':asMessageIds') {
+              $item->{$prop} = JMAP::EmailObject::asMessageIds($values[-1]);
+            }
+            elsif ($rest eq ':asDate') {
+              $item->{$prop} = JMAP::EmailObject::asDate($values[-1]);
+            }
+            elsif ($rest eq ':asURLs') {
+              $item->{$prop} = JMAP::EmailObject::asURLs($values[-1]);
+            }
+            else {  # :asRaw or nothing
+              $item->{$prop} = $values[-1];
+            }
+          }
         }
       }
       if (_prop_wanted($args, 'attachments')) {
