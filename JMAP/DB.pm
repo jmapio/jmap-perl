@@ -571,6 +571,8 @@ sub get_file {
 
   $Self->begin();
   my $data = $Self->dgetone('jfiles', { jfileid => $id }, 'type,content');
+  use Data::Dumper;
+  warn "GET FILE $id: " . Dumper($data);
   $Self->commit();
 
   return unless $data;

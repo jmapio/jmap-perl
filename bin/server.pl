@@ -31,7 +31,7 @@ use Template;
 my $BASEURL = $ENV{BASEURL} || 'https://146.190.52.243';
 
 my $TT   = Template->new(INCLUDE_PATH => '/home/jmap/jmap-perl/htdocs');
-my $json = JSON::XS->new->utf8->canonical();
+my $json = JSON::XS->new->utf8->canonical->pretty();
 
 sub mkerr {
   my $req = shift;
@@ -415,7 +415,9 @@ sub do_jmap {
 
   send_backend_request($accountid, 'jmap', $request, sub {
     my $res = shift;
+    warn $json->encode($request);
     my $html = $json->encode($res);
+    warn $html;
     $req->respond (['200', 'ok', {
       'Content-Type' => 'application/json',
       'Access-Control-Allow-Origin' => '*',
