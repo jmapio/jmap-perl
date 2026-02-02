@@ -776,6 +776,8 @@ sub dgetone {
   $Self->log('debug', $sql, _dbl(map { $filter->{$_} } @lkeys));
 
   my $data = $Self->dbh->selectall_arrayref($sql, {Slice => {}}, @vals);
+  use Data::Dumper;
+  $Self->log('debug', Dumper($data));
   return $data->[0];
 }
 
