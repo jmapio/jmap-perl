@@ -367,7 +367,7 @@ sub create_messages {
 
   # XXX - get draft mailbox ID
   my $draftid = $Self->dgetfield('jmailboxes', { role => 'drafts' }, 'jmailboxid');
-  my $mailboxdata = $Self->{db}->dget('jmailboxes', { active => 1 });
+  my $mailboxdata = $Self->dget('jmailboxes', { active => 1 });
   my %validids = map { $_->{jmailboxid} => 1 } @$mailboxdata;
 
   $Self->commit();

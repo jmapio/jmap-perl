@@ -2183,7 +2183,7 @@ sub api_Email_import {
 
 sub _good_keywords {
   my $val = shift;
-  return unless ref($val) eq 'hash';
+  return unless ref($val) eq 'HASH';
   for my $key (sort keys %$val) {
     # bad characters
     warn "CHECKING KEY $key";
