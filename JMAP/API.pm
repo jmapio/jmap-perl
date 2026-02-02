@@ -2104,21 +2104,33 @@ sub api_Email_import {
   my $mailboxdata = $Self->{db}->dget('jmailboxes', { active => 1 });
   my %validids = map { $_->{jmailboxid} => 1 } @$mailboxdata;
 
-  foreach my $id (keys %{$args->{emails}}) {
-    my $message = $args->{emails}{$id};
-    # sanity check
-    return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['mailboxIds']}])
-      if (not $message->{mailboxIds} or ref($message->{mailboxIds}) ne 'HASH');
-    return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['blobId']}])
-      if (not $message->{blobId});
-  }
-
   $Self->commit();
   $oldState = "$user->{jstateEmail}";
 
   my %todo;
   foreach my $id (keys %{$args->{emails}}) {
     my $message = $args->{emails}{$id};
+    if (not $message->{mailboxIds} or ref($message->{mailboxIds}) ne 'HASH') {
+      $notcreated{$id} = { type => 'invalidProperties', properties => ['mailboxIds'] };
+      next;
+    }
+
+    unless (defined $message->{blobId} and $message->{blobId} ne '') {
+      $notcreated{$id} = { type => 'invalidProperties', properties => ['blobId'] };
+      next;
+    }
+
+    my $date = $message->{receivedAt} ? str2time($message->{receivedAt}) : time();
+    unless (defined $date) {
+      $notcreated{$id} = { type => 'invalidProperties', properties => ['receivedAt'] };
+      next;
+    }
+
+    if (exists $message->{keywords} and not _good_keywords($message->{keywords})) {
+      $notcreated{$id} = { type => 'invalidProperties', properties => ['keywords'] };
+      next;
+    }
+
     my @ids = map { $Self->idmap($_) } keys %{$message->{mailboxIds}};
     if (grep { not $validids{$_} } @ids) {
       $notcreated{$id} = { type => 'invalidProperties', properties => ['mailboxIds'] };
@@ -2132,11 +2144,9 @@ sub api_Email_import {
     }
 
     unless ($type eq 'message/rfc822') {
-      $notcreated{$id} = { type => 'notFound', description => "incorrect type $type for $message->{blobId}" };
+      $notcreated{$id} = { type => 'invalidProperties', properties => ['blobId'] };
       next;
     }
-
-    my $date = $message->{receivedAt} ? str2time($message->{receivedAt}) : time();
 
     my ($msgid, $thrid, $size) = eval { $Self->{db}->import_message($file, \@ids, $message->{keywords}, $date) };
     if ($@) {
@@ -2169,6 +2179,21 @@ sub api_Email_import {
   }];
 
   return @res;
+}
+
+sub _good_keywords {
+  my $val = shift;
+  return unless ref($val) eq 'hash';
+  for my $key (sort keys %$val) {
+    # bad characters
+    return if $key =~ m/[\x00-\x20\(\)\{\}\%\*\"\\]/;
+    # false or null
+    return unless $val->{$key};
+    # not a boolean
+    return unless JSON::is_bool($val->{$key});
+    # must be true!  This one is OK
+  }
+  return 1;
 }
 
 sub api_Email_copy {
