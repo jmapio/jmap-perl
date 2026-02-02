@@ -2110,41 +2110,41 @@ sub api_Email_import {
   my %todo;
   foreach my $id (keys %{$args->{emails}}) {
     my $message = $args->{emails}{$id};
-    if (not $message->{mailboxIds} or ref($message->{mailboxIds}) ne 'HASH') {
-      $notcreated{$id} = { type => 'invalidProperties', properties => ['mailboxIds'] };
-      next;
-    }
-
-    unless (defined $message->{blobId} and $message->{blobId} ne '') {
-      $notcreated{$id} = { type => 'invalidProperties', properties => ['blobId'] };
-      next;
-    }
+    my @ids;
+    my @bad;
 
     my $date = $message->{receivedAt} ? str2time($message->{receivedAt}) : time();
     unless (defined $date) {
-      $notcreated{$id} = { type => 'invalidProperties', properties => ['receivedAt'] };
-      next;
+      push @bad, 'receivedAt';
     }
 
     if (exists $message->{keywords} and not _good_keywords($message->{keywords})) {
-      $notcreated{$id} = { type => 'invalidProperties', properties => ['keywords'] };
-      next;
+      push @bad, 'keywords';
     }
 
-    my @ids = map { $Self->idmap($_) } keys %{$message->{mailboxIds}};
-    if (grep { not $validids{$_} } @ids) {
-      $notcreated{$id} = { type => 'invalidProperties', properties => ['mailboxIds'] };
-      next;
+    if (not $message->{mailboxIds} or ref($message->{mailboxIds}) ne 'HASH') {
+      push @bad, 'mailboxIds';
+    }
+    else {
+      @ids = map { $Self->idmap($_) } keys %{$message->{mailboxIds}};
+      if (grep { not $validids{$_} } @ids) {
+        push @bad, 'mailboxIds';
+      }
     }
 
-    my ($type, $file) = $Self->{db}->get_blob($message->{blobId});
-    unless ($file) {
-      $notcreated{$id} = { type => 'invalidProperties', properties => ['blobId'] };
-      next;
+    my ($type, $file);
+    if (not defined $message->{blobId} or $message->{blobId} eq '') {
+      push @bad, 'blobId';
+    }
+    else {
+      ($type, $file) = $Self->{db}->get_blob($message->{blobId});
+      unless ($file and $type eq 'message/rfc822') {
+        push @bad, 'blobId';
+      }
     }
 
-    unless ($type eq 'message/rfc822') {
-      $notcreated{$id} = { type => 'invalidProperties', properties => ['blobId'] };
+    if (@bad) {
+      $notcreated{$id} = { type => 'invalidProperties', properties => [sort @bad] };
       next;
     }
 
@@ -2186,10 +2186,12 @@ sub _good_keywords {
   return unless ref($val) eq 'hash';
   for my $key (sort keys %$val) {
     # bad characters
+    warn "CHECKING KEY $key";
     return if $key =~ m/[\x00-\x20\(\)\{\}\%\*\"\\]/;
     # false or null
     return unless $val->{$key};
     # not a boolean
+    warn "CHECKING BOOL";
     return unless JSON::is_bool($val->{$key});
     # must be true!  This one is OK
   }
