@@ -1530,19 +1530,19 @@ sub create_mailboxes {
   my %fromthis;
   while (my $cid = shift @list) {
     my $mailbox = $new->{$cid};
-    my @bad;
+    my %bad;
 
     unless (defined $mailbox->{name} and $mailbox->{name} ne '') {
-      push @bad, 'name';
+      $bad{name} = 1;
     }
 
     my $encname = eval { encode('IMAP-UTF-7', $mailbox->{name}) };
     unless (defined $encname) {
-      push @bad, 'name';
+      $bad{name} = 1;
     }
 
     my %immutable = (
-      id => $cid,
+      id => $cid,  # XXX: allows re-creating with old ID, which allows UNDO but is tricky
       totalEmails => 0,
       unreadEmails => 0,
       totalThreads => 0,
@@ -1560,9 +1560,21 @@ sub create_mailboxes {
       },
     );
 
-    for my $key (keys %$mailbox) {
-      next unless exists $immutable{$key};
-      push @bad, $key unless deepeq($mailbox->{$key}, $immutable{$key});
+    for my $key (keys %immutable) {
+      next unless exists $mailbox->{$key};
+      if (ref($immutable{$key}) eq 'HASH') {
+        if (ref($mailbox->{$key}) eq 'HASH') {
+          for my $sub (keys %{$mailbox->{$key}}) {
+            $bad{"$key/$sub"} = 1 if $mailbox->{$key}{$sub} ne $immutable{$key}{$sub};
+          }
+        }
+        else {
+          $bad{$key} = 1;
+        }
+      }
+      elsif (ref($mailbox->{$key}) or $immutable{$key} ne $mailbox->{$key}) {
+        $bad{$key} = 1;
+      }
     }
 
     my $parentid = $idmap->($mailbox->{parentId});
@@ -1570,7 +1582,7 @@ sub create_mailboxes {
     if ($parentid) {
       if ($parentid =~ m/^\#(.*)/) {
         if ($todo{$1}) {
-          $todo{$cid} = [$todo{$1}[0] . $todo{$1}[1] . $encname, $todo{$1}[1]] unless @bad;
+          $todo{$cid} = [$todo{$1}[0] . $todo{$1}[1] . $encname, $todo{$1}[1]] unless %bad;
         }
         else {
           # try later
@@ -1579,17 +1591,17 @@ sub create_mailboxes {
         }
       }
       else {
-        my $parent = $Self->dgetone('ifolders', { jmailboxid => $mailbox->{parentId} }, 'imapname,sep');
+        my $parent = $Self->dgetone('ifolders', { jmailboxid => $parentid }, 'imapname,sep');
         # XXX - check "mailCreateChild" on parent mailbox
         if ($parent) {
-          $todo{$cid} = [$parent->{imapname} . $parent->{sep} . $encname, $parent->{sep}] unless @bad;
+          $todo{$cid} = [$parent->{imapname} . $parent->{sep} . $encname, $parent->{sep}] unless %bad;
         }
         else {
-          push @bad, 'parentId';
+          $bad{parentId} = 1;
         }
       }
     }
-    elsif (not @bad) {
+    elsif (not %bad) {
       # will probably get INBOX - but meh, close enough.  Sync will fix it if needed.  Better
       # would be to use namespace to lift it when we lift the prefix
       # DBNOTE: this one is a little weird with use or ORDER BY
@@ -1599,8 +1611,8 @@ sub create_mailboxes {
       $todo{$cid} = [$prefix . $encname, $sep];
     }
 
-    if (@bad) {
-      $notcreated{$cid} = { type => "invalidProperties", properties => [sort @bad] };
+    if (%bad) {
+      $notcreated{$cid} = { type => "invalidProperties", properties => [sort keys %bad] };
     }
   }
 
@@ -1671,7 +1683,7 @@ sub update_mailboxes {
   # XXX - reorder the crap out of this if renaming multiple mailboxes due to deep rename
   foreach my $jid (keys %$update) {
     my $mailbox = $update->{$jid};
-    my @bad;
+    my %bad;
 
     my $data = $Self->dgetone('jmailboxes', {jmailboxid => $jid});
     my %immutable = (
@@ -1681,13 +1693,31 @@ sub update_mailboxes {
       totalThreads => $data->{totalThreads},
       unreadThreads => $data->{unreadThreads},
       myRights => {
-        map { $_ => JSON::true } grep { $data->{$_} } qw(mayAddItems mayCreateChild mayDelete mayReadItems mayRemoveItems mayRename maySetKeywords maySetSeen maySubmit),
+        map { $_ => JSON::true() } grep { $data->{$_} } qw(mayAddItems mayCreateChild mayDelete mayReadItems mayRemoveItems mayRename maySetKeywords maySetSeen maySubmit),
       },
     );
-    foreach my $key (keys %$mailbox) {
-      if (exists $immutable{$key}) {
-        warn "DEEPEQ TEST " . Dumper($immutable{$key}, $mailbox->{$key});
-        push @bad, $key unless deepeq($immutable{$key}, $mailbox->{$key});
+
+    for my $key (keys %immutable) {
+      next unless exists $mailbox->{$key};
+      if (ref($immutable{$key}) eq 'HASH') {
+        if (ref($mailbox->{$key}) eq 'HASH') {
+          for my $sub (keys %{$mailbox->{$key}}) {
+            $bad{"$key/$sub"} = 1 if $mailbox->{$key}{$sub} ne $immutable{$key}{$sub};
+          }
+        }
+        else {
+          $bad{$key} = 1;
+        }
+      }
+      elsif (ref($mailbox->{$key}) or $immutable{$key} ne $mailbox->{$key}) {
+        $bad{$key} = 1;
+      }
+    }
+
+    for my $key (keys %$mailbox) {
+      if ($key =~ m{(.*)/(.*)}) {
+        # XXX - multi-depth
+        $data->{$1}{$2} = $mailbox->{$key};
       }
       else {
         $data->{$key} = $mailbox->{$key};
@@ -1696,30 +1726,30 @@ sub update_mailboxes {
 
     my $encname = eval { encode('IMAP-UTF-7', $data->{name}) };
     unless (defined $encname) {
-      push @bad, 'name';
+      $bad{name} = 1;
     }
 
     my $old = $Self->dgetone('ifolders', { jmailboxid => $jid }, 'imapname,ifolderid');
 
-    my $parentId = $data->{parentId};
+    my $parentid = $data->{parentId};
     if (defined $data->{parentId}) {
-      $parentId = $idmap->($parentId);
-      my $parent = $Self->dgetone('ifolders', { jmailboxid => $parentId }, 'imapname,sep');
+      $parentid = $idmap->($parentid);
+      my $parent = $Self->dgetone('ifolders', { jmailboxid => $parentid }, 'imapname,sep');
       if ($parent) {
-        $namemap{$old->{imapname}} = [$parent->{imapname} . $parent->{sep} . $encname, $jid, $old->{ifolderid}] unless @bad;
+        $namemap{$old->{imapname}} = [$parent->{imapname} . $parent->{sep} . $encname, $jid, $old->{ifolderid}] unless %bad;
       }
       else {
-        push @bad, 'parentId';
+        $bad{parentId} = 1;
       }
     }
-    elsif (not @bad) {
+    elsif (not %bad) {
       my $prefix = $Self->dgetfield('iserver', {}, 'imapPrefix');
       $prefix = '' unless $prefix;
       $namemap{$old->{imapname}} = [$prefix . $encname, $jid, $old->{ifolderid}];
     }
 
-    if (@bad) {
-      $notchanged{$jid} = { type => 'invalidProperties', properties => [sort @bad] };
+    if (%bad) {
+      $notchanged{$jid} = { type => 'invalidProperties', properties => [sort keys %bad] };
     }
   }
 
