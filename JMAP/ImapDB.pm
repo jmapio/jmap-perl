@@ -1871,9 +1871,19 @@ sub destroy_mailboxes {
     foreach my $jid (sort keys %toremove) {
       my $ifolderid = $toremove{$jid};
       $Self->ddelete('ifolders', {ifolderid => $ifolderid});
+      my $tocheck = $Self->dget('jmessagemap', {active => 1, jmailboxid => $jid}, 'active,msgid');
       $Self->dupdate('jmailboxes', {active => 0}, {jmailboxid => $jid});
       $Self->dupdate('jmessagemap', {active => 0}, {jmailboxid => $jid});
-      # XXX - do we need to zero out thes messages with no more references?
+      # item contains 'msgid' and 'active', precisely what we want to filter on
+      for my $item (@$tocheck) {
+        if ($Self->dgetone('jmessagemap', $item, 'msgid')) {
+          # there's other copies, don't nuke it
+          $Self->dupdate('jmessages', {}, $item);
+        }
+        else {
+          $Self->dupdate('jmessages', {active => 0}, $item);
+        }
+      }
     }
     $Self->commit();
   }
