@@ -779,7 +779,7 @@ sub api_Mailbox_get {
     my %rec = (
       id => "$item->{jmailboxid}",
       name => Encode::decode_utf8($item->{name}),
-      parentId => ($item->{parentId} ? "$item->{parentId}" : undef),
+      parentId => $item->{parentId},
       role => $item->{role},
       sortOrder => $item->{sortOrder}||0,
       (map { $_ => $item->{$_} || 0 } qw(totalEmails unreadEmails totalThreads unreadThreads)),

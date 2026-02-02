@@ -303,7 +303,7 @@ sub sync_jmailboxes {
       else {
         $id = $folder->{uniqueid} || new_uuid_string();
         $Self->dmake('jmailboxes', {role => $role, jmailboxid => $id, %details}, 'jnoncountsmodseq');
-        $byname{$parentId}{$name} = $id;
+        $byname{$parentId//''}{$name} = $id;
         $roletoid{$role} = $id if $role;
       }
     }
@@ -1626,8 +1626,8 @@ sub create_mailboxes {
     if ($res->[1] eq 'ok') {
       my $mailbox = $new->{$cid};
       my $status = $res->[2];
-      my $parentid = $idmap->($mailbox->{parentId}) // '';
-      if ($parentid =~ m/^\#(.*)/) {
+      my $parentid = $idmap->($mailbox->{parentId});
+      if (defined $parentid and $parentid =~ m/^\#(.*)/) {
         if ($createmap{$1}) {
           $parentid = $createmap{$1}{id};
         }
@@ -1796,7 +1796,7 @@ sub update_mailboxes {
       $changes{sortOrder} = $change->{sortOrder} if exists $change->{sortOrder};
       $changes{role} = $change->{role} if exists $change->{role};
       $changes{isSubscribed} = $change->{isSubscribed} ? 1 : 0 if exists $change->{isSubscribed};
-      $Self->dmaybedirty('jmailboxes', \%changes, {jmailboxid => $jid});
+      $Self->dmaybedirty('jmailboxes', \%changes, {jmailboxid => $jid}, 'jnoncountsmodseq');
     }
     $Self->commit();
   }
@@ -1880,7 +1880,7 @@ sub destroy_mailboxes {
       $Self->ddelete('ifolders', {ifolderid => $ifolderid});
       $Self->ddelete('imessages', {ifolderid => $ifolderid});
       my $tocheck = $Self->dget('jmessagemap', {active => 1, jmailboxid => $jid}, 'active,msgid');
-      $Self->dupdate('jmailboxes', {active => 0}, {jmailboxid => $jid});
+      $Self->dmaybedirty('jmailboxes', {active => 0}, {jmailboxid => $jid});
       $Self->dupdate('jmessagemap', {active => 0}, {jmailboxid => $jid});
       # item contains 'msgid' and 'active', precisely what we want to filter on
       for my $item (@$tocheck) {
