@@ -992,7 +992,7 @@ sub api_Mailbox_changes {
 
   my @created;
   my @updated;
-  my @removed;
+  my @destroyed;
   my $onlyCounts = 1;
   foreach my $item (@$data) {
     if ($item->{active}) {
@@ -1006,7 +1006,7 @@ sub api_Mailbox_changes {
     }
     else {
       if ($item->{jcreated} <= $sinceState) {
-        push @removed, $item->{jmailboxid};
+        push @destroyed, $item->{jmailboxid};
       }
       # otherwise never seen
     }
@@ -1018,7 +1018,7 @@ sub api_Mailbox_changes {
     newState => $newState,
     created => [map { "$_" } @created],
     updated => [map { "$_" } @updated],
-    removed => [map { "$_" } @removed],
+    destroyed => [map { "$_" } @destroyed],
     changedProperties => $onlyCounts ? ["totalEmails", "unreadEmails", "totalThreads", "unreadThreads"] : JSON::null,
   }]);
 
@@ -1526,7 +1526,7 @@ sub api_Email_queryChanges {
   my $total = 0;
   my $changes = 0;
   my @added;
-  my @removed;
+  my @destroyed;
   # just do two entire logic paths, it's different enough to make it easier to write twice
   if ($args->{collapseThreads}) {
     # exemplar - only these messages are in the result set we're building
@@ -1557,12 +1557,12 @@ sub api_Email_queryChanges {
         # if it's in AND it's the exemplar, it's been added
         if ($isin and $exemplar{$item->{thrid}} eq $item->{msgid}) {
           push @added, {id => "$item->{msgid}", index => $total-1};
-          push @removed, "$item->{msgid}";
+          push @destroyed, "$item->{msgid}";
           $changes++;
         }
-        # otherwise it's removed
+        # otherwise it's destroyed
         else {
-          push @removed, "$item->{msgid}";
+          push @destroyed, "$item->{msgid}";
           $changes++;
         }
       }
@@ -1570,7 +1570,7 @@ sub api_Email_queryChanges {
       elsif ($isin) {
         # remove it unless it's also the current exemplar
         if ($exemplar{$item->{thrid}} ne $item->{msgid}) {
-          push @removed, "$item->{msgid}";
+          push @destroyed, "$item->{msgid}";
           $changes++;
         }
         # and we're done
@@ -1605,11 +1605,11 @@ sub api_Email_queryChanges {
       if ($changed) {
         if ($isin) {
           push @added, {id => "$item->{msgid}", index => $total-1};
-          push @removed, "$item->{msgid}";
+          push @destroyed, "$item->{msgid}";
           $changes++;
         }
         else {
-          push @removed, "$item->{msgid}";
+          push @destroyed, "$item->{msgid}";
           $changes++;
         }
       }
@@ -1633,7 +1633,7 @@ sub api_Email_queryChanges {
     collapseThreads => $args->{collapseThreads},
     oldQueryState => "$args->{sinceQueryState}",
     newQueryState => $newQueryState,
-    removed => \@removed,
+    destroyed => \@destroyed,
     added => \@added,
     total => $total,
   }];
@@ -1929,7 +1929,7 @@ sub api_Email_changes {
 
   my @created;
   my @updated;
-  my @removed;
+  my @destroyed;
 
   foreach my $row (@$data) {
     if ($row->{active}) {
@@ -1941,7 +1941,7 @@ sub api_Email_changes {
     }
     else {
       if ($row->{jcreated} <= $args->{sinceState}) {
-        push @removed, $row->{msgid};
+        push @destroyed, $row->{msgid};
       }
       # otherwise never seen
     }
@@ -1954,7 +1954,7 @@ sub api_Email_changes {
     newState => $newState,
     created => [map { "$_" } @created],
     updated => [map { "$_" } @updated],
-    removed => [map { "$_" } @removed],
+    destroyed => [map { "$_" } @destroyed],
   }];
 
   return @res;
@@ -2228,7 +2228,7 @@ sub api_Thread_changes {
 
   my @created;
   my @updated;
-  my @removed;
+  my @destroyed;
   foreach my $row (@$data) {
     if ($row->{active}) {
       if ($row->{jcreated} <= $args->{sinceState}) {
@@ -2240,7 +2240,7 @@ sub api_Thread_changes {
     }
     else {
       if ($row->{jcreated} <= $args->{sinceState}) {
-        push @removed, $row->{thrid};
+        push @destroyed, $row->{thrid};
       }
       # otherwise never seen
     }
@@ -2253,7 +2253,7 @@ sub api_Thread_changes {
     newState => $newState,
     created => \@created,
     updated => \@updated,
-    removed => \@removed,
+    destroyed => \@destroyed,
   }];
 
   return @res;
@@ -2381,7 +2381,7 @@ sub api_Calendar_changes {
 
   my @created;
   my @updated;
-  my @removed;
+  my @destroyed;
   foreach my $item (@$data) {
     if ($item->{jmodseq} > $sinceState) {
       if ($item->{active}) {
@@ -2394,7 +2394,7 @@ sub api_Calendar_changes {
       }
       else {
         if ($item->{jcreated} <= $sinceState) {
-          push @removed, $item->{jcalendarid};
+          push @destroyed, $item->{jcalendarid};
         }
         # otherwise never seen
       }
@@ -2407,7 +2407,7 @@ sub api_Calendar_changes {
     newState => $newState,
     created => [map { "$_" } @created],
     updated => [map { "$_" } @updated],
-    removed => [map { "$_" } @removed],
+    destroyed => [map { "$_" } @destroyed],
   }]);
 
   return @res;
@@ -2563,7 +2563,7 @@ sub api_CalendarEvent_changes {
 
   my @created;
   my @updated;
-  my @removed;
+  my @destroyed;
 
   foreach my $row (@$data) {
     if ($row->{active}) {
@@ -2576,7 +2576,7 @@ sub api_CalendarEvent_changes {
     }
     else {
       if ($row->{jcreated} <= $args->{sinceState}) {
-        push @removed, $row->{eventuid};
+        push @destroyed, $row->{eventuid};
       }
       # otherwise never seen
     }
@@ -2589,7 +2589,7 @@ sub api_CalendarEvent_changes {
     newState => $newState,
     created => [map { "$_" } @created],
     updated => [map { "$_" } @updated],
-    removed => [map { "$_" } @removed],
+    destroyed => [map { "$_" } @destroyed],
   }];
 
   return @res;
@@ -2685,7 +2685,7 @@ sub api_Addressbook_changes {
 
   my @created;
   my @updated;
-  my @removed;
+  my @destroyed;
   foreach my $item (@$data) {
     if ($item->{jmodseq} > $sinceState) {
       if ($item->{active}) {
@@ -2698,7 +2698,7 @@ sub api_Addressbook_changes {
       }
       else {
         if ($item->{jcreated} <= $sinceState) {
-          push @removed, $item->{jaddressbookid};
+          push @destroyed, $item->{jaddressbookid};
         }
         # otherwise never seen
       }
@@ -2711,7 +2711,7 @@ sub api_Addressbook_changes {
     newState => $newState,
     created => [map { "$_" } @created],
     updated => [map { "$_" } @updated],
-    removed => [map { "$_" } @removed],
+    destroyed => [map { "$_" } @destroyed],
   }]);
 
   return @res;
@@ -2866,7 +2866,7 @@ sub api_Contact_changes {
 
   my @created;
   my @updated;
-  my @removed;
+  my @destroyed;
 
   foreach my $row (@$data) {
     if ($row->{active}) {
@@ -2879,7 +2879,7 @@ sub api_Contact_changes {
     }
     else {
       if ($row->{jcreated} <= $args->{sinceState}) {
-        push @removed, $row->{contactuid};
+        push @destroyed, $row->{contactuid};
       }
       # otherwise never seen
     }
@@ -2892,7 +2892,7 @@ sub api_Contact_changes {
     newState => $newState,
     created => [map { "$_" } @created],
     updated => [map { "$_" } @updated],
-    removed => [map { "$_" } @removed],
+    destroyed => [map { "$_" } @destroyed],
   }];
 
   return @res;
@@ -2981,7 +2981,7 @@ sub api_ContactGroup_changes {
 
   my @created;
   my @updated;
-  my @removed;
+  my @destroyed;
 
   foreach my $row (@$data) {
     if ($row->{active}) {
@@ -2994,7 +2994,7 @@ sub api_ContactGroup_changes {
     }
     else {
       if ($row->{jcreated} <= $args->{sinceState}) {
-        push @removed, $row->{groupuid};
+        push @destroyed, $row->{groupuid};
       }
       # otherwise never seen
     }
@@ -3008,7 +3008,7 @@ sub api_ContactGroup_changes {
     newState => $newState,
     created => [map { "$_" } @created],
     updated => [map { "$_" } @updated],
-    removed => [map { "$_" } @removed],
+    destroyed => [map { "$_" } @destroyed],
   }];
 
   return @res;
@@ -3388,7 +3388,7 @@ sub api_EmailSubmission_queryChanges {
   $Self->commit();
 
   my @added;
-  my @removed;
+  my @destroyed;
 
   my $index = 0;
   foreach my $item (@$data) {
@@ -3397,7 +3397,7 @@ sub api_EmailSubmission_queryChanges {
       next;
     }
     # changed
-    push @removed, "$item->[0]";
+    push @destroyed, "$item->[0]";
     next unless $item->[5];
     push @added, { id => "$item->[0]", index => $index };
     $index++;
@@ -3410,7 +3410,7 @@ sub api_EmailSubmission_queryChanges {
     oldQueryState => $sinceQueryState,
     newQueryState => $newQueryState,
     total => $total,
-    removed => \@removed,
+    destroyed => \@destroyed,
     added => \@added,
   }];
 }
@@ -3510,7 +3510,7 @@ sub api_EmailSubmission_changes {
 
   my @created;
   my @updated;
-  my @removed;
+  my @destroyed;
 
   foreach my $item (@$data) {
     # changed
@@ -3524,7 +3524,7 @@ sub api_EmailSubmission_changes {
     }
     else {
       if ($item->[6] <= $args->{sinceState}) {
-        push @removed, "$item->[0]";
+        push @destroyed, "$item->[0]";
       }
       # otherwise never seen
     }
@@ -3538,7 +3538,7 @@ sub api_EmailSubmission_changes {
     hasMoreChanges => $hasMore ? $JSON::true : $JSON::false,
     created => \@created,
     updated => \@updated,
-    removed => \@removed,
+    destroyed => \@destroyed,
   }];
 
   return @res;
