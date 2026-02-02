@@ -102,6 +102,9 @@ sub bodystructure {
     my $body = $eml->body();
     my $disposition = $eml->header('Content-Disposition') || 'none';
     $disposition =~ s/;.*//;
+    if ($type =~ m{^text/}) {
+      $values->{$partno}{value} = $body;
+    }
     return {
       partId => $partno,
       blobId => "m-$id-$partno",
@@ -114,9 +117,6 @@ sub bodystructure {
       location => asText($eml->header('Content-Location')),
       disposition => $disposition,
     };
-    if ($type =~ m{^text/}) {
-      $values->{$partno}{value} = $body;
-    }
   }
 }
 

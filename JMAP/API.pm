@@ -1717,7 +1717,7 @@ sub api_Email_get {
   my %missingids;
   my @list;
   my $need_content = 0;
-  foreach my $prop (qw(hasAttachment headers preview textBody htmlBody attachments attachedEmails)) {
+  foreach my $prop (qw(hasAttachment headers preview textBody htmlBody attachments attachedEmails bodyValues messageId inReplyTo references)) {
     $need_content = 1 if _prop_wanted($args, $prop);
   }
   $need_content = 1 if ($args->{properties} and grep { m/^headers\./ } @{$args->{properties}});
@@ -1882,6 +1882,9 @@ sub api_Email_get {
       }
       if (_prop_wanted($args, 'bodyStructure')) {
         $item->{bodyStructure} = createBodyStructure($data->{bodyStructure}, $args->{bodyProperties});
+      }
+      if (_prop_wanted($args, 'bodyValues')) {
+        $item->{bodyValues} = $data->{bodyValues};
       }
       if (_prop_wanted($args, 'messageId')) {
         $item->{messageId} = $data->{messageId};
