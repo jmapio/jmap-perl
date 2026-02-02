@@ -985,8 +985,15 @@ sub api_Mailbox_changes {
 
   my $data = $Self->{db}->dget('jmailboxes', { jmodseq => ['>', $sinceState] });
 
+  my $partial = 0;
   if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
-    return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
+    $data = [ sort { $a->{jmodseq} <=> $b->{jmodseq} } @$data ];
+    my $next = $data->[$args->{maxChanges}];
+    pop @$data while (@$data and $data->[-1]{jmodseq} == $next->{jmodseq});
+    # couldn't find a set of changes that would work!
+    return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]) unless @$data;
+    $newState = "$data->[-1]{jmodseq}";
+    $partial = 1;
   }
 
   $Self->commit();
@@ -1022,7 +1029,7 @@ sub api_Mailbox_changes {
     created => [map { "$_" } @created],
     updated => [map { "$_" } @updated],
     destroyed => [map { "$_" } @destroyed],
-    hasMoreChanges => JSON::false,
+    hasMoreChanges => $partial ? JSON::true : JSON::false,
     updatedProperties => $onlyCounts ? ["totalEmails", "unreadEmails", "totalThreads", "unreadThreads"] : JSON::null,
   }]);
 
