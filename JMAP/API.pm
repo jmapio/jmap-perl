@@ -2127,7 +2127,7 @@ sub api_Email_import {
 
     my ($type, $file) = $Self->{db}->get_blob($message->{blobId});
     unless ($file) {
-      $notcreated{$id} = { type => 'notFound', description => "failed to find $message->{blobId}" };
+      $notcreated{$id} = { type => 'invalidProperties', properties => ['blobId'] };
       next;
     }
 
@@ -2235,7 +2235,7 @@ sub api_Thread_changes {
 
   my $newState = "$user->{jstateThread}";
 
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceState']}])
     if not $args->{sinceState};
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
@@ -2389,7 +2389,7 @@ sub api_Calendar_changes {
   my $newState = "$user->{jstateCalendar}";
 
   my $sinceState = $args->{sinceState};
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['position']}])
     if not $args->{sinceState};
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $sinceState <= $user->{jdeletedmodseq});
@@ -2479,7 +2479,7 @@ sub api_CalendarEvent_query {
   my $newQueryState = "$user->{jstateCalendarEvent}";
 
   my $start = $args->{position} || 0;
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['position']}])
     if $start < 0;
 
   my $data = $Self->{db}->dget('jevents', { active => 1 }, 'eventuid,jcalendarid');
@@ -2520,7 +2520,7 @@ sub api_CalendarEvent_get {
 
   my $newState = "$user->{jstateCalendarEvent}";
 
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['ids']}])
     unless $args->{ids};
   #properties: String[] A list of properties to fetch for each message.
 
@@ -2572,7 +2572,7 @@ sub api_CalendarEvent_changes {
 
   my $newState = "$user->{jstateCalendarEvent}";
 
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceState']}])
     if not $args->{sinceState};
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
@@ -2695,7 +2695,7 @@ sub api_Addressbook_changes {
   my $newState = "$user->{jhighestmodseq}";
 
   my $sinceState = $args->{sinceState};
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceState']}])
     if not $args->{sinceState};
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $sinceState <= $user->{jdeletedmodseq});
@@ -2785,7 +2785,7 @@ sub api_Contact_query {
   my $newQueryState = "$user->{jstateContact}";
 
   my $start = $args->{position} || 0;
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['position']}])
     if $start < 0;
 
   my $data = $Self->{db}->dget('jcontacts', { active => 1 }, 'contactuid,jaddressbookid');
@@ -2878,7 +2878,7 @@ sub api_Contact_changes {
 
   my $newState = "$user->{jstateContact}";
 
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceState']}])
     if not $args->{sinceState};
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
@@ -2993,7 +2993,7 @@ sub api_ContactGroup_changes {
 
   my $newState = "$user->{jstateContactGroup}";
 
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceState']}])
     if not $args->{sinceState};
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
@@ -3346,11 +3346,11 @@ sub api_EmailSubmission_query {
   my $newQueryState = "$user->{jstateEmailSubmission}";
 
   my $start = $args->{position} || 0;
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['position']}])
     if $start < 0;
 
   my $sort = _mk_submission_sort($args->{sort});
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sort']}])
     unless $sort;
 
   my $data = $dbh->selectall_arrayref("SELECT jsubid,thrid,msgid,sendat FROM jsubmission WHERE active = 1 ORDER BY $sort");
@@ -3397,7 +3397,7 @@ sub api_EmailSubmission_queryChanges {
   my $newQueryState = "$user->{jstateEmailSubmission}";
   my $sinceQueryState = $args->{sinceQueryState};
 
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceQueryState']}])
     if not $args->{sinceQueryState};
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newQueryState => $newQueryState}])
     if ($user->{jdeletedmodseq} and $sinceQueryState <= $user->{jdeletedmodseq});
@@ -3405,7 +3405,7 @@ sub api_EmailSubmission_queryChanges {
   #properties: String[] A list of properties to fetch for each message.
 
   my $sort = _mk_submission_sort($args->{sort});
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sort']}])
     unless $sort;
 
   my $data = $dbh->selectall_arrayref("SELECT jsubid,thrid,msgid,sendat,jmodseq,active FROM jsubmission ORDER BY $sort");
@@ -3457,7 +3457,7 @@ sub api_EmailSubmission_get {
 
   my $newState = "$user->{jstateEmailSubmission}";
 
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['ids']}])
     unless $args->{ids};
   #properties: String[] A list of properties to fetch for each message.
 
@@ -3520,7 +3520,7 @@ sub api_EmailSubmission_changes {
   my $newState = "$user->{jstateEmailSubmission}";
 
   my $sinceState = $args->{sinceState};
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceState']}])
     if not $args->{sinceState};
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $sinceState <= $user->{jdeletedmodseq});
@@ -3746,7 +3746,7 @@ sub api_StorageNode_query {
   my $data = [grep { dummy_node_matches($args->{filter}, $_) } dummy_storage_node_data()];
 
   my $start = $args->{position} || 0;
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['position']}])
     if $start < 0;
 
   my $end = $args->{limit} ? $start + $args->{limit} - 1 : $#$data;
