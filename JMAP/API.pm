@@ -2176,39 +2176,6 @@ sub api_Email_copy {
   return $Self->_transError(['error', {type => 'notImplemented'}]);
 }
 
-sub reportEmails {
-  my $Self = shift;
-  my $args = shift;
-
-  $Self->begin();
-
-  my $user = $Self->{db}->get_user();
-  my $accountid = $Self->{db}->accountid();
-  return $Self->_transError(['error', {type => 'accountNotFound'}])
-    if ($args->{accountId} and $args->{accountId} ne $accountid);
-
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
-    if not $args->{emailIds};
-
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
-    if not exists $args->{asSpam};
-
-  $Self->commit();
-
-  my @ids = map { $Self->idmap($_) } @{$args->{emailIds}};
-  my ($reported, $notfound) = $Self->report_messages(\@ids, $args->{asSpam});
-
-  my @res;
-  push @res, ['messagesReported', {
-    accountId => $Self->{db}->accountid(),
-    asSpam => $args->{asSpam},
-    reported => $reported,
-    notFound => $notfound,
-  }];
-
-  return @res;
-}
-
 sub api_Thread_get {
   my $Self = shift;
   my $args = shift;
