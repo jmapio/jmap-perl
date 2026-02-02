@@ -1036,6 +1036,7 @@ sub import_message {
   # store to the first named folder - we can use labels on gmail to add to other folders later.
   my ($id, @others) = @$mailboxIds;
   my $imapname = $jmailmap{$id}{imapname};
+  my $uidvalidity = $jmailmap{$id}{uidvalidity};
 
   my %flags = %$keywords;
   my @flags;
@@ -1059,7 +1060,15 @@ sub import_message {
     $ifolderid = $am->{ifolderid};
   }
   else {
-    my $fdata = $jmailmap{$mailboxIds->[0]};
+    # copy to all the other folders too and sync them
+    for my $folder (@others) {
+      my $newfolder = $jmailmap{$folder}{imapname};
+      my $fdata = $jmailmap{$folder};
+      $Self->backend_cmd('imap_copy', $imapname, $uidvalidity, $uid, $newfolder);
+      $Self->do_folder($fdata->{ifolderid}, $fdata->{label});
+    }
+    # sync this folder
+    my $fdata = $jmailmap{$id};
     $Self->do_folder($fdata->{ifolderid}, $fdata->{label});
     $ifolderid = $fdata->{ifolderid};
   }
