@@ -1530,16 +1530,39 @@ sub create_mailboxes {
   my %fromthis;
   while (my $cid = shift @list) {
     my $mailbox = $new->{$cid};
+    my @bad;
 
     unless (defined $mailbox->{name} and $mailbox->{name} ne '') {
-      $notcreated{$cid} = {type => 'invalidProperties', description => "name is required"};
-      next;
+      push @bad, 'name';
     }
 
     my $encname = eval { encode('IMAP-UTF-7', $mailbox->{name}) };
     unless (defined $encname) {
-      $notcreated{$cid} = {type => 'invalidProperties', description => "name can't be used with IMAP proxy"};
-      next;
+      push @bad, 'name';
+    }
+
+    my %immutable = (
+      id => $cid,
+      totalEmails => 0,
+      unreadEmails => 0,
+      totalThreads => 0,
+      unreadThreads => 0,
+      myRights => {
+        mayAddItems => JSON::true,
+        mayCreateChild => JSON::true,
+        mayDelete => JSON::true,
+        mayReadItems => JSON::true,
+        mayRemoveItems => JSON::true,
+        mayRename => JSON::true,
+        maySetKeywords => JSON::true,
+        maySetSeen => JSON::true,
+        maySubmit => JSON::true,
+      },
+    );
+
+    for my $key (keys %$mailbox) {
+      next unless exists $immutable{$key};
+      push @bad, $key unless deepeq($mailbox->{$key}, $immutable{$key});
     }
 
     my $parentid = $idmap->($mailbox->{parentId});
@@ -1547,7 +1570,7 @@ sub create_mailboxes {
     if ($parentid) {
       if ($parentid =~ m/^\#(.*)/) {
         if ($todo{$1}) {
-          $todo{$cid} = [$todo{$1}[0] . $todo{$1}[1] . $encname, $todo{$1}[1]];
+          $todo{$cid} = [$todo{$1}[0] . $todo{$1}[1] . $encname, $todo{$1}[1]] unless @bad;
         }
         else {
           # try later
@@ -1558,14 +1581,15 @@ sub create_mailboxes {
       else {
         my $parent = $Self->dgetone('ifolders', { jmailboxid => $mailbox->{parentId} }, 'imapname,sep');
         # XXX - check "mailCreateChild" on parent mailbox
-        unless ($parent) {
-          $notcreated{$cid} = {type => 'notFound', description => "parent folder not found"};
-          next;
+        if ($parent) {
+          $todo{$cid} = [$parent->{imapname} . $parent->{sep} . $encname, $parent->{sep}] unless @bad;
         }
-        $todo{$cid} = [$parent->{imapname} . $parent->{sep} . $encname, $parent->{sep}];
+        else {
+          push @bad, 'parentId';
+        }
       }
     }
-    else {
+    elsif (not @bad) {
       # will probably get INBOX - but meh, close enough.  Sync will fix it if needed.  Better
       # would be to use namespace to lift it when we lift the prefix
       # DBNOTE: this one is a little weird with use or ORDER BY
@@ -1573,6 +1597,10 @@ sub create_mailboxes {
       my $prefix = $Self->dgetfield('iserver', {}, 'imapPrefix');
       $prefix = '' unless defined $prefix;
       $todo{$cid} = [$prefix . $encname, $sep];
+    }
+
+    if (@bad) {
+      $notcreated{$cid} = { type => "invalidProperties", properties => [sort @bad] };
     }
   }
 
@@ -1643,40 +1671,55 @@ sub update_mailboxes {
   # XXX - reorder the crap out of this if renaming multiple mailboxes due to deep rename
   foreach my $jid (keys %$update) {
     my $mailbox = $update->{$jid};
-    unless (keys %$mailbox) {
-      $notchanged{$jid} = {type => 'invalidProperties', description => "nothing to change"};
-      next;
-    }
+    my @bad;
 
     my $data = $Self->dgetone('jmailboxes', {jmailboxid => $jid});
-    foreach my $key (keys %$mailbox) { # XXX - check if valid
-      $data->{$key} = $update->{$key};
-    }
-    my $parentId = $data->{parentId};
-    if ($data->{parentId}) {
-      $parentId = $idmap->($data->{parentId});
+    my %immutable = (
+      id => $jid,
+      totalEmails => $data->{totalEmails},
+      unreadEmails => $data->{unreadEmails},
+      totalThreads => $data->{totalThreads},
+      unreadThreads => $data->{unreadThreads},
+      myRights => {
+        map { $_ => JSON::true } grep { $data->{$_} } qw(mayAddItems mayCreateChild mayDelete mayReadItems mayRemoveItems mayRename maySetKeywords maySetSeen maySubmit),
+      },
+    );
+    foreach my $key (keys %$mailbox) {
+      if (exists $immutable{$key}) {
+        warn "DEEPEQ TEST " . Dumper($immutable{$key}, $mailbox->{$key});
+        push @bad, $key unless deepeq($immutable{$key}, $mailbox->{$key});
+      }
+      else {
+        $data->{$key} = $mailbox->{$key};
+      }
     }
 
     my $encname = eval { encode('IMAP-UTF-7', $data->{name}) };
     unless (defined $encname) {
-      $notchanged{$jid} = {type => 'invalidProperties', description => "name can't be used with IMAP proxy"};
-      next;
+      push @bad, 'name';
     }
 
     my $old = $Self->dgetone('ifolders', { jmailboxid => $jid }, 'imapname,ifolderid');
 
-    if ($parentId) {
+    my $parentId = $data->{parentId};
+    if (defined $data->{parentId}) {
+      $parentId = $idmap->($parentId);
       my $parent = $Self->dgetone('ifolders', { jmailboxid => $parentId }, 'imapname,sep');
-      unless ($parent) {
-        $notchanged{$jid} = {type => 'invalidProperties', description => "parent folder not found"};
-        next;
+      if ($parent) {
+        $namemap{$old->{imapname}} = [$parent->{imapname} . $parent->{sep} . $encname, $jid, $old->{ifolderid}] unless @bad;
       }
-      $namemap{$old->{imapname}} = [$parent->{imapname} . $parent->{sep} . $encname, $jid, $old->{ifolderid}];
+      else {
+        push @bad, 'parentId';
+      }
     }
-    else {
+    elsif (not @bad) {
       my $prefix = $Self->dgetfield('iserver', {}, 'imapPrefix');
       $prefix = '' unless $prefix;
       $namemap{$old->{imapname}} = [$prefix . $encname, $jid, $old->{ifolderid}];
+    }
+
+    if (@bad) {
+      $notchanged{$jid} = { type => 'invalidProperties', properties => [sort @bad] };
     }
   }
 
@@ -1704,20 +1747,35 @@ sub update_mailboxes {
 
   if (keys %toupdate) {
     $Self->begin();
-    foreach my $jid (keys %toupdate) {
+    foreach my $jid (keys %changed) {
       my ($imapname, $ifolderid) = @{$toupdate{$jid}};
+      if ($imapname) {
+        $Self->dmaybeupdate('ifolders', {imapname => $imapname}, {ifolderid => $ifolderid});
+      }
       my $change = $update->{$jid};
-      $Self->dmaybeupdate('ifolders', {imapname => $imapname}, {ifolderid => $ifolderid});
       my %changes;
       $changes{name} = $change->{name} if exists $change->{name};
-      $changes{parentId} = $change->{parentId} if exists $change->{parentId};
+      $changes{parentId} = $idmap->($change->{parentId}) if exists $change->{parentId};
       $changes{sortOrder} = $change->{sortOrder} if exists $change->{sortOrder};
+      $changes{role} = $change->{role} if exists $change->{role};
+      $changes{isSubscribed} = $change->{isSubscribed} ? 1 : 0 if exists $change->{isSubscribed};
       $Self->dmaybedirty('jmailboxes', \%changes, {jmailboxid => $jid});
     }
     $Self->commit();
   }
 
   return (\%changed, \%notchanged);
+}
+
+sub deepeq {
+  my ($x, $y) = @_;
+  # all the undefs
+  if (not defined $x or not defined $y) {
+    return 1 if (not defined $x and not defined $y);
+    return 0;
+  }
+  # json encoding
+  return $json->encode([$x]) eq $json->encode([$y]);
 }
 
 sub destroy_mailboxes {
