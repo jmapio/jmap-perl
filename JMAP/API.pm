@@ -1980,10 +1980,17 @@ sub api_Email_changes {
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
 
-  my $data = $Self->{db}->dget('jmessages', { jmodseq => ['>', $args->{sinceState}] }, 'msgid,active,jcreated');
+  my $data = $Self->{db}->dget('jmessages', { jmodseq => ['>', $args->{sinceState}] }, 'msgid,active,jcreated,jmodseq');
 
+  my $partial = 0;
   if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
-    return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
+    $data = [ sort { $a->{jmodseq} <=> $b->{jmodseq} } @$data ];
+    my $next = $data->[$args->{maxChanges}];
+    pop @$data while (@$data and $data->[-1]{jmodseq} == $next->{jmodseq});
+    # couldn't find a set of changes that would work!
+    return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]) unless @$data;
+    $newState = "$data->[-1]{jmodseq}";
+    $partial = 1;
   }
 
   $Self->commit();
@@ -2016,7 +2023,7 @@ sub api_Email_changes {
     created => [map { "$_" } @created],
     updated => [map { "$_" } @updated],
     destroyed => [map { "$_" } @destroyed],
-    hasMoreChanges => JSON::false,
+    hasMoreChanges => $partial ? JSON::true : JSON::false,
   }];
 
   return @res;
@@ -2276,10 +2283,18 @@ sub api_Thread_changes {
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
 
-  my $data = $Self->{db}->dget('jthreads', { jmodseq => ['>', $args->{sinceState}] }, 'thrid,active,jcreated');
+  my $data = $Self->{db}->dget('jthreads', { jmodseq => ['>', $args->{sinceState}] }, 'thrid,active,jcreated,jmodseq');
 
+  my $partial = 0;
   if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
-    return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
+    $data = [ sort { $a->{jmodseq} <=> $b->{jmodseq} } @$data ];
+    warn Dumper($data);
+    my $next = $data->[$args->{maxChanges}];
+    pop @$data while (@$data and $data->[-1]{jmodseq} == $next->{jmodseq});
+    # couldn't find a set of changes that would work!
+    return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]) unless @$data;
+    $newState = "$data->[-1]{jmodseq}";
+    $partial = 1;
   }
 
   $Self->commit();
@@ -2312,7 +2327,7 @@ sub api_Thread_changes {
     created => \@created,
     updated => \@updated,
     destroyed => \@destroyed,
-    hasMoreChanges => JSON::false,
+    hasMoreChanges => $partial ? JSON::true : JSON::false,
   }];
 
   return @res;
