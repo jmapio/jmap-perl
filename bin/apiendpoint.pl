@@ -415,6 +415,8 @@ sub handle_signup {
   $detail->{smtpPort} ||= 587;
   $detail->{smtpSSL} ||= 3;
 
+  my $resolve = not delete $detail->{noResolve};
+
   if ($detail->{username} =~ m/\@icloud\.com/) {
     $detail->{imapHost} = 'imap.mail.me.com';
     $detail->{smtpHost} = 'smtp.mail.me.com';
@@ -431,7 +433,7 @@ sub handle_signup {
     $force = 1;
   }
 
-  elsif (not $detail->{noResolve}) {
+  elsif ($resolve) {
     my $Resolver = Net::DNS::Resolver->new;
     my $domain = $detail->{username};
     $domain =~ s/.*\@//;
