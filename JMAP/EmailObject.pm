@@ -470,7 +470,7 @@ sub make {
   my @attachments = $args->{attachments} ? @{$args->{attachments}} : ();
 
   if (@attachments) {
-    my @attparts = map { makeatt($_, $getblob) } @attachments;
+    my @attparts = map { _makeatt($_, $getblob) } @attachments;
     # most complex case
     if ($htmlpart) {
       my $msgparts = Email::MIME->create(
