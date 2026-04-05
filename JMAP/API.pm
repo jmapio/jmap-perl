@@ -11,7 +11,7 @@ use HTML::GenerateUtil qw(escape_html);
 use JSON::XS;
 use Data::Dumper;
 use Time::HiRes qw(gettimeofday tv_interval);
-use JMAP::EmailObject;
+use Data::JSEmail;
 use Date::Parse;
 
 my $json = JSON::XS->new->utf8->canonical();
@@ -1769,7 +1769,7 @@ sub api_Email_get {
 
     foreach my $email (qw(to cc bcc from replyTo)) {
       if (_prop_wanted($args, $email)) {
-        $item->{$email} = JMAP::EmailObject::asAddresses($data->{"msg$email"});
+        $item->{$email} = Data::JSEmail::asAddresses($data->{"msg$email"});
       }
     }
 
@@ -1778,11 +1778,11 @@ sub api_Email_get {
     }
 
     if (_prop_wanted($args, 'sentAt')) {
-      $item->{sentAt} = JMAP::EmailObject::isodate($data->{msgdate});
+      $item->{sentAt} = Data::JSEmail::isodate($data->{msgdate});
     }
 
     if (_prop_wanted($args, 'receivedAt')) {
-      $item->{receivedAt} = JMAP::EmailObject::isodate($data->{internaldate});
+      $item->{receivedAt} = Data::JSEmail::isodate($data->{internaldate});
     }
 
     if (_prop_wanted($args, 'size')) {
@@ -1838,22 +1838,22 @@ sub api_Email_get {
           }
           if ($rest =~ s/:all$//) {
             if ($rest eq ':asText') {
-              $item->{$prop} = [map { JMAP::EmailObject::asText($_) } @values ];
+              $item->{$prop} = [map { Data::JSEmail::asText($_) } @values ];
             }
             elsif ($rest eq ':asAddresses') {
-              $item->{$prop} = [map { JMAP::EmailObject::asAddresses($_) } @values ];
+              $item->{$prop} = [map { Data::JSEmail::asAddresses($_) } @values ];
             }
             elsif ($rest eq ':asGroupedAddresses') {
-              $item->{$prop} = [map { JMAP::EmailObject::asGroupedAddresses($_) } @values ];
+              $item->{$prop} = [map { Data::JSEmail::asGroupedAddresses($_) } @values ];
             }
             elsif ($rest eq ':asMessageIds') {
-              $item->{$prop} = [map { JMAP::EmailObject::asMessageIds($_) } @values ];
+              $item->{$prop} = [map { Data::JSEmail::asMessageIds($_) } @values ];
             }
             elsif ($rest eq ':asDate') {
-              $item->{$prop} = [map { JMAP::EmailObject::asDate($_) } @values ];
+              $item->{$prop} = [map { Data::JSEmail::asDate($_) } @values ];
             }
             elsif ($rest eq ':asURLs') {
-              $item->{$prop} = [map { JMAP::EmailObject::asURLs($_) } @values ];
+              $item->{$prop} = [map { Data::JSEmail::asURLs($_) } @values ];
             }
             else {  # :asRaw or nothing
               $item->{$prop} = \@values;
@@ -1861,22 +1861,22 @@ sub api_Email_get {
           }
           else {
             if ($rest eq ':asText') {
-              $item->{$prop} = JMAP::EmailObject::asText($values[-1]);
+              $item->{$prop} = Data::JSEmail::asText($values[-1]);
             }
             elsif ($rest eq ':asAddresses') {
-              $item->{$prop} = JMAP::EmailObject::asAddresses($values[-1]);
+              $item->{$prop} = Data::JSEmail::asAddresses($values[-1]);
             }
             elsif ($rest eq ':asGroupedAddresses') {
-              $item->{$prop} = JMAP::EmailObject::asGroupedAddresses($values[-1]);
+              $item->{$prop} = Data::JSEmail::asGroupedAddresses($values[-1]);
             }
             elsif ($rest eq ':asMessageIds') {
-              $item->{$prop} = JMAP::EmailObject::asMessageIds($values[-1]);
+              $item->{$prop} = Data::JSEmail::asMessageIds($values[-1]);
             }
             elsif ($rest eq ':asDate') {
-              $item->{$prop} = JMAP::EmailObject::asDate($values[-1]);
+              $item->{$prop} = Data::JSEmail::asDate($values[-1]);
             }
             elsif ($rest eq ':asURLs') {
-              $item->{$prop} = JMAP::EmailObject::asURLs($values[-1]);
+              $item->{$prop} = Data::JSEmail::asURLs($values[-1]);
             }
             else {  # :asRaw or nothing
               $item->{$prop} = $values[-1];
@@ -3532,7 +3532,7 @@ sub api_EmailSubmission_get {
       emailId => $data->{msgid},
       threadId => $thrid,
       envelope => $data->{envelope} ? decode_json($data->{envelope}) : undef,
-      sendAt => JMAP::EmailObject::isodate($data->{sendat}),
+      sendAt => Data::JSEmail::isodate($data->{sendat}),
       undoStatus => $data->{status},
       deliveryStatus => undef,
       dsnBlobIds => [],

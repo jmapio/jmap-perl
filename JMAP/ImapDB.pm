@@ -18,6 +18,8 @@ use Encode::IMAPUTF7;
 use AnyEvent;
 use AnyEvent::Socket;
 use Date::Format;
+use Data::JSEmail;
+use Text::JSContact qw(vcard_to_jscontact jscontact_to_vcard);
 use Data::Dumper;
 use JMAP::Sync::Gmail;
 use JMAP::Sync::Standard;
@@ -1081,7 +1083,7 @@ sub import_message {
   die "FAILED TO GET BACK STORED MESSAGE FROM IMAP SERVER" unless $msgdata;
 
   # save us having to download it again - drop out of transaction so we don't wait on the parse
-  my $message = JMAP::EmailObject::parse($rfc822, $msgdata->{msgid});
+  my $message = Data::JSEmail::parse($rfc822, $msgdata->{msgid});
 
   $Self->begin();
   $Self->dinsert('jrawmessage', {
@@ -1457,7 +1459,7 @@ sub fill_messages {
       next unless $rfc822;
       my $msgid = $uhash->{$uid};
       next if $result{$msgid};
-      $result{$msgid} = $parsed{$msgid} = JMAP::EmailObject::parse($rfc822, $msgid);
+      $result{$msgid} = $parsed{$msgid} = Data::JSEmail::parse($rfc822, $msgid);
     }
   }
 
@@ -1548,15 +1550,15 @@ sub create_mailboxes {
       totalThreads => 0,
       unreadThreads => 0,
       myRights => {
-        mayAddItems => JSON::true,
-        mayCreateChild => JSON::true,
-        mayDelete => JSON::true,
-        mayReadItems => JSON::true,
-        mayRemoveItems => JSON::true,
-        mayRename => JSON::true,
-        maySetKeywords => JSON::true,
-        maySetSeen => JSON::true,
-        maySubmit => JSON::true,
+        mayAddItems => $JSON::true,
+        mayCreateChild => $JSON::true,
+        mayDelete => $JSON::true,
+        mayReadItems => $JSON::true,
+        mayRemoveItems => $JSON::true,
+        mayRename => $JSON::true,
+        maySetKeywords => $JSON::true,
+        maySetSeen => $JSON::true,
+        maySubmit => $JSON::true,
       },
     );
 
@@ -1699,7 +1701,7 @@ sub update_mailboxes {
       totalThreads => $data->{totalThreads},
       unreadThreads => $data->{unreadThreads},
       myRights => {
-        map { $_ => JSON::true() } grep { $data->{$_} } qw(mayAddItems mayCreateChild mayDelete mayReadItems mayRemoveItems mayRename maySetKeywords maySetSeen maySubmit),
+        map { $_ => $JSON::true } grep { $data->{$_} } qw(mayAddItems mayCreateChild mayDelete mayReadItems mayRemoveItems mayRename maySetKeywords maySetSeen maySubmit),
       },
     );
 
@@ -2021,15 +2023,16 @@ sub create_contact_groups {
     }
     my $name = $contact->{name} || 'Unknown';
 
-    my ($card) = Net::CardDAVTalk::VCard->new();
     my $uid = new_uuid_string();
-    $card->uid($uid);
-    $card->VKind('group');
-    $card->V('n', 'value', $name);
-    $card->VFN($name);
+    my $card = {
+      uid => "urn:uuid:$uid",
+      kind => 'group',
+      name => { full => $name },
+    };
     if (exists $contact->{contactIds}) {
-      my @ids = @{$contact->{contactIds}};
-      $card->VGroupContactUIDs(\@ids);
+      my %members;
+      $members{"urn:uuid:$_"} = $JSON::true for @{$contact->{contactIds}};
+      $card->{members} = \%members;
     }
 
     $todo{$cid} = [$href, $card];
@@ -2066,12 +2069,18 @@ sub update_contact_groups {
       $notchanged{$carduid} = {type => 'notFound', description => "No such card on server"};
       next;
     }
-    my ($card) = Net::CardDAVTalk::VCard->new_fromstring($old->{content});
-    $card->VKind('group');
-    $card->VFN($contact->{name}) if exists $contact->{name};
+    my $card = vcard_to_jscontact($old->{content});
+    unless ($card) {
+      $notchanged{$carduid} = {type => 'parseError', description => "Could not parse existing card"};
+      next;
+    }
+    $card->{kind} = 'group';
+    $card->{name}{full} = $contact->{name} if exists $contact->{name};
     if (exists $contact->{contactIds}) {
       my @ids = map { $idmap->($_) } @{$contact->{contactIds}};
-      $card->VGroupContactUIDs(\@ids);
+      my %members;
+      $members{"urn:uuid:$_"} = $JSON::true for @ids;
+      $card->{members} = \%members;
     }
 
     $todo{$old->{href}} = $card;
@@ -2117,6 +2126,111 @@ sub destroy_contact_groups {
   return (\@destroyed, \%notdestroyed);
 }
 
+# Bridge old custom contact format to JSContact
+sub _contact_to_jscontact {
+  my ($uid, $contact) = @_;
+
+  my $card = {
+    uid => "urn:uuid:$uid",
+    name => {},
+  };
+
+  # Name components
+  my @components;
+  push @components, { kind => 'surname', value => $contact->{lastName} } if $contact->{lastName};
+  push @components, { kind => 'given', value => $contact->{firstName} } if $contact->{firstName};
+  push @components, { kind => 'title', value => $contact->{prefix} } if $contact->{prefix};
+  $card->{name}{components} = \@components if @components;
+  $card->{name}{full} = join(' ', grep { $_ } $contact->{prefix}, $contact->{firstName}, $contact->{lastName}) || 'Unknown';
+
+  # Organization
+  if ($contact->{company}) {
+    my $org = { name => $contact->{company} };
+    $org->{units} = [{ name => $contact->{department} }] if $contact->{department};
+    $card->{organizations} = { o1 => $org };
+  }
+
+  # Emails
+  if ($contact->{emails} && @{$contact->{emails}}) {
+    my %emails;
+    my $n = 1;
+    for my $em (@{$contact->{emails}}) {
+      $emails{"e$n"} = { address => $em->{value} };
+      $n++;
+    }
+    $card->{emails} = \%emails;
+  }
+
+  # Phones
+  if ($contact->{phones} && @{$contact->{phones}}) {
+    my %phones;
+    my $n = 1;
+    for my $ph (@{$contact->{phones}}) {
+      $phones{"p$n"} = { number => $ph->{value} };
+      $n++;
+    }
+    $card->{phones} = \%phones;
+  }
+
+  # Nickname, birthday, notes
+  if ($contact->{nickname}) {
+    $card->{nicknames} = { n1 => { name => $contact->{nickname} } };
+  }
+  if ($contact->{birthday} && $contact->{birthday} ne '0000-00-00') {
+    $card->{anniversaries} = { b1 => { kind => 'birth', date => $contact->{birthday} } };
+  }
+  if ($contact->{notes}) {
+    $card->{notes} = { n1 => { note => $contact->{notes} } };
+  }
+
+  return $card;
+}
+
+sub _apply_contact_changes {
+  my ($card, $contact) = @_;
+
+  # Apply each field that exists in the change set
+  if (exists $contact->{lastName} || exists $contact->{firstName} || exists $contact->{prefix}) {
+    my @components;
+    my $ln = exists $contact->{lastName} ? $contact->{lastName} : _get_name_component($card, 'surname');
+    my $fn = exists $contact->{firstName} ? $contact->{firstName} : _get_name_component($card, 'given');
+    my $pf = exists $contact->{prefix} ? $contact->{prefix} : _get_name_component($card, 'title');
+    push @components, { kind => 'surname', value => $ln } if $ln;
+    push @components, { kind => 'given', value => $fn } if $fn;
+    push @components, { kind => 'title', value => $pf } if $pf;
+    $card->{name}{components} = \@components;
+    $card->{name}{full} = join(' ', grep { $_ } $pf, $fn, $ln) || 'Unknown';
+  }
+  if (exists $contact->{company}) {
+    my $org = $card->{organizations} ? (values %{$card->{organizations}})[0] : {};
+    $org->{name} = $contact->{company};
+    $org->{units} = [{ name => $contact->{department} }] if exists $contact->{department};
+    $card->{organizations} = { o1 => $org };
+  }
+  if (exists $contact->{nickname}) {
+    $card->{nicknames} = $contact->{nickname} ? { n1 => { name => $contact->{nickname} } } : undef;
+  }
+  if (exists $contact->{birthday}) {
+    if ($contact->{birthday} && $contact->{birthday} ne '0000-00-00') {
+      $card->{anniversaries} = { b1 => { kind => 'birth', date => $contact->{birthday} } };
+    } else {
+      delete $card->{anniversaries};
+    }
+  }
+  if (exists $contact->{notes}) {
+    $card->{notes} = $contact->{notes} ? { n1 => { note => $contact->{notes} } } : undef;
+  }
+}
+
+sub _get_name_component {
+  my ($card, $kind) = @_;
+  return '' unless $card->{name} && $card->{name}{components};
+  for my $c (@{$card->{name}{components}}) {
+    return $c->{value} if $c->{kind} eq $kind;
+  }
+  return '';
+}
+
 sub create_contacts {
   my $Self = shift;
   my $new = shift;
@@ -2135,24 +2249,8 @@ sub create_contacts {
       $notcreated{$cid} = {type => 'notFound', description => "No such addressbook on server"};
       next;
     }
-    my ($card) = Net::CardDAVTalk::VCard->new();
     my $uid = new_uuid_string();
-    $card->uid($uid);
-    $card->VLastName($contact->{lastName}) if exists $contact->{lastName};
-    $card->VFirstName($contact->{firstName}) if exists $contact->{firstName};
-    $card->VTitle($contact->{prefix}) if exists $contact->{prefix};
-
-    $card->VCompany($contact->{company}) if exists $contact->{company};
-    $card->VDepartment($contact->{department}) if exists $contact->{department};
-
-    $card->VEmails(@{$contact->{emails}}) if exists $contact->{emails};
-    $card->VAddresses(@{$contact->{addresses}}) if exists $contact->{addresses};
-    $card->VPhones(@{$contact->{phones}}) if exists $contact->{phones};
-    $card->VOnline(@{$contact->{online}}) if exists $contact->{online};
-
-    $card->VNickname($contact->{nickname}) if exists $contact->{nickname};
-    $card->VBirthday($contact->{birthday}) if exists $contact->{birthday};
-    $card->VNotes($contact->{notes}) if exists $contact->{notes};
+    my $card = _contact_to_jscontact($uid, $contact);
 
     $todo{$cid} = [$abookhref, $card];
 
@@ -2188,22 +2286,13 @@ sub update_contacts {
       $notchanged{$carduid} = {type => 'notFound', description => "No such card on server"};
       next;
     }
-    my ($card) = Net::CardDAVTalk::VCard->new_fromstring($old->{content});
-    $card->VLastName($contact->{lastName}) if exists $contact->{lastName};
-    $card->VFirstName($contact->{firstName}) if exists $contact->{firstName};
-    $card->VTitle($contact->{prefix}) if exists $contact->{prefix};
-
-    $card->VCompany($contact->{company}) if exists $contact->{company};
-    $card->VDepartment($contact->{department}) if exists $contact->{department};
-
-    $card->VEmails(@{$contact->{emails}}) if exists $contact->{emails};
-    $card->VAddresses(@{$contact->{addresses}}) if exists $contact->{addresses};
-    $card->VPhones(@{$contact->{phones}}) if exists $contact->{phones};
-    $card->VOnline(@{$contact->{online}}) if exists $contact->{online};
-
-    $card->VNickname($contact->{nickname}) if exists $contact->{nickname};
-    $card->VBirthday($contact->{birthday}) if exists $contact->{birthday};
-    $card->VNotes($contact->{notes}) if exists $contact->{notes};
+    my $card = vcard_to_jscontact($old->{content});
+    unless ($card) {
+      $notchanged{$carduid} = {type => 'parseError', description => "Could not parse existing card"};
+      next;
+    }
+    # Apply changes from the old custom format onto the JSContact card
+    _apply_contact_changes($card, $contact);
 
     $todo{$old->{href}} = $card;
     $changed{$carduid} = undef;

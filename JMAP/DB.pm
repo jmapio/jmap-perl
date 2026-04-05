@@ -26,10 +26,10 @@ use Encode::MIME::Header;
 use DateTime;
 use Date::Parse;
 use Net::CalDAVTalk;
-use Net::CardDAVTalk::VCard;
+use Text::JSContact qw(vcard_to_jscontact jscontact_to_vcard);
 use MIME::Base64 qw(encode_base64 decode_base64);
 use Scalar::Util qw(weaken);
-use JMAP::EmailObject;
+use Data::JSEmail;
 
 my $json = JSON::XS->new->utf8->canonical();
 
@@ -380,7 +380,7 @@ sub create_messages {
     my $hostname = $ENV{HOSTNAME} || hostname();
     $item->{msgdate} = $item->{receivedAt} ? str2time($item->{receivedAt}) : time();
     $item->{headers}{'Message-ID'} ||= "<" . new_uuid_string() . ".$item->{msgdate}\@$hostname>";
-    my $message = JMAP::EmailObject::make($item, sub { $Self->get_blob(@_) } );
+    my $message = Data::JSEmail::make($item, sub { $Self->get_blob(@_) } );
     # XXX - let's just assume goodness for now - lots of error handling to add
     $todo{$cid} = [$message, $mailboxIds, $keywords, $item->{msgdate}];
   }
@@ -465,45 +465,23 @@ sub delete_event {
 sub parse_card {
   my $Self = shift;
   my $raw = shift;
-  my ($card) = Net::CardDAVTalk::VCard->new_fromstring($raw);
+  my $card = vcard_to_jscontact($raw);
+  return undef unless $card;
 
-  my %hash;
-
-  $hash{uid} = $card->uid();
-  $hash{kind} = $card->VKind();
-
-  if ($hash{kind} eq 'contact') {
-    $hash{lastName} = $card->VLastName();
-    $hash{firstName} = $card->VFirstName();
-    $hash{prefix} = $card->VTitle();
-
-    $hash{company} = $card->VCompany();
-    $hash{department} = $card->VDepartment();
-
-    $hash{emails} = [$card->VEmails()];
-    $hash{addresses} = [$card->VAddresses()];
-    $hash{phones} = [$card->VPhones()];
-    $hash{online} = [$card->VOnline()];
-
-    $hash{nickname} = $card->VNickname();
-    $hash{birthday} = $card->VBirthday();
-    $hash{notes} = $card->VNotes();
-  }
-  else {
-    $hash{name} = $card->VFN();
-    $hash{members} = [$card->VGroupContactUIDs()];
-  }
-
-  return \%hash;
+  # Return the JSContact Card directly — callers should migrate
+  # to using JSContact properties instead of the old custom format
+  return $card;
 }
 
 sub set_card {
   my $Self = shift;
   my $jaddressbookid = shift;
   my $card = shift;
-  my $carduid = delete $card->{uid};
-  my $kind = delete $card->{kind};
-  if ($kind eq 'contact') {
+  my $carduid = $card->{uid} // '';
+  $carduid =~ s/^urn:uuid://;
+  my $kind = $card->{kind} // 'individual';
+  if ($kind ne 'group') {
+    # Store the full JSContact card as payload
     $Self->dmake('jcontacts', {
       contactuid => $carduid,
       jaddressbookid => $jaddressbookid,
@@ -511,16 +489,19 @@ sub set_card {
     });
   }
   else {
+    my $name = $card->{name}{full} // '';
     $Self->dmake('jcontactgroups', {
       groupuid => $carduid,
       jaddressbookid => $jaddressbookid,
-      name => $card->{name},
+      name => $name,
     });
     $Self->ddelete('jcontactgroupmap', {groupuid => $carduid});
-    foreach my $item (@{$card->{members}}) {
+    foreach my $memberuid (keys %{$card->{members} || {}}) {
+      my $uid = $memberuid;
+      $uid =~ s/^urn:uuid://;
       $Self->dinsert('jcontactgroupmap', {
         groupuid => $carduid,
-        contactuid => $item,
+        contactuid => $uid,
       });
     }
   }
@@ -566,7 +547,7 @@ sub put_file {
     accountId => "$accountid",
     blobId => "f-$id",
     type => $type,
-    expires => JMAP::EmailObject::isodate($expires),
+    expires => Data::JSEmail::isodate($expires),
     size => $size,
   };
 }
