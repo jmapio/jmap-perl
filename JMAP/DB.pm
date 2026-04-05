@@ -50,11 +50,13 @@ my %TABLE2GROUPS = (
   jcalendarprefs => ['CalendarPreferences'],
 );
 
+our $DATADIR = $ENV{JMAP_DATADIR} || '/home/jmap/data';
+
 sub new {
   my $class = shift;
   my $accountid = shift || die;
   my $Self = bless { accountid => $accountid, start => time() }, ref($class) || $class;
-  my $dbh = DBI->connect("dbi:SQLite:dbname=/home/jmap/data/$accountid.sqlite3");
+  my $dbh = DBI->connect("dbi:SQLite:dbname=$DATADIR/$accountid.sqlite3");
   $Self->_initdb($dbh);
   return $Self;
 }
@@ -63,7 +65,7 @@ sub delete {
   my $Self = shift;
   my $accountid = $Self->accountid();
   delete $Self->{dbh};
-  unlink("/home/jmap/data/$accountid.sqlite3");
+  unlink("$DATADIR/$accountid.sqlite3");
 }
 
 sub accountid {
@@ -98,7 +100,7 @@ sub in_transaction {
 sub begin_superlock {
   my $Self = shift;
   my $accountid = $Self->accountid();
-  my $lock = IO::LockedFile->new(">/home/jmap/data/$accountid.lock");
+  my $lock = IO::LockedFile->new(">$DATADIR/$accountid.lock");
   $Self->{superlock} = $lock;
   weaken $Self->{superlock};
   return $lock;
@@ -109,8 +111,8 @@ sub begin {
   confess("ALREADY IN TRANSACTION") if $Self->{t};
   my $accountid = $Self->accountid();
   # we need this because sqlite locking isn't as robust as you might hope
-  $Self->{t} = {lock => $Self->{superlock} || IO::LockedFile->new(">/home/jmap/data/$accountid.lock")};
-  $Self->{t}{dbh} = DBI->connect("dbi:SQLite:dbname=/home/jmap/data/$accountid.sqlite3");
+  $Self->{t} = {lock => $Self->{superlock} || IO::LockedFile->new(">$DATADIR/$accountid.lock")};
+  $Self->{t}{dbh} = DBI->connect("dbi:SQLite:dbname=$DATADIR/$accountid.sqlite3");
   $Self->{t}{dbh}->begin_work();
 }
 

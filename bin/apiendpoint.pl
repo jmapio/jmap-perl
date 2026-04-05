@@ -297,7 +297,8 @@ sub handle_davsync {
 }
 
 sub accountsdb {
-  my $dbh = DBI->connect("dbi:SQLite:dbname=/home/jmap/data/accounts.sqlite3");
+  my $datadir = $ENV{JMAP_DATADIR} || '/home/jmap/data';
+  my $dbh = DBI->connect("dbi:SQLite:dbname=$datadir/accounts.sqlite3");
   $dbh->do(<<EOF);
 CREATE TABLE IF NOT EXISTS accounts (
   email TEXT PRIMARY KEY,
