@@ -368,12 +368,9 @@ sub _validate_email_create {
   my $has_structure = exists $item->{bodyStructure};
   my $has_bodies = exists $item->{textBody} || exists $item->{htmlBody};
   if ($has_structure && $has_bodies) {
-    # Can't have both bodyStructure and textBody/htmlBody
-    push @bad, 'bodyStructure' if $has_structure;
-  }
-  if (!$has_structure && !$has_bodies) {
-    # Must have some body
-    push @bad, 'textBody' unless @bad;
+    push @bad, 'textBody' if exists $item->{textBody};
+    push @bad, 'htmlBody' if exists $item->{htmlBody};
+    push @bad, 'bodyStructure';
   }
 
   # textBody and htmlBody must have at most 1 part each
@@ -384,9 +381,9 @@ sub _validate_email_create {
     push @bad, 'htmlBody';
   }
 
-  # No Content-* headers at top level (except via body parts)
+  # No Content-* headers at top level (but X-Content-* is fine)
   for my $key (keys %$item) {
-    if ($key =~ /^header:Content-/i) {
+    if ($key =~ /^header:Content-/i && $key !~ /^header:X-/i) {
       push @bad, $key;
     }
   }
@@ -403,14 +400,7 @@ sub _validate_email_create {
     }
   }
   if ($item->{bodyStructure}) {
-    my @parts = ($item->{bodyStructure});
-    while (my $part = shift @parts) {
-      next unless ref $part eq 'HASH';
-      for my $key (keys %$part) {
-        push @bad, $key if $key =~ /^header:Content-Transfer-Encoding$/i;
-      }
-      push @parts, @{$part->{subParts}} if $part->{subParts} && ref($part->{subParts}) eq 'ARRAY';
-    }
+    _check_bodystructure_cte($item->{bodyStructure}, 'bodyStructure', \@bad);
   }
 
   # No duplicate header representations: can't have both convenience
@@ -452,14 +442,24 @@ sub _validate_email_create {
       }
     }
   }
+  if ($item->{bodyStructure}) {
+    _check_bodystructure_size($item->{bodyStructure}, 'bodyStructure', \@bad);
+  }
 
   # headers property forbidden on body parts in bodyStructure
   if ($item->{bodyStructure}) {
-    my @parts = ($item->{bodyStructure});
-    while (my $part = shift @parts) {
+    my @parts = (['bodyStructure', $item->{bodyStructure}]);
+    while (my $entry = shift @parts) {
+      my ($path, $part) = @$entry;
       next unless ref $part eq 'HASH';
-      push @bad, 'bodyStructure/headers' if exists $part->{headers};
-      push @parts, @{$part->{subParts}} if $part->{subParts} && ref($part->{subParts}) eq 'ARRAY';
+      push @bad, "$path/headers" if exists $part->{headers};
+      if ($part->{subParts} && ref($part->{subParts}) eq 'ARRAY') {
+        my $i = 0;
+        for my $sub (@{$part->{subParts}}) {
+          push @parts, ["$path/subParts/$i", $sub];
+          $i++;
+        }
+      }
     }
   }
 
@@ -472,6 +472,36 @@ sub _validate_email_create {
   }
 
   return @bad;
+}
+
+sub _check_bodystructure_cte {
+  my ($part, $path, $bad) = @_;
+  return unless ref $part eq 'HASH';
+  for my $key (keys %$part) {
+    push @$bad, "$path/$key" if $key =~ /^header:Content-Transfer-Encoding$/i;
+  }
+  if ($part->{subParts} && ref($part->{subParts}) eq 'ARRAY') {
+    my $i = 0;
+    for my $sub (@{$part->{subParts}}) {
+      _check_bodystructure_cte($sub, "$path/subParts/$i", $bad);
+      $i++;
+    }
+  }
+}
+
+sub _check_bodystructure_size {
+  my ($part, $path, $bad) = @_;
+  return unless ref $part eq 'HASH';
+  if (exists $part->{partId} && exists $part->{size}) {
+    push @$bad, "$path/size";
+  }
+  if ($part->{subParts} && ref($part->{subParts}) eq 'ARRAY') {
+    my $i = 0;
+    for my $sub (@{$part->{subParts}}) {
+      _check_bodystructure_size($sub, "$path/subParts/$i", $bad);
+      $i++;
+    }
+  }
 }
 
 sub create_messages {
