@@ -1720,6 +1720,12 @@ sub api_Email_get {
 
   return $Self->_transError(['error', {type => 'invalidArguments',  arguments => ['ids']}])
     unless $args->{ids};
+
+  # Validate maxBodyValueBytes (UnsignedInt > 0 or null)
+  if (defined $args->{maxBodyValueBytes} && $args->{maxBodyValueBytes} < 1) {
+    return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['maxBodyValueBytes']}]);
+  }
+
   # RFC 8621 default properties for Email/get
   my @EMAIL_DEFAULT_PROPERTIES = qw(
     id blobId threadId mailboxIds keywords size receivedAt
@@ -1938,12 +1944,22 @@ sub api_Email_get {
           next unless $bv;
           my %val = %$bv;
           if ($maxBytes && $maxBytes > 0 && defined $val{value}) {
-            # Truncate at character boundary, not byte boundary
             my $val_bytes = Encode::encode_utf8($val{value});
             if (length($val_bytes) > $maxBytes) {
-              # Decode back after byte truncation to avoid splitting chars
+              # Truncate, then remove any trailing partial UTF-8 char
               my $truncated = substr($val_bytes, 0, $maxBytes);
-              $val{value} = Encode::decode_utf8($truncated, Encode::FB_QUIET);
+              # Strip trailing continuation bytes + incomplete lead byte
+              while (length($truncated) && (ord(substr($truncated, -1)) & 0xC0) == 0x80) {
+                chop $truncated;
+              }
+              # If last byte is a multi-byte lead that's now incomplete, remove it
+              if (length($truncated) && ord(substr($truncated, -1)) >= 0xC0) {
+                my $lead = ord(substr($truncated, -1));
+                my $expected = ($lead < 0xE0) ? 2 : ($lead < 0xF0) ? 3 : 4;
+                # Check if we have enough following bytes (we don't, we just stripped them)
+                chop $truncated;
+              }
+              $val{value} = Encode::decode_utf8($truncated);
               $val{isTruncated} = $JSON::true;
             }
           }
