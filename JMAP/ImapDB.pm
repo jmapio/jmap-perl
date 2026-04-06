@@ -1559,6 +1559,7 @@ sub create_mailboxes {
         maySetKeywords => $JSON::true,
         maySetSeen => $JSON::true,
         maySubmit => $JSON::true,
+        mayAdmin => $JSON::true,
       },
     );
 
@@ -1701,7 +1702,7 @@ sub update_mailboxes {
       totalThreads => $data->{totalThreads},
       unreadThreads => $data->{unreadThreads},
       myRights => {
-        map { $_ => $JSON::true } grep { $data->{$_} } qw(mayAddItems mayCreateChild mayDelete mayReadItems mayRemoveItems mayRename maySetKeywords maySetSeen maySubmit),
+        map { $_ => $JSON::true } grep { $data->{$_} } qw(mayAddItems mayCreateChild mayDelete mayReadItems mayRemoveItems mayRename maySetKeywords maySetSeen maySubmit mayAdmin),
       },
     );
 

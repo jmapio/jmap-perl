@@ -211,7 +211,7 @@ sub get_backend {
   # XXX - play the ping_pong game with callbacks?
   unless ($backend{$accountid}) {
     $backend{$accountid} = [AnyEvent::Handle->new(
-      connect => ['127.0.0.1', 5000],
+      connect => ['127.0.0.1', $ENV{JMAP_BACKEND_PORT} || 5000],
       on_error => sub {
         print "CLOSING ON ERROR $accountid\n";
         delete $backend{$accountid};

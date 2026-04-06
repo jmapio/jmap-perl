@@ -775,7 +775,7 @@ sub api_Mailbox_get {
   foreach my $item (@$data) {
     next unless delete $want{$item->{jmailboxid}};
 
-    my %rights = map { $_ => ($item->{$_} ? $JSON::true : $JSON::false) } qw(mayReadItems mayAddItems mayRemoveItems maySetSeen maySetKeywords mayCreateChild mayRename mayDelete maySubmit);
+    my %rights = map { $_ => ($item->{$_} ? $JSON::true : $JSON::false) } qw(mayReadItems mayAddItems mayRemoveItems maySetSeen maySetKeywords mayCreateChild mayRename mayDelete maySubmit mayAdmin);
     my %rec = (
       id => "$item->{jmailboxid}",
       name => Encode::decode_utf8($item->{name}),
