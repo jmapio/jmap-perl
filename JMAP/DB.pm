@@ -379,11 +379,19 @@ sub create_messages {
     my $item = $args->{$cid};
     my $mailboxIds = delete $item->{mailboxIds};
     my $keywords = delete $item->{keywords};
-    my $hostname = $ENV{HOSTNAME} || hostname();
-    $item->{msgdate} = $item->{receivedAt} ? str2time($item->{receivedAt}) : time();
-    $item->{headers}{'Message-ID'} ||= "<" . new_uuid_string() . ".$item->{msgdate}\@$hostname>";
-    my $message = Data::JSEmail::make($item, sub { $Self->get_blob(@_) } );
-    # XXX - let's just assume goodness for now - lots of error handling to add
+
+    # Set defaults for missing fields
+    $item->{msgdate} ||= time();
+    unless ($item->{messageId}) {
+      my $hostname = $ENV{HOSTNAME} || hostname();
+      $item->{messageId} = [new_uuid_string() . ".$item->{msgdate}\@$hostname"];
+    }
+
+    my $message = eval { Data::JSEmail::make($item, sub { $Self->get_blob(@_) }) };
+    if ($@ || !$message) {
+      $notCreated{$cid} = { type => 'invalidProperties', description => $@ || 'failed to create message' };
+      next;
+    }
     $todo{$cid} = [$message, $mailboxIds, $keywords, $item->{msgdate}];
   }
 
