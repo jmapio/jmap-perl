@@ -434,6 +434,16 @@ sub _validate_email_create {
     }
   }
 
+  # Validate cid values on body parts (no angle brackets, no whitespace)
+  for my $partlist ($item->{textBody}, $item->{htmlBody}, $item->{attachments}) {
+    next unless $partlist && ref($partlist) eq 'ARRAY';
+    for my $part (@$partlist) {
+      if (defined $part->{cid} && $part->{cid} =~ /[<>\s]/) {
+        push @bad, 'cid';
+      }
+    }
+  }
+
   # Can't have size with partId (size only valid with blobId)
   for my $partlist ($item->{textBody}, $item->{htmlBody}) {
     next unless $partlist && ref($partlist) eq 'ARRAY';
