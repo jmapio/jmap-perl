@@ -549,6 +549,34 @@ sub create_messages {
       $item->{messageId} = [new_uuid_string() . ".$item->{msgdate}\@$hostname"];
     }
 
+    # Validate blob references exist before calling make()
+    my @blob_errors;
+    for my $partlist ($item->{textBody}, $item->{htmlBody}, $item->{attachments}) {
+      next unless $partlist && ref($partlist) eq 'ARRAY';
+      for my $part (@$partlist) {
+        next unless $part->{blobId};
+        my ($type, $content) = $Self->get_blob($part->{blobId});
+        unless (defined $content) {
+          push @blob_errors, 'blobId';
+        }
+      }
+    }
+    if ($item->{bodyStructure}) {
+      my @parts = ($item->{bodyStructure});
+      while (my $p = shift @parts) {
+        next unless ref $p eq 'HASH';
+        if ($p->{blobId}) {
+          my ($type, $content) = $Self->get_blob($p->{blobId});
+          push @blob_errors, 'blobId' unless defined $content;
+        }
+        push @parts, @{$p->{subParts}} if $p->{subParts} && ref($p->{subParts}) eq 'ARRAY';
+      }
+    }
+    if (@blob_errors) {
+      $notCreated{$cid} = { type => 'invalidProperties', properties => \@blob_errors };
+      next;
+    }
+
     my $message = eval { Data::JSEmail::make($item, sub { $Self->get_blob(@_) }) };
     if ($@ || !$message) {
       $notCreated{$cid} = { type => 'invalidProperties', description => $@ || 'failed to create message' };
