@@ -573,7 +573,7 @@ sub create_messages {
       }
     }
     if (@blob_errors) {
-      $notCreated{$cid} = { type => 'invalidProperties', properties => \@blob_errors };
+      $notCreated{$cid} = { type => 'blobNotFound' };
       next;
     }
 
