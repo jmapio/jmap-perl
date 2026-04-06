@@ -1800,13 +1800,20 @@ sub api_Email_get {
 
   # need to load messages from the server
   if ($need_content) {
+    # RFC 8621 Section 4.2: default bodyProperties
+    my $bodyProperties = $args->{bodyProperties} || [qw(partId blobId size name type charset disposition cid language location)];
+
     my $content = $Self->{db}->fill_messages(map { $_->{id} } @list);
     foreach my $item (@list) {
       my $data = $content->{$item->{id}};
-      foreach my $prop (qw(preview textBody htmlBody)) {
-        if (_prop_wanted($args, $prop)) {
-          $item->{$prop} = $data->{$prop};
-        }
+      if (_prop_wanted($args, 'preview')) {
+        $item->{preview} = $data->{preview};
+      }
+      if (_prop_wanted($args, 'textBody')) {
+        $item->{textBody} = _filterBodyParts($data->{textBody}, $bodyProperties);
+      }
+      if (_prop_wanted($args, 'htmlBody')) {
+        $item->{htmlBody} = _filterBodyParts($data->{htmlBody}, $bodyProperties);
       }
       if (_prop_wanted($args, 'body')) {
         if ($data->{htmlBody}) {
@@ -1831,7 +1838,7 @@ sub api_Email_get {
           next unless $prop =~ m/^header:([^:]+)(.*)/;
           my $headername = lc $1;
           my $rest = $2;
-          my @values = map { $_->{Value} } grep { lc $_->{Name} eq $headername } @{$data->{headers}||[]};
+          my @values = map { $_->{value} // $_->{Value} } grep { lc($_->{name} // $_->{Name} // '') eq $headername } @{$data->{headers}||[]};
           unless (@values) {
             $item->{$prop} = undef;
             next;
@@ -1885,16 +1892,58 @@ sub api_Email_get {
         }
       }
       if (_prop_wanted($args, 'attachments')) {
-        $item->{attachments} = $data->{attachments};
+        $item->{attachments} = _filterBodyParts($data->{attachments}, $bodyProperties);
       }
       if (_prop_wanted($args, 'attachedEmails')) {
         $item->{attachedEmails} = $data->{attachedEmails};
       }
       if (_prop_wanted($args, 'bodyStructure')) {
-        $item->{bodyStructure} = createBodyStructure($data->{bodyStructure}, $args->{bodyProperties});
+        $item->{bodyStructure} = _filterBodyPart($data->{bodyStructure}, $bodyProperties);
       }
-      if (_prop_wanted($args, 'bodyValues')) {
-        $item->{bodyValues} = $data->{bodyValues};
+
+      # bodyValues: always present, but only populated when fetch*BodyValues flags are set
+      if (_prop_wanted($args, 'bodyValues') && ($args->{fetchAllBodyValues} || $args->{fetchTextBodyValues} || $args->{fetchHTMLBodyValues})) {
+        my %wantParts;
+        if ($args->{fetchAllBodyValues}) {
+          for my $part (@{$data->{textBody} || []}, @{$data->{htmlBody} || []}) {
+            $wantParts{$part->{partId}} = 1 if $part->{partId};
+          }
+        }
+        else {
+          if ($args->{fetchTextBodyValues}) {
+            for my $part (@{$data->{textBody} || []}) {
+              $wantParts{$part->{partId}} = 1 if $part->{partId};
+            }
+          }
+          if ($args->{fetchHTMLBodyValues}) {
+            for my $part (@{$data->{htmlBody} || []}) {
+              $wantParts{$part->{partId}} = 1 if $part->{partId};
+            }
+          }
+        }
+
+        my %bodyValues;
+        my $maxBytes = $args->{maxBodyValueBytes};
+        for my $partId (keys %wantParts) {
+          my $bv = $data->{bodyValues}{$partId};
+          next unless $bv;
+          my %val = %$bv;
+          if ($maxBytes && $maxBytes > 0 && defined $val{value}) {
+            # Truncate at character boundary, not byte boundary
+            my $val_bytes = Encode::encode_utf8($val{value});
+            if (length($val_bytes) > $maxBytes) {
+              # Decode back after byte truncation to avoid splitting chars
+              my $truncated = substr($val_bytes, 0, $maxBytes);
+              $val{value} = Encode::decode_utf8($truncated, Encode::FB_QUIET);
+              $val{isTruncated} = $JSON::true;
+            }
+          }
+          $bodyValues{$partId} = \%val;
+        }
+        $item->{bodyValues} = \%bodyValues;
+      }
+      elsif (_prop_wanted($args, 'bodyValues')) {
+        $item->{bodyValues} = {};
       }
       if (_prop_wanted($args, 'messageId')) {
         $item->{messageId} = $data->{messageId};
@@ -1931,19 +1980,31 @@ sub getRawBlob {
 }
 
 # or this
-sub createBodyStructure {
+# Filter a single body part to only include requested properties
+sub _filterBodyPart {
   my $data = shift;
   my $props = shift;
-  return $data unless $props;
+  return $data unless $props && @$props;
   my %res;
   for my $prop (@$props) {
-    $res{$prop} = $data->{$prop};
+    $res{$prop} = $data->{$prop} if exists $data->{$prop};
   }
   if ($data->{subParts}) {
-    $res{subParts} = [ map { createBodyStructure($_, $props) } @{$data->{subParts}} ];
+    $res{subParts} = [ map { _filterBodyPart($_, $props) } @{$data->{subParts}} ];
   }
   return \%res;
 }
+
+# Filter a list of body parts
+sub _filterBodyParts {
+  my $parts = shift;
+  my $props = shift;
+  return $parts unless $props && @$props;
+  return [ map { _filterBodyPart($_, $props) } @{$parts || []} ];
+}
+
+# backward compat alias
+sub createBodyStructure { _filterBodyPart(@_) }
 
 # or this
 sub uploadFile {

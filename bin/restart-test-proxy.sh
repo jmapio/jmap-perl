@@ -27,8 +27,22 @@ sleep 2
 mkdir -p "$DATADIR"
 
 if [ "$1" = "clean" ]; then
-    echo "Cleaning DB..."
+    echo "Cleaning DB and Cyrus user..."
     rm -f "$DATADIR/$CYRUS_USER.sqlite3" "$DATADIR/$CYRUS_USER.lock"
+
+    # Nuke and recreate user on Cyrus
+    perl -e '
+      use IO::Socket::INET;
+      my $s = IO::Socket::INET->new(PeerAddr => "localhost", PeerPort => '$CYRUS_IMAP_PORT', Timeout => 3) or die "cannot connect";
+      <$s>;
+      print $s "A LOGIN admin admin\r\n"; <$s>;
+      print $s "B SETACL user.'$CYRUS_USER' admin lrswipkxtecdan\r\n"; <$s>;
+      print $s "C DELETE user.'$CYRUS_USER'\r\n"; <$s>;
+      print $s "D CREATE user.'$CYRUS_USER'\r\n"; <$s>;
+      print $s "E SETACL user.'$CYRUS_USER' '$CYRUS_USER' lrswipkxtecdan\r\n"; <$s>;
+      print $s "F LOGOUT\r\n";
+      close $s;
+    ' 2>/dev/null
 
     # Create accounts DB
     perl -MDBI -e "
