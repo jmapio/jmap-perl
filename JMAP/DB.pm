@@ -356,6 +356,124 @@ sub get_blob {
 }
 
 # NOTE: this can ONLY be used to create draft messages
+# RFC 8621 Email/set create validation
+sub _validate_email_create {
+  my $item = shift;
+  my @bad;
+
+  # "headers" property is forbidden — use header:Name instead
+  push @bad, 'headers' if exists $item->{headers};
+
+  # Must have body content: bodyStructure OR textBody/htmlBody (not both modes)
+  my $has_structure = exists $item->{bodyStructure};
+  my $has_bodies = exists $item->{textBody} || exists $item->{htmlBody};
+  if ($has_structure && $has_bodies) {
+    # Can't have both bodyStructure and textBody/htmlBody
+    push @bad, 'bodyStructure' if $has_structure;
+  }
+  if (!$has_structure && !$has_bodies) {
+    # Must have some body
+    push @bad, 'textBody' unless @bad;
+  }
+
+  # textBody and htmlBody must have at most 1 part each
+  if ($item->{textBody} && ref($item->{textBody}) eq 'ARRAY' && @{$item->{textBody}} > 1) {
+    push @bad, 'textBody';
+  }
+  if ($item->{htmlBody} && ref($item->{htmlBody}) eq 'ARRAY' && @{$item->{htmlBody}} > 1) {
+    push @bad, 'htmlBody';
+  }
+
+  # No Content-* headers at top level (except via body parts)
+  for my $key (keys %$item) {
+    if ($key =~ /^header:Content-/i) {
+      push @bad, $key;
+    }
+  }
+
+  # No header:Content-Transfer-Encoding on body parts
+  for my $partlist ($item->{textBody}, $item->{htmlBody}) {
+    next unless $partlist && ref($partlist) eq 'ARRAY';
+    for my $part (@$partlist) {
+      for my $key (keys %$part) {
+        if ($key =~ /^header:Content-Transfer-Encoding$/i) {
+          push @bad, $key;
+        }
+      }
+    }
+  }
+  if ($item->{bodyStructure}) {
+    my @parts = ($item->{bodyStructure});
+    while (my $part = shift @parts) {
+      next unless ref $part eq 'HASH';
+      for my $key (keys %$part) {
+        push @bad, $key if $key =~ /^header:Content-Transfer-Encoding$/i;
+      }
+      push @parts, @{$part->{subParts}} if $part->{subParts} && ref($part->{subParts}) eq 'ARRAY';
+    }
+  }
+
+  # No duplicate header representations: can't have both convenience
+  # property and header:Name for the same header
+  my %header_convenience = (
+    'message-id' => 'messageId', 'in-reply-to' => 'inReplyTo',
+    'references' => 'references', 'sender' => 'sender',
+    'from' => 'from', 'to' => 'to', 'cc' => 'cc',
+    'bcc' => 'bcc', 'reply-to' => 'replyTo', 'subject' => 'subject',
+    'date' => 'sentAt',
+  );
+  for my $key (keys %$item) {
+    next unless $key =~ /^header:([^:]+)/;
+    my $hname = lc $1;
+    if (my $conv = $header_convenience{$hname}) {
+      push @bad, $key if exists $item->{$conv};
+    }
+  }
+
+  # bodyValues restrictions: isTruncated and isEncodingProblem must not be true
+  if ($item->{bodyValues} && ref($item->{bodyValues}) eq 'HASH') {
+    for my $partId (keys %{$item->{bodyValues}}) {
+      my $bv = $item->{bodyValues}{$partId};
+      if ($bv->{isTruncated}) {
+        push @bad, "bodyValues/$partId/isTruncated";
+      }
+      if ($bv->{isEncodingProblem}) {
+        push @bad, "bodyValues/$partId/isEncodingProblem";
+      }
+    }
+  }
+
+  # Can't have size with partId (size only valid with blobId)
+  for my $partlist ($item->{textBody}, $item->{htmlBody}) {
+    next unless $partlist && ref($partlist) eq 'ARRAY';
+    for my $part (@$partlist) {
+      if (exists $part->{partId} && exists $part->{size}) {
+        push @bad, 'size';
+      }
+    }
+  }
+
+  # headers property forbidden on body parts in bodyStructure
+  if ($item->{bodyStructure}) {
+    my @parts = ($item->{bodyStructure});
+    while (my $part = shift @parts) {
+      next unless ref $part eq 'HASH';
+      push @bad, 'bodyStructure/headers' if exists $part->{headers};
+      push @parts, @{$part->{subParts}} if $part->{subParts} && ref($part->{subParts}) eq 'ARRAY';
+    }
+  }
+
+  # headers property forbidden on textBody/htmlBody parts
+  for my $partlist ($item->{textBody}, $item->{htmlBody}) {
+    next unless $partlist && ref($partlist) eq 'ARRAY';
+    for my $part (@$partlist) {
+      push @bad, 'headers' if exists $part->{headers};
+    }
+  }
+
+  return @bad;
+}
+
 sub create_messages {
   my $Self = shift;
   my $args = shift;
@@ -379,6 +497,19 @@ sub create_messages {
     my $item = $args->{$cid};
     my $mailboxIds = delete $item->{mailboxIds};
     my $keywords = delete $item->{keywords};
+
+    # RFC 8621 Email/set create validation
+    my @bad = _validate_email_create($item);
+    if (@bad) {
+      $notCreated{$cid} = { type => 'invalidProperties', properties => \@bad };
+      next;
+    }
+
+    # mailboxIds is required
+    unless ($mailboxIds && ref($mailboxIds) eq 'HASH' && keys %$mailboxIds) {
+      $notCreated{$cid} = { type => 'invalidProperties', properties => ['mailboxIds'] };
+      next;
+    }
 
     # Set defaults for missing fields
     $item->{msgdate} ||= time();
