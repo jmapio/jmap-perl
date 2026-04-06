@@ -1964,7 +1964,8 @@ sub api_Email_get {
 
     foreach my $email (qw(to cc bcc from replyTo sender)) {
       if (_prop_wanted($args, $email)) {
-        $item->{$email} = Data::JSEmail::asAddresses($data->{"msg$email"});
+        my $raw = $data->{"msg$email"};
+        $item->{$email} = (defined $raw && $raw ne '') ? Data::JSEmail::asAddresses($raw) : undef;
       }
     }
 
