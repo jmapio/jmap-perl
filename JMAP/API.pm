@@ -1720,17 +1720,26 @@ sub api_Email_get {
 
   return $Self->_transError(['error', {type => 'invalidArguments',  arguments => ['ids']}])
     unless $args->{ids};
-  #properties: String[] A list of properties to fetch for each message.
+  # RFC 8621 default properties for Email/get
+  my @EMAIL_DEFAULT_PROPERTIES = qw(
+    id blobId threadId mailboxIds keywords size receivedAt
+    messageId inReplyTo references sender from to cc bcc replyTo
+    subject sentAt hasAttachment preview bodyValues textBody htmlBody attachments
+  );
 
-  # XXX - lots to do about properties here
+  # If properties not specified, use defaults
+  unless ($args->{properties}) {
+    $args->{properties} = \@EMAIL_DEFAULT_PROPERTIES;
+  }
+
   my %seenids;
   my %missingids;
   my @list;
   my $need_content = 0;
-  foreach my $prop (qw(hasAttachment headers preview textBody htmlBody attachments attachedEmails bodyValues messageId inReplyTo references)) {
+  foreach my $prop (qw(hasAttachment headers preview textBody htmlBody attachments bodyValues bodyStructure messageId inReplyTo references sender)) {
     $need_content = 1 if _prop_wanted($args, $prop);
   }
-  $need_content = 1 if ($args->{properties} and grep { m/^headers\./ } @{$args->{properties}});
+  $need_content = 1 if grep { m/^header:/ } @{$args->{properties}};
   my %msgidmap;
   foreach my $msgid (map { $Self->idmap($_) } @{$args->{ids}}) {
     next if $seenids{$msgid};
@@ -1767,7 +1776,7 @@ sub api_Email_get {
       $item->{keywords} = decode_json($data->{keywords});
     }
 
-    foreach my $email (qw(to cc bcc from replyTo)) {
+    foreach my $email (qw(to cc bcc from replyTo sender)) {
       if (_prop_wanted($args, $email)) {
         $item->{$email} = Data::JSEmail::asAddresses($data->{"msg$email"});
       }
