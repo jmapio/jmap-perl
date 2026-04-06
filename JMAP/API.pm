@@ -13,8 +13,186 @@ use Data::Dumper;
 use Time::HiRes qw(gettimeofday tv_interval);
 use Data::JSEmail;
 use Date::Parse;
+use B ();
 
 my $json = JSON::XS->new->utf8->canonical();
+
+# Parameter type validation schemas for JMAP methods
+# Types: string, uint (unsigned int), int, bool, [string] (array of strings),
+#        {string} (hash with string keys), object, any
+my %PARAM_SCHEMA = (
+  'Email/get' => {
+    accountId          => 'string?',
+    ids                => '[string]',
+    properties         => '[string]?',
+    bodyProperties     => '[string]?',
+    fetchTextBodyValues  => 'bool?',
+    fetchHTMLBodyValues  => 'bool?',
+    fetchAllBodyValues   => 'bool?',
+    maxBodyValueBytes    => 'posint?',
+  },
+  'Email/query' => {
+    accountId          => 'string?',
+    filter             => 'object?',
+    sort               => '[object]?',
+    position           => 'int?',
+    anchor             => 'string?',
+    anchorOffset        => 'int?',
+    limit              => 'uint?',
+    collapseThreads    => 'bool?',
+    calculateTotal     => 'bool?',
+  },
+  'Email/set' => {
+    accountId          => 'string?',
+    ifInState          => 'string?',
+    create             => '{object}?',
+    update             => '{object}?',
+    destroy            => '[string]?',
+  },
+  'Email/import' => {
+    accountId          => 'string?',
+    ifInState          => 'string?',
+    emails             => '{object}',
+  },
+  'Email/changes' => {
+    accountId          => 'string?',
+    sinceState         => 'string',
+    maxChanges         => 'uint?',
+  },
+  'Mailbox/get' => {
+    accountId          => 'string?',
+    ids                => '[string]?',
+    properties         => '[string]?',
+  },
+  'Mailbox/set' => {
+    accountId          => 'string?',
+    ifInState          => 'string?',
+    create             => '{object}?',
+    update             => '{object}?',
+    destroy            => '[string]?',
+    onDestroyRemoveMessages => 'bool?',
+  },
+  'Mailbox/query' => {
+    accountId          => 'string?',
+    filter             => 'object?',
+    sort               => '[object]?',
+    position           => 'int?',
+    limit              => 'uint?',
+    calculateTotal     => 'bool?',
+  },
+  'Mailbox/changes' => {
+    accountId          => 'string?',
+    sinceState         => 'string',
+    maxChanges         => 'uint?',
+  },
+  'Thread/get' => {
+    accountId          => 'string?',
+    ids                => '[string]',
+  },
+  'Thread/changes' => {
+    accountId          => 'string?',
+    sinceState         => 'string',
+    maxChanges         => 'uint?',
+  },
+);
+
+# Validate a single value against a type spec
+sub _validate_type {
+  my ($value, $type) = @_;
+
+  # Optional types (trailing ?)
+  my $optional = ($type =~ s/\?$//);
+  return 1 if !defined $value && $optional;
+  return 0 if !defined $value && !$optional;
+
+  # JSON::Typist wraps values in blessed objects — unwrap for type checking
+  my $is_json_string = ref($value) && ref($value) =~ /String/;
+  my $is_json_number = ref($value) && ref($value) =~ /Number/;
+
+  if ($type eq 'string') {
+    return 1 if $is_json_string;
+    if (!ref($value)) {
+      # Reject values that were JSON numbers (have IOK/NOK but not POK)
+      my $flags = B::svref_2object(\$value)->FLAGS;
+      my $is_num = $flags & (B::SVf_IOK | B::SVf_NOK);
+      my $is_str = $flags & B::SVf_POK;
+      return 0 if $is_num && !$is_str;
+      return 1;
+    }
+    return 0;
+  }
+  elsif ($type eq 'uint' || $type eq 'posint' || $type eq 'int') {
+    # Must be a JSON number, not a string that looks like a number
+    if ($is_json_number) {
+      my $v = 0 + "$value";
+      return 0 if $type eq 'uint' && $v < 0;
+      return 0 if $type eq 'posint' && $v < 1;
+      return 0 if $type eq 'int' && "$value" !~ /^-?\d+$/;
+      return 1;
+    }
+    if (!ref($value)) {
+      # Plain scalar — check if it was decoded as a number (has IOK/NOK flag)
+      my $flags = B::svref_2object(\$value)->FLAGS;
+      my $is_num = $flags & (B::SVf_IOK | B::SVf_NOK);
+      return 0 unless $is_num;
+      return 0 if $type eq 'uint' && $value < 0;
+      return 0 if $type eq 'posint' && $value < 1;
+      return 1;
+    }
+    return 0;
+  }
+  elsif ($type eq 'bool') {
+    # JSON booleans come through as various blessed refs
+    return 1 if ref($value) && (
+      ref($value) eq 'JSON::PP::Boolean' ||
+      ref($value) eq 'JSON::XS::Boolean' ||
+      ref($value) =~ /Boolean/
+    );
+    # Also accept scalar refs \0 and \1
+    return 1 if ref($value) eq 'SCALAR';
+    return 0;
+  }
+  elsif ($type eq '[string]') {
+    return ref($value) eq 'ARRAY' && !grep { ref $_ } @$value;
+  }
+  elsif ($type eq '[object]') {
+    return ref($value) eq 'ARRAY' && !grep { ref $_ ne 'HASH' } @$value;
+  }
+  elsif ($type eq '{object}') {
+    return ref($value) eq 'HASH';
+  }
+  elsif ($type eq '{string}') {
+    return ref($value) eq 'HASH' && !grep { ref $_ } values %$value;
+  }
+  elsif ($type eq 'object') {
+    return ref($value) eq 'HASH';
+  }
+  elsif ($type eq 'any') {
+    return 1;
+  }
+  return 0;
+}
+
+# Validate args against schema, return list of invalid argument names
+sub _validate_args {
+  my ($command, $args) = @_;
+  my $schema = $PARAM_SCHEMA{$command};
+  return () unless $schema; # no schema = no validation
+
+  my @bad;
+  for my $param (keys %$schema) {
+    my $type = $schema->{$param};
+    next if $type =~ /\?$/ && !exists $args->{$param};
+    if (exists $args->{$param}) {
+      push @bad, $param unless _validate_type($args->{$param}, $type);
+    }
+    elsif ($type !~ /\?$/) {
+      # Required parameter missing
+      push @bad, $param;
+    }
+  }
+  return @bad;
+}
 
 sub new {
   my $class = shift;
@@ -118,6 +296,13 @@ sub handle_request {
     if ($FuncRef) {
       my ($myargs, $error) = $Self->resolve_args($args);
       if ($myargs) {
+        # Validate argument types
+        my @bad = _validate_args($command, $myargs);
+        if (@bad) {
+          push @items, ['error', { type => 'invalidArguments', arguments => \@bad }];
+          $Self->push_results($tag, @items);
+          next;
+        }
         if ($myargs->{ids}) {
           my @list = @{$myargs->{ids}};
           if (@list > 4) {
@@ -1720,11 +1905,6 @@ sub api_Email_get {
 
   return $Self->_transError(['error', {type => 'invalidArguments',  arguments => ['ids']}])
     unless $args->{ids};
-
-  # Validate maxBodyValueBytes (UnsignedInt > 0 or null)
-  if (defined $args->{maxBodyValueBytes} && $args->{maxBodyValueBytes} < 1) {
-    return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['maxBodyValueBytes']}]);
-  }
 
   # RFC 8621 default properties for Email/get
   my @EMAIL_DEFAULT_PROPERTIES = qw(
