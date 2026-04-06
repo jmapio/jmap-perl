@@ -1984,12 +1984,22 @@ sub getRawBlob {
 sub _filterBodyPart {
   my $data = shift;
   my $props = shift;
-  return $data unless $props && @$props;
+  return $data unless $props; # undef means no filtering
   my %res;
+  my %want = map { $_ => 1 } @$props;
   for my $prop (@$props) {
     $res{$prop} = $data->{$prop} if exists $data->{$prop};
   }
-  if ($data->{subParts}) {
+  # subParts: array for multipart, null for leaf parts
+  if ($want{subParts}) {
+    if ($data->{subParts}) {
+      $res{subParts} = [ map { _filterBodyPart($_, $props) } @{$data->{subParts}} ];
+    } else {
+      $res{subParts} = [];
+    }
+  }
+  elsif ($data->{subParts}) {
+    # Always include subParts structurally even if not explicitly requested
     $res{subParts} = [ map { _filterBodyPart($_, $props) } @{$data->{subParts}} ];
   }
   return \%res;
@@ -1999,7 +2009,7 @@ sub _filterBodyPart {
 sub _filterBodyParts {
   my $parts = shift;
   my $props = shift;
-  return $parts unless $props && @$props;
+  return $parts unless $props; # undef means no filtering
   return [ map { _filterBodyPart($_, $props) } @{$parts || []} ];
 }
 
