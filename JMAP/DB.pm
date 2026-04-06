@@ -560,15 +560,13 @@ sub create_messages {
     }
 
     # Validate blob references exist before calling make()
-    my @blob_errors;
+    my @missing_blobs;
     for my $partlist ($item->{textBody}, $item->{htmlBody}, $item->{attachments}) {
       next unless $partlist && ref($partlist) eq 'ARRAY';
       for my $part (@$partlist) {
         next unless $part->{blobId};
         my ($type, $content) = $Self->get_blob($part->{blobId});
-        unless (defined $content) {
-          push @blob_errors, 'blobId';
-        }
+        push @missing_blobs, $part->{blobId} unless defined $content;
       }
     }
     if ($item->{bodyStructure}) {
@@ -577,13 +575,13 @@ sub create_messages {
         next unless ref $p eq 'HASH';
         if ($p->{blobId}) {
           my ($type, $content) = $Self->get_blob($p->{blobId});
-          push @blob_errors, 'blobId' unless defined $content;
+          push @missing_blobs, $p->{blobId} unless defined $content;
         }
         push @parts, @{$p->{subParts}} if $p->{subParts} && ref($p->{subParts}) eq 'ARRAY';
       }
     }
-    if (@blob_errors) {
-      $notCreated{$cid} = { type => 'blobNotFound' };
+    if (@missing_blobs) {
+      $notCreated{$cid} = { type => 'blobNotFound', notFound => \@missing_blobs };
       next;
     }
 
