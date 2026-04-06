@@ -237,7 +237,8 @@ sub sync_jmailboxes {
     next if lc $folder->{label} eq "\\allmail"; # we don't show this folder
     my $fname = $folder->{imapname};
     # check for roles first
-    my @bits = map { decode('IMAP-UTF-7', $_) } split "[$folder->{sep}]", $fname;
+    my $sep = $folder->{sep};
+    my @bits = map { my $b = decode('IMAP-UTF-7', $_); $b =~ s/\^/$sep/g; $b } split "[\Q$sep\E]", $fname;
     shift @bits if ($bits[0] eq 'INBOX' and $bits[1]); # really we should be stripping the actual prefix, if any
     shift @bits if $bits[0] eq '[Gmail]'; # we special case this GMail magic
     next unless @bits; # also skip the magic '[Gmail]' top-level
@@ -248,23 +249,39 @@ sub sync_jmailboxes {
     my $sortOrder = 3;
     $sortOrder = 2 if $role;
     $sortOrder = 1 if ($role||'') eq 'inbox';
-    while (my $item = shift @bits) {
-      $seen{$id//''} = 1 if $id;
-      $name = $item;
-      $parentId = $id;
-      $id = $byname{$parentId//''}{$name};
-      unless ($id) {
-        if (@bits) {
-          # need to create intermediate folder ...
-          # XXX  - label noselect?
-          $id = new_uuid_string();
-          $Self->dmake('jmailboxes', {
-            name => $name,
-            jmailboxid => $id,
-            sortOrder => 10,
-            parentId => $parentId,
-          }, 'jnoncountsmodseq');
-          $byname{$parentId//''}{$name} = $id;
+
+    # If this ifolder already has a jmailboxid (e.g. from create_mailboxes),
+    # and that jmailbox exists, use it directly instead of name-walking.
+    if ($folder->{jmailboxid} && $jbyid{$folder->{jmailboxid}}) {
+      $id = $folder->{jmailboxid};
+      $name = $jbyid{$id}{name};
+      $parentId = $jbyid{$id}{parentId};
+      # mark intermediates as seen
+      my $pid = $parentId;
+      while ($pid) {
+        $seen{$pid} = 1;
+        $pid = $jbyid{$pid} ? $jbyid{$pid}{parentId} : undef;
+      }
+    }
+    else {
+      while (my $item = shift @bits) {
+        $seen{$id//''} = 1 if $id;
+        $name = $item;
+        $parentId = $id;
+        $id = $byname{$parentId//''}{$name};
+        unless ($id) {
+          if (@bits) {
+            # need to create intermediate folder ...
+            # XXX  - label noselect?
+            $id = new_uuid_string();
+            $Self->dmake('jmailboxes', {
+              name => $name,
+              jmailboxid => $id,
+              sortOrder => 10,
+              parentId => $parentId,
+            }, 'jnoncountsmodseq');
+            $byname{$parentId//''}{$name} = $id;
+          }
         }
       }
     }
@@ -1543,6 +1560,15 @@ sub create_mailboxes {
       $bad{name} = 1;
     }
 
+    # Replace hierarchy separator in the encoded name so IMAP doesn't
+    # interpret it as a path delimiter.  Cyrus uses ^ as the replacement.
+    if (defined $encname) {
+      my ($sep) = $Self->dbh->selectrow_array("SELECT sep FROM ifolders ORDER BY ifolderid");
+      if ($sep && $encname =~ /\Q$sep\E/) {
+        $encname =~ s/\Q$sep\E/^/g;
+      }
+    }
+
     my %immutable = (
       id => $cid,  # XXX: allows re-creating with old ID, which allows UNDO but is tricky
       totalEmails => 0,
@@ -1585,7 +1611,8 @@ sub create_mailboxes {
     if ($parentid) {
       if ($parentid =~ m/^\#(.*)/) {
         if ($todo{$1}) {
-          $todo{$cid} = [$todo{$1}[0] . $todo{$1}[1] . $encname, $todo{$1}[1]] unless %bad;
+          my $sep = $todo{$1}[1];
+          $todo{$cid} = [$todo{$1}[0] . $sep . $encname, $sep] unless %bad;
         }
         else {
           # try later
