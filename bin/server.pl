@@ -1,6 +1,6 @@
 #!/usr/bin/perl -w
 
-use lib '/home/jmap/jmap-perl';
+use lib $ENV{JMAP_HOME} || '/home/jmap/jmap-perl';
 
 #use Mail::IMAPTalk qw(:trace);
 use HTML::GenerateUtil qw(escape_html escape_uri);
@@ -30,7 +30,8 @@ use Template;
 
 my $BASEURL = $ENV{BASEURL} || 'https://146.190.52.243';
 
-my $TT   = Template->new(INCLUDE_PATH => '/home/jmap/jmap-perl/htdocs');
+my $jmaphome = $ENV{JMAP_HOME} || '/home/jmap/jmap-perl';
+my $TT   = Template->new(INCLUDE_PATH => "$jmaphome/htdocs");
 my $json = JSON::XS->new->utf8->canonical->pretty();
 
 sub mkerr {

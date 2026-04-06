@@ -1,6 +1,6 @@
 #!/usr/bin/perl -w
 
-use lib '/home/jmap/jmap-perl';
+use lib $ENV{JMAP_HOME} || '/home/jmap/jmap-perl';
 package JMAP::Backend;
 
 #use Mail::IMAPTalk qw(:trace);
