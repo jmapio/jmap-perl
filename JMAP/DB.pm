@@ -366,11 +366,12 @@ sub _validate_email_create {
 
   # Must have body content: bodyStructure OR textBody/htmlBody (not both modes)
   my $has_structure = exists $item->{bodyStructure};
-  my $has_bodies = exists $item->{textBody} || exists $item->{htmlBody};
+  my $has_bodies = exists $item->{textBody} || exists $item->{htmlBody} || exists $item->{attachments};
   if ($has_structure && $has_bodies) {
+    # bodyStructure mode — textBody/htmlBody/attachments are forbidden
     push @bad, 'textBody' if exists $item->{textBody};
     push @bad, 'htmlBody' if exists $item->{htmlBody};
-    push @bad, 'bodyStructure';
+    push @bad, 'attachments' if exists $item->{attachments};
   }
 
   # textBody and htmlBody must have at most 1 part each
