@@ -1059,6 +1059,34 @@ sub _mailbox_match {
   my $item = shift;
   my $filter = shift;
 
+  if ($filter->{operator}) {
+    if ($filter->{operator} eq 'NOT') {
+      return not $Self->_mailbox_match($item, {operator => 'OR', conditions => $filter->{conditions}});
+    }
+    elsif ($filter->{operator} eq 'OR') {
+      for my $cond (@{$filter->{conditions}}) {
+        return 1 if $Self->_mailbox_match($item, $cond);
+      }
+      return 0;
+    }
+    elsif ($filter->{operator} eq 'AND') {
+      for my $cond (@{$filter->{conditions}}) {
+        return 0 unless $Self->_mailbox_match($item, $cond);
+      }
+      return 1;
+    }
+    die "Invalid operator $filter->{operator}";
+  }
+
+  if (exists $filter->{hasAnyRole}) {
+    if ($filter->{hasAnyRole}) {
+      return 0 unless $item->{role};
+    }
+    else {
+      return 0 if $item->{role};
+    }
+  }
+
   if (exists $filter->{hasRole}) {
     if ($filter->{hasRole}) {
       return 0 unless $item->{role};
@@ -1524,10 +1552,13 @@ sub _match {
     return 0 if $item->{keywords}->{$condition->{notKeyword}};
   }
 
-  if ($condition->{hasAttachment}) {
+  if (exists $condition->{hasAttachment}) {
     $storage->{hasatt} ||= $Self->_load_hasatt();
-    return 0 unless $storage->{hasatt}{$item->{msgid}};
-    # XXX - hasAttachment
+    if ($condition->{hasAttachment}) {
+      return 0 unless $storage->{hasatt}{$item->{msgid}};
+    } else {
+      return 0 if $storage->{hasatt}{$item->{msgid}};
+    }
   }
 
   if ($condition->{text}) {
@@ -1831,7 +1862,7 @@ sub api_Email_queryChanges {
     collapseThreads => $args->{collapseThreads},
     oldQueryState => "$args->{sinceQueryState}",
     newQueryState => $newQueryState,
-    destroyed => \@destroyed,
+    removed => \@destroyed,
     added => \@added,
     total => $total,
   }];
