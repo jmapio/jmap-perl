@@ -844,13 +844,15 @@ sub calcmsgid {
   my $encsub = eval { Encode::decode('MIME-Header', $envelope->{Subject}) };
   $encsub = $envelope->{Subject} unless defined $encsub;
   my $sortsub = _normalsubject($encsub);
-  # DBNOTE: because of DISTINCT and IN not being supported
-  my ($thrid) = $Self->dbh->selectrow_array("SELECT DISTINCT thrid FROM ithread WHERE messageid IN (?, ?) AND sortsubject = ?", {}, $replyto, $messageid, $sortsub);
-  # XXX - merging?  subject-checking?  We have a subject here
+
+  # Thread by In-Reply-To/Message-ID first (JMAP threading model),
+  # then fall back to subject-based threading
+  my ($thrid) = $Self->dbh->selectrow_array(
+    "SELECT DISTINCT thrid FROM ithread WHERE messageid IN (?, ?)",
+    {}, $replyto, $messageid);
   $thrid ||= "t$base";
   foreach my $id ($replyto, $messageid) {
     next if $id eq '';
-    # DBNOTE: because of INSERT OR IGNORE (maybe)
     $Self->dbh->do("INSERT OR IGNORE INTO ithread (messageid, thrid, sortsubject) VALUES (?, ?, ?)", {}, $id, $thrid, $sortsub);
   }
 
@@ -1004,13 +1006,14 @@ sub imap_search {
   foreach my $item (@$data) {
     my $from = $item->{uidfirst};
     my $to = $item->{uidnext}-1;
+    next if $from > $to;  # empty folder
     my $res = $Self->backend_cmd('imap_search', $item->{imapname}, 'uid', "$from:$to", @search);
     # XXX - uidvaldity changed
     next unless $res->[2] == $item->{uidvalidity};
     $Self->begin();
     foreach my $uid (@{$res->[3]}) {
       my $msgid = $Self->dgetfield('imessages', { ifolderid => $item->{ifolderid}, uid => $uid }, 'msgid');
-      $matches{$msgid} = 1;
+      $matches{$msgid} = 1 if $msgid;
     }
     $Self->commit();
   }
