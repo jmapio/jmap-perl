@@ -29,7 +29,7 @@ my %PARAM_SCHEMA = (
     fetchTextBodyValues  => 'bool?',
     fetchHTMLBodyValues  => 'bool?',
     fetchAllBodyValues   => 'bool?',
-    maxBodyValueBytes    => 'posint?',
+    maxBodyValueBytes    => 'posint!',
   },
   'Email/query' => {
     accountId          => 'string?',
@@ -100,10 +100,12 @@ my %PARAM_SCHEMA = (
 sub _validate_type {
   my ($value, $type) = @_;
 
-  # Optional types (trailing ?)
+  # ? = optional (key can be absent, null accepted)
+  # ! = optional but not nullable (key can be absent, null rejected)
   my $optional = ($type =~ s/\?$//);
+  my $notnull = ($type =~ s/!$//);
   return 1 if !defined $value && $optional;
-  return 0 if !defined $value && !$optional;
+  return 0 if !defined $value; # catches both required and !-marked
 
   # JSON::Typist wraps values in blessed objects — unwrap for type checking
   my $is_json_string = ref($value) && ref($value) =~ /String/;
@@ -182,11 +184,11 @@ sub _validate_args {
   my @bad;
   for my $param (keys %$schema) {
     my $type = $schema->{$param};
-    next if $type =~ /\?$/ && !exists $args->{$param};
+    next if $type =~ /[\?!]$/ && !exists $args->{$param};
     if (exists $args->{$param}) {
       push @bad, $param unless _validate_type($args->{$param}, $type);
     }
-    elsif ($type !~ /\?$/) {
+    elsif ($type !~ /[\?!]$/) {
       # Required parameter missing
       push @bad, $param;
     }
