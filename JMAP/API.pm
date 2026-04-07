@@ -1962,12 +1962,13 @@ sub api_Email_get {
       $item->{keywords} = decode_json($data->{keywords});
     }
 
-    foreach my $email (qw(to cc bcc from replyTo sender)) {
+    foreach my $email (qw(to cc bcc from)) {
       if (_prop_wanted($args, $email)) {
         my $raw = $data->{"msg$email"};
         $item->{$email} = (defined $raw && $raw ne '') ? Data::JSEmail::asAddresses($raw) : undef;
       }
     }
+    # replyTo and sender not stored in DB — handled in fill_messages block below
 
     if (_prop_wanted($args, 'subject')) {
       $item->{subject} = Encode::decode_utf8($data->{msgsubject});
@@ -2004,6 +2005,12 @@ sub api_Email_get {
       my $data = $content->{$item->{id}};
       if (_prop_wanted($args, 'preview')) {
         $item->{preview} = $data->{preview};
+      }
+      # replyTo and sender come from parsed content, not DB envelope
+      for my $email (qw(replyTo sender)) {
+        if (_prop_wanted($args, $email)) {
+          $item->{$email} = $data->{$email}; # already parsed by Data::JSEmail
+        }
       }
       if (_prop_wanted($args, 'textBody')) {
         $item->{textBody} = _filterBodyParts($data->{textBody}, $bodyProperties);
