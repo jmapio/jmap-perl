@@ -1044,7 +1044,7 @@ sub _mailbox_sort {
         die "unknown field $field";
       }
 
-      $res = -$res unless $arg->{isAscending};
+      $res = -$res if defined($arg->{isAscending}) && !$arg->{isAscending};
 
       return $res if $res;
     }
@@ -1147,23 +1147,53 @@ sub api_Mailbox_query {
   $data = $Self->_mailbox_sort($data, $args->{sort}, $storage);
   $data = $Self->_mailbox_filter($data, $args->{filter}, $storage) if $args->{filter};
 
+  my $total = scalar @$data;
+
+  if (defined $args->{limit} && $args->{limit} < 0) {
+    return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['limit']}]);
+  }
+
   my $start = $args->{position} || 0;
 
   if ($args->{anchor}) {
     # need to calculate the position
     for (0..$#$data) {
-      next unless $data->[$_]{msgid} eq $args->{anchor};
-      $start = $_ + $args->{anchorOffset};
+      next unless $data->[$_]{jmailboxid} eq $args->{anchor};
+      $start = $_ + ($args->{anchorOffset} || 0);
       $start = 0 if $start < 0;
       goto gotit;
     }
     return $Self->_transError(['error', {type => 'anchorNotFound'}]);
   }
 
-  my $end = $args->{limit} ? $start + $args->{limit} - 1 : $#$data;
-  $end = $#$data if $end > $#$data;
+  gotit:
+  # Handle negative positions (count from end)
+  if ($start < 0) {
+    $start = $total + $start;
+    $start = 0 if $start < 0;
+  }
 
-  my @result = map { $data->[$_]{jmailboxid} } $start..$end;
+  # Position beyond total = no results, position clamped to 0
+  if ($start >= $total) {
+    my @res;
+    push @res, ['Mailbox/query', {
+      accountId => $accountid,
+      filter => $args->{filter},
+      sort => $args->{sort},
+      queryState => $newQueryState,
+      canCalculateChanges => $JSON::false,
+      position => 0,
+      total => $total,
+      ids => [],
+    }];
+    return @res;
+  }
+
+  my $end = defined($args->{limit}) ? $start + $args->{limit} - 1 : $#$data;
+  $end = $#$data if $end > $#$data;
+  $end = $start - 1 if $end < $start;  # limit 0
+
+  my @result = ($start <= $end) ? map { $data->[$_]{jmailboxid} } $start..$end : ();
 
   my @res;
   push @res, ['Mailbox/query', {
@@ -1409,7 +1439,7 @@ sub _post_sort {
         die "unknown field $field";
       }
 
-      $res = -$res unless $arg->{isAscending};
+      $res = -$res if defined($arg->{isAscending}) && !$arg->{isAscending};
 
       return $res if $res;
     }
