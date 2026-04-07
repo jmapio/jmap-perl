@@ -301,6 +301,7 @@ sub sync_jmailboxes {
       mayRename => $role ? 0 : 1,
       mayDelete => $role ? 0 : 1,
       maySubmit => 1,
+      mayAdmin => 1,
     );
     if ($id) {
       if ($role and $roletoid{$role} and $roletoid{$role} ne $id) {
