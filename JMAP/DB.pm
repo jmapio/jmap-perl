@@ -25,6 +25,7 @@ use Encode;
 use Encode::MIME::Header;
 use DateTime;
 use Date::Parse;
+use Date::Format;
 use Net::CalDAVTalk;
 use Text::JSContact qw(vcard_to_jscontact jscontact_to_vcard);
 use MIME::Base64 qw(encode_base64 decode_base64);
@@ -414,10 +415,15 @@ sub _validate_email_create {
     'date' => 'sentAt',
   );
   for my $key (keys %$item) {
-    next unless $key =~ /^header:([^:]+)/;
+    next unless $key =~ /^header:([^:]+)(.*)/;
     my $hname = lc $1;
+    my $rest = $2;
     if (my $conv = $header_convenience{$hname}) {
       push @bad, $key if exists $item->{$conv};
+    }
+    # header:Name (no suffix at all) cannot be an array
+    if (ref($item->{$key}) eq 'ARRAY' && $rest eq '') {
+      push @bad, "header:$1";
     }
   }
 
@@ -515,6 +521,68 @@ sub _check_bodystructure_size {
   }
 }
 
+sub _convert_header_value {
+  my ($type, $val) = @_;
+  if ($type eq 'asText') {
+    return $val;
+  }
+  if ($type eq 'asAddresses') {
+    return join(', ', map {
+      my $name = $_->{name};
+      my $email = $_->{email};
+      defined $name && length($name) ? qq{"$name" <$email>} : $email;
+    } @$val);
+  }
+  if ($type eq 'asMessageIds') {
+    return join(' ', map { "<$_>" } @$val);
+  }
+  if ($type eq 'asDate') {
+    my $epoch = Date::Parse::str2time($val);
+    return Date::Format::time2str("%a, %d %b %Y %H:%M:%S %z", $epoch) if defined $epoch;
+    return $val;
+  }
+  if ($type eq 'asURLs') {
+    return join(",\r\n ", map { "<$_>" } @$val);
+  }
+  return $val;
+}
+
+sub _convert_header_forms {
+  my ($item) = @_;
+  for my $key (keys %$item) {
+    next unless $key =~ /^header:([^:]+):(.*)/;
+    my $hname = $1;
+    my $rest = $2;
+
+    my $val = delete $item->{$key};
+
+    # Parse :asType and :all modifiers
+    my $type;
+    my $is_all;
+    for my $part (split /:/, $rest) {
+      if ($part eq 'all') { $is_all = 1 }
+      elsif ($part =~ /^as/) { $type = $part }
+    }
+
+    if ($type && $is_all && ref($val) eq 'ARRAY') {
+      $item->{"header:$hname"} = [map { _convert_header_value($type, $_) } @$val];
+    } elsif ($type) {
+      $item->{"header:$hname"} = _convert_header_value($type, $val);
+    } elsif ($is_all) {
+      # :all without type - values are already the text to set
+      $item->{"header:$hname"} = $val;
+    }
+  }
+}
+
+sub _convert_header_forms_recursive {
+  my ($node) = @_;
+  _convert_header_forms($node);
+  if ($node->{subParts} && ref($node->{subParts}) eq 'ARRAY') {
+    _convert_header_forms_recursive($_) for @{$node->{subParts}};
+  }
+}
+
 sub create_messages {
   my $Self = shift;
   my $args = shift;
@@ -552,12 +620,7 @@ sub create_messages {
       next;
     }
 
-    # Set defaults for missing fields
     $item->{msgdate} ||= time();
-    unless ($item->{messageId}) {
-      my $hostname = $ENV{HOSTNAME} || hostname();
-      $item->{messageId} = [new_uuid_string() . ".$item->{msgdate}\@$hostname"];
-    }
 
     # Validate blob references exist before calling make()
     my @missing_blobs;
@@ -585,7 +648,25 @@ sub create_messages {
       next;
     }
 
-    my $message = eval { Data::JSEmail::make($item, sub { $Self->get_blob(@_) }) };
+    # Convert typed header forms (header:Name:asType) to raw (header:Name)
+    _convert_header_forms($item);
+    if ($item->{bodyStructure}) {
+      _convert_header_forms_recursive($item->{bodyStructure});
+    }
+
+    my %generated_defaults;
+    my $defaults_cb = sub {
+      my ($name) = @_;
+      if (lc($name) eq 'message-id') {
+        my $hostname = $ENV{HOSTNAME} || hostname();
+        my $mid = new_uuid_string() . ".$item->{msgdate}\@$hostname";
+        $generated_defaults{'messageId'} = [$mid];
+        return "<$mid>";
+      }
+      return Data::JSEmail::default_header_defaults($name);
+    };
+
+    my $message = eval { Data::JSEmail::make($item, sub { $Self->get_blob(@_) }, $defaults_cb) };
     if ($@ || !$message) {
       $notCreated{$cid} = { type => 'invalidProperties', description => $@ || 'failed to create message' };
       next;
