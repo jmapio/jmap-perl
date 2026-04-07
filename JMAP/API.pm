@@ -2051,7 +2051,8 @@ sub api_Email_get {
 
           my @values = map { $_->{value} // $_->{Value} } grep { lc($_->{name} // $_->{Name} // '') eq $headername } @{$data->{headers}||[]};
           unless (@values) {
-            $item->{$prop} = undef;
+            # :all returns empty array, non-:all returns null
+            $item->{$prop} = ($rest =~ /:all/) ? [] : undef;
             next;
           }
           if ($rest =~ s/:all$//) {
