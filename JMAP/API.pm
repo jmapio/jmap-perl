@@ -2043,6 +2043,12 @@ sub api_Email_get {
           next unless $prop =~ m/^header:([^:]+)(.*)/;
           my $headername = lc $1;
           my $rest = $2;
+
+          # Validate suffix format: optional :as{Type} then optional :all
+          if ($rest ne '' && $rest !~ /^(:(asText|asAddresses|asGroupedAddresses|asMessageIds|asDate|asURLs|asRaw))?(:(all))?$/) {
+            return $Self->_transError(['error', { type => 'invalidArguments', arguments => [$prop] }]);
+          }
+
           my @values = map { $_->{value} // $_->{Value} } grep { lc($_->{name} // $_->{Name} // '') eq $headername } @{$data->{headers}||[]};
           unless (@values) {
             $item->{$prop} = undef;
