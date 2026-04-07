@@ -1594,14 +1594,27 @@ sub create_mailboxes {
       if (ref($immutable{$key}) eq 'HASH') {
         if (ref($mailbox->{$key}) eq 'HASH') {
           for my $sub (keys %{$mailbox->{$key}}) {
-            $bad{"$key/$sub"} = 1 if $mailbox->{$key}{$sub} ne $immutable{$key}{$sub};
+            unless (exists $immutable{$key}{$sub}) {
+              $bad{"$key/$sub"} = 1;
+              next;
+            }
+            my $got = $mailbox->{$key}{$sub};
+            my $want = $immutable{$key}{$sub};
+            if (ref($want) && "$want" =~ /^[01]$/) {
+              $bad{"$key/$sub"} = 1 if !!$got != !!$want;
+            } else {
+              $bad{"$key/$sub"} = 1 if "$got" ne "$want";
+            }
           }
         }
         else {
           $bad{$key} = 1;
         }
       }
-      elsif (ref($mailbox->{$key}) or $immutable{$key} ne $mailbox->{$key}) {
+      elsif (ref($immutable{$key}) && "$immutable{$key}" =~ /^[01]$/) {
+        $bad{$key} = 1 if !!$mailbox->{$key} != !!$immutable{$key};
+      }
+      elsif (ref($mailbox->{$key}) || "$immutable{$key}" ne "$mailbox->{$key}") {
         $bad{$key} = 1;
       }
     }
@@ -1738,14 +1751,27 @@ sub update_mailboxes {
       if (ref($immutable{$key}) eq 'HASH') {
         if (ref($mailbox->{$key}) eq 'HASH') {
           for my $sub (keys %{$mailbox->{$key}}) {
-            $bad{"$key/$sub"} = 1 if $mailbox->{$key}{$sub} ne $immutable{$key}{$sub};
+            unless (exists $immutable{$key}{$sub}) {
+              $bad{"$key/$sub"} = 1;
+              next;
+            }
+            my $got = $mailbox->{$key}{$sub};
+            my $want = $immutable{$key}{$sub};
+            if (ref($want) && "$want" =~ /^[01]$/) {
+              $bad{"$key/$sub"} = 1 if !!$got != !!$want;
+            } else {
+              $bad{"$key/$sub"} = 1 if "$got" ne "$want";
+            }
           }
         }
         else {
           $bad{$key} = 1;
         }
       }
-      elsif (ref($mailbox->{$key}) or $immutable{$key} ne $mailbox->{$key}) {
+      elsif (ref($immutable{$key}) && "$immutable{$key}" =~ /^[01]$/) {
+        $bad{$key} = 1 if !!$mailbox->{$key} != !!$immutable{$key};
+      }
+      elsif (ref($mailbox->{$key}) || "$immutable{$key}" ne "$mailbox->{$key}") {
         $bad{$key} = 1;
       }
     }
@@ -1812,11 +1838,11 @@ sub update_mailboxes {
     }
   }
 
-  if (keys %toupdate) {
+  if (keys %changed) {
     $Self->begin();
     foreach my $jid (keys %changed) {
-      my ($imapname, $ifolderid) = @{$toupdate{$jid}};
-      if ($imapname) {
+      if ($toupdate{$jid}) {
+        my ($imapname, $ifolderid) = @{$toupdate{$jid}};
         $Self->dmaybeupdate('ifolders', {imapname => $imapname}, {ifolderid => $ifolderid});
       }
       my $change = $update->{$jid};
@@ -1826,7 +1852,7 @@ sub update_mailboxes {
       $changes{sortOrder} = $change->{sortOrder} if exists $change->{sortOrder};
       $changes{role} = $change->{role} if exists $change->{role};
       $changes{isSubscribed} = $change->{isSubscribed} ? 1 : 0 if exists $change->{isSubscribed};
-      $Self->dmaybedirty('jmailboxes', \%changes, {jmailboxid => $jid}, 'jnoncountsmodseq');
+      $Self->dmaybedirty('jmailboxes', \%changes, {jmailboxid => $jid}, 'jnoncountsmodseq') if %changes;
     }
     $Self->commit();
   }
