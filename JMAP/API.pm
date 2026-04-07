@@ -2063,7 +2063,7 @@ sub api_Email_get {
               $item->{$prop} = [map { Data::JSEmail::asAddresses($_) } @values ];
             }
             elsif ($rest eq ':asGroupedAddresses') {
-              $item->{$prop} = [map { Data::JSEmail::asGroupedAddresses($_) } @values ];
+              $item->{$prop} = [map { Data::JSEmail::asGroupAddresses($_) } @values ];
             }
             elsif ($rest eq ':asMessageIds') {
               $item->{$prop} = [map { Data::JSEmail::asMessageIds($_) } @values ];
@@ -2086,7 +2086,7 @@ sub api_Email_get {
               $item->{$prop} = Data::JSEmail::asAddresses($values[-1]);
             }
             elsif ($rest eq ':asGroupedAddresses') {
-              $item->{$prop} = Data::JSEmail::asGroupedAddresses($values[-1]);
+              $item->{$prop} = Data::JSEmail::asGroupAddresses($values[-1]);
             }
             elsif ($rest eq ':asMessageIds') {
               $item->{$prop} = Data::JSEmail::asMessageIds($values[-1]);
