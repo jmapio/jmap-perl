@@ -389,4 +389,295 @@ warn "JMAP proxy listening on port $port\n";
 warn "  Data: $datadir\n";
 warn "  Base URL: $BASEURL\n";
 
+#
+# Management API & UI
+#
+
+sub _accounts_db {
+  my $dbh = DBI->connect("dbi:SQLite:dbname=$datadir/accounts.sqlite3");
+  $dbh->do("CREATE TABLE IF NOT EXISTS accounts (email TEXT PRIMARY KEY, accountid TEXT, type TEXT)");
+  return $dbh;
+}
+
+sub _account_details {
+  my ($accountid) = @_;
+  my $dbfile = "$datadir/$accountid.sqlite3";
+  return {} unless -f $dbfile;
+  my $udb = DBI->connect("dbi:SQLite:dbname=$dbfile");
+  my $user = $udb->selectrow_hashref("SELECT * FROM account LIMIT 1") || {};
+  my ($folders) = $udb->selectrow_array("SELECT COUNT(*) FROM ifolders") // 0;
+  my ($messages) = $udb->selectrow_array("SELECT COUNT(*) FROM jmessages WHERE active = 1") // 0;
+  return {
+    configured => (defined $user->{username} ? 1 : 0),
+    username   => $user->{username},
+    imapHost   => $user->{imapHost},
+    imapPort   => $user->{imapPort},
+    caldavURL  => $user->{caldavURL},
+    carddavURL => $user->{carddavURL},
+    folders    => $folders,
+    messages   => $messages,
+  };
+}
+
+sub mgmt_api_accounts {
+  my ($httpd, $req) = @_;
+  my $method = lc $req->method;
+  my $path = $req->url->path;
+
+  if ($path eq '/api/accounts' && $method eq 'get') {
+    my $dbh = _accounts_db();
+    my $rows = $dbh->selectall_arrayref(
+      "SELECT email, accountid, type FROM accounts ORDER BY accountid",
+      { Slice => {} });
+    for my $row (@$rows) {
+      my $details = _account_details($row->{accountid});
+      $row->{$_} = $details->{$_} for keys %$details;
+    }
+    return $req->respond([200, 'ok',
+      { 'Content-Type' => 'application/json' },
+      JSON::XS::encode_json($rows)]);
+  }
+
+  if ($path =~ m{^/api/accounts/([^/]+)$} && $method eq 'get') {
+    my $aid = $1;
+    my $dbh = _accounts_db();
+    my $row = $dbh->selectrow_hashref(
+      "SELECT email, accountid, type FROM accounts WHERE accountid = ?",
+      {}, $aid);
+    return $req->respond([404, 'not found', {}, '{"error":"not found"}']) unless $row;
+    my $details = _account_details($aid);
+    $row->{$_} = $details->{$_} for keys %$details;
+    return $req->respond([200, 'ok',
+      { 'Content-Type' => 'application/json' },
+      JSON::XS::encode_json($row)]);
+  }
+
+  if ($path eq '/api/accounts' && $method eq 'post') {
+    my $data = eval { decode_json($req->content) };
+    return $req->respond([400, 'bad request', {}, '{"error":"invalid JSON"}']) unless $data;
+    return $req->respond([400, 'bad request', {}, '{"error":"accountid required"}'])
+      unless $data->{accountid};
+
+    my $aid = $data->{accountid};
+    my $type = $data->{type} || 'imap';
+    my $email = $data->{email} || $aid;
+
+    my $dbh = _accounts_db();
+    $dbh->do("INSERT OR REPLACE INTO accounts (email, accountid, type) VALUES (?, ?, ?)",
+      {}, $email, $aid, $type);
+
+    # Set up backend config if provided
+    if ($data->{imapHost}) {
+      eval {
+        require JMAP::ImapDB;
+        my $db = JMAP::ImapDB->new($aid);
+        $db->setuser({
+          username   => $data->{username}   || $aid,
+          password   => $data->{password}   || '',
+          imapHost   => $data->{imapHost},
+          imapPort   => $data->{imapPort}   || 993,
+          imapSSL    => $data->{imapSSL}    // 1,
+          smtpHost   => $data->{smtpHost}   || $data->{imapHost},
+          smtpPort   => $data->{smtpPort}   || 587,
+          smtpSSL    => $data->{smtpSSL}    // 1,
+          caldavURL  => $data->{caldavURL}  || '',
+          carddavURL => $data->{carddavURL} || '',
+        });
+        $db->firstsync();
+        $db->sync_imap();
+      };
+      if ($@) {
+        return $req->respond([500, 'error',
+          { 'Content-Type' => 'application/json' },
+          JSON::XS::encode_json({ error => "$@", accountid => $aid })]);
+      }
+    }
+
+    # Kill existing backend child so it reconnects with new config
+    if ($backend{$aid}) {
+      delete $backend{$aid};
+    }
+
+    return $req->respond([201, 'created',
+      { 'Content-Type' => 'application/json' },
+      JSON::XS::encode_json({ accountid => $aid, type => $type })]);
+  }
+
+  if ($path =~ m{^/api/accounts/([^/]+)$} && $method eq 'delete') {
+    my $aid = $1;
+    my $dbh = _accounts_db();
+    $dbh->do("DELETE FROM accounts WHERE accountid = ?", {}, $aid);
+    unlink "$datadir/$aid.sqlite3";
+    unlink "$datadir/$aid.lock";
+    delete $backend{$aid};
+    return $req->respond([200, 'ok',
+      { 'Content-Type' => 'application/json' },
+      JSON::XS::encode_json({ deleted => $aid })]);
+  }
+
+  if ($path =~ m{^/api/accounts/([^/]+)/sync$} && $method eq 'post') {
+    my $aid = $1;
+    $httpd->stop_request();
+    send_backend_request($aid, 'sync', {}, sub {
+      $req->respond([200, 'ok',
+        { 'Content-Type' => 'application/json' },
+        JSON::XS::encode_json({ synced => $aid })]);
+    }, sub {
+      my $err = shift;
+      $req->respond([500, 'error',
+        { 'Content-Type' => 'application/json' },
+        JSON::XS::encode_json({ error => "$err" })]);
+    });
+    return;
+  }
+
+  return $req->respond([404, 'not found', {}, '{"error":"unknown endpoint"}']);
+}
+
+sub mgmt_dashboard {
+  my ($httpd, $req) = @_;
+  my $html = <<'HTML';
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JMAP Proxy - Management</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #f5f5f5; color: #333; line-height: 1.6; }
+    .container { max-width: 900px; margin: 0 auto; padding: 20px; }
+    h1 { margin-bottom: 20px; color: #2c3e50; }
+    h2 { margin: 20px 0 10px; color: #34495e; }
+    table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px; }
+    th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid #eee; }
+    th { background: #2c3e50; color: white; font-weight: 500; }
+    tr:hover { background: #f8f9fa; }
+    button, input[type=submit] { padding: 6px 14px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
+    .btn-sync { background: #3498db; color: white; }
+    .btn-delete { background: #e74c3c; color: white; }
+    .btn-add { background: #27ae60; color: white; padding: 10px 20px; font-size: 16px; }
+    .btn-sync:hover { background: #2980b9; }
+    .btn-delete:hover { background: #c0392b; }
+    .btn-add:hover { background: #219a52; }
+    .actions { display: flex; gap: 6px; }
+    .form-group { margin-bottom: 12px; }
+    .form-group label { display: block; font-weight: 500; margin-bottom: 4px; }
+    .form-group input { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; }
+    .card { background: white; border-radius: 8px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px; }
+    .hidden { display: none; }
+    .status { font-size: 12px; color: #888; }
+    #message { padding: 10px; border-radius: 4px; margin-bottom: 10px; }
+    .msg-ok { background: #d4edda; color: #155724; }
+    .msg-err { background: #f8d7da; color: #721c24; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h1>JMAP Proxy Management</h1>
+  <div id="message" class="hidden"></div>
+
+  <table>
+    <thead>
+      <tr><th>Account ID</th><th>Type</th><th>Host</th><th>Folders</th><th>Messages</th><th>Actions</th></tr>
+    </thead>
+    <tbody id="accounts"></tbody>
+  </table>
+
+  <button class="btn-add" onclick="toggleForm()">+ Add Account</button>
+
+  <div id="add-form" class="card hidden" style="margin-top: 20px;">
+    <h2>Add Account</h2>
+    <div class="form-group"><label>Account ID</label><input id="f-aid" placeholder="user1"></div>
+    <div class="form-group"><label>Type</label><input id="f-type" value="imap"></div>
+    <div class="form-group"><label>IMAP Host</label><input id="f-host" placeholder="imap.example.com"></div>
+    <div class="form-group"><label>IMAP Port</label><input id="f-port" value="993"></div>
+    <div class="form-group"><label>Username</label><input id="f-user" placeholder="user@example.com"></div>
+    <div class="form-group"><label>Password</label><input id="f-pass" type="password"></div>
+    <div class="form-group"><label>CalDAV URL (optional)</label><input id="f-caldav" placeholder="https://example.com"></div>
+    <div class="form-group"><label>CardDAV URL (optional)</label><input id="f-carddav" placeholder="https://example.com"></div>
+    <div style="margin-top: 16px;">
+      <button class="btn-add" onclick="addAccount()">Create Account</button>
+    </div>
+  </div>
+</div>
+<script>
+function msg(text, ok) {
+  var el = document.getElementById('message');
+  el.textContent = text;
+  el.className = ok ? 'msg-ok' : 'msg-err';
+  setTimeout(function() { el.className = 'hidden'; }, 4000);
+}
+function loadAccounts() {
+  fetch('/api/accounts').then(r => r.json()).then(data => {
+    var tb = document.getElementById('accounts');
+    tb.innerHTML = '';
+    data.forEach(function(a) {
+      var tr = document.createElement('tr');
+      tr.innerHTML = '<td>' + a.accountid + '</td>'
+        + '<td>' + a.type + '</td>'
+        + '<td>' + (a.imapHost || '-') + ':' + (a.imapPort || '') + '</td>'
+        + '<td>' + (a.folders || 0) + '</td>'
+        + '<td>' + (a.messages || 0) + '</td>'
+        + '<td class="actions">'
+        + '<button class="btn-sync" onclick="syncAccount(\'' + a.accountid + '\')">Sync</button>'
+        + '<button class="btn-delete" onclick="deleteAccount(\'' + a.accountid + '\')">Delete</button>'
+        + '</td>';
+      tb.appendChild(tr);
+    });
+  });
+}
+function syncAccount(aid) {
+  fetch('/api/accounts/' + aid + '/sync', { method: 'POST' })
+    .then(r => r.json())
+    .then(d => { msg(d.error ? 'Error: ' + d.error : 'Synced ' + aid, !d.error); loadAccounts(); });
+}
+function deleteAccount(aid) {
+  if (!confirm('Delete account ' + aid + '?')) return;
+  fetch('/api/accounts/' + aid, { method: 'DELETE' })
+    .then(r => r.json())
+    .then(d => { msg('Deleted ' + aid, true); loadAccounts(); });
+}
+function toggleForm() { document.getElementById('add-form').classList.toggle('hidden'); }
+function addAccount() {
+  var body = {
+    accountid: document.getElementById('f-aid').value,
+    type: document.getElementById('f-type').value,
+    imapHost: document.getElementById('f-host').value,
+    imapPort: parseInt(document.getElementById('f-port').value) || 993,
+    username: document.getElementById('f-user').value,
+    password: document.getElementById('f-pass').value,
+    caldavURL: document.getElementById('f-caldav').value,
+    carddavURL: document.getElementById('f-carddav').value,
+  };
+  fetch('/api/accounts', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) })
+    .then(r => r.json())
+    .then(d => {
+      if (d.error) { msg('Error: ' + d.error, false); }
+      else { msg('Created ' + d.accountid, true); document.getElementById('add-form').classList.add('hidden'); loadAccounts(); }
+    });
+}
+loadAccounts();
+</script>
+</body>
+</html>
+HTML
+  $req->respond([200, 'ok', { 'Content-Type' => 'text/html; charset=utf-8' }, $html]);
+}
+
+my $mgmt_port = $ENV{JMAP_MGMT_PORT} || 8080;
+my $mgmt_host = $ENV{JMAP_MGMT_HOST} || '127.0.0.1';
+my $mgmt = AnyEvent::HTTPD->new(
+  port => $mgmt_port,
+  host => $mgmt_host,
+  allowed_methods => [qw(GET POST DELETE PUT)],
+);
+
+$mgmt->reg_cb(
+  '/api'  => \&mgmt_api_accounts,
+  '/'     => \&mgmt_dashboard,
+);
+
+warn "Management UI on http://$mgmt_host:$mgmt_port/\n";
+
 EV::run();

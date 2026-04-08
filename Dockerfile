@@ -62,7 +62,9 @@ RUN mkdir -p /data
 ENV JMAP_HOME=/opt/jmap-perl
 ENV JMAP_DATADIR=/data
 ENV JMAP_PORT=9000
+ENV JMAP_MGMT_PORT=8080
+ENV JMAP_MGMT_HOST=0.0.0.0
 
-EXPOSE 9000
+EXPOSE 9000 8080
 
 ENTRYPOINT ["/opt/jmap-perl/bin/docker-entrypoint.sh"]
