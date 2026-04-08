@@ -127,7 +127,11 @@ sub process_request {
   exit 0;
 }
 
-JMAP::Backend->run(host => '127.0.0.1', port => 5000);
+if (my $sock = $ENV{JMAP_BACKEND_SOCK}) {
+  JMAP::Backend->run(port => "$sock|unix");
+} else {
+  JMAP::Backend->run(host => '127.0.0.1', port => $ENV{JMAP_BACKEND_PORT} || 5000);
+}
 
 sub change_cb {
   my $db = shift;

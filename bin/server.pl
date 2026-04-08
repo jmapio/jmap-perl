@@ -153,7 +153,7 @@ sub read_idle_line {
   });
 }
 
-my $httpd = AnyEvent::HTTPD->new (port => 9000);
+my $httpd = AnyEvent::HTTPD->new (port => ($ENV{JMAP_PORT} || 9000));
 
 my %backend;
 
@@ -205,13 +205,17 @@ sub mk_json {
   };
 }
 
-sub get_backend {
+sub _connect_backend {
   my $accountid = shift;
 
-  # XXX - play the ping_pong game with callbacks?
-  unless ($backend{$accountid}) {
-    $backend{$accountid} = [AnyEvent::Handle->new(
-      connect => ['127.0.0.1', $ENV{JMAP_BACKEND_PORT} || 5000],
+  if (my $sock = $ENV{JMAP_BACKEND_SOCK}) {
+    require IO::Socket::UNIX;
+    my $fh = IO::Socket::UNIX->new(
+      Peer => $sock,
+      Type => IO::Socket::UNIX::SOCK_STREAM(),
+    ) or die "Cannot connect to backend socket $sock: $!";
+    return AnyEvent::Handle->new(
+      fh => $fh,
       on_error => sub {
         print "CLOSING ON ERROR $accountid\n";
         delete $backend{$accountid};
@@ -220,7 +224,28 @@ sub get_backend {
         print "CLOSING ON DISCONNECT $accountid\n";
         delete $backend{$accountid};
       },
-    ), 0];
+    );
+  }
+
+  return AnyEvent::Handle->new(
+    connect => ['127.0.0.1', $ENV{JMAP_BACKEND_PORT} || 5000],
+    on_error => sub {
+      print "CLOSING ON ERROR $accountid\n";
+      delete $backend{$accountid};
+    },
+    on_disconnect => sub {
+      print "CLOSING ON DISCONNECT $accountid\n";
+      delete $backend{$accountid};
+    },
+  );
+}
+
+sub get_backend {
+  my $accountid = shift;
+
+  # XXX - play the ping_pong game with callbacks?
+  unless ($backend{$accountid}) {
+    $backend{$accountid} = [_connect_backend($accountid), 0];
     $backend{$accountid}[0]->push_write("$accountid\n");
     $backend{$accountid}[0]->push_read(json => mk_json($accountid));
   }
