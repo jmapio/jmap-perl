@@ -150,7 +150,7 @@ Client ──JMAP──▶ Proxy ──JMAP──▶ Cyrus (passthrough, acc-wor
 - [ ] Session management with proper token lifecycle
 
 ### Performance
-- [ ] Connection pooling for IMAP backends
+- [x] IMAP connection reuse (persistent forked child per account holds connection open)
 - [ ] Incremental sync scheduling (CONDSTORE/QRESYNC already used)
 - [ ] Query result caching for proper queryChanges with filters
 - [ ] Lazy body fetching (don't download until client requests)
