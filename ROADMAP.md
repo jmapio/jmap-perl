@@ -160,6 +160,10 @@ Much of the performance work is already done:
 
 - [ ] Incremental sync scheduling (CONDSTORE/QRESYNC already used)
 - [ ] Query result caching for proper queryChanges with filters
+- [ ] Move parsed message cache out of SQLite (`jrawmessage`) into
+  per-account file directories (e.g. `/data/{accountid}/cache/{msgid}.json`).
+  SQLite blobs grow the DB file indefinitely; flat files allow
+  age-based eviction and visible disk usage per account
 
 ### Monitoring
 - [ ] Prometheus metrics endpoint
