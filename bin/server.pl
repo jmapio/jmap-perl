@@ -1,6 +1,6 @@
 #!/usr/bin/perl -w
 
-use lib '/home/jmap/jmap-perl';
+use lib $ENV{JMAP_HOME} || '/home/jmap/jmap-perl';
 
 #use Mail::IMAPTalk qw(:trace);
 use HTML::GenerateUtil qw(escape_html escape_uri);
@@ -28,10 +28,11 @@ use URI;
 use Encode qw(encode_utf8);
 use Template;
 
-$ENV{jmaphost} ||= '146.190.52.243';
+my $BASEURL = $ENV{BASEURL} || 'https://146.190.52.243';
 
-my $TT   = Template->new(INCLUDE_PATH => '/home/jmap/jmap-perl/htdocs');
-my $json = JSON::XS->new->utf8->canonical();
+my $jmaphome = $ENV{JMAP_HOME} || '/home/jmap/jmap-perl';
+my $TT   = Template->new(INCLUDE_PATH => "$jmaphome/htdocs");
+my $json = JSON::XS->new->utf8->canonical->pretty();
 
 sub mkerr {
   my $req = shift;
@@ -57,20 +58,20 @@ sub idler {
         host => 'imap.gmail.com',
         user => $data->[1],
         token => $data->[2],
-        port => 993,
-        ssl => 1,
+        port => $data->[3],
+        ssl => ($data->[4] > 1),
       ) : $data->[0] eq 'imap.aol.com' ? AnyEvent::Gmail->new(
         host => 'imap.aol.com',
         user => $data->[1],
         token => $data->[2],
-        port => 993,
-        ssl => 1,
+        port => $data->[3],
+        ssl => ($data->[4] > 1),
       ) : AnyEvent::IMAP->new(
         host => $data->[0],
         user => $data->[1],
         pass => $data->[2],
-        port => 993,
-        ssl => 1,
+        port => $data->[3],
+        ssl => ($data->[4] > 1),
       );
 
       $imap->reg_cb(
@@ -162,7 +163,6 @@ $httpd->reg_cb (
   '/raw' => \&do_raw,
   '/register/gmail' => \&do_register_gmail,
   '/register/aol' => \&do_register_aol,
-  '/delete' => \&do_delete,
   '/cb/aol' => \&do_cb_aol,
   '/cb/google' => \&do_cb_google,
   '/signup' => \&do_signup,
@@ -211,7 +211,7 @@ sub get_backend {
   # XXX - play the ping_pong game with callbacks?
   unless ($backend{$accountid}) {
     $backend{$accountid} = [AnyEvent::Handle->new(
-      connect => ['127.0.0.1', 5000],
+      connect => ['127.0.0.1', $ENV{JMAP_BACKEND_PORT} || 5000],
       on_error => sub {
         print "CLOSING ON ERROR $accountid\n";
         delete $backend{$accountid};
@@ -398,6 +398,11 @@ sub do_jmap {
   my $accountid = $1;
   my $client = $2;
 
+  return send_backend_request($accountid, 'delete', $accountid, sub {
+    my $cookie = bake_cookie("jmap_$accountid", {value => '', path => '/'});
+    $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "$BASEURL/" }, "Redirected"]);
+  }, mkerr($req)) if $client eq '/delete';
+
   return landing_page($req, $accountid, $client) unless lc $req->method eq 'post';
 
   prod_idler($accountid);
@@ -411,7 +416,9 @@ sub do_jmap {
 
   send_backend_request($accountid, 'jmap', $request, sub {
     my $res = shift;
+    warn $json->encode($request);
     my $html = $json->encode($res);
+    warn $html;
     $req->respond (['200', 'ok', {
       'Content-Type' => 'application/json',
       'Access-Control-Allow-Origin' => '*',
@@ -434,13 +441,13 @@ sub client_page {
     my $content = '';
     $TT->process($template, {
       accountid => $accountid,
-      jmaphost => $ENV{jmaphost},
+      jmapurl => "$BASEURL/jmap",
       username => $data->[0],
      }, \$content) || die $Template::ERROR;
     $req->respond({content => [$content_type, $content]});
   }, sub {
     my $cookie = bake_cookie("jmap_$accountid", {value => '', path => '/'});
-    $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "https://$ENV{jmaphost}/" }, "Redirected"]);
+    $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "$BASEURL/" }, "Redirected"]);
   });
 }
 
@@ -460,16 +467,65 @@ sub landing_page {
     prod_idler($accountid);
     send_backend_request("$accountid:sync", 'syncall');
 
-    my $html = '';
-    $TT->process("landing.html", {
-      info => "Account: <b>$data->[0] ($data->[1])</b>",
-      uuid => $accountid,
-      jmaphost => $ENV{jmaphost},
-     }, \$html) || die $Template::ERROR;
-    $req->respond({content => ['text/html', $html]});
+    my $session = {
+      username => $data->[0],
+      accounts => {
+        $accountid => {
+          accountCapabilities => {
+            'urn:ietf:params:jmap:submission' => {
+              'submissionExtensions' => {},
+            },
+            'urn:ietf:params:jmap:contacts' => {},
+            'urn:ietf:params:jmap:calendars' => {},
+            'urn:ietf:params:jmap:mail' => {
+              mayCreateTopLevelMailbox => JSON::true,
+              maxMailboxDepth => undef,
+              maxMailboxesPerEmail => 100,
+              maxSizeMailboxName => 490,
+              emailQuerySortOptions => [qw(receivedAt from to subject size)],
+              maxSizeAttachmentsPerEmail => 10000000,
+            },
+          },
+          isPersonal => JSON::true,
+        },
+      },
+      primaryAccounts => {
+        'urn:ietf:params:jmap:calendars' => $accountid,
+        'urn:ietf:params:jmap:contacts' => $accountid,
+        'urn:ietf:params:jmap:mail' => $accountid,
+        'urn:ietf:params:jmap:submission' => $accountid,
+      },
+      capabilities => {
+        'urn:ietf:params:jmap:submission' => {},
+        'urn:ietf:params:jmap:core' => {
+           'maxObjectsInGet' => 4096,
+           'maxCallsInRequest' => 50,
+           'maxConcurrentRequests' => 10,
+           'maxConcurrentUpload' => 10,
+           'maxObjectsInSet' => 4096,
+           'maxSizeRequest' => 10000000,
+           'collationAlgorithms' => [
+              'i;ascii-numeric',
+              'i;ascii-casemap',
+              'i;octet'
+           ],
+           'maxSizeUpload' => 250000000,
+        },
+        'urn:ietf:params:jmap:mail' => {},
+        'urn:ietf:params:jmap:contacts' => {},
+        'urn:ietf:params:jmap:calendars' => {},
+      },
+      apiUrl => "$BASEURL/jmap/$accountid",
+      eventSourceUrl => "$BASEURL/event/$accountid?types={types}&closeafter={closeafter}&ping={ping}",
+      uploadUrl => "$BASEURL/upload/{accountid}",
+      downloadUrl => "$BASEURL/raw/{accountId}/{blobId}/{name}?type={type}",
+      state => "singleton",
+    };
+    my $res = encode_utf8($json->encode($session));
+    $req->respond({content => ['application/json', $res]});
   }, sub {
     my $cookie = bake_cookie("jmap_$accountid", {value => '', path => '/'});
-    $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "https://$ENV{jmaphost}/" }, "Redirected"]);
+    $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "$BASEURL/" }, "Redirected"]);
   });
 }
 
@@ -493,14 +549,14 @@ sub home_page {
 </tr>
 EOF
     foreach my $key (sort keys %ids) {
-      $sessiontext .= qq{<tr>\n <td><a href="https://$ENV{jmaphost}/jmap/$key/">$ids{$key}</a>\n </td>\n</tr>\n};
+      $sessiontext .= qq{<tr>\n <td><a href="$BASEURL/jmap/$key/">$ids{$key}</a>\n </td>\n</tr>\n};
     }
     $sessiontext .= "</table>";
   }
   my $html = '';
   $TT->process("index.html", {
     sessions => $sessiontext,
-    jmaphost => $ENV{jmaphost},
+    jmapurl => "$BASEURL/jmap",
    }, \$html) || die $Template::ERROR;
   $req->respond({content => ['text/html', $html]});
 }
@@ -747,23 +803,6 @@ sub do_register_aol {
   $req->respond({redirect => $O->start(new_uuid_string())});
 };
 
-sub do_delete {
-  my ($httpd, $req) = @_;
-
-  my $uri = $req->url();
-  my $path = $uri->path();
-
-  return not_found($req) unless $path =~ m{^/delete/([^/]+)};
-
-  my $accountid = $1;
-  if ($accountid) {
-    send_backend_request($accountid, 'delete', $accountid, sub {
-      my $cookie = bake_cookie("jmap_$accountid", {value => '', path => '/'});
-      $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "https://$ENV{jmaphost}/" }, "Redirected"]);
-    }, mkerr($req));
-  }
-};
-
 sub do_signup {
   my ($httpd, $req) = @_;
 
@@ -771,7 +810,7 @@ sub do_signup {
   my $path = $uri->path();
 
   my %opts;
-  foreach my $key (qw(username password imapHost imapPort imapSSL smtpHost smtpPort smtpSSL caldavURL carddavURL force)) {
+  foreach my $key (qw(username password imapHost imapPort imapSSL smtpHost smtpPort smtpSSL caldavURL carddavURL force noResolve)) {
     $opts{$key} = $req->parm($key);
   }
 
@@ -786,7 +825,7 @@ sub do_signup {
         path => '/',
         expires => '+3M',
       });
-      $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "https://$ENV{jmaphost}/jmap/$data->[1]" },
+      $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "$BASEURL/jmap/$data->[1]" },
                 "Redirected"]);
       delete $backend{$accountid} unless $data->[1] eq $accountid;
     }
@@ -813,7 +852,7 @@ sub do_cb_aol {
         path => '/',
         expires => '+3M',
       });
-      $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "https://$ENV{jmaphost}/jmap/$data->[0]" },
+      $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "$BASEURL/jmap/$data->[0]" },
                 "Redirected"]);
       delete $backend{$accountid} unless $data->[0] eq $accountid;
       send_backend_request($data->[0], 'sync', $data->[0]);
@@ -839,7 +878,7 @@ sub do_cb_google {
         path => '/',
         expires => '+3M',
       });
-      $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "https://$ENV{jmaphost}/jmap/$data->[0]" },
+      $req->respond([301, 'redirected', { 'Set-Cookie' => $cookie, Location => "$BASEURL/jmap/$data->[0]" },
                 "Redirected"]);
       delete $backend{$accountid} unless $data->[0] eq $accountid;
       send_backend_request($data->[0], 'sync', $data->[0]);

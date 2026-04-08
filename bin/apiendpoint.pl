@@ -1,6 +1,6 @@
 #!/usr/bin/perl -w
 
-use lib '/home/jmap/jmap-perl';
+use lib $ENV{JMAP_HOME} || '/home/jmap/jmap-perl';
 package JMAP::Backend;
 
 #use Mail::IMAPTalk qw(:trace);
@@ -297,7 +297,8 @@ sub handle_davsync {
 }
 
 sub accountsdb {
-  my $dbh = DBI->connect("dbi:SQLite:dbname=/home/jmap/data/accounts.sqlite3");
+  my $datadir = $ENV{JMAP_DATADIR} || '/home/jmap/data';
+  my $dbh = DBI->connect("dbi:SQLite:dbname=$datadir/accounts.sqlite3");
   $dbh->do(<<EOF);
 CREATE TABLE IF NOT EXISTS accounts (
   email TEXT PRIMARY KEY,
@@ -415,6 +416,8 @@ sub handle_signup {
   $detail->{smtpPort} ||= 587;
   $detail->{smtpSSL} ||= 3;
 
+  my $resolve = not delete $detail->{noResolve};
+
   if ($detail->{username} =~ m/\@icloud\.com/) {
     $detail->{imapHost} = 'imap.mail.me.com';
     $detail->{smtpHost} = 'smtp.mail.me.com';
@@ -431,7 +434,7 @@ sub handle_signup {
     $force = 1;
   }
 
-  else {
+  elsif ($resolve) {
     my $Resolver = Net::DNS::Resolver->new;
     my $domain = $detail->{username};
     $domain =~ s/.*\@//;

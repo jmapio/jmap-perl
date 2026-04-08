@@ -10,8 +10,8 @@ use Mail::IMAPTalk;
 use Email::Simple;
 use Email::Sender::Simple qw(sendmail);
 use Email::Sender::Transport::SMTPS;
-use Net::CalDAVTalk '0.11';
-use Net::CardDAVTalk '0.07';
+use Net::CalDAVTalk;
+use Net::CardDAVTalk;
 use MIME::Base64 qw(decode_base64);
 use MIME::QuotedPrint qw(decode_qp);
 
@@ -697,7 +697,7 @@ sub create_mailbox {
 
   my $res = $imap->create($imapname);
 
-  unless ($res and $res eq 'ok') {
+  unless ($res) {
     my $err = $imap->get_last_error();
     if ($err =~ m/Response was : (\w+) - (.*)/) {
       return ['create', $1, $2];

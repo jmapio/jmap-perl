@@ -11,9 +11,190 @@ use HTML::GenerateUtil qw(escape_html);
 use JSON::XS;
 use Data::Dumper;
 use Time::HiRes qw(gettimeofday tv_interval);
-use JMAP::EmailObject;
+use Data::JSEmail;
+use Date::Parse;
+use B ();
 
 my $json = JSON::XS->new->utf8->canonical();
+
+# Parameter type validation schemas for JMAP methods
+# Types: string, uint (unsigned int), int, bool, [string] (array of strings),
+#        {string} (hash with string keys), object, any
+my %PARAM_SCHEMA = (
+  'Email/get' => {
+    accountId          => 'string?',
+    ids                => '[string]',
+    properties         => '[string]?',
+    bodyProperties     => '[string]?',
+    fetchTextBodyValues  => 'bool?',
+    fetchHTMLBodyValues  => 'bool?',
+    fetchAllBodyValues   => 'bool?',
+    maxBodyValueBytes    => 'posint!',
+  },
+  'Email/query' => {
+    accountId          => 'string?',
+    filter             => 'object?',
+    sort               => '[object]?',
+    position           => 'int?',
+    anchor             => 'string?',
+    anchorOffset        => 'int?',
+    limit              => 'uint?',
+    collapseThreads    => 'bool?',
+    calculateTotal     => 'bool?',
+  },
+  'Email/set' => {
+    accountId          => 'string?',
+    ifInState          => 'string?',
+    create             => '{object}?',
+    update             => '{object}?',
+    destroy            => '[string]?',
+  },
+  'Email/import' => {
+    accountId          => 'string?',
+    ifInState          => 'string?',
+    emails             => '{object}',
+  },
+  'Email/changes' => {
+    accountId          => 'string?',
+    sinceState         => 'string',
+    maxChanges         => 'uint?',
+  },
+  'Mailbox/get' => {
+    accountId          => 'string?',
+    ids                => '[string]?',
+    properties         => '[string]?',
+  },
+  'Mailbox/set' => {
+    accountId          => 'string?',
+    ifInState          => 'string?',
+    create             => '{object}?',
+    update             => '{object}?',
+    destroy            => '[string]?',
+    onDestroyRemoveMessages => 'bool?',
+  },
+  'Mailbox/query' => {
+    accountId          => 'string?',
+    filter             => 'object?',
+    sort               => '[object]?',
+    position           => 'int?',
+    limit              => 'uint?',
+    calculateTotal     => 'bool?',
+  },
+  'Mailbox/changes' => {
+    accountId          => 'string?',
+    sinceState         => 'string',
+    maxChanges         => 'uint?',
+  },
+  'Thread/get' => {
+    accountId          => 'string?',
+    ids                => '[string]',
+  },
+  'Thread/changes' => {
+    accountId          => 'string?',
+    sinceState         => 'string',
+    maxChanges         => 'uint?',
+  },
+);
+
+# Validate a single value against a type spec
+sub _validate_type {
+  my ($value, $type) = @_;
+
+  # ? = optional (key can be absent, null accepted)
+  # ! = optional but not nullable (key can be absent, null rejected)
+  my $optional = ($type =~ s/\?$//);
+  my $notnull = ($type =~ s/!$//);
+  return 1 if !defined $value && $optional;
+  return 0 if !defined $value; # catches both required and !-marked
+
+  # JSON::Typist wraps values in blessed objects — unwrap for type checking
+  my $is_json_string = ref($value) && ref($value) =~ /String/;
+  my $is_json_number = ref($value) && ref($value) =~ /Number/;
+
+  if ($type eq 'string') {
+    return 1 if $is_json_string;
+    if (!ref($value)) {
+      # Reject values that were JSON numbers (have IOK/NOK but not POK)
+      my $flags = B::svref_2object(\$value)->FLAGS;
+      my $is_num = $flags & (B::SVf_IOK | B::SVf_NOK);
+      my $is_str = $flags & B::SVf_POK;
+      return 0 if $is_num && !$is_str;
+      return 1;
+    }
+    return 0;
+  }
+  elsif ($type eq 'uint' || $type eq 'posint' || $type eq 'int') {
+    # Must be a JSON number, not a string that looks like a number
+    if ($is_json_number) {
+      my $v = 0 + "$value";
+      return 0 if $type eq 'uint' && $v < 0;
+      return 0 if $type eq 'posint' && $v < 1;
+      return 0 if $type eq 'int' && "$value" !~ /^-?\d+$/;
+      return 1;
+    }
+    if (!ref($value)) {
+      # Plain scalar — check if it was decoded as a number (has IOK/NOK flag)
+      my $flags = B::svref_2object(\$value)->FLAGS;
+      my $is_num = $flags & (B::SVf_IOK | B::SVf_NOK);
+      return 0 unless $is_num;
+      return 0 if $type eq 'uint' && $value < 0;
+      return 0 if $type eq 'posint' && $value < 1;
+      return 1;
+    }
+    return 0;
+  }
+  elsif ($type eq 'bool') {
+    # JSON booleans come through as various blessed refs
+    return 1 if ref($value) && (
+      ref($value) eq 'JSON::PP::Boolean' ||
+      ref($value) eq 'JSON::XS::Boolean' ||
+      ref($value) =~ /Boolean/
+    );
+    # Also accept scalar refs \0 and \1
+    return 1 if ref($value) eq 'SCALAR';
+    return 0;
+  }
+  elsif ($type eq '[string]') {
+    return ref($value) eq 'ARRAY' && !grep { ref $_ } @$value;
+  }
+  elsif ($type eq '[object]') {
+    return ref($value) eq 'ARRAY' && !grep { ref $_ ne 'HASH' } @$value;
+  }
+  elsif ($type eq '{object}') {
+    return ref($value) eq 'HASH';
+  }
+  elsif ($type eq '{string}') {
+    return ref($value) eq 'HASH' && !grep { ref $_ } values %$value;
+  }
+  elsif ($type eq 'object') {
+    return ref($value) eq 'HASH';
+  }
+  elsif ($type eq 'any') {
+    return 1;
+  }
+  return 0;
+}
+
+# Validate args against schema, return list of invalid argument names
+sub _validate_args {
+  my ($command, $args) = @_;
+  my $schema = $PARAM_SCHEMA{$command};
+  return () unless $schema; # no schema = no validation
+
+  my @bad;
+  for my $param (keys %$schema) {
+    my $type = $schema->{$param};
+    next if $type =~ /[\?!]$/ && !exists $args->{$param};
+    if (exists $args->{$param}) {
+      push @bad, $param unless _validate_type($args->{$param}, $type);
+    }
+    elsif ($type !~ /[\?!]$/) {
+      # Required parameter missing
+      push @bad, $param;
+    }
+  }
+  return @bad;
+}
 
 sub new {
   my $class = shift;
@@ -117,6 +298,13 @@ sub handle_request {
     if ($FuncRef) {
       my ($myargs, $error) = $Self->resolve_args($args);
       if ($myargs) {
+        # Validate argument types
+        my @bad = _validate_args($command, $myargs);
+        if (@bad) {
+          push @items, ['error', { type => 'invalidArguments', arguments => \@bad }];
+          $Self->push_results($tag, @items);
+          next;
+        }
         if ($myargs->{ids}) {
           my @list = @{$myargs->{ids}};
           if (@list > 4) {
@@ -774,11 +962,11 @@ sub api_Mailbox_get {
   foreach my $item (@$data) {
     next unless delete $want{$item->{jmailboxid}};
 
-    my %rights = map { $_ => ($item->{$_} ? $JSON::true : $JSON::false) } qw(mayReadItems mayAddItems mayRemoveItems maySetSeen maySetKeywords mayCreateChild mayRename mayDelete maySubmit);
+    my %rights = map { $_ => ($item->{$_} ? $JSON::true : $JSON::false) } qw(mayReadItems mayAddItems mayRemoveItems maySetSeen maySetKeywords mayCreateChild mayRename mayDelete maySubmit mayAdmin);
     my %rec = (
       id => "$item->{jmailboxid}",
       name => Encode::decode_utf8($item->{name}),
-      parentId => ($item->{parentId} ? "$item->{parentId}" : undef),
+      parentId => $item->{parentId},
       role => $item->{role},
       sortOrder => $item->{sortOrder}||0,
       (map { $_ => $item->{$_} || 0 } qw(totalEmails unreadEmails totalThreads unreadThreads)),
@@ -856,7 +1044,7 @@ sub _mailbox_sort {
         die "unknown field $field";
       }
 
-      $res = -$res unless $arg->{isAscending};
+      $res = -$res if defined($arg->{isAscending}) && !$arg->{isAscending};
 
       return $res if $res;
     }
@@ -870,6 +1058,34 @@ sub _mailbox_match {
   my $Self = shift;
   my $item = shift;
   my $filter = shift;
+
+  if ($filter->{operator}) {
+    if ($filter->{operator} eq 'NOT') {
+      return not $Self->_mailbox_match($item, {operator => 'OR', conditions => $filter->{conditions}});
+    }
+    elsif ($filter->{operator} eq 'OR') {
+      for my $cond (@{$filter->{conditions}}) {
+        return 1 if $Self->_mailbox_match($item, $cond);
+      }
+      return 0;
+    }
+    elsif ($filter->{operator} eq 'AND') {
+      for my $cond (@{$filter->{conditions}}) {
+        return 0 unless $Self->_mailbox_match($item, $cond);
+      }
+      return 1;
+    }
+    die "Invalid operator $filter->{operator}";
+  }
+
+  if (exists $filter->{hasAnyRole}) {
+    if ($filter->{hasAnyRole}) {
+      return 0 unless $item->{role};
+    }
+    else {
+      return 0 if $item->{role};
+    }
+  }
 
   if (exists $filter->{hasRole}) {
     if ($filter->{hasRole}) {
@@ -931,23 +1147,53 @@ sub api_Mailbox_query {
   $data = $Self->_mailbox_sort($data, $args->{sort}, $storage);
   $data = $Self->_mailbox_filter($data, $args->{filter}, $storage) if $args->{filter};
 
+  my $total = scalar @$data;
+
+  if (defined $args->{limit} && $args->{limit} < 0) {
+    return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['limit']}]);
+  }
+
   my $start = $args->{position} || 0;
 
   if ($args->{anchor}) {
     # need to calculate the position
     for (0..$#$data) {
-      next unless $data->[$_]{msgid} eq $args->{anchor};
-      $start = $_ + $args->{anchorOffset};
+      next unless $data->[$_]{jmailboxid} eq $args->{anchor};
+      $start = $_ + ($args->{anchorOffset} || 0);
       $start = 0 if $start < 0;
       goto gotit;
     }
     return $Self->_transError(['error', {type => 'anchorNotFound'}]);
   }
 
-  my $end = $args->{limit} ? $start + $args->{limit} - 1 : $#$data;
-  $end = $#$data if $end > $#$data;
+  gotit:
+  # Handle negative positions (count from end)
+  if ($start < 0) {
+    $start = $total + $start;
+    $start = 0 if $start < 0;
+  }
 
-  my @result = map { $data->[$_]{jmailboxid} } $start..$end;
+  # Position beyond total = no results, position clamped to 0
+  if ($start >= $total) {
+    my @res;
+    push @res, ['Mailbox/query', {
+      accountId => $accountid,
+      filter => $args->{filter},
+      sort => $args->{sort},
+      queryState => $newQueryState,
+      canCalculateChanges => $JSON::false,
+      position => 0,
+      total => $total,
+      ids => [],
+    }];
+    return @res;
+  }
+
+  my $end = defined($args->{limit}) ? $start + $args->{limit} - 1 : $#$data;
+  $end = $#$data if $end > $#$data;
+  $end = $start - 1 if $end < $start;  # limit 0
+
+  my @result = ($start <= $end) ? map { $data->[$_]{jmailboxid} } $start..$end : ();
 
   my @res;
   push @res, ['Mailbox/query', {
@@ -977,22 +1223,29 @@ sub api_Mailbox_changes {
   my $newState = "$user->{jstateMailbox}";
 
   my $sinceState = $args->{sinceState};
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceState']}])
     if not $args->{sinceState};
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $sinceState <= $user->{jdeletedmodseq});
 
   my $data = $Self->{db}->dget('jmailboxes', { jmodseq => ['>', $sinceState] });
 
+  my $partial = 0;
   if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
-    return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
+    $data = [ sort { $a->{jmodseq} <=> $b->{jmodseq} } @$data ];
+    my $next = $data->[$args->{maxChanges}];
+    pop @$data while (@$data and $data->[-1]{jmodseq} == $next->{jmodseq});
+    # couldn't find a set of changes that would work!
+    return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]) unless @$data;
+    $newState = "$data->[-1]{jmodseq}";
+    $partial = 1;
   }
 
   $Self->commit();
 
   my @created;
   my @updated;
-  my @removed;
+  my @destroyed;
   my $onlyCounts = 1;
   foreach my $item (@$data) {
     if ($item->{active}) {
@@ -1002,15 +1255,17 @@ sub api_Mailbox_changes {
       }
       else {
         push @created, $item->{jmailboxid};
+        $onlyCounts = 0;
       }
     }
     else {
       if ($item->{jcreated} <= $sinceState) {
-        push @removed, $item->{jmailboxid};
+        push @destroyed, $item->{jmailboxid};
       }
       # otherwise never seen
     }
   }
+  $onlyCounts = 0 unless @updated;
 
   my @res = (['Mailbox/changes', {
     accountId => $accountid,
@@ -1018,8 +1273,9 @@ sub api_Mailbox_changes {
     newState => $newState,
     created => [map { "$_" } @created],
     updated => [map { "$_" } @updated],
-    removed => [map { "$_" } @removed],
-    changedProperties => $onlyCounts ? ["totalEmails", "unreadEmails", "totalThreads", "unreadThreads"] : JSON::null,
+    destroyed => [map { "$_" } @destroyed],
+    hasMoreChanges => $partial ? JSON::true : JSON::false,
+    updatedProperties => $onlyCounts ? ["totalEmails", "unreadEmails", "totalThreads", "unreadThreads"] : JSON::null,
   }]);
 
   return @res;
@@ -1102,11 +1358,11 @@ sub api_Mailbox_set {
   $Self->commit();
   $oldState = "$user->{jstateMailbox}";
 
-  ($created, $notCreated) = $Self->{db}->create_mailboxes($create);
+  ($created, $notCreated) = $Self->{db}->create_mailboxes($create, sub { $Self->idmap(shift) });
   $Self->setid($_, $created->{$_}{id}) for keys %$created;
   $Self->_resolve_patch($update, 'api_Mailbox_get');
   ($updated, $notUpdated) = $Self->{db}->update_mailboxes($update, sub { $Self->idmap(shift) });
-  ($destroyed, $notDestroyed) = $Self->{db}->destroy_mailboxes($destroy, $Self->{onDestroyRemoveMessages});
+  ($destroyed, $notDestroyed) = $Self->{db}->destroy_mailboxes($destroy, $args->{onDestroyRemoveMessages});
 
   $Self->begin();
   $user = $Self->{db}->get_user();
@@ -1183,7 +1439,7 @@ sub _post_sort {
         die "unknown field $field";
       }
 
-      $res = -$res unless $arg->{isAscending};
+      $res = -$res if defined($arg->{isAscending}) && !$arg->{isAscending};
 
       return $res if $res;
     }
@@ -1326,10 +1582,13 @@ sub _match {
     return 0 if $item->{keywords}->{$condition->{notKeyword}};
   }
 
-  if ($condition->{hasAttachment}) {
+  if (exists $condition->{hasAttachment}) {
     $storage->{hasatt} ||= $Self->_load_hasatt();
-    return 0 unless $storage->{hasatt}{$item->{msgid}};
-    # XXX - hasAttachment
+    if ($condition->{hasAttachment}) {
+      return 0 unless $storage->{hasatt}{$item->{msgid}};
+    } else {
+      return 0 if $storage->{hasatt}{$item->{msgid}};
+    }
   }
 
   if ($condition->{text}) {
@@ -1377,6 +1636,7 @@ sub _match {
 
   return 1;
 }
+
 
 sub _match_operator {
   my $Self = shift;
@@ -1431,15 +1691,15 @@ sub api_Email_query {
 
   my $newQueryState = "$user->{jstateEmail}";
 
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['position', 'anchor']}])
     if (exists $args->{position} and exists $args->{anchor});
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['anchor', 'anchorOffset']}])
     if (exists $args->{anchor} and not exists $args->{anchorOffset});
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['anchor', 'anchorOffset']}])
     if (not exists $args->{anchor} and exists $args->{anchorOffset});
 
   my $start = $args->{position} || 0;
-  return $Self->_transError(['error', {type => 'invalidArguments'}]) if $start < 0;
+  return $Self->_transError(['error', {type => 'invalidArguments',  arguments => ['position']}]) if $start < 0;
 
   my $data = $Self->{db}->dget('jmessages', { active => 1 });
 
@@ -1499,13 +1759,13 @@ sub api_Email_queryChanges {
 
   my $newQueryState = "$user->{jstateEmail}";
 
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments',  arguments => ['sinceQueryState']}])
     if not $args->{sinceQueryState};
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newQueryState => $newQueryState}])
     if ($user->{jdeletedmodseq} and $args->{sinceQueryState} <= $user->{jdeletedmodseq});
 
   my $start = $args->{position} || 0;
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments',  arguments => ['position']}])
     if $start < 0;
 
   my $data = $Self->{db}->dget('jmessages', {});
@@ -1526,7 +1786,7 @@ sub api_Email_queryChanges {
   my $total = 0;
   my $changes = 0;
   my @added;
-  my @removed;
+  my @destroyed;
   # just do two entire logic paths, it's different enough to make it easier to write twice
   if ($args->{collapseThreads}) {
     # exemplar - only these messages are in the result set we're building
@@ -1557,12 +1817,12 @@ sub api_Email_queryChanges {
         # if it's in AND it's the exemplar, it's been added
         if ($isin and $exemplar{$item->{thrid}} eq $item->{msgid}) {
           push @added, {id => "$item->{msgid}", index => $total-1};
-          push @removed, "$item->{msgid}";
+          push @destroyed, "$item->{msgid}";
           $changes++;
         }
-        # otherwise it's removed
+        # otherwise it's destroyed
         else {
-          push @removed, "$item->{msgid}";
+          push @destroyed, "$item->{msgid}";
           $changes++;
         }
       }
@@ -1570,7 +1830,7 @@ sub api_Email_queryChanges {
       elsif ($isin) {
         # remove it unless it's also the current exemplar
         if ($exemplar{$item->{thrid}} ne $item->{msgid}) {
-          push @removed, "$item->{msgid}";
+          push @destroyed, "$item->{msgid}";
           $changes++;
         }
         # and we're done
@@ -1605,13 +1865,18 @@ sub api_Email_queryChanges {
       if ($changed) {
         if ($isin) {
           push @added, {id => "$item->{msgid}", index => $total-1};
-          push @removed, "$item->{msgid}";
+          # also mark as removed so the client replaces rather than duplicates
+          push @destroyed, "$item->{msgid}" unless $isnew;
           $changes++;
         }
-        else {
-          push @removed, "$item->{msgid}";
+        elsif (!$isnew) {
+          # Changed but not matching now — may have been in old results.
+          # Without query result caching we can't know for sure, so
+          # report as removed.  RFC 8620 §5.6 allows extra IDs in removed.
+          push @destroyed, "$item->{msgid}";
           $changes++;
         }
+        # New messages that don't match: not in old results, nothing to report
       }
 
       if ($args->{maxChanges} and $changes > $args->{maxChanges}) {
@@ -1633,7 +1898,7 @@ sub api_Email_queryChanges {
     collapseThreads => $args->{collapseThreads},
     oldQueryState => "$args->{sinceQueryState}",
     newQueryState => $newQueryState,
-    removed => \@removed,
+    removed => \@destroyed,
     added => \@added,
     total => $total,
   }];
@@ -1707,24 +1972,34 @@ sub api_Email_get {
 
   my $newState = "$user->{jstateEmail}";
 
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments',  arguments => ['ids']}])
     unless $args->{ids};
-  #properties: String[] A list of properties to fetch for each message.
 
-  # XXX - lots to do about properties here
+  # RFC 8621 default properties for Email/get
+  my @EMAIL_DEFAULT_PROPERTIES = qw(
+    id blobId threadId mailboxIds keywords size receivedAt
+    messageId inReplyTo references sender from to cc bcc replyTo
+    subject sentAt hasAttachment preview bodyValues textBody htmlBody attachments
+  );
+
+  # If properties not specified, use defaults
+  unless ($args->{properties}) {
+    $args->{properties} = \@EMAIL_DEFAULT_PROPERTIES;
+  }
+
   my %seenids;
   my %missingids;
   my @list;
   my $need_content = 0;
-  foreach my $prop (qw(hasAttachment headers preview textBody htmlBody attachments attachedEmails)) {
+  foreach my $prop (qw(hasAttachment headers preview textBody htmlBody attachments bodyValues bodyStructure messageId inReplyTo references sender)) {
     $need_content = 1 if _prop_wanted($args, $prop);
   }
-  $need_content = 1 if ($args->{properties} and grep { m/^headers\./ } @{$args->{properties}});
+  $need_content = 1 if grep { m/^header:/ } @{$args->{properties}};
   my %msgidmap;
   foreach my $msgid (map { $Self->idmap($_) } @{$args->{ids}}) {
     next if $seenids{$msgid};
     $seenids{$msgid} = 1;
-    my $data = $Self->{db}->dgetone('jmessages', { msgid => $msgid });
+    my $data = $Self->{db}->dgetone('jmessages', { msgid => $msgid, active => 1 });
     unless ($data) {
       $missingids{$msgid} = 1;
       next;
@@ -1756,22 +2031,24 @@ sub api_Email_get {
       $item->{keywords} = decode_json($data->{keywords});
     }
 
-    foreach my $email (qw(to cc bcc from replyTo)) {
+    foreach my $email (qw(to cc bcc from)) {
       if (_prop_wanted($args, $email)) {
-        $item->{$email} = JMAP::EmailObject::asAddresses($data->{"msg$email"});
+        my $raw = $data->{"msg$email"};
+        $item->{$email} = (defined $raw && $raw ne '') ? Data::JSEmail::asAddresses($raw) : undef;
       }
     }
+    # replyTo and sender not stored in DB — handled in fill_messages block below
 
     if (_prop_wanted($args, 'subject')) {
       $item->{subject} = Encode::decode_utf8($data->{msgsubject});
     }
 
     if (_prop_wanted($args, 'sentAt')) {
-      $item->{sentAt} = JMAP::EmailObject::isodate($data->{msgdate});
+      $item->{sentAt} = Data::JSEmail::isodate($data->{msgdate});
     }
 
     if (_prop_wanted($args, 'receivedAt')) {
-      $item->{receivedAt} = JMAP::EmailObject::isodate($data->{internaldate});
+      $item->{receivedAt} = Data::JSEmail::isodate($data->{internaldate});
     }
 
     if (_prop_wanted($args, 'size')) {
@@ -1789,13 +2066,26 @@ sub api_Email_get {
 
   # need to load messages from the server
   if ($need_content) {
+    # RFC 8621 Section 4.2: default bodyProperties
+    my $bodyProperties = $args->{bodyProperties} || [qw(partId blobId size name type charset disposition cid language location)];
+
     my $content = $Self->{db}->fill_messages(map { $_->{id} } @list);
     foreach my $item (@list) {
       my $data = $content->{$item->{id}};
-      foreach my $prop (qw(preview textBody htmlBody)) {
-        if (_prop_wanted($args, $prop)) {
-          $item->{$prop} = $data->{$prop};
+      if (_prop_wanted($args, 'preview')) {
+        $item->{preview} = $data->{preview};
+      }
+      # replyTo and sender come from parsed content, not DB envelope
+      for my $email (qw(replyTo sender)) {
+        if (_prop_wanted($args, $email)) {
+          $item->{$email} = $data->{$email}; # already parsed by Data::JSEmail
         }
+      }
+      if (_prop_wanted($args, 'textBody')) {
+        $item->{textBody} = _filterBodyParts($data->{textBody}, $bodyProperties);
+      }
+      if (_prop_wanted($args, 'htmlBody')) {
+        $item->{htmlBody} = _filterBodyParts($data->{htmlBody}, $bodyProperties);
       }
       if (_prop_wanted($args, 'body')) {
         if ($data->{htmlBody}) {
@@ -1817,20 +2107,141 @@ sub api_Email_get {
       elsif ($args->{properties}) {
         my %wanted;
         foreach my $prop (@{$args->{properties}}) {
-          next unless $prop =~ m/^headers\.(.*)/;
-          $item->{headers} ||= {}; # avoid zero matched headers bug
-          $wanted{lc $1} = 1;
-        }
-        foreach my $key (keys %{$data->{headers}}) {
-          next unless $wanted{lc $key};
-          $item->{headers}{lc $key} = $data->{headers}{$key};
+          next unless $prop =~ m/^header:([^:]+)(.*)/;
+          my $headername = lc $1;
+          my $rest = $2;
+
+          # Validate suffix format: optional :as{Type} then optional :all
+          if ($rest ne '' && $rest !~ /^(:(asText|asAddresses|asGroupedAddresses|asMessageIds|asDate|asURLs|asRaw))?(:(all))?$/) {
+            return $Self->_transError(['error', { type => 'invalidArguments', arguments => [$prop] }]);
+          }
+
+          my @values = map { $_->{value} // $_->{Value} } grep { lc($_->{name} // $_->{Name} // '') eq $headername } @{$data->{headers}||[]};
+          unless (@values) {
+            # :all returns empty array, non-:all returns null
+            $item->{$prop} = ($rest =~ /:all/) ? [] : undef;
+            next;
+          }
+          if ($rest =~ s/:all$//) {
+            if ($rest eq ':asText') {
+              $item->{$prop} = [map { Data::JSEmail::asText($_) } @values ];
+            }
+            elsif ($rest eq ':asAddresses') {
+              $item->{$prop} = [map { Data::JSEmail::asAddresses($_) } @values ];
+            }
+            elsif ($rest eq ':asGroupedAddresses') {
+              $item->{$prop} = [map { Data::JSEmail::asGroupedAddresses($_) } @values ];
+            }
+            elsif ($rest eq ':asMessageIds') {
+              $item->{$prop} = [map { Data::JSEmail::asMessageIds($_) } @values ];
+            }
+            elsif ($rest eq ':asDate') {
+              $item->{$prop} = [map { Data::JSEmail::asDate($_) } @values ];
+            }
+            elsif ($rest eq ':asURLs') {
+              $item->{$prop} = [map { Data::JSEmail::asURLs($_) } @values ];
+            }
+            else {  # :asRaw or nothing
+              $item->{$prop} = \@values;
+            }
+          }
+          else {
+            if ($rest eq ':asText') {
+              $item->{$prop} = Data::JSEmail::asText($values[-1]);
+            }
+            elsif ($rest eq ':asAddresses') {
+              $item->{$prop} = Data::JSEmail::asAddresses($values[-1]);
+            }
+            elsif ($rest eq ':asGroupedAddresses') {
+              $item->{$prop} = Data::JSEmail::asGroupedAddresses($values[-1]);
+            }
+            elsif ($rest eq ':asMessageIds') {
+              $item->{$prop} = Data::JSEmail::asMessageIds($values[-1]);
+            }
+            elsif ($rest eq ':asDate') {
+              $item->{$prop} = Data::JSEmail::asDate($values[-1]);
+            }
+            elsif ($rest eq ':asURLs') {
+              $item->{$prop} = Data::JSEmail::asURLs($values[-1]);
+            }
+            else {  # :asRaw or nothing
+              $item->{$prop} = $values[-1];
+            }
+          }
         }
       }
       if (_prop_wanted($args, 'attachments')) {
-        $item->{attachments} = $data->{attachments};
+        $item->{attachments} = _filterBodyParts($data->{attachments}, $bodyProperties);
       }
       if (_prop_wanted($args, 'attachedEmails')) {
         $item->{attachedEmails} = $data->{attachedEmails};
+      }
+      if (_prop_wanted($args, 'bodyStructure')) {
+        $item->{bodyStructure} = _filterBodyPart($data->{bodyStructure}, $bodyProperties);
+      }
+
+      # bodyValues: always present, but only populated when fetch*BodyValues flags are set
+      if (_prop_wanted($args, 'bodyValues') && ($args->{fetchAllBodyValues} || $args->{fetchTextBodyValues} || $args->{fetchHTMLBodyValues})) {
+        my %wantParts;
+        if ($args->{fetchAllBodyValues}) {
+          for my $part (@{$data->{textBody} || []}, @{$data->{htmlBody} || []}) {
+            $wantParts{$part->{partId}} = 1 if $part->{partId};
+          }
+        }
+        else {
+          if ($args->{fetchTextBodyValues}) {
+            for my $part (@{$data->{textBody} || []}) {
+              $wantParts{$part->{partId}} = 1 if $part->{partId};
+            }
+          }
+          if ($args->{fetchHTMLBodyValues}) {
+            for my $part (@{$data->{htmlBody} || []}) {
+              $wantParts{$part->{partId}} = 1 if $part->{partId};
+            }
+          }
+        }
+
+        my %bodyValues;
+        my $maxBytes = $args->{maxBodyValueBytes};
+        for my $partId (keys %wantParts) {
+          my $bv = $data->{bodyValues}{$partId};
+          next unless $bv;
+          my %val = %$bv;
+          if ($maxBytes && $maxBytes > 0 && defined $val{value}) {
+            my $val_bytes = Encode::encode_utf8($val{value});
+            if (length($val_bytes) > $maxBytes) {
+              # Truncate, then remove any trailing partial UTF-8 char
+              my $truncated = substr($val_bytes, 0, $maxBytes);
+              # Strip trailing continuation bytes + incomplete lead byte
+              while (length($truncated) && (ord(substr($truncated, -1)) & 0xC0) == 0x80) {
+                chop $truncated;
+              }
+              # If last byte is a multi-byte lead that's now incomplete, remove it
+              if (length($truncated) && ord(substr($truncated, -1)) >= 0xC0) {
+                my $lead = ord(substr($truncated, -1));
+                my $expected = ($lead < 0xE0) ? 2 : ($lead < 0xF0) ? 3 : 4;
+                # Check if we have enough following bytes (we don't, we just stripped them)
+                chop $truncated;
+              }
+              $val{value} = Encode::decode_utf8($truncated);
+              $val{isTruncated} = $JSON::true;
+            }
+          }
+          $bodyValues{$partId} = \%val;
+        }
+        $item->{bodyValues} = \%bodyValues;
+      }
+      elsif (_prop_wanted($args, 'bodyValues')) {
+        $item->{bodyValues} = {};
+      }
+      if (_prop_wanted($args, 'messageId')) {
+        $item->{messageId} = $data->{messageId};
+      }
+      if (_prop_wanted($args, 'references')) {
+        $item->{references} = $data->{references};
+      }
+      if (_prop_wanted($args, 'inReplyTo')) {
+        $item->{inReplyTo} = $data->{inReplyTo};
       }
     }
   }
@@ -1858,6 +2269,43 @@ sub getRawBlob {
 }
 
 # or this
+# Filter a single body part to only include requested properties
+sub _filterBodyPart {
+  my $data = shift;
+  my $props = shift;
+  return $data unless $props; # undef means no filtering
+  my %res;
+  my %want = map { $_ => 1 } @$props;
+  for my $prop (@$props) {
+    $res{$prop} = $data->{$prop} if exists $data->{$prop};
+  }
+  # subParts: array for multipart, null for leaf parts
+  if ($want{subParts}) {
+    if ($data->{subParts}) {
+      $res{subParts} = [ map { _filterBodyPart($_, $props) } @{$data->{subParts}} ];
+    } else {
+      $res{subParts} = [];
+    }
+  }
+  elsif ($data->{subParts}) {
+    # Always include subParts structurally even if not explicitly requested
+    $res{subParts} = [ map { _filterBodyPart($_, $props) } @{$data->{subParts}} ];
+  }
+  return \%res;
+}
+
+# Filter a list of body parts
+sub _filterBodyParts {
+  my $parts = shift;
+  my $props = shift;
+  return $parts unless $props; # undef means no filtering
+  return [ map { _filterBodyPart($_, $props) } @{$parts || []} ];
+}
+
+# backward compat alias
+sub createBodyStructure { _filterBodyPart(@_) }
+
+# or this
 sub uploadFile {
   my $Self = shift;
   my ($accountid, $type, $content) = @_; # XXX filehandle?
@@ -1869,7 +2317,7 @@ sub downloadFile {
   my $Self = shift;
   my $jfileid = shift;
 
-  my ($type, $content) = $Self->{db}->get_file($jfileid);
+  my ($type, $content) = $Self->{db}->get_blob($jfileid);
 
   return ($type, $content);
 }
@@ -1887,22 +2335,29 @@ sub api_Email_changes {
 
   my $newState = "$user->{jstateEmail}";
 
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceState']}])
     if not $args->{sinceState};
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
 
-  my $data = $Self->{db}->dget('jmessages', { jmodseq => ['>', $args->{sinceState}] }, 'msgid,active,jcreated');
+  my $data = $Self->{db}->dget('jmessages', { jmodseq => ['>', $args->{sinceState}] }, 'msgid,active,jcreated,jmodseq');
 
+  my $partial = 0;
   if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
-    return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
+    $data = [ sort { $a->{jmodseq} <=> $b->{jmodseq} } @$data ];
+    my $next = $data->[$args->{maxChanges}];
+    pop @$data while (@$data and $data->[-1]{jmodseq} == $next->{jmodseq});
+    # couldn't find a set of changes that would work!
+    return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]) unless @$data;
+    $newState = "$data->[-1]{jmodseq}";
+    $partial = 1;
   }
 
   $Self->commit();
 
   my @created;
   my @updated;
-  my @removed;
+  my @destroyed;
 
   foreach my $row (@$data) {
     if ($row->{active}) {
@@ -1914,7 +2369,7 @@ sub api_Email_changes {
     }
     else {
       if ($row->{jcreated} <= $args->{sinceState}) {
-        push @removed, $row->{msgid};
+        push @destroyed, $row->{msgid};
       }
       # otherwise never seen
     }
@@ -1927,7 +2382,8 @@ sub api_Email_changes {
     newState => $newState,
     created => [map { "$_" } @created],
     updated => [map { "$_" } @updated],
-    removed => [map { "$_" } @removed],
+    destroyed => [map { "$_" } @destroyed],
+    hasMoreChanges => $partial ? JSON::true : JSON::false,
   }];
 
   return @res;
@@ -2004,6 +2460,8 @@ sub api_Email_import {
   my %created;
   my %notcreated;
 
+  my ($oldState, $newState);
+
   my $scoped_lock = $Self->{db}->begin_superlock();
 
   # make sure our DB is up to date
@@ -2016,44 +2474,57 @@ sub api_Email_import {
   return $Self->_transError(['error', {type => 'accountNotFound'}])
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
-    if (not $args->{messages} or ref($args->{messages}) ne 'HASH');
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['emails']}])
+    if (not $args->{emails} or ref($args->{emails}) ne 'HASH');
 
-  my $mailboxdata = $Self->dget('jmailboxes', { active => 1 });
+  my $mailboxdata = $Self->{db}->dget('jmailboxes', { active => 1 });
   my %validids = map { $_->{jmailboxid} => 1 } @$mailboxdata;
 
-  foreach my $id (keys %{$args->{messages}}) {
-    my $message = $args->{messages}{$id};
-    # sanity check
-    return $Self->_transError(['error', {type => 'invalidArguments'}])
-      if (not $message->{mailboxIds} or ref($message->{mailboxIds}) ne 'HASH');
-    return $Self->_transError(['error', {type => 'invalidArguments'}])
-      if (not $message->{blobId});
-  }
-
   $Self->commit();
+  $oldState = "$user->{jstateEmail}";
 
   my %todo;
-  foreach my $id (keys %{$args->{messages}}) {
-    my $message = $args->{messages}{$id};
-    my @ids = map { $Self->idmap($_) } keys %{$message->{mailboxIds}};
-    if (grep { not $validids{$_} } @ids) {
-      $notcreated{$id} = { type => 'invalidMailboxes' };
+  foreach my $id (keys %{$args->{emails}}) {
+    my $message = $args->{emails}{$id};
+    my @ids;
+    my @bad;
+
+    my $date = $message->{receivedAt} ? str2time($message->{receivedAt}) : time();
+    unless (defined $date) {
+      push @bad, 'receivedAt';
+    }
+
+    if (exists $message->{keywords} and not _good_keywords($message->{keywords})) {
+      push @bad, 'keywords';
+    }
+
+    if (not $message->{mailboxIds} or ref($message->{mailboxIds}) ne 'HASH') {
+      push @bad, 'mailboxIds';
+    }
+    else {
+      @ids = map { $Self->idmap($_) } keys %{$message->{mailboxIds}};
+      if (grep { not $validids{$_} } @ids) {
+        push @bad, 'mailboxIds';
+      }
+    }
+
+    my ($type, $file);
+    if (not defined $message->{blobId} or $message->{blobId} eq '') {
+      push @bad, 'blobId';
+    }
+    else {
+      ($type, $file) = $Self->{db}->get_blob($message->{blobId});
+      unless ($file and $type eq 'message/rfc822') {
+        push @bad, 'blobId';
+      }
+    }
+
+    if (@bad) {
+      $notcreated{$id} = { type => 'invalidProperties', properties => [sort @bad] };
       next;
     }
 
-    my ($type, $file) = $Self->{db}->get_file($message->{blobId});
-    unless ($file) {
-      $notcreated{$id} = { type => 'notFound' };
-      next;
-    }
-
-    unless ($type eq 'message/rfc822') {
-      $notcreated{$id} = { type => 'notFound', description => "incorrect type $type for $message->{blobId}" };
-      next;
-    }
-
-    my ($msgid, $thrid, $size) = eval { $Self->{db}->import_message($file, \@ids, $message->{keywords}) };
+    my ($msgid, $thrid, $size) = eval { $Self->{db}->import_message($file, \@ids, $message->{keywords}, $date) };
     if ($@) {
       $notcreated{$id} = { type => 'internalError', description => $@ };
       next;
@@ -2067,52 +2538,45 @@ sub api_Email_import {
     };
   }
 
+  $Self->{db}->sync_imap();
+
+  $Self->begin();
+  $user = $Self->{db}->get_user();
+  $Self->commit();
+  $newState = "$user->{jstateEmail}";
+
   my @res;
   push @res, ['Email/import', {
     accountId => $accountid,
     created => \%created,
     notCreated => \%notcreated,
+    oldState => $oldState,
+    newState => $newState,
   }];
 
   return @res;
+}
+
+sub _good_keywords {
+  my $val = shift;
+  return unless ref($val) eq 'HASH';
+  for my $key (sort keys %$val) {
+    # bad characters
+    warn "CHECKING KEY $key";
+    return if $key =~ m/[\x00-\x20\(\)\{\}\%\*\"\\]/;
+    # false or null
+    return unless $val->{$key};
+    # not a boolean
+    warn "CHECKING BOOL";
+    return unless JSON::is_bool($val->{$key});
+    # must be true!  This one is OK
+  }
+  return 1;
 }
 
 sub api_Email_copy {
   my $Self = shift;
   return $Self->_transError(['error', {type => 'notImplemented'}]);
-}
-
-sub reportEmails {
-  my $Self = shift;
-  my $args = shift;
-
-  $Self->begin();
-
-  my $user = $Self->{db}->get_user();
-  my $accountid = $Self->{db}->accountid();
-  return $Self->_transError(['error', {type => 'accountNotFound'}])
-    if ($args->{accountId} and $args->{accountId} ne $accountid);
-
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
-    if not $args->{emailIds};
-
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
-    if not exists $args->{asSpam};
-
-  $Self->commit();
-
-  my @ids = map { $Self->idmap($_) } @{$args->{emailIds}};
-  my ($reported, $notfound) = $Self->report_messages(\@ids, $args->{asSpam});
-
-  my @res;
-  push @res, ['messagesReported', {
-    accountId => $Self->{db}->accountid(),
-    asSpam => $args->{asSpam},
-    reported => $reported,
-    notFound => $notfound,
-  }];
-
-  return @res;
 }
 
 sub api_Thread_get {
@@ -2174,22 +2638,30 @@ sub api_Thread_changes {
 
   my $newState = "$user->{jstateThread}";
 
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceState']}])
     if not $args->{sinceState};
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
 
-  my $data = $Self->{db}->dget('jthreads', { jmodseq => ['>', $args->{sinceState}] }, 'thrid,active,jcreated');
+  my $data = $Self->{db}->dget('jthreads', { jmodseq => ['>', $args->{sinceState}] }, 'thrid,active,jcreated,jmodseq');
 
+  my $partial = 0;
   if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
-    return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
+    $data = [ sort { $a->{jmodseq} <=> $b->{jmodseq} } @$data ];
+    warn Dumper($data);
+    my $next = $data->[$args->{maxChanges}];
+    pop @$data while (@$data and $data->[-1]{jmodseq} == $next->{jmodseq});
+    # couldn't find a set of changes that would work!
+    return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]) unless @$data;
+    $newState = "$data->[-1]{jmodseq}";
+    $partial = 1;
   }
 
   $Self->commit();
 
   my @created;
   my @updated;
-  my @removed;
+  my @destroyed;
   foreach my $row (@$data) {
     if ($row->{active}) {
       if ($row->{jcreated} <= $args->{sinceState}) {
@@ -2201,7 +2673,7 @@ sub api_Thread_changes {
     }
     else {
       if ($row->{jcreated} <= $args->{sinceState}) {
-        push @removed, $row->{thrid};
+        push @destroyed, $row->{thrid};
       }
       # otherwise never seen
     }
@@ -2214,7 +2686,8 @@ sub api_Thread_changes {
     newState => $newState,
     created => \@created,
     updated => \@updated,
-    removed => \@removed,
+    destroyed => \@destroyed,
+    hasMoreChanges => $partial ? JSON::true : JSON::false,
   }];
 
   return @res;
@@ -2327,7 +2800,7 @@ sub api_Calendar_changes {
   my $newState = "$user->{jstateCalendar}";
 
   my $sinceState = $args->{sinceState};
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['position']}])
     if not $args->{sinceState};
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $sinceState <= $user->{jdeletedmodseq});
@@ -2342,7 +2815,7 @@ sub api_Calendar_changes {
 
   my @created;
   my @updated;
-  my @removed;
+  my @destroyed;
   foreach my $item (@$data) {
     if ($item->{jmodseq} > $sinceState) {
       if ($item->{active}) {
@@ -2355,7 +2828,7 @@ sub api_Calendar_changes {
       }
       else {
         if ($item->{jcreated} <= $sinceState) {
-          push @removed, $item->{jcalendarid};
+          push @destroyed, $item->{jcalendarid};
         }
         # otherwise never seen
       }
@@ -2368,7 +2841,8 @@ sub api_Calendar_changes {
     newState => $newState,
     created => [map { "$_" } @created],
     updated => [map { "$_" } @updated],
-    removed => [map { "$_" } @removed],
+    destroyed => [map { "$_" } @destroyed],
+    hasMoreChanges => JSON::false,
   }]);
 
   return @res;
@@ -2416,7 +2890,7 @@ sub api_CalendarEvent_query {
   my $newQueryState = "$user->{jstateCalendarEvent}";
 
   my $start = $args->{position} || 0;
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['position']}])
     if $start < 0;
 
   my $data = $Self->{db}->dget('jevents', { active => 1 }, 'eventuid,jcalendarid');
@@ -2457,7 +2931,7 @@ sub api_CalendarEvent_get {
 
   my $newState = "$user->{jstateCalendarEvent}";
 
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['ids']}])
     unless $args->{ids};
   #properties: String[] A list of properties to fetch for each message.
 
@@ -2509,7 +2983,7 @@ sub api_CalendarEvent_changes {
 
   my $newState = "$user->{jstateCalendarEvent}";
 
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceState']}])
     if not $args->{sinceState};
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
@@ -2524,7 +2998,7 @@ sub api_CalendarEvent_changes {
 
   my @created;
   my @updated;
-  my @removed;
+  my @destroyed;
 
   foreach my $row (@$data) {
     if ($row->{active}) {
@@ -2537,7 +3011,7 @@ sub api_CalendarEvent_changes {
     }
     else {
       if ($row->{jcreated} <= $args->{sinceState}) {
-        push @removed, $row->{eventuid};
+        push @destroyed, $row->{eventuid};
       }
       # otherwise never seen
     }
@@ -2550,7 +3024,8 @@ sub api_CalendarEvent_changes {
     newState => $newState,
     created => [map { "$_" } @created],
     updated => [map { "$_" } @updated],
-    removed => [map { "$_" } @removed],
+    destroyed => [map { "$_" } @destroyed],
+    hasMoreChanges => JSON::false,
   }];
 
   return @res;
@@ -2631,7 +3106,7 @@ sub api_Addressbook_changes {
   my $newState = "$user->{jhighestmodseq}";
 
   my $sinceState = $args->{sinceState};
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceState']}])
     if not $args->{sinceState};
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $sinceState <= $user->{jdeletedmodseq});
@@ -2646,7 +3121,7 @@ sub api_Addressbook_changes {
 
   my @created;
   my @updated;
-  my @removed;
+  my @destroyed;
   foreach my $item (@$data) {
     if ($item->{jmodseq} > $sinceState) {
       if ($item->{active}) {
@@ -2659,7 +3134,7 @@ sub api_Addressbook_changes {
       }
       else {
         if ($item->{jcreated} <= $sinceState) {
-          push @removed, $item->{jaddressbookid};
+          push @destroyed, $item->{jaddressbookid};
         }
         # otherwise never seen
       }
@@ -2672,7 +3147,8 @@ sub api_Addressbook_changes {
     newState => $newState,
     created => [map { "$_" } @created],
     updated => [map { "$_" } @updated],
-    removed => [map { "$_" } @removed],
+    destroyed => [map { "$_" } @destroyed],
+    hasMoreChanges => JSON::false,
   }]);
 
   return @res;
@@ -2720,7 +3196,7 @@ sub api_Contact_query {
   my $newQueryState = "$user->{jstateContact}";
 
   my $start = $args->{position} || 0;
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['position']}])
     if $start < 0;
 
   my $data = $Self->{db}->dget('jcontacts', { active => 1 }, 'contactuid,jaddressbookid');
@@ -2813,7 +3289,7 @@ sub api_Contact_changes {
 
   my $newState = "$user->{jstateContact}";
 
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceState']}])
     if not $args->{sinceState};
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
@@ -2827,7 +3303,7 @@ sub api_Contact_changes {
 
   my @created;
   my @updated;
-  my @removed;
+  my @destroyed;
 
   foreach my $row (@$data) {
     if ($row->{active}) {
@@ -2840,7 +3316,7 @@ sub api_Contact_changes {
     }
     else {
       if ($row->{jcreated} <= $args->{sinceState}) {
-        push @removed, $row->{contactuid};
+        push @destroyed, $row->{contactuid};
       }
       # otherwise never seen
     }
@@ -2853,7 +3329,8 @@ sub api_Contact_changes {
     newState => $newState,
     created => [map { "$_" } @created],
     updated => [map { "$_" } @updated],
-    removed => [map { "$_" } @removed],
+    destroyed => [map { "$_" } @destroyed],
+    hasMoreChanges => JSON::false,
   }];
 
   return @res;
@@ -2927,7 +3404,7 @@ sub api_ContactGroup_changes {
 
   my $newState = "$user->{jstateContactGroup}";
 
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceState']}])
     if not $args->{sinceState};
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
@@ -2942,7 +3419,7 @@ sub api_ContactGroup_changes {
 
   my @created;
   my @updated;
-  my @removed;
+  my @destroyed;
 
   foreach my $row (@$data) {
     if ($row->{active}) {
@@ -2955,7 +3432,7 @@ sub api_ContactGroup_changes {
     }
     else {
       if ($row->{jcreated} <= $args->{sinceState}) {
-        push @removed, $row->{groupuid};
+        push @destroyed, $row->{groupuid};
       }
       # otherwise never seen
     }
@@ -2969,7 +3446,8 @@ sub api_ContactGroup_changes {
     newState => $newState,
     created => [map { "$_" } @created],
     updated => [map { "$_" } @updated],
-    removed => [map { "$_" } @removed],
+    destroyed => [map { "$_" } @destroyed],
+    hasMoreChanges => JSON::false,
   }];
 
   return @res;
@@ -3279,11 +3757,11 @@ sub api_EmailSubmission_query {
   my $newQueryState = "$user->{jstateEmailSubmission}";
 
   my $start = $args->{position} || 0;
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['position']}])
     if $start < 0;
 
   my $sort = _mk_submission_sort($args->{sort});
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sort']}])
     unless $sort;
 
   my $data = $dbh->selectall_arrayref("SELECT jsubid,thrid,msgid,sendat FROM jsubmission WHERE active = 1 ORDER BY $sort");
@@ -3330,7 +3808,7 @@ sub api_EmailSubmission_queryChanges {
   my $newQueryState = "$user->{jstateEmailSubmission}";
   my $sinceQueryState = $args->{sinceQueryState};
 
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceQueryState']}])
     if not $args->{sinceQueryState};
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newQueryState => $newQueryState}])
     if ($user->{jdeletedmodseq} and $sinceQueryState <= $user->{jdeletedmodseq});
@@ -3338,7 +3816,7 @@ sub api_EmailSubmission_queryChanges {
   #properties: String[] A list of properties to fetch for each message.
 
   my $sort = _mk_submission_sort($args->{sort});
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sort']}])
     unless $sort;
 
   my $data = $dbh->selectall_arrayref("SELECT jsubid,thrid,msgid,sendat,jmodseq,active FROM jsubmission ORDER BY $sort");
@@ -3349,7 +3827,7 @@ sub api_EmailSubmission_queryChanges {
   $Self->commit();
 
   my @added;
-  my @removed;
+  my @destroyed;
 
   my $index = 0;
   foreach my $item (@$data) {
@@ -3358,7 +3836,7 @@ sub api_EmailSubmission_queryChanges {
       next;
     }
     # changed
-    push @removed, "$item->[0]";
+    push @destroyed, "$item->[0]";
     next unless $item->[5];
     push @added, { id => "$item->[0]", index => $index };
     $index++;
@@ -3371,7 +3849,7 @@ sub api_EmailSubmission_queryChanges {
     oldQueryState => $sinceQueryState,
     newQueryState => $newQueryState,
     total => $total,
-    removed => \@removed,
+    destroyed => \@destroyed,
     added => \@added,
   }];
 }
@@ -3390,7 +3868,7 @@ sub api_EmailSubmission_get {
 
   my $newState = "$user->{jstateEmailSubmission}";
 
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['ids']}])
     unless $args->{ids};
   #properties: String[] A list of properties to fetch for each message.
 
@@ -3414,7 +3892,7 @@ sub api_EmailSubmission_get {
       emailId => $data->{msgid},
       threadId => $thrid,
       envelope => $data->{envelope} ? decode_json($data->{envelope}) : undef,
-      sendAt => JMAP::EmailObject::isodate($data->{sendat}),
+      sendAt => Data::JSEmail::isodate($data->{sendat}),
       undoStatus => $data->{status},
       deliveryStatus => undef,
       dsnBlobIds => [],
@@ -3453,7 +3931,7 @@ sub api_EmailSubmission_changes {
   my $newState = "$user->{jstateEmailSubmission}";
 
   my $sinceState = $args->{sinceState};
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceState']}])
     if not $args->{sinceState};
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $sinceState <= $user->{jdeletedmodseq});
@@ -3471,7 +3949,7 @@ sub api_EmailSubmission_changes {
 
   my @created;
   my @updated;
-  my @removed;
+  my @destroyed;
 
   foreach my $item (@$data) {
     # changed
@@ -3485,7 +3963,7 @@ sub api_EmailSubmission_changes {
     }
     else {
       if ($item->[6] <= $args->{sinceState}) {
-        push @removed, "$item->[0]";
+        push @destroyed, "$item->[0]";
       }
       # otherwise never seen
     }
@@ -3499,7 +3977,8 @@ sub api_EmailSubmission_changes {
     hasMoreChanges => $hasMore ? $JSON::true : $JSON::false,
     created => \@created,
     updated => \@updated,
-    removed => \@removed,
+    destroyed => \@destroyed,
+    hasMoreChanges => JSON::false,
   }];
 
   return @res;
@@ -3678,7 +4157,7 @@ sub api_StorageNode_query {
   my $data = [grep { dummy_node_matches($args->{filter}, $_) } dummy_storage_node_data()];
 
   my $start = $args->{position} || 0;
-  return $Self->_transError(['error', {type => 'invalidArguments'}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['position']}])
     if $start < 0;
 
   my $end = $args->{limit} ? $start + $args->{limit} - 1 : $#$data;

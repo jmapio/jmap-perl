@@ -18,6 +18,8 @@ use Encode::IMAPUTF7;
 use AnyEvent;
 use AnyEvent::Socket;
 use Date::Format;
+use Data::JSEmail;
+use Text::JSContact qw(vcard_to_jscontact jscontact_to_vcard);
 use Data::Dumper;
 use JMAP::Sync::Gmail;
 use JMAP::Sync::Standard;
@@ -96,7 +98,7 @@ sub access_token {
   my $data = $Self->dgetone('iserver');
   $Self->commit();
 
-  return [$data->{imapHost}, $data->{username}, $data->{password}];
+  return [$data->{imapHost}, $data->{username}, $data->{password}, $data->{imapPort}, $data->{imapSSL}];
 }
 
 sub access_data {
@@ -235,34 +237,51 @@ sub sync_jmailboxes {
     next if lc $folder->{label} eq "\\allmail"; # we don't show this folder
     my $fname = $folder->{imapname};
     # check for roles first
-    my @bits = map { decode('IMAP-UTF-7', $_) } split "[$folder->{sep}]", $fname;
+    my $sep = $folder->{sep};
+    my @bits = map { my $b = decode('IMAP-UTF-7', $_); $b =~ s/\^/$sep/g; $b } split "[\Q$sep\E]", $fname;
     shift @bits if ($bits[0] eq 'INBOX' and $bits[1]); # really we should be stripping the actual prefix, if any
     shift @bits if $bits[0] eq '[Gmail]'; # we special case this GMail magic
     next unless @bits; # also skip the magic '[Gmail]' top-level
     my $role = $ROLE_MAP{lc $folder->{label}};
-    my $id = '';
-    my $parentId = '';
+    my $id = undef;
+    my $parentId = undef;
     my $name;
     my $sortOrder = 3;
     $sortOrder = 2 if $role;
     $sortOrder = 1 if ($role||'') eq 'inbox';
-    while (my $item = shift @bits) {
-      $seen{$id} = 1 if $id;
-      $name = $item;
-      $parentId = $id;
-      $id = $byname{$parentId}{$name};
-      unless ($id) {
-        if (@bits) {
-          # need to create intermediate folder ...
-          # XXX  - label noselect?
-          $id = new_uuid_string();
-          $Self->dmake('jmailboxes', {
-            name => $name,
-            jmailboxid => $id,
-            sortOrder => 4,
-            parentId => $parentId,
-          }, 'jnoncountsmodseq');
-          $byname{$parentId}{$name} = $id;
+
+    # If this ifolder already has a jmailboxid (e.g. from create_mailboxes),
+    # and that jmailbox exists, use it directly instead of name-walking.
+    if ($folder->{jmailboxid} && $jbyid{$folder->{jmailboxid}}) {
+      $id = $folder->{jmailboxid};
+      $name = $jbyid{$id}{name};
+      $parentId = $jbyid{$id}{parentId};
+      # mark intermediates as seen
+      my $pid = $parentId;
+      while ($pid) {
+        $seen{$pid} = 1;
+        $pid = $jbyid{$pid} ? $jbyid{$pid}{parentId} : undef;
+      }
+    }
+    else {
+      while (my $item = shift @bits) {
+        $seen{$id//''} = 1 if $id;
+        $name = $item;
+        $parentId = $id;
+        $id = $byname{$parentId//''}{$name};
+        unless ($id) {
+          if (@bits) {
+            # need to create intermediate folder ...
+            # XXX  - label noselect?
+            $id = new_uuid_string();
+            $Self->dmake('jmailboxes', {
+              name => $name,
+              jmailboxid => $id,
+              sortOrder => 10,
+              parentId => $parentId,
+            }, 'jnoncountsmodseq');
+            $byname{$parentId//''}{$name} = $id;
+          }
         }
       }
     }
@@ -282,6 +301,7 @@ sub sync_jmailboxes {
       mayRename => $role ? 0 : 1,
       mayDelete => $role ? 0 : 1,
       maySubmit => 1,
+      mayAdmin => 1,
     );
     if ($id) {
       if ($role and $roletoid{$role} and $roletoid{$role} ne $id) {
@@ -303,11 +323,11 @@ sub sync_jmailboxes {
       else {
         $id = $folder->{uniqueid} || new_uuid_string();
         $Self->dmake('jmailboxes', {role => $role, jmailboxid => $id, %details}, 'jnoncountsmodseq');
-        $byname{$parentId}{$name} = $id;
+        $byname{$parentId//''}{$name} = $id;
         $roletoid{$role} = $id if $role;
       }
     }
-    $seen{$id} = 1;
+    $seen{$id//''} = 1;
     $Self->dmaybeupdate('ifolders', {jmailboxid => $id}, {ifolderid => $folder->{ifolderid}});
   }
 
@@ -824,13 +844,15 @@ sub calcmsgid {
   my $encsub = eval { Encode::decode('MIME-Header', $envelope->{Subject}) };
   $encsub = $envelope->{Subject} unless defined $encsub;
   my $sortsub = _normalsubject($encsub);
-  # DBNOTE: because of DISTINCT and IN not being supported
-  my ($thrid) = $Self->dbh->selectrow_array("SELECT DISTINCT thrid FROM ithread WHERE messageid IN (?, ?) AND sortsubject = ?", {}, $replyto, $messageid, $sortsub);
-  # XXX - merging?  subject-checking?  We have a subject here
+
+  # Thread by In-Reply-To/Message-ID first (JMAP threading model),
+  # then fall back to subject-based threading
+  my ($thrid) = $Self->dbh->selectrow_array(
+    "SELECT DISTINCT thrid FROM ithread WHERE messageid IN (?, ?)",
+    {}, $replyto, $messageid);
   $thrid ||= "t$base";
   foreach my $id ($replyto, $messageid) {
     next if $id eq '';
-    # DBNOTE: because of INSERT OR IGNORE (maybe)
     $Self->dbh->do("INSERT OR IGNORE INTO ithread (messageid, thrid, sortsubject) VALUES (?, ?, ?)", {}, $id, $thrid, $sortsub);
   }
 
@@ -984,13 +1006,14 @@ sub imap_search {
   foreach my $item (@$data) {
     my $from = $item->{uidfirst};
     my $to = $item->{uidnext}-1;
+    next if $from > $to;  # empty folder
     my $res = $Self->backend_cmd('imap_search', $item->{imapname}, 'uid', "$from:$to", @search);
     # XXX - uidvaldity changed
     next unless $res->[2] == $item->{uidvalidity};
     $Self->begin();
     foreach my $uid (@{$res->[3]}) {
       my $msgid = $Self->dgetfield('imessages', { ifolderid => $item->{ifolderid}, uid => $uid }, 'msgid');
-      $matches{$msgid} = 1;
+      $matches{$msgid} = 1 if $msgid;
     }
     $Self->commit();
   }
@@ -1023,7 +1046,8 @@ sub import_message {
   my $Self = shift;
   my $rfc822 = shift;
   my $mailboxIds = shift;
-  my $keywords = shift;
+  my $keywords = shift || {};
+  my $internaldate = shift;
 
   $Self->begin();
   my $folderdata = $Self->dget('ifolders');
@@ -1035,6 +1059,7 @@ sub import_message {
   # store to the first named folder - we can use labels on gmail to add to other folders later.
   my ($id, @others) = @$mailboxIds;
   my $imapname = $jmailmap{$id}{imapname};
+  my $uidvalidity = $jmailmap{$id}{uidvalidity};
 
   my %flags = %$keywords;
   my @flags;
@@ -1044,7 +1069,6 @@ sub import_message {
   push @flags, "\\Seen" if delete $flags{'$seen'};
   push @flags, sort keys %flags;
 
-  my $internaldate = time(); # XXX - allow setting?
   my $date = Date::Format::time2str('%e-%b-%Y %T %z', $internaldate);
 
   my $appendres = $Self->backend_cmd('imap_append', $imapname, "(@flags)", $date, $rfc822);
@@ -1059,7 +1083,15 @@ sub import_message {
     $ifolderid = $am->{ifolderid};
   }
   else {
-    my $fdata = $jmailmap{$mailboxIds->[0]};
+    # copy to all the other folders too and sync them
+    for my $folder (@others) {
+      my $newfolder = $jmailmap{$folder}{imapname};
+      my $fdata = $jmailmap{$folder};
+      $Self->backend_cmd('imap_copy', $imapname, $uidvalidity, $uid, $newfolder);
+      $Self->do_folder($fdata->{ifolderid}, $fdata->{label});
+    }
+    # sync this folder
+    my $fdata = $jmailmap{$id};
     $Self->do_folder($fdata->{ifolderid}, $fdata->{label});
     $ifolderid = $fdata->{ifolderid};
   }
@@ -1072,7 +1104,7 @@ sub import_message {
   die "FAILED TO GET BACK STORED MESSAGE FROM IMAP SERVER" unless $msgdata;
 
   # save us having to download it again - drop out of transaction so we don't wait on the parse
-  my $message = JMAP::EmailObject::parse($rfc822, $msgdata->{msgid});
+  my $message = Data::JSEmail::parse($rfc822, $msgdata->{msgid});
 
   $Self->begin();
   $Self->dinsert('jrawmessage', {
@@ -1448,7 +1480,7 @@ sub fill_messages {
       next unless $rfc822;
       my $msgid = $uhash->{$uid};
       next if $result{$msgid};
-      $result{$msgid} = $parsed{$msgid} = JMAP::EmailObject::parse($rfc822, $msgid);
+      $result{$msgid} = $parsed{$msgid} = Data::JSEmail::parse($rfc822, $msgid);
     }
   }
 
@@ -1473,9 +1505,10 @@ sub find_type {
   my $message = shift;
   my $part = shift;
 
-  return $message->{type} if ($message->{id} || '') eq $part;
 
-  foreach my $sub (@{$message->{attachments}}) {
+  return $message->{type} if ($message->{partId} || '') eq $part;
+
+  foreach my $sub (@{$message->{subParts}}) {
     my $type = find_type($sub, $part);
     return $type if $type;
   }
@@ -1495,7 +1528,7 @@ sub get_raw_message {
   my $type = 'message/rfc822';
   if ($part) {
     my $parsed = $Self->fill_messages($msgid);
-    $type = find_type($parsed->{$msgid}, $part);
+    $type = find_type($parsed->{$msgid}{bodyStructure}, $part);
   }
 
   my $res = $Self->backend_cmd('imap_getpart', $imapname, $uidvalidity, $uid, $part);
@@ -1506,6 +1539,7 @@ sub get_raw_message {
 sub create_mailboxes {
   my $Self = shift;
   my $new = shift;
+  my $idmap = shift;
 
   return ({}, {}) unless keys %$new;
 
@@ -1515,30 +1549,106 @@ sub create_mailboxes {
   $Self->begin();
   my %todo;
   my %notcreated;
-  foreach my $cid (keys %$new) {
+  my @list = keys %$new;
+  my %fromthis;
+  while (my $cid = shift @list) {
     my $mailbox = $new->{$cid};
+    my %bad;
 
-    unless (exists $mailbox->{name} and $mailbox->{name} ne '') {
-      $notcreated{$cid} = {type => 'invalidProperties', description => "name is required"};
-      next;
+    unless (defined $mailbox->{name} and $mailbox->{name} ne '') {
+      $bad{name} = 1;
     }
 
     my $encname = eval { encode('IMAP-UTF-7', $mailbox->{name}) };
     unless (defined $encname) {
-      $notcreated{$cid} = {type => 'invalidProperties', description => "name can't be used with IMAP proxy"};
-      next;
+      $bad{name} = 1;
     }
 
-    if ($mailbox->{parentId}) {
-      my $parent = $Self->dgetone('ifolders', { jmailboxid => $mailbox->{parentId} }, 'imapname,sep');
-      # XXX - check "mailCreateChild" on parent mailbox
-      unless ($parent) {
-        $notcreated{$cid} = {type => 'notFound', description => "parent folder not found"};
-        next;
+    # Replace hierarchy separator in the encoded name so IMAP doesn't
+    # interpret it as a path delimiter.  Cyrus uses ^ as the replacement.
+    if (defined $encname) {
+      my ($sep) = $Self->dbh->selectrow_array("SELECT sep FROM ifolders ORDER BY ifolderid");
+      if ($sep && $encname =~ /\Q$sep\E/) {
+        $encname =~ s/\Q$sep\E/^/g;
       }
-      $todo{$cid} = [$parent->{imapname} . $parent->{sep} . $encname, $parent->{sep}];
     }
-    else {
+
+    my %immutable = (
+      id => $cid,  # XXX: allows re-creating with old ID, which allows UNDO but is tricky
+      totalEmails => 0,
+      unreadEmails => 0,
+      totalThreads => 0,
+      unreadThreads => 0,
+      myRights => {
+        mayAddItems => $JSON::true,
+        mayCreateChild => $JSON::true,
+        mayDelete => $JSON::true,
+        mayReadItems => $JSON::true,
+        mayRemoveItems => $JSON::true,
+        mayRename => $JSON::true,
+        maySetKeywords => $JSON::true,
+        maySetSeen => $JSON::true,
+        maySubmit => $JSON::true,
+        mayAdmin => $JSON::true,
+      },
+    );
+
+    for my $key (keys %immutable) {
+      next unless exists $mailbox->{$key};
+      if (ref($immutable{$key}) eq 'HASH') {
+        if (ref($mailbox->{$key}) eq 'HASH') {
+          for my $sub (keys %{$mailbox->{$key}}) {
+            unless (exists $immutable{$key}{$sub}) {
+              $bad{"$key/$sub"} = 1;
+              next;
+            }
+            my $got = $mailbox->{$key}{$sub};
+            my $want = $immutable{$key}{$sub};
+            if (ref($want) && "$want" =~ /^[01]$/) {
+              $bad{"$key/$sub"} = 1 if !!$got != !!$want;
+            } else {
+              $bad{"$key/$sub"} = 1 if "$got" ne "$want";
+            }
+          }
+        }
+        else {
+          $bad{$key} = 1;
+        }
+      }
+      elsif (ref($immutable{$key}) && "$immutable{$key}" =~ /^[01]$/) {
+        $bad{$key} = 1 if !!$mailbox->{$key} != !!$immutable{$key};
+      }
+      elsif (ref($mailbox->{$key}) || "$immutable{$key}" ne "$mailbox->{$key}") {
+        $bad{$key} = 1;
+      }
+    }
+
+    my $parentid = $idmap->($mailbox->{parentId});
+
+    if ($parentid) {
+      if ($parentid =~ m/^\#(.*)/) {
+        if ($todo{$1}) {
+          my $sep = $todo{$1}[1];
+          $todo{$cid} = [$todo{$1}[0] . $sep . $encname, $sep] unless %bad;
+        }
+        else {
+          # try later
+          push @list, $cid;
+          next;
+        }
+      }
+      else {
+        my $parent = $Self->dgetone('ifolders', { jmailboxid => $parentid }, 'imapname,sep');
+        # XXX - check "mailCreateChild" on parent mailbox
+        if ($parent) {
+          $todo{$cid} = [$parent->{imapname} . $parent->{sep} . $encname, $parent->{sep}] unless %bad;
+        }
+        else {
+          $bad{parentId} = 1;
+        }
+      }
+    }
+    elsif (not %bad) {
       # will probably get INBOX - but meh, close enough.  Sync will fix it if needed.  Better
       # would be to use namespace to lift it when we lift the prefix
       # DBNOTE: this one is a little weird with use or ORDER BY
@@ -1547,18 +1657,32 @@ sub create_mailboxes {
       $prefix = '' unless defined $prefix;
       $todo{$cid} = [$prefix . $encname, $sep];
     }
+
+    if (%bad) {
+      $notcreated{$cid} = { type => "invalidProperties", properties => [sort keys %bad] };
+    }
   }
 
   $Self->commit();
 
   my %createmap;
-  foreach my $cid (sort { $todo{$a} cmp $todo{$b} } keys %todo) {
+  foreach my $cid (sort { $todo{$a}[0] cmp $todo{$b}[0] } keys %todo) {
     my ($imapname, $sep) = @{$todo{$cid}};
     # XXX - check if already exists?
     my $res = $Self->backend_cmd('create_mailbox', $imapname);
     if ($res->[1] eq 'ok') {
       my $mailbox = $new->{$cid};
       my $status = $res->[2];
+      my $parentid = $idmap->($mailbox->{parentId});
+      if (defined $parentid and $parentid =~ m/^\#(.*)/) {
+        if ($createmap{$1}) {
+          $parentid = $createmap{$1}{id};
+        }
+        else {
+          $notcreated{$cid} = {type => 'invalidResultReference', description => "missing create for parentId"};
+          next;
+        }
+      }
       # yeah, I don't care so much here about the cost of lots of transactions, creating a mailbox is expensive
       $Self->begin();
       my $jmailboxid = new_uuid_string();
@@ -1575,8 +1699,8 @@ sub create_mailboxes {
       $Self->dmake('jmailboxes', {
         name => $mailbox->{name},
         jmailboxid => $jmailboxid,
-        sortOrder => $mailbox->{sortOrder} // 4,
-        parentId => $mailbox->{parentId} // '',
+        sortOrder => $mailbox->{sortOrder} // 10,
+        parentId => $parentid,
       }, 'jnoncountsmodseq');
 
       $Self->commit();
@@ -1586,7 +1710,7 @@ sub create_mailboxes {
     else {
       $notcreated{$cid} = {type => 'internalError', description => $res->[2]};
     }
-  } 
+  }
 
   return (\%createmap, \%notcreated);
 }
@@ -1606,40 +1730,92 @@ sub update_mailboxes {
   # XXX - reorder the crap out of this if renaming multiple mailboxes due to deep rename
   foreach my $jid (keys %$update) {
     my $mailbox = $update->{$jid};
-    unless (keys %$mailbox) {
-      $notchanged{$jid} = {type => 'invalidProperties', description => "nothing to change"};
+    my %bad;
+
+    my $data = $Self->dgetone('jmailboxes', {jmailboxid => $jid, active => 1});
+    my $old = $Self->dgetone('ifolders', { jmailboxid => $jid }, 'imapname,ifolderid');
+    unless ($data and $old) {
+      $notchanged{$jid} = { type => 'notFound' };
       next;
     }
 
-    my $data = $Self->dgetone('jmailboxes', {jmailboxid => $jid});
-    foreach my $key (keys %$mailbox) { # XXX - check if valid
-      $data->{$key} = $update->{$key};
+    my %immutable = (
+      id => $jid,
+      totalEmails => $data->{totalEmails},
+      unreadEmails => $data->{unreadEmails},
+      totalThreads => $data->{totalThreads},
+      unreadThreads => $data->{unreadThreads},
+      myRights => {
+        map { $_ => $JSON::true } grep { $data->{$_} } qw(mayAddItems mayCreateChild mayDelete mayReadItems mayRemoveItems mayRename maySetKeywords maySetSeen maySubmit mayAdmin),
+      },
+    );
+
+    for my $key (keys %immutable) {
+      next unless exists $mailbox->{$key};
+      if (ref($immutable{$key}) eq 'HASH') {
+        if (ref($mailbox->{$key}) eq 'HASH') {
+          for my $sub (keys %{$mailbox->{$key}}) {
+            unless (exists $immutable{$key}{$sub}) {
+              $bad{"$key/$sub"} = 1;
+              next;
+            }
+            my $got = $mailbox->{$key}{$sub};
+            my $want = $immutable{$key}{$sub};
+            if (ref($want) && "$want" =~ /^[01]$/) {
+              $bad{"$key/$sub"} = 1 if !!$got != !!$want;
+            } else {
+              $bad{"$key/$sub"} = 1 if "$got" ne "$want";
+            }
+          }
+        }
+        else {
+          $bad{$key} = 1;
+        }
+      }
+      elsif (ref($immutable{$key}) && "$immutable{$key}" =~ /^[01]$/) {
+        $bad{$key} = 1 if !!$mailbox->{$key} != !!$immutable{$key};
+      }
+      elsif (ref($mailbox->{$key}) || "$immutable{$key}" ne "$mailbox->{$key}") {
+        $bad{$key} = 1;
+      }
     }
-    my $parentId = $data->{parentId};
-    if ($data->{parentId}) {
-      $parentId = $idmap->($data->{parentId});
+
+    for my $key (keys %$mailbox) {
+      if ($key =~ m{(.*)/(.*)}) {
+        # XXX - multi-depth
+        $data->{$1}{$2} = $mailbox->{$key};
+      }
+      else {
+        $data->{$key} = $mailbox->{$key};
+      }
     }
 
     my $encname = eval { encode('IMAP-UTF-7', $data->{name}) };
     unless (defined $encname) {
-      $notchanged{$jid} = {type => 'invalidProperties', description => "name can't be used with IMAP proxy"};
-      next;
+      $bad{name} = 1;
+      $encname = ''; # quiet warnings
     }
 
-    my $old = $Self->dgetone('ifolders', { jmailboxid => $jid }, 'imapname,ifolderid');
-
-    if ($parentId) {
-      my $parent = $Self->dgetone('ifolders', { jmailboxid => $parentId }, 'imapname,sep');
-      unless ($parent) {
-        $notchanged{$jid} = {type => 'invalidProperties', description => "parent folder not found"};
-        next;
+    my $parentid = $data->{parentId};
+    if (defined $data->{parentId}) {
+      $parentid = $idmap->($parentid);
+      my $parent = $Self->dgetone('ifolders', { jmailboxid => $parentid }, 'imapname,sep');
+      warn "PARENT: " . Dumper($parent, $parentid, $data);
+      if ($parent) {
+        $namemap{$old->{imapname}} = [$parent->{imapname} . $parent->{sep} . $encname, $jid, $old->{ifolderid}];
       }
-      $namemap{$old->{imapname}} = [$parent->{imapname} . $parent->{sep} . $encname, $jid, $old->{ifolderid}];
+      else {
+        $bad{parentId} = 1;
+      }
     }
     else {
       my $prefix = $Self->dgetfield('iserver', {}, 'imapPrefix');
       $prefix = '' unless $prefix;
       $namemap{$old->{imapname}} = [$prefix . $encname, $jid, $old->{ifolderid}];
+    }
+
+    if (%bad) {
+      $notchanged{$jid} = { type => 'invalidProperties', properties => [sort keys %bad] };
     }
   }
 
@@ -1648,6 +1824,7 @@ sub update_mailboxes {
   my %toupdate;
   foreach my $oldname (sort keys %namemap) {
     my ($imapname, $jid, $ifolderid) = @{$namemap{$oldname}};
+    next if $notchanged{$jid};
 
     if ($imapname eq $oldname) {
       # no change, yay
@@ -1665,22 +1842,37 @@ sub update_mailboxes {
     }
   }
 
-  if (keys %toupdate) {
+  if (keys %changed) {
     $Self->begin();
-    foreach my $jid (keys %toupdate) {
-      my ($imapname, $ifolderid) = @{$toupdate{$jid}};
+    foreach my $jid (keys %changed) {
+      if ($toupdate{$jid}) {
+        my ($imapname, $ifolderid) = @{$toupdate{$jid}};
+        $Self->dmaybeupdate('ifolders', {imapname => $imapname}, {ifolderid => $ifolderid});
+      }
       my $change = $update->{$jid};
-      $Self->dmaybeupdate('ifolders', {imapname => $imapname}, {ifolderid => $ifolderid});
       my %changes;
       $changes{name} = $change->{name} if exists $change->{name};
-      $changes{parentId} = $change->{parentId} if exists $change->{parentId};
+      $changes{parentId} = $idmap->($change->{parentId}) if exists $change->{parentId};
       $changes{sortOrder} = $change->{sortOrder} if exists $change->{sortOrder};
-      $Self->dmaybedirty('jmailboxes', \%changes, {jmailboxid => $jid});
+      $changes{role} = $change->{role} if exists $change->{role};
+      $changes{isSubscribed} = $change->{isSubscribed} ? 1 : 0 if exists $change->{isSubscribed};
+      $Self->dmaybedirty('jmailboxes', \%changes, {jmailboxid => $jid}, 'jnoncountsmodseq') if %changes;
     }
     $Self->commit();
   }
 
   return (\%changed, \%notchanged);
+}
+
+sub deepeq {
+  my ($x, $y) = @_;
+  # all the undefs
+  if (not defined $x or not defined $y) {
+    return 1 if (not defined $x and not defined $y);
+    return 0;
+  }
+  # json encoding
+  return $json->encode([$x]) eq $json->encode([$y]);
 }
 
 sub destroy_mailboxes {
@@ -1709,7 +1901,19 @@ sub destroy_mailboxes {
       $namemap{$old->{imapname}} = [$jid, $old->{ifolderid}];
     }
     else {
-      $notdestroyed{$jid} = {type => 'invalidProperties', description => "parent folder not found"};
+      $notdestroyed{$jid} = {type => 'notFound'};
+    }
+  }
+
+  # look for children not being deleted
+  foreach my $oldname (reverse sort keys %namemap) {
+    my ($jid, $ifolderid) = @{$namemap{$oldname}};
+    my $children = $Self->dget('jmailboxes', { parentId => $jid, active => 1 }, 'jmailboxid');
+    for my $child (@$children) {
+      # OK if it's already being destroyed
+      next if grep { $child->{jmailboxid} eq $_ and not $notdestroyed{$_} } @$destroy;
+      $notdestroyed{$jid} = { type => 'mailboxHasChild' };
+      delete $namemap{$oldname};
     }
   }
 
@@ -1734,7 +1938,20 @@ sub destroy_mailboxes {
     foreach my $jid (sort keys %toremove) {
       my $ifolderid = $toremove{$jid};
       $Self->ddelete('ifolders', {ifolderid => $ifolderid});
-      $Self->dupdate('jmailboxes', {active => 0}, {jmailboxid => $jid});
+      $Self->ddelete('imessages', {ifolderid => $ifolderid});
+      my $tocheck = $Self->dget('jmessagemap', {active => 1, jmailboxid => $jid}, 'active,msgid');
+      $Self->dmaybedirty('jmailboxes', {active => 0}, {jmailboxid => $jid});
+      $Self->dupdate('jmessagemap', {active => 0}, {jmailboxid => $jid});
+      # item contains 'msgid' and 'active', precisely what we want to filter on
+      for my $item (@$tocheck) {
+        if ($Self->dgetone('jmessagemap', $item, 'msgid')) {
+          # there's other copies, don't nuke it
+          $Self->dupdate('jmessages', {}, $item);
+        }
+        else {
+          $Self->dupdate('jmessages', {active => 0}, $item);
+        }
+      }
     }
     $Self->commit();
   }
@@ -1864,15 +2081,16 @@ sub create_contact_groups {
     }
     my $name = $contact->{name} || 'Unknown';
 
-    my ($card) = Net::CardDAVTalk::VCard->new();
     my $uid = new_uuid_string();
-    $card->uid($uid);
-    $card->VKind('group');
-    $card->V('n', 'value', $name);
-    $card->VFN($name);
+    my $card = {
+      uid => "urn:uuid:$uid",
+      kind => 'group',
+      name => { full => $name },
+    };
     if (exists $contact->{contactIds}) {
-      my @ids = @{$contact->{contactIds}};
-      $card->VGroupContactUIDs(\@ids);
+      my %members;
+      $members{"urn:uuid:$_"} = $JSON::true for @{$contact->{contactIds}};
+      $card->{members} = \%members;
     }
 
     $todo{$cid} = [$href, $card];
@@ -1909,12 +2127,18 @@ sub update_contact_groups {
       $notchanged{$carduid} = {type => 'notFound', description => "No such card on server"};
       next;
     }
-    my ($card) = Net::CardDAVTalk::VCard->new_fromstring($old->{content});
-    $card->VKind('group');
-    $card->VFN($contact->{name}) if exists $contact->{name};
+    my $card = vcard_to_jscontact($old->{content});
+    unless ($card) {
+      $notchanged{$carduid} = {type => 'parseError', description => "Could not parse existing card"};
+      next;
+    }
+    $card->{kind} = 'group';
+    $card->{name}{full} = $contact->{name} if exists $contact->{name};
     if (exists $contact->{contactIds}) {
       my @ids = map { $idmap->($_) } @{$contact->{contactIds}};
-      $card->VGroupContactUIDs(\@ids);
+      my %members;
+      $members{"urn:uuid:$_"} = $JSON::true for @ids;
+      $card->{members} = \%members;
     }
 
     $todo{$old->{href}} = $card;
@@ -1960,6 +2184,111 @@ sub destroy_contact_groups {
   return (\@destroyed, \%notdestroyed);
 }
 
+# Bridge old custom contact format to JSContact
+sub _contact_to_jscontact {
+  my ($uid, $contact) = @_;
+
+  my $card = {
+    uid => "urn:uuid:$uid",
+    name => {},
+  };
+
+  # Name components
+  my @components;
+  push @components, { kind => 'surname', value => $contact->{lastName} } if $contact->{lastName};
+  push @components, { kind => 'given', value => $contact->{firstName} } if $contact->{firstName};
+  push @components, { kind => 'title', value => $contact->{prefix} } if $contact->{prefix};
+  $card->{name}{components} = \@components if @components;
+  $card->{name}{full} = join(' ', grep { $_ } $contact->{prefix}, $contact->{firstName}, $contact->{lastName}) || 'Unknown';
+
+  # Organization
+  if ($contact->{company}) {
+    my $org = { name => $contact->{company} };
+    $org->{units} = [{ name => $contact->{department} }] if $contact->{department};
+    $card->{organizations} = { o1 => $org };
+  }
+
+  # Emails
+  if ($contact->{emails} && @{$contact->{emails}}) {
+    my %emails;
+    my $n = 1;
+    for my $em (@{$contact->{emails}}) {
+      $emails{"e$n"} = { address => $em->{value} };
+      $n++;
+    }
+    $card->{emails} = \%emails;
+  }
+
+  # Phones
+  if ($contact->{phones} && @{$contact->{phones}}) {
+    my %phones;
+    my $n = 1;
+    for my $ph (@{$contact->{phones}}) {
+      $phones{"p$n"} = { number => $ph->{value} };
+      $n++;
+    }
+    $card->{phones} = \%phones;
+  }
+
+  # Nickname, birthday, notes
+  if ($contact->{nickname}) {
+    $card->{nicknames} = { n1 => { name => $contact->{nickname} } };
+  }
+  if ($contact->{birthday} && $contact->{birthday} ne '0000-00-00') {
+    $card->{anniversaries} = { b1 => { kind => 'birth', date => $contact->{birthday} } };
+  }
+  if ($contact->{notes}) {
+    $card->{notes} = { n1 => { note => $contact->{notes} } };
+  }
+
+  return $card;
+}
+
+sub _apply_contact_changes {
+  my ($card, $contact) = @_;
+
+  # Apply each field that exists in the change set
+  if (exists $contact->{lastName} || exists $contact->{firstName} || exists $contact->{prefix}) {
+    my @components;
+    my $ln = exists $contact->{lastName} ? $contact->{lastName} : _get_name_component($card, 'surname');
+    my $fn = exists $contact->{firstName} ? $contact->{firstName} : _get_name_component($card, 'given');
+    my $pf = exists $contact->{prefix} ? $contact->{prefix} : _get_name_component($card, 'title');
+    push @components, { kind => 'surname', value => $ln } if $ln;
+    push @components, { kind => 'given', value => $fn } if $fn;
+    push @components, { kind => 'title', value => $pf } if $pf;
+    $card->{name}{components} = \@components;
+    $card->{name}{full} = join(' ', grep { $_ } $pf, $fn, $ln) || 'Unknown';
+  }
+  if (exists $contact->{company}) {
+    my $org = $card->{organizations} ? (values %{$card->{organizations}})[0] : {};
+    $org->{name} = $contact->{company};
+    $org->{units} = [{ name => $contact->{department} }] if exists $contact->{department};
+    $card->{organizations} = { o1 => $org };
+  }
+  if (exists $contact->{nickname}) {
+    $card->{nicknames} = $contact->{nickname} ? { n1 => { name => $contact->{nickname} } } : undef;
+  }
+  if (exists $contact->{birthday}) {
+    if ($contact->{birthday} && $contact->{birthday} ne '0000-00-00') {
+      $card->{anniversaries} = { b1 => { kind => 'birth', date => $contact->{birthday} } };
+    } else {
+      delete $card->{anniversaries};
+    }
+  }
+  if (exists $contact->{notes}) {
+    $card->{notes} = $contact->{notes} ? { n1 => { note => $contact->{notes} } } : undef;
+  }
+}
+
+sub _get_name_component {
+  my ($card, $kind) = @_;
+  return '' unless $card->{name} && $card->{name}{components};
+  for my $c (@{$card->{name}{components}}) {
+    return $c->{value} if $c->{kind} eq $kind;
+  }
+  return '';
+}
+
 sub create_contacts {
   my $Self = shift;
   my $new = shift;
@@ -1978,24 +2307,8 @@ sub create_contacts {
       $notcreated{$cid} = {type => 'notFound', description => "No such addressbook on server"};
       next;
     }
-    my ($card) = Net::CardDAVTalk::VCard->new();
     my $uid = new_uuid_string();
-    $card->uid($uid);
-    $card->VLastName($contact->{lastName}) if exists $contact->{lastName};
-    $card->VFirstName($contact->{firstName}) if exists $contact->{firstName};
-    $card->VTitle($contact->{prefix}) if exists $contact->{prefix};
-
-    $card->VCompany($contact->{company}) if exists $contact->{company};
-    $card->VDepartment($contact->{department}) if exists $contact->{department};
-
-    $card->VEmails(@{$contact->{emails}}) if exists $contact->{emails};
-    $card->VAddresses(@{$contact->{addresses}}) if exists $contact->{addresses};
-    $card->VPhones(@{$contact->{phones}}) if exists $contact->{phones};
-    $card->VOnline(@{$contact->{online}}) if exists $contact->{online};
-
-    $card->VNickname($contact->{nickname}) if exists $contact->{nickname};
-    $card->VBirthday($contact->{birthday}) if exists $contact->{birthday};
-    $card->VNotes($contact->{notes}) if exists $contact->{notes};
+    my $card = _contact_to_jscontact($uid, $contact);
 
     $todo{$cid} = [$abookhref, $card];
 
@@ -2031,22 +2344,13 @@ sub update_contacts {
       $notchanged{$carduid} = {type => 'notFound', description => "No such card on server"};
       next;
     }
-    my ($card) = Net::CardDAVTalk::VCard->new_fromstring($old->{content});
-    $card->VLastName($contact->{lastName}) if exists $contact->{lastName};
-    $card->VFirstName($contact->{firstName}) if exists $contact->{firstName};
-    $card->VTitle($contact->{prefix}) if exists $contact->{prefix};
-
-    $card->VCompany($contact->{company}) if exists $contact->{company};
-    $card->VDepartment($contact->{department}) if exists $contact->{department};
-
-    $card->VEmails(@{$contact->{emails}}) if exists $contact->{emails};
-    $card->VAddresses(@{$contact->{addresses}}) if exists $contact->{addresses};
-    $card->VPhones(@{$contact->{phones}}) if exists $contact->{phones};
-    $card->VOnline(@{$contact->{online}}) if exists $contact->{online};
-
-    $card->VNickname($contact->{nickname}) if exists $contact->{nickname};
-    $card->VBirthday($contact->{birthday}) if exists $contact->{birthday};
-    $card->VNotes($contact->{notes}) if exists $contact->{notes};
+    my $card = vcard_to_jscontact($old->{content});
+    unless ($card) {
+      $notchanged{$carduid} = {type => 'parseError', description => "Could not parse existing card"};
+      next;
+    }
+    # Apply changes from the old custom format onto the JSContact card
+    _apply_contact_changes($card, $contact);
 
     $todo{$old->{href}} = $card;
     $changed{$carduid} = undef;

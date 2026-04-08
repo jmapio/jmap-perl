@@ -10,6 +10,7 @@ use DBI;
 use DBI qw(:sql_types);
 use Carp qw(confess);
 
+use Sys::Hostname;
 use Data::UUID::LibUUID;
 use IO::LockedFile;
 use JSON::XS qw(decode_json);
@@ -24,11 +25,12 @@ use Encode;
 use Encode::MIME::Header;
 use DateTime;
 use Date::Parse;
+use Date::Format;
 use Net::CalDAVTalk;
-use Net::CardDAVTalk::VCard;
+use Text::JSContact qw(vcard_to_jscontact jscontact_to_vcard);
 use MIME::Base64 qw(encode_base64 decode_base64);
 use Scalar::Util qw(weaken);
-use JMAP::EmailObject;
+use Data::JSEmail;
 
 my $json = JSON::XS->new->utf8->canonical();
 
@@ -49,11 +51,13 @@ my %TABLE2GROUPS = (
   jcalendarprefs => ['CalendarPreferences'],
 );
 
+our $DATADIR = $ENV{JMAP_DATADIR} || '/home/jmap/data';
+
 sub new {
   my $class = shift;
   my $accountid = shift || die;
   my $Self = bless { accountid => $accountid, start => time() }, ref($class) || $class;
-  my $dbh = DBI->connect("dbi:SQLite:dbname=/home/jmap/data/$accountid.sqlite3");
+  my $dbh = DBI->connect("dbi:SQLite:dbname=$DATADIR/$accountid.sqlite3");
   $Self->_initdb($dbh);
   return $Self;
 }
@@ -62,7 +66,7 @@ sub delete {
   my $Self = shift;
   my $accountid = $Self->accountid();
   delete $Self->{dbh};
-  unlink("/home/jmap/data/$accountid.sqlite3");
+  unlink("$DATADIR/$accountid.sqlite3");
 }
 
 sub accountid {
@@ -97,7 +101,7 @@ sub in_transaction {
 sub begin_superlock {
   my $Self = shift;
   my $accountid = $Self->accountid();
-  my $lock = IO::LockedFile->new(">/home/jmap/data/$accountid.lock");
+  my $lock = IO::LockedFile->new(">$DATADIR/$accountid.lock");
   $Self->{superlock} = $lock;
   weaken $Self->{superlock};
   return $lock;
@@ -108,8 +112,8 @@ sub begin {
   confess("ALREADY IN TRANSACTION") if $Self->{t};
   my $accountid = $Self->accountid();
   # we need this because sqlite locking isn't as robust as you might hope
-  $Self->{t} = {lock => $Self->{superlock} || IO::LockedFile->new(">/home/jmap/data/$accountid.lock")};
-  $Self->{t}{dbh} = DBI->connect("dbi:SQLite:dbname=/home/jmap/data/$accountid.sqlite3");
+  $Self->{t} = {lock => $Self->{superlock} || IO::LockedFile->new(">$DATADIR/$accountid.lock")};
+  $Self->{t}{dbh} = DBI->connect("dbi:SQLite:dbname=$DATADIR/$accountid.sqlite3");
   $Self->{t}{dbh}->begin_work();
 }
 
@@ -353,6 +357,232 @@ sub get_blob {
 }
 
 # NOTE: this can ONLY be used to create draft messages
+# RFC 8621 Email/set create validation
+sub _validate_email_create {
+  my $item = shift;
+  my @bad;
+
+  # "headers" property is forbidden — use header:Name instead
+  push @bad, 'headers' if exists $item->{headers};
+
+  # Must have body content: bodyStructure OR textBody/htmlBody (not both modes)
+  my $has_structure = exists $item->{bodyStructure};
+  my $has_bodies = exists $item->{textBody} || exists $item->{htmlBody} || exists $item->{attachments};
+  if ($has_structure && $has_bodies) {
+    # bodyStructure mode — textBody/htmlBody/attachments are forbidden
+    push @bad, 'textBody' if exists $item->{textBody};
+    push @bad, 'htmlBody' if exists $item->{htmlBody};
+    push @bad, 'attachments' if exists $item->{attachments};
+  }
+
+  # textBody and htmlBody must have at most 1 part each
+  if ($item->{textBody} && ref($item->{textBody}) eq 'ARRAY' && @{$item->{textBody}} > 1) {
+    push @bad, 'textBody';
+  }
+  if ($item->{htmlBody} && ref($item->{htmlBody}) eq 'ARRAY' && @{$item->{htmlBody}} > 1) {
+    push @bad, 'htmlBody';
+  }
+
+  # No Content-* headers at top level (but X-Content-* is fine)
+  for my $key (keys %$item) {
+    if ($key =~ /^header:Content-/i && $key !~ /^header:X-/i) {
+      push @bad, $key;
+    }
+  }
+
+  # No header:Content-Transfer-Encoding on body parts
+  for my $partlist ($item->{textBody}, $item->{htmlBody}) {
+    next unless $partlist && ref($partlist) eq 'ARRAY';
+    for my $part (@$partlist) {
+      for my $key (keys %$part) {
+        if ($key =~ /^header:Content-Transfer-Encoding$/i) {
+          push @bad, $key;
+        }
+      }
+    }
+  }
+  if ($item->{bodyStructure}) {
+    _check_bodystructure_cte($item->{bodyStructure}, 'bodyStructure', \@bad);
+  }
+
+  # No duplicate header representations: can't have both convenience
+  # property and header:Name for the same header
+  my %header_convenience = (
+    'message-id' => 'messageId', 'in-reply-to' => 'inReplyTo',
+    'references' => 'references', 'sender' => 'sender',
+    'from' => 'from', 'to' => 'to', 'cc' => 'cc',
+    'bcc' => 'bcc', 'reply-to' => 'replyTo', 'subject' => 'subject',
+    'date' => 'sentAt',
+  );
+  for my $key (keys %$item) {
+    next unless $key =~ /^header:([^:]+)(.*)/;
+    my $hname = lc $1;
+    my $rest = $2;
+    if (my $conv = $header_convenience{$hname}) {
+      push @bad, $key if exists $item->{$conv};
+    }
+    # header:Name (no suffix at all) cannot be an array
+    if (ref($item->{$key}) eq 'ARRAY' && $rest eq '') {
+      push @bad, "header:$1";
+    }
+  }
+
+  # bodyValues restrictions: isTruncated and isEncodingProblem must not be true
+  if ($item->{bodyValues} && ref($item->{bodyValues}) eq 'HASH') {
+    for my $partId (keys %{$item->{bodyValues}}) {
+      my $bv = $item->{bodyValues}{$partId};
+      if ($bv->{isTruncated}) {
+        push @bad, "bodyValues/$partId/isTruncated";
+      }
+      if ($bv->{isEncodingProblem}) {
+        push @bad, "bodyValues/$partId/isEncodingProblem";
+      }
+    }
+  }
+
+  # Validate cid values on body parts (no angle brackets, no whitespace)
+  for my $partlist ($item->{textBody}, $item->{htmlBody}, $item->{attachments}) {
+    next unless $partlist && ref($partlist) eq 'ARRAY';
+    for my $part (@$partlist) {
+      if (defined $part->{cid} && $part->{cid} =~ /[<>\s]/) {
+        push @bad, 'cid';
+      }
+    }
+  }
+
+  # Can't have size with partId (size only valid with blobId)
+  for my $partlist ($item->{textBody}, $item->{htmlBody}) {
+    next unless $partlist && ref($partlist) eq 'ARRAY';
+    for my $part (@$partlist) {
+      if (exists $part->{partId} && exists $part->{size}) {
+        push @bad, 'size';
+      }
+    }
+  }
+  if ($item->{bodyStructure}) {
+    _check_bodystructure_size($item->{bodyStructure}, 'bodyStructure', \@bad);
+  }
+
+  # headers property forbidden on body parts in bodyStructure
+  if ($item->{bodyStructure}) {
+    my @parts = (['bodyStructure', $item->{bodyStructure}]);
+    while (my $entry = shift @parts) {
+      my ($path, $part) = @$entry;
+      next unless ref $part eq 'HASH';
+      push @bad, "$path/headers" if exists $part->{headers};
+      if ($part->{subParts} && ref($part->{subParts}) eq 'ARRAY') {
+        my $i = 0;
+        for my $sub (@{$part->{subParts}}) {
+          push @parts, ["$path/subParts/$i", $sub];
+          $i++;
+        }
+      }
+    }
+  }
+
+  # headers property forbidden on textBody/htmlBody parts
+  for my $partlist ($item->{textBody}, $item->{htmlBody}) {
+    next unless $partlist && ref($partlist) eq 'ARRAY';
+    for my $part (@$partlist) {
+      push @bad, 'headers' if exists $part->{headers};
+    }
+  }
+
+  return @bad;
+}
+
+sub _check_bodystructure_cte {
+  my ($part, $path, $bad) = @_;
+  return unless ref $part eq 'HASH';
+  for my $key (keys %$part) {
+    push @$bad, "$path/$key" if $key =~ /^header:Content-Transfer-Encoding$/i;
+  }
+  if ($part->{subParts} && ref($part->{subParts}) eq 'ARRAY') {
+    my $i = 0;
+    for my $sub (@{$part->{subParts}}) {
+      _check_bodystructure_cte($sub, "$path/subParts/$i", $bad);
+      $i++;
+    }
+  }
+}
+
+sub _check_bodystructure_size {
+  my ($part, $path, $bad) = @_;
+  return unless ref $part eq 'HASH';
+  if (exists $part->{partId} && exists $part->{size}) {
+    push @$bad, "$path/size";
+  }
+  if ($part->{subParts} && ref($part->{subParts}) eq 'ARRAY') {
+    my $i = 0;
+    for my $sub (@{$part->{subParts}}) {
+      _check_bodystructure_size($sub, "$path/subParts/$i", $bad);
+      $i++;
+    }
+  }
+}
+
+sub _convert_header_value {
+  my ($type, $val) = @_;
+  if ($type eq 'asText') {
+    return $val;
+  }
+  if ($type eq 'asAddresses') {
+    return join(', ', map {
+      my $name = $_->{name};
+      my $email = $_->{email};
+      defined $name && length($name) ? qq{"$name" <$email>} : $email;
+    } @$val);
+  }
+  if ($type eq 'asMessageIds') {
+    return join(' ', map { "<$_>" } @$val);
+  }
+  if ($type eq 'asDate') {
+    my $epoch = Date::Parse::str2time($val);
+    return Date::Format::time2str("%a, %d %b %Y %H:%M:%S %z", $epoch) if defined $epoch;
+    return $val;
+  }
+  if ($type eq 'asURLs') {
+    return join(",\r\n ", map { "<$_>" } @$val);
+  }
+  return $val;
+}
+
+sub _convert_header_forms {
+  my ($item) = @_;
+  for my $key (keys %$item) {
+    next unless $key =~ /^header:([^:]+):(.*)/;
+    my $hname = $1;
+    my $rest = $2;
+
+    my $val = delete $item->{$key};
+
+    # Parse :asType and :all modifiers
+    my $type;
+    my $is_all;
+    for my $part (split /:/, $rest) {
+      if ($part eq 'all') { $is_all = 1 }
+      elsif ($part =~ /^as/) { $type = $part }
+    }
+
+    if ($type && $is_all && ref($val) eq 'ARRAY') {
+      $item->{"header:$hname"} = [map { _convert_header_value($type, $_) } @$val];
+    } elsif ($type) {
+      $item->{"header:$hname"} = _convert_header_value($type, $val);
+    } elsif ($is_all) {
+      # :all without type - values are already the text to set
+      $item->{"header:$hname"} = $val;
+    }
+  }
+}
+
+sub _convert_header_forms_recursive {
+  my ($node) = @_;
+  _convert_header_forms($node);
+  if ($node->{subParts} && ref($node->{subParts}) eq 'ARRAY') {
+    _convert_header_forms_recursive($_) for @{$node->{subParts}};
+  }
+}
+
 sub create_messages {
   my $Self = shift;
   my $args = shift;
@@ -366,6 +596,8 @@ sub create_messages {
 
   # XXX - get draft mailbox ID
   my $draftid = $Self->dgetfield('jmailboxes', { role => 'drafts' }, 'jmailboxid');
+  my $mailboxdata = $Self->dget('jmailboxes', { active => 1 });
+  my %validids = map { $_->{jmailboxid} => 1 } @$mailboxdata;
 
   $Self->commit();
 
@@ -374,17 +606,82 @@ sub create_messages {
     my $item = $args->{$cid};
     my $mailboxIds = delete $item->{mailboxIds};
     my $keywords = delete $item->{keywords};
-    $item->{msgdate} = time();
-    $item->{headers}{'Message-ID'} ||= "<" . new_uuid_string() . ".$item->{msgdate}\@$ENV{jmaphost}>";
-    my $message = JMAP::EmailObject::make($item, sub { $Self->get_blob(@_) } );
-    # XXX - let's just assume goodness for now - lots of error handling to add
-    $todo{$cid} = [$message, $mailboxIds, $keywords];
+
+    # RFC 8621 Email/set create validation
+    my @bad = _validate_email_create($item);
+    if (@bad) {
+      $notCreated{$cid} = { type => 'invalidProperties', properties => \@bad };
+      next;
+    }
+
+    # mailboxIds is required
+    unless ($mailboxIds && ref($mailboxIds) eq 'HASH' && keys %$mailboxIds) {
+      $notCreated{$cid} = { type => 'invalidProperties', properties => ['mailboxIds'] };
+      next;
+    }
+
+    $item->{msgdate} ||= time();
+
+    # Validate blob references exist before calling make()
+    my @missing_blobs;
+    for my $partlist ($item->{textBody}, $item->{htmlBody}, $item->{attachments}) {
+      next unless $partlist && ref($partlist) eq 'ARRAY';
+      for my $part (@$partlist) {
+        next unless $part->{blobId};
+        my ($type, $content) = $Self->get_blob($part->{blobId});
+        push @missing_blobs, $part->{blobId} unless defined $content;
+      }
+    }
+    if ($item->{bodyStructure}) {
+      my @parts = ($item->{bodyStructure});
+      while (my $p = shift @parts) {
+        next unless ref $p eq 'HASH';
+        if ($p->{blobId}) {
+          my ($type, $content) = $Self->get_blob($p->{blobId});
+          push @missing_blobs, $p->{blobId} unless defined $content;
+        }
+        push @parts, @{$p->{subParts}} if $p->{subParts} && ref($p->{subParts}) eq 'ARRAY';
+      }
+    }
+    if (@missing_blobs) {
+      $notCreated{$cid} = { type => 'blobNotFound', notFound => \@missing_blobs };
+      next;
+    }
+
+    # Convert typed header forms (header:Name:asType) to raw (header:Name)
+    _convert_header_forms($item);
+    if ($item->{bodyStructure}) {
+      _convert_header_forms_recursive($item->{bodyStructure});
+    }
+
+    my %generated_defaults;
+    my $defaults_cb = sub {
+      my ($name) = @_;
+      if (lc($name) eq 'message-id') {
+        my $hostname = $ENV{HOSTNAME} || hostname();
+        my $mid = new_uuid_string() . ".$item->{msgdate}\@$hostname";
+        $generated_defaults{'messageId'} = [$mid];
+        return "<$mid>";
+      }
+      return Data::JSEmail::default_header_defaults($name);
+    };
+
+    my $message = eval { Data::JSEmail::make($item, sub { $Self->get_blob(@_) }, $defaults_cb) };
+    if ($@ || !$message) {
+      $notCreated{$cid} = { type => 'invalidProperties', description => $@ || 'failed to create message' };
+      next;
+    }
+    $todo{$cid} = [$message, $mailboxIds, $keywords, $item->{msgdate}];
   }
 
   foreach my $cid (keys %todo) {
-    my ($message, $mailboxIds, $keywords) = @{$todo{$cid}};
+    my ($message, $mailboxIds, $keywords, $date) = @{$todo{$cid}};
     my @mailboxes = map { $idmap->($_) } keys %$mailboxIds;
-    my ($msgid, $thrid) = $Self->import_message($message, \@mailboxes, $keywords);
+    if (grep { not $validids{$_} } @mailboxes) {
+      $notCreated{$cid} = { type => 'invalidProperties', properties => ['mailboxIds'] };
+      next;
+    }
+    my ($msgid, $thrid) = $Self->import_message($message, \@mailboxes, $keywords, $date);
     $created{$cid} = {
       id => $msgid,
       threadId => $thrid,
@@ -457,45 +754,23 @@ sub delete_event {
 sub parse_card {
   my $Self = shift;
   my $raw = shift;
-  my ($card) = Net::CardDAVTalk::VCard->new_fromstring($raw);
+  my $card = vcard_to_jscontact($raw);
+  return undef unless $card;
 
-  my %hash;
-
-  $hash{uid} = $card->uid();
-  $hash{kind} = $card->VKind();
-
-  if ($hash{kind} eq 'contact') {
-    $hash{lastName} = $card->VLastName();
-    $hash{firstName} = $card->VFirstName();
-    $hash{prefix} = $card->VTitle();
-
-    $hash{company} = $card->VCompany();
-    $hash{department} = $card->VDepartment();
-
-    $hash{emails} = [$card->VEmails()];
-    $hash{addresses} = [$card->VAddresses()];
-    $hash{phones} = [$card->VPhones()];
-    $hash{online} = [$card->VOnline()];
-
-    $hash{nickname} = $card->VNickname();
-    $hash{birthday} = $card->VBirthday();
-    $hash{notes} = $card->VNotes();
-  }
-  else {
-    $hash{name} = $card->VFN();
-    $hash{members} = [$card->VGroupContactUIDs()];
-  }
-
-  return \%hash;
+  # Return the JSContact Card directly — callers should migrate
+  # to using JSContact properties instead of the old custom format
+  return $card;
 }
 
 sub set_card {
   my $Self = shift;
   my $jaddressbookid = shift;
   my $card = shift;
-  my $carduid = delete $card->{uid};
-  my $kind = delete $card->{kind};
-  if ($kind eq 'contact') {
+  my $carduid = $card->{uid} // '';
+  $carduid =~ s/^urn:uuid://;
+  my $kind = $card->{kind} // 'individual';
+  if ($kind ne 'group') {
+    # Store the full JSContact card as payload
     $Self->dmake('jcontacts', {
       contactuid => $carduid,
       jaddressbookid => $jaddressbookid,
@@ -503,16 +778,19 @@ sub set_card {
     });
   }
   else {
+    my $name = $card->{name}{full} // '';
     $Self->dmake('jcontactgroups', {
       groupuid => $carduid,
       jaddressbookid => $jaddressbookid,
-      name => $card->{name},
+      name => $name,
     });
     $Self->ddelete('jcontactgroupmap', {groupuid => $carduid});
-    foreach my $item (@{$card->{members}}) {
+    foreach my $memberuid (keys %{$card->{members} || {}}) {
+      my $uid = $memberuid;
+      $uid =~ s/^urn:uuid://;
       $Self->dinsert('jcontactgroupmap', {
         groupuid => $carduid,
-        contactuid => $item,
+        contactuid => $uid,
       });
     }
   }
@@ -558,9 +836,8 @@ sub put_file {
     accountId => "$accountid",
     blobId => "f-$id",
     type => $type,
-    expires => JMAP::EmailObject::isodate($expires),
+    expires => Data::JSEmail::isodate($expires),
     size => $size,
-    url => "https://$ENV{jmaphost}/raw/$accountid/f-$id"
   };
 }
 
@@ -570,6 +847,8 @@ sub get_file {
 
   $Self->begin();
   my $data = $Self->dgetone('jfiles', { jfileid => $id }, 'type,content');
+  use Data::Dumper;
+  warn "GET FILE $id: " . Dumper($data);
   $Self->commit();
 
   return unless $data;
@@ -767,6 +1046,8 @@ sub dgetone {
   $Self->log('debug', $sql, _dbl(map { $filter->{$_} } @lkeys));
 
   my $data = $Self->dbh->selectall_arrayref($sql, {Slice => {}}, @vals);
+  use Data::Dumper;
+  $Self->log('debug', Dumper($data));
   return $data->[0];
 }
 
@@ -836,19 +1117,20 @@ CREATE TABLE IF NOT EXISTS jmailboxes (
   name TEXT,
   sortOrder INTEGER,
   isSubscribed INTEGER,
-  mayReadItems BOOLEAN,
-  mayAddItems BOOLEAN,
-  mayRemoveItems BOOLEAN,
-  maySetSeen BOOLEAN,
-  maySetKeywords BOOLEAN,
-  mayCreateChild BOOLEAN,
-  mayRename BOOLEAN,
-  mayDelete BOOLEAN,
-  maySubmit BOOLEAN,
-  totalEmails INTEGER,
-  unreadEmails INTEGER,
-  totalThreads INTEGER,
-  unreadThreads INTEGER,
+  mayReadItems BOOLEAN NOT NULL DEFAULT 1,
+  mayAddItems BOOLEAN NOT NULL DEFAULT 1,
+  mayRemoveItems BOOLEAN NOT NULL DEFAULT 1,
+  maySetSeen BOOLEAN NOT NULL DEFAULT 1,
+  maySetKeywords BOOLEAN NOT NULL DEFAULT 1,
+  mayCreateChild BOOLEAN NOT NULL DEFAULT 1,
+  mayRename BOOLEAN NOT NULL DEFAULT 1,
+  mayDelete BOOLEAN NOT NULL DEFAULT 1,
+  maySubmit BOOLEAN NOT NULL DEFAULT 1,
+  mayAdmin BOOLEAN NOT NULL DEFAULT 1,
+  totalEmails INTEGER NOT NULL DEFAULT 0,
+  unreadEmails INTEGER NOT NULL DEFAULT 0,
+  totalThreads INTEGER NOT NULL DEFAULT 0,
+  unreadThreads INTEGER NOT NULL DEFAULT 0,
   jcreated INTEGER,
   jmodseq INTEGER,
   jnoncountsmodseq INTEGER,
