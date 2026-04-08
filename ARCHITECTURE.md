@@ -26,6 +26,14 @@ CHILD: per-account (forked on first request to accountid, blocking loop)
   \-- Exit on error or delete
 ```
 
+## Lifecycle
+
+- **Health check**: `GET /healthz` on `JMAP_MGMT_PORT` -- returns uptime, child count, pid
+- **Idle timeout**: children with no activity for `JMAP_IDLE_TIMEOUT` seconds (default 300)
+  are closed by the parent. The `__accounts__` child is exempt. Set to 0 to disable.
+- **Graceful shutdown**: SIGTERM/SIGINT stops accepting connections, closes all children
+  (they exit on socketpair EOF), and exits after 2 seconds.
+
 ## The Rule
 
 - **Parent**: HTTP routing, request dispatch, response callbacks, child management
@@ -65,4 +73,36 @@ Client -> POST /api/accounts {accountid, imapHost, username, password, ...}
 - `docker-entrypoint.sh`: init `accounts.sqlite3`, exec jmap-proxy.pl
 - Ports: `JMAP_PORT` (public), `JMAP_MGMT_PORT` (management, localhost-only by default)
 - Volume: `/data` -- `accounts.sqlite3` + per-account `.sqlite3` files
-- Env: `JMAP_PORT`, `JMAP_MGMT_PORT`, `JMAP_MGMT_HOST`, `JMAP_DATADIR`, `BASEURL`
+- Env: `JMAP_PORT`, `JMAP_MGMT_PORT`, `JMAP_MGMT_HOST`, `JMAP_DATADIR`, `BASEURL`,
+  `JMAP_IDLE_TIMEOUT`
+
+## TLS Termination
+
+The proxy speaks plain HTTP. Put a reverse proxy in front for TLS.
+
+### nginx
+```nginx
+server {
+    listen 443 ssl;
+    server_name jmap.example.com;
+
+    ssl_certificate     /etc/ssl/certs/jmap.pem;
+    ssl_certificate_key /etc/ssl/private/jmap.key;
+
+    location / {
+        proxy_pass http://127.0.0.1:9000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        client_max_body_size 50m;  # for uploads
+    }
+}
+```
+
+### Caddy
+```
+jmap.example.com {
+    reverse_proxy 127.0.0.1:9000
+}
+```
+Caddy handles TLS certificates automatically via Let's Encrypt.

@@ -49,10 +49,10 @@ backends and exposes them over the JMAP protocol (RFCs 8620/8621).
 - [x] HTML dashboard (self-contained, no template files)
 
 ### Still TODO
-- [ ] Health check endpoint
-- [ ] Graceful shutdown (drain connections, close DBs)
-- [ ] TLS termination documentation (reverse proxy setup)
-- [ ] Idle timeout for backend children (parent closes socketpair)
+- [x] Health check endpoint (`GET /healthz` on mgmt port)
+- [x] Graceful shutdown (SIGTERM/SIGINT: stop accepting, close children, exit)
+- [x] TLS termination documentation (nginx/Caddy examples in ARCHITECTURE.md)
+- [x] Idle timeout for backend children (`JMAP_IDLE_TIMEOUT`, default 300s)
 
 ### Database: SQLite stays
 Per-account SQLite files are the right model: zero contention between

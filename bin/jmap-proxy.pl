@@ -51,8 +51,9 @@ my $child_watcher = AnyEvent->signal(signal => 'CHLD', cb => sub {
 #
 # Backend connection management
 #
-my %backend;   # accountid => [AnyEvent::Handle, cmd_counter]
+my %backend;   # accountid => [AnyEvent::Handle, cmd_counter, pid, last_active]
 my %waiting;   # accountid => { cmd_id => [success_cb, error_cb] }
+my $start_time = time();
 
 sub mk_json {
   my $accountid = shift;
@@ -72,6 +73,7 @@ sub mk_json {
         delete $backend{$accountid};
       }
       else {
+        $backend{$accountid}[3] = time() if $backend{$accountid};
         $waiting{$accountid}{$res->[2]}[0]->($res->[1]);
       }
       delete $waiting{$accountid}{$res->[2]};
@@ -130,7 +132,7 @@ sub get_backend {
         warn "Backend handle EOF for $accountid\n";
         delete $backend{$accountid};
       },
-    ), 0];
+    ), 0, $pid, time()];
 
     $backend{$accountid}[0]->push_read(json => mk_json($accountid));
   }
@@ -389,6 +391,7 @@ sub send_backend_request {
   my $errcb = shift;
   my $backend = get_backend($accountid);
   my $cmd = "#" . $backend->[1]++;
+  $backend->[3] = time();
   $waiting{$accountid}{$cmd} = [$cb || sub { 1 }, $errcb || sub { 1 }];
   $backend->[0]->push_write(json => [$request, $args, $cmd]);
 }
@@ -821,11 +824,84 @@ my $mgmt = AnyEvent::HTTPD->new(
   allowed_methods => [qw(GET POST DELETE PUT)],
 );
 
+sub mgmt_healthz {
+  my ($httpd, $req) = @_;
+  my $now = time();
+  my $children = grep { $_ ne '__accounts__' } keys %backend;
+  $req->respond([200, 'ok',
+    { 'Content-Type' => 'application/json' },
+    JSON::XS::encode_json({
+      status   => 'ok',
+      uptime   => $now - $start_time,
+      children => $children,
+      pid      => $$,
+    })]);
+}
+
 $mgmt->reg_cb(
-  '/api'  => \&mgmt_api_accounts,
-  '/'     => \&mgmt_dashboard,
+  '/healthz' => \&mgmt_healthz,
+  '/api'     => \&mgmt_api_accounts,
+  '/'        => \&mgmt_dashboard,
 );
 
 warn "Management UI on http://$mgmt_host:$mgmt_port/\n";
+
+#
+# Idle timeout: reap backend children that haven't been used recently
+#
+my $idle_timeout = $ENV{JMAP_IDLE_TIMEOUT} || 300;  # seconds, 0 to disable
+my $idle_timer;
+if ($idle_timeout) {
+  $idle_timer = AnyEvent->timer(
+    after    => 60,
+    interval => 60,
+    cb       => sub {
+      my $now = time();
+      for my $name (keys %backend) {
+        next if $name eq '__accounts__';  # keep accounts worker alive
+        next if %{$waiting{$name} || {}};  # has in-flight requests
+        my $idle = $now - ($backend{$name}[3] || 0);
+        if ($idle > $idle_timeout) {
+          warn "Idle timeout: closing $name (idle ${idle}s)\n";
+          delete $backend{$name};
+          delete $waiting{$name};
+          # Child will see EOF on socketpair and exit
+        }
+      }
+    },
+  );
+}
+
+#
+# Graceful shutdown
+#
+my $shutting_down = 0;
+
+my $shutdown = sub {
+  return if $shutting_down;
+  $shutting_down = 1;
+  warn "Shutting down...\n";
+
+  # Stop accepting new connections
+  $httpd = undef;
+  $mgmt = undef;
+
+  # Close all backend children (they'll see EOF and exit)
+  for my $name (keys %backend) {
+    warn "Closing backend $name\n";
+    delete $backend{$name};
+    delete $waiting{$name};
+  }
+
+  # Give children a moment to exit, then stop event loop
+  my $exit_timer; $exit_timer = AnyEvent->timer(after => 2, cb => sub {
+    undef $exit_timer;
+    warn "Shutdown complete\n";
+    exit 0;
+  });
+};
+
+my $sig_term = AnyEvent->signal(signal => 'TERM', cb => $shutdown);
+my $sig_int  = AnyEvent->signal(signal => 'INT',  cb => $shutdown);
 
 EV::run();
