@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+<link href='https://fonts.googleapis.com/css?family=Source+Sans+Pro:300,400,600,700,400italic' rel='stylesheet' type='text/css'>
+<link href="/main.css" rel="stylesheet" type="text/css">
+<title>JMAP Proxy - My Accounts</title>
+<style>
+  table.accounts { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+  table.accounts th, table.accounts td { padding: 8px 12px; text-align: left; border-bottom: 1px solid #ddd; }
+  table.accounts th { background: #2c3e50; color: white; }
+  table.accounts tr:hover { background: #f8f9fa; }
+  .actions { display: flex; gap: 6px; }
+  .actions form { display: inline; }
+  button.detach { background: #f39c12; color: white; border: none; padding: 4px 10px; border-radius: 3px; cursor: pointer; }
+  button.detach:hover { background: #e67e22; }
+  button.delete { background: #e74c3c; color: white; border: none; padding: 4px 10px; border-radius: 3px; cursor: pointer; }
+  button.delete:hover { background: #c0392b; }
+  .add-form { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-top: 20px; }
+  .add-form label { display: block; font-weight: 500; margin-bottom: 4px; }
+  .add-form input[type=email], .add-form input[type=password] { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; margin-bottom: 12px; }
+  .add-form button { background: #27ae60; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-size: 16px; }
+  .add-form button:hover { background: #219a52; }
+</style>
+</head>
+<body>
+<header>
+<div id="logo">JMAP</div>
+<ul id="nav" style="left:0">
+    <li class="nav-item"><a class="nav-link" href="/">Home</a></li>
+    <li class="nav-item"><a class="nav-link" href="/accounts">Accounts</a></li>
+    <li class="nav-item"><a class="nav-link" href="/logout">Log out</a></li>
+</ul>
+<a id="github" href="https://github.com/jmapio"><img style="position: absolute; top: 0; right: 0; border: 0;" src="https://s3.amazonaws.com/github/ribbons/forkme_right_darkblue_121621.png" alt="Fork me on GitHub"></a>
+</header>
+<article>
+
+<h1>My Accounts</h1>
+
+<table class="accounts">
+<thead>
+  <tr><th>Account</th><th>Server</th><th>Folders</th><th>Messages</th><th>Actions</th></tr>
+</thead>
+<tbody>
+[% FOREACH a IN accounts %]
+  <tr>
+    <td><a href="[% baseurl %]/jmap/[% a.accountid %]">[% a.email || a.accountid %]</a>[% IF a.accountid == auth_aid %] (logged in)[% END %]</td>
+    <td>[% a.imapHost || '-' %]:[% a.imapPort || '' %]</td>
+    <td>[% a.folders || 0 %]</td>
+    <td>[% a.messages || 0 %]</td>
+    <td class="actions">
+      <form method="post" action="/accounts/detach">
+        <input type="hidden" name="accountid" value="[% a.accountid %]">
+        <button class="detach" type="submit">Detach</button>
+      </form>
+      <form method="post" action="/accounts/delete" onsubmit="return confirm('Delete account [% a.email || a.accountid %]? This removes all data.')">
+        <input type="hidden" name="accountid" value="[% a.accountid %]">
+        <button class="delete" type="submit">Delete</button>
+      </form>
+    </td>
+  </tr>
+[% END %]
+</tbody>
+</table>
+
+<h2>Add Another Account</h2>
+<div class="add-form">
+  <form action="/signup" method="post">
+    <label>Email</label>
+    <input name="username" type="email" required>
+    <label>Password</label>
+    <input name="password" type="password" required>
+    <div style="margin-top: 8px;">
+      <button type="submit">Add Account</button>
+    </div>
+  </form>
+</div>
+
+</article>
+</body>
+</html>

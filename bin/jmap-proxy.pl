@@ -22,7 +22,9 @@ use File::Temp ();
 use HTML::GenerateUtil qw(escape_html escape_uri);
 use HTTP::Request;
 use HTTP::Response;
+use JSON;
 use JSON::XS qw(decode_json);
+use MIME::Base64 qw(decode_base64);
 use MIME::Base64::URLSafe;
 use POSIX qw(:sys_wait_h);
 use Socket;
@@ -320,10 +322,16 @@ sub run_backend_worker {
         my $final_aid;
         if ($existing_aid) {
           $final_aid = $existing_aid;
+          # Join pool if requested
+          if ($detail->{poolid}) {
+            $dbh->do("UPDATE accounts SET poolid = ? WHERE accountid = ?",
+              {}, $detail->{poolid}, $existing_aid);
+          }
         } else {
           $final_aid = $accountid;
-          $dbh->do("INSERT INTO accounts (email, accountid, type) VALUES (?, ?, ?)",
-            {}, $detail->{username}, $accountid, 'imap');
+          my $poolid = $detail->{poolid} || $accountid;
+          $dbh->do("INSERT INTO accounts (email, accountid, type, poolid) VALUES (?, ?, ?, ?)",
+            {}, $detail->{username}, $accountid, 'imap', $poolid);
         }
 
         # Set up the account
@@ -409,7 +417,11 @@ sub run_accounts_worker {
   my ($read_json, $write_json) = _make_json_io($sock);
 
   my $dbh = DBI->connect("dbi:SQLite:dbname=$datadir/accounts.sqlite3");
-  $dbh->do("CREATE TABLE IF NOT EXISTS accounts (email TEXT PRIMARY KEY, accountid TEXT, type TEXT)");
+  $dbh->do("CREATE TABLE IF NOT EXISTS accounts (email TEXT PRIMARY KEY, accountid TEXT, type TEXT, poolid TEXT)");
+  $dbh->do("CREATE TABLE IF NOT EXISTS tokens (token TEXT PRIMARY KEY, accountid TEXT NOT NULL)");
+  # Migrate: ensure poolid column exists and backfill
+  eval { $dbh->do("ALTER TABLE accounts ADD COLUMN poolid TEXT") };
+  $dbh->do("UPDATE accounts SET poolid = accountid WHERE poolid IS NULL");
 
   while (my $request = $read_json->()) {
     my ($cmd, $args, $tag) = @$request;
@@ -446,9 +458,78 @@ sub run_accounts_worker {
         my $aid = $args->{accountid};
         my $type = $args->{type} || 'imap';
         my $email = $args->{email} || $aid;
-        $dbh->do("INSERT OR REPLACE INTO accounts (email, accountid, type) VALUES (?, ?, ?)",
-          {}, $email, $aid, $type);
-        return ['create_account', { accountid => $aid, type => $type }];
+        my $poolid = $args->{poolid} || $aid;
+        $dbh->do("INSERT OR REPLACE INTO accounts (email, accountid, type, poolid) VALUES (?, ?, ?, ?)",
+          {}, $email, $aid, $type, $poolid);
+        return ['create_account', { accountid => $aid, type => $type, poolid => $poolid }];
+      }
+
+      if ($cmd eq 'get_pool') {
+        my $aid = $args->{accountid};
+        my $row = $dbh->selectrow_hashref(
+          "SELECT poolid FROM accounts WHERE accountid = ?", {}, $aid);
+        return ['get_pool', { accounts => [] }] unless $row;
+        my $poolid = $row->{poolid};
+        my $rows = $dbh->selectall_arrayref(
+          "SELECT email, accountid, type FROM accounts WHERE poolid = ? ORDER BY accountid",
+          { Slice => {} }, $poolid);
+        for my $r (@$rows) {
+          my $details = _account_details_child($r->{accountid});
+          $r->{$_} = $details->{$_} for keys %$details;
+        }
+        return ['get_pool', { poolid => $poolid, accounts => $rows }];
+      }
+
+      if ($cmd eq 'set_poolid') {
+        my $aid = $args->{accountid};
+        my $poolid = $args->{poolid};
+        $dbh->do("UPDATE accounts SET poolid = ? WHERE accountid = ?", {}, $poolid, $aid);
+        return ['set_poolid', { accountid => $aid, poolid => $poolid }];
+      }
+
+      if ($cmd eq 'create_token') {
+        my $token = $args->{token};
+        my $aid = $args->{accountid};
+        $dbh->do("INSERT OR REPLACE INTO tokens (token, accountid) VALUES (?, ?)", {}, $token, $aid);
+        return ['create_token', { token => $token, accountid => $aid }];
+      }
+
+      if ($cmd eq 'resolve_token') {
+        my $token = $args->{token};
+        my $row = $dbh->selectrow_hashref(
+          "SELECT accountid FROM tokens WHERE token = ?", {}, $token);
+        return ['resolve_token', $row ? $row->{accountid} : undef];
+      }
+
+      if ($cmd eq 'auth') {
+        # Authenticate by email + password: look up account, check stored password
+        my $email = $args->{username};
+        my $password = $args->{password};
+        my $row = $dbh->selectrow_hashref(
+          "SELECT accountid, poolid FROM accounts WHERE email = ?", {}, $email);
+        return ['auth', undef] unless $row;
+
+        # Check password against per-account DB (credentials in iserver table)
+        my $aid = $row->{accountid};
+        my $dbfile = "$datadir/$aid.sqlite3";
+        return ['auth', undef] unless -f $dbfile;
+        my $udb = DBI->connect("dbi:SQLite:dbname=$dbfile");
+        my $stored = $udb->selectrow_hashref(
+          "SELECT password FROM iserver WHERE username = ?", {}, $email);
+        return ['auth', undef] unless $stored && $stored->{password} eq $password;
+
+        # Create a token for this session
+        my $token = _generate_token();
+        $dbh->do("INSERT INTO tokens (token, accountid) VALUES (?, ?)", {}, $token, $aid);
+
+        # Get all accounts in the pool
+        my $poolid = $row->{poolid} || $aid;
+        my $pool = $dbh->selectall_arrayref(
+          "SELECT email, accountid, type FROM accounts WHERE poolid = ? ORDER BY accountid",
+          { Slice => {} }, $poolid);
+
+        return ['auth', { accountid => $aid, poolid => $poolid, email => $email,
+                          token => $token, accounts => $pool }];
       }
 
       if ($cmd eq 'delete_account') {
@@ -523,14 +604,83 @@ sub not_found {
   $req->respond([404, 'not found', {}, 'not found']);
 }
 
+sub do_wellknown {
+  my ($httpd, $req) = @_;
+  my $path = $req->url->path;
+  if ($path eq '/.well-known/jmap') {
+    $req->respond([301, 'redirected', { Location => "$BASEURL/session" }, "Redirected"]);
+    return;
+  }
+  not_found($req);
+}
+
+sub do_session {
+  my ($httpd, $req) = @_;
+
+  $httpd->stop_request();
+  _authenticate($req, $httpd, sub {
+    my ($auth_aid) = @_;
+    # Get pool info for this account
+    send_backend_request('__accounts__', 'get_pool', { accountid => $auth_aid }, sub {
+      my $pool = shift;
+      my $accounts = {};
+      my $primary_aid;
+      for my $a (@{$pool->{accounts} || []}) {
+        $accounts->{$a->{accountid}} = {
+          name => $a->{email} || $a->{accountid},
+          isPersonal => ($a->{accountid} eq $auth_aid ? JSON::true : JSON::false),
+          isReadOnly => JSON::false,
+          accountCapabilities => {
+            'urn:ietf:params:jmap:mail' => {},
+          },
+        };
+        $primary_aid //= $a->{accountid};
+      }
+      $primary_aid //= $auth_aid;
+
+      my $session = {
+        capabilities => {
+          'urn:ietf:params:jmap:core' => {
+            maxSizeUpload => 50_000_000,
+            maxConcurrentUpload => 4,
+            maxSizeRequest => 10_000_000,
+            maxConcurrentRequests => 4,
+            maxCallsInRequest => 16,
+            maxObjectsInGet => 4096,
+            maxObjectsInSet => 4096,
+            collationAlgorithms => [],
+          },
+          'urn:ietf:params:jmap:mail' => {},
+        },
+        accounts => $accounts,
+        primaryAccounts => {
+          'urn:ietf:params:jmap:mail' => $primary_aid,
+        },
+        username => ($pool->{accounts} && $pool->{accounts}[0] ? $pool->{accounts}[0]{email} : ''),
+        apiUrl => "$BASEURL/jmap",
+        downloadUrl => "$BASEURL/raw/{accountId}/{blobId}/{name}",
+        uploadUrl => "$BASEURL/upload/{accountId}",
+        eventSourceUrl => "$BASEURL/eventsource?types={types}&closeafter={closeafter}&ping={ping}",
+        state => "$pool->{poolid}:" . time(),
+      };
+
+      $req->respond([200, 'ok', { 'Content-Type' => 'application/json' },
+        JSON::XS::encode_json($session)]);
+    }, sub {
+      my $err = shift;
+      $req->respond([500, 'error', { 'Content-Type' => 'application/json' },
+        JSON::XS::encode_json({ type => 'serverError', message => "$err" })]);
+    });
+  }, sub {
+    _require_auth($req);
+  });
+}
+
 sub do_jmap {
   my ($httpd, $req) = @_;
 
   my $uri = $req->url();
   my $path = $uri->path();
-
-  return invalid_request($req) unless $path =~ m{^/jmap/([^/]+)/?$};
-  my $accountid = $1;
 
   return invalid_request($req) unless lc $req->method eq 'post';
 
@@ -538,8 +688,31 @@ sub do_jmap {
   my $data = eval { decode_json($content) };
   return invalid_request($req) unless $data;
 
-  $httpd->stop_request();
+  # Legacy: /jmap/{accountid} — accountid in URL is the credential
+  if ($path =~ m{^/jmap/([^/]+)/?$}) {
+    my $accountid = $1;
+    $httpd->stop_request();
+    _do_jmap_request($req, $accountid, $data);
+    return;
+  }
 
+  # Standard: POST /jmap with auth header/cookie
+  if ($path eq '/jmap' || $path eq '/jmap/') {
+    $httpd->stop_request();
+    _authenticate($req, $httpd, sub {
+      my ($auth_aid) = @_;
+      _do_jmap_request($req, $auth_aid, $data);
+    }, sub {
+      _require_auth($req);
+    });
+    return;
+  }
+
+  invalid_request($req);
+}
+
+sub _do_jmap_request {
+  my ($req, $accountid, $data) = @_;
   send_backend_request($accountid, 'jmap', $data, sub {
     my $result = shift;
     my $body = $json->encode($result);
@@ -636,6 +809,116 @@ sub do_static {
   $req->respond([200, 'ok', { 'Content-Type' => $types{$ext} || 'application/octet-stream' }, $content]);
 }
 
+sub _generate_token {
+  open my $fh, '<', '/dev/urandom' or die "Cannot open /dev/urandom: $!";
+  my $bytes;
+  read $fh, $bytes, 32;  # 256 bits
+  close $fh;
+  return unpack('H*', $bytes);
+}
+
+sub _get_auth_accountid {
+  my ($req) = @_;
+  # Cookie contains a token, not an accountid — check the cache
+  my $cookies = crush_cookie($req->headers->{cookie} || '');
+  my $token = $cookies->{jmap_proxy};
+  return undef unless $token;
+  my $cached = _check_cache("bearer:$token");
+  return $cached;
+  # Note: if not cached, caller must use _authenticate() for async resolution
+}
+
+# Cache auth results: key => [accountid, expire_time]
+my %auth_cache;
+my $AUTH_CACHE_TTL = 300;  # 5 minutes
+
+sub _check_cache {
+  my ($key) = @_;
+  if (my $cached = $auth_cache{$key}) {
+    if ($cached->[1] > time()) {
+      return $cached->[0];
+    }
+    delete $auth_cache{$key};
+  }
+  return undef;
+}
+
+# Authenticate via Basic auth, Bearer token, or cookie.
+# All are async since token/Basic resolution goes through __accounts__ child.
+# Calls $cb->($accountid) on success, $errcb->() on failure.
+sub _authenticate {
+  my ($req, $httpd, $cb, $errcb) = @_;
+  my $auth_header = $req->headers->{authorization} || '';
+
+  # Bearer token — resolve to accountid
+  if ($auth_header =~ /^Bearer\s+(\S+)$/i) {
+    my $token = $1;
+    my $cached = _check_cache("bearer:$token");
+    if ($cached) { $cb->($cached); return; }
+    $httpd->stop_request();
+    send_backend_request('__accounts__', 'resolve_token', { token => $token }, sub {
+      my $aid = shift;
+      if ($aid) {
+        $auth_cache{"bearer:$token"} = [$aid, time() + $AUTH_CACHE_TTL];
+        $cb->($aid);
+      } else {
+        $errcb->();
+      }
+    }, sub { $errcb->() });
+    return;
+  }
+
+  # Cookie — token in cookie, resolve to accountid
+  my $cookies = crush_cookie($req->headers->{cookie} || '');
+  if (my $token = $cookies->{jmap_proxy}) {
+    my $cached = _check_cache("bearer:$token");
+    if ($cached) { $cb->($cached); return; }
+    $httpd->stop_request();
+    send_backend_request('__accounts__', 'resolve_token', { token => $token }, sub {
+      my $aid = shift;
+      if ($aid) {
+        $auth_cache{"bearer:$token"} = [$aid, time() + $AUTH_CACHE_TTL];
+        $cb->($aid);
+      } else {
+        $errcb->();
+      }
+    }, sub { $errcb->() });
+    return;
+  }
+
+  # Basic auth — verify password, get accountid
+  if ($auth_header =~ /^Basic\s+(\S+)$/i) {
+    my $b64 = $1;
+    my $cached = _check_cache("basic:$b64");
+    if ($cached) { $cb->($cached); return; }
+
+    my $decoded = eval { decode_base64($b64) };
+    if ($decoded && $decoded =~ /^([^:]+):(.+)$/) {
+      my ($user, $pass) = ($1, $2);
+      $httpd->stop_request();
+      send_backend_request('__accounts__', 'auth', { username => $user, password => $pass }, sub {
+        my $result = shift;
+        if ($result && $result->{accountid}) {
+          $auth_cache{"basic:$b64"} = [$result->{accountid}, time() + $AUTH_CACHE_TTL];
+          $cb->($result->{accountid});
+        } else {
+          $errcb->();
+        }
+      }, sub { $errcb->() });
+      return;
+    }
+  }
+
+  $errcb->();
+}
+
+sub _require_auth {
+  my ($req) = @_;
+  $req->respond([401, 'unauthorized',
+    { 'Content-Type' => 'application/json', 'WWW-Authenticate' => 'Basic realm="JMAP Proxy"' },
+    '{"type":"unauthorized"}']);
+}
+
 sub do_signup {
   my ($httpd, $req) = @_;
 
@@ -647,6 +930,11 @@ sub do_signup {
   }
 
   return invalid_request($req) unless $opts{username} && $opts{password};
+
+  # If logged in, new account joins the existing pool
+  # Use sync cache check — if not cached, pool join will be skipped (acceptable)
+  my $auth_aid = _get_auth_accountid($req);
+  $opts{poolid} = $auth_aid if $auth_aid;
 
   my $accountid = new_uuid_string();
 
@@ -671,15 +959,22 @@ sub do_signup {
       my ($final_accountid, $username) = @{$result}[1, 2];
       # Trigger background sync
       send_backend_request($final_accountid, 'sync', {});
-      # Set cookie and redirect
-      my $cookie = bake_cookie("jmap_$final_accountid", {
-        value => $username,
-        path => '/',
-        expires => '+3M',
+      # Create a token for the cookie
+      my $token = _generate_token();
+      send_backend_request('__accounts__', 'create_token',
+        { token => $token, accountid => $final_accountid }, sub {
+        $auth_cache{"bearer:$token"} = [$final_accountid, time() + $AUTH_CACHE_TTL];
+        my $cookie = bake_cookie("jmap_proxy", {
+          value => $token,
+          path => '/',
+          expires => '+3M',
+        });
+        $req->respond([301, 'redirected',
+          { 'Set-Cookie' => $cookie, Location => "$BASEURL/accounts" },
+          "Redirected"]);
+      }, sub {
+        $req->respond([500, 'error', {}, 'failed to create session']);
       });
-      $req->respond([301, 'redirected',
-        { 'Set-Cookie' => $cookie, Location => "$BASEURL/jmap/$final_accountid" },
-        "Redirected"]);
       # Clean up temp child if a different accountid was used
       delete $backend{$accountid} unless $final_accountid eq $accountid;
       return;
@@ -694,6 +989,100 @@ sub do_signup {
   });
 }
 
+sub do_accounts {
+  my ($httpd, $req) = @_;
+
+  my $method = lc $req->method;
+  my $path = $req->url->path;
+
+  $httpd->stop_request();
+  _authenticate($req, $httpd, sub {
+    my ($auth_aid) = @_;
+    _do_accounts_authed($httpd, $req, $auth_aid, $method, $path);
+  }, sub {
+    $req->respond([301, 'redirected', { Location => "$BASEURL/" }, "Redirected"]);
+  });
+}
+
+sub _do_accounts_authed {
+  my ($httpd, $req, $auth_aid, $method, $path) = @_;
+
+  # POST /accounts/detach — detach an account from the pool
+  if ($path eq '/accounts/detach' && $method eq 'post') {
+    my $aid = $req->parm('accountid');
+    return invalid_request($req) unless $aid;
+    $httpd->stop_request();
+    # Set the account's poolid to itself
+    send_backend_request('__accounts__', 'set_poolid', { accountid => $aid, poolid => $aid }, sub {
+      $req->respond([301, 'redirected', { Location => "$BASEURL/accounts" }, "Redirected"]);
+    }, sub {
+      my $err = shift;
+      $req->respond([500, 'error', {}, "detach failed: $err"]);
+    });
+    return;
+  }
+
+  # POST /accounts/delete — delete an account
+  if ($path eq '/accounts/delete' && $method eq 'post') {
+    my $aid = $req->parm('accountid');
+    return invalid_request($req) unless $aid;
+    $httpd->stop_request();
+
+    my $finish_delete = sub {
+      send_backend_request('__accounts__', 'delete_account', { accountid => $aid }, sub {
+        # If we deleted the authenticated account, clear cookie and go home
+        if ($aid eq $auth_aid) {
+          my $cookie = bake_cookie("jmap_proxy", { value => '', path => '/', expires => '-1d' });
+          $req->respond([301, 'redirected',
+            { 'Set-Cookie' => $cookie, Location => "$BASEURL/" }, "Redirected"]);
+        } else {
+          $req->respond([301, 'redirected', { Location => "$BASEURL/accounts" }, "Redirected"]);
+        }
+      }, sub {
+        my $err = shift;
+        $req->respond([500, 'error', {}, "delete failed: $err"]);
+      });
+    };
+
+    # Tell per-account child to clean up if running
+    if ($backend{$aid}) {
+      send_backend_request($aid, 'delete', {}, sub {
+        delete $backend{$aid};
+        $finish_delete->();
+      }, sub {
+        delete $backend{$aid};
+        $finish_delete->();
+      });
+    } else {
+      $finish_delete->();
+    }
+    return;
+  }
+
+  # GET /accounts — show the accounts page
+  $httpd->stop_request();
+  send_backend_request('__accounts__', 'get_pool', { accountid => $auth_aid }, sub {
+    my $pool = shift;
+    my $html = '';
+    $TT->process("accounts.html", {
+      baseurl  => $BASEURL,
+      auth_aid => $auth_aid,
+      accounts => $pool->{accounts} || [],
+    }, \$html) || return $req->respond([500, 'error', {}, $Template::ERROR]);
+    $req->respond([200, 'ok', { 'Content-Type' => 'text/html; charset=utf-8' }, $html]);
+  }, sub {
+    my $err = shift;
+    $req->respond([500, 'error', {}, "error: $err"]);
+  });
+}
+
+sub do_logout {
+  my ($httpd, $req) = @_;
+  my $cookie = bake_cookie("jmap_proxy", { value => '', path => '/', expires => '-1d' });
+  $req->respond([301, 'redirected',
+    { 'Set-Cookie' => $cookie, Location => "$BASEURL/" }, "Redirected"]);
+}
+
 #
 # Start HTTP server
 #
@@ -702,12 +1091,16 @@ my $port = $ENV{JMAP_PORT} || 9000;
 my $httpd = AnyEvent::HTTPD->new(port => $port);
 
 $httpd->reg_cb(
-  '/jmap'   => \&do_jmap,
-  '/upload' => \&do_upload,
-  '/raw'    => \&do_raw,
-  '/signup' => \&do_signup,
-  '/main.css' => \&do_static,
-  '/'       => \&do_landing,
+  '/.well-known' => \&do_wellknown,
+  '/session'     => \&do_session,
+  '/jmap'        => \&do_jmap,
+  '/upload'      => \&do_upload,
+  '/raw'         => \&do_raw,
+  '/signup'      => \&do_signup,
+  '/accounts'    => \&do_accounts,
+  '/logout'      => \&do_logout,
+  '/main.css'    => \&do_static,
+  '/'            => \&do_landing,
 );
 
 warn "JMAP proxy listening on port $port\n";
