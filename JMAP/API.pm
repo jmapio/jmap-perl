@@ -1637,26 +1637,6 @@ sub _match {
   return 1;
 }
 
-# Check if a deleted message definitely could NOT have matched a filter,
-# using locally available data.  Returns 1 if we're sure it never matched.
-# Conservative: returns 0 (might have matched) if we can't tell.
-sub _definitely_not_matching {
-  my ($item, $filter) = @_;
-  # For text searches, check subject (we still have it in jmessages)
-  if ($filter->{text}) {
-    my $text = lc($filter->{text});
-    my $subject = lc($item->{msgsubject} // $item->{subject} // '');
-    return 0 if index($subject, $text) >= 0;
-    my $sortsubject = lc($item->{sortsubject} // '');
-    return 0 if index($sortsubject, $text) >= 0;
-    # Text search also matches body/from/to — we can't check body
-    # for deleted messages, so only filter on what we have.
-    # If nothing locally matched, it likely never matched.
-    return 1;
-  }
-  # For other filters we can't easily check, assume it might have matched
-  return 0;
-}
 
 sub _match_operator {
   my $Self = shift;
@@ -1891,18 +1871,10 @@ sub api_Email_queryChanges {
         }
         elsif (!$isnew) {
           # Changed but not matching now — may have been in old results.
-          # For unfiltered queries, always report as removed.
-          # For filtered queries, check if it could have matched using
-          # locally-available data (subject, keywords, etc.) to avoid
-          # spurious removals for messages that never matched.
-          my $dominated = 0;
-          if ($args->{filter} && !$item->{active}) {
-            $dominated = _definitely_not_matching($item, $args->{filter});
-          }
-          unless ($dominated) {
-            push @destroyed, "$item->{msgid}";
-            $changes++;
-          }
+          # Without query result caching we can't know for sure, so
+          # report as removed.  RFC 8620 §5.6 allows extra IDs in removed.
+          push @destroyed, "$item->{msgid}";
+          $changes++;
         }
         # New messages that don't match: not in old results, nothing to report
       }
