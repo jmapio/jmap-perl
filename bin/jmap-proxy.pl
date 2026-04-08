@@ -219,6 +219,119 @@ sub run_backend_worker {
       if ($cmd eq 'getinfo') {
         return ['info', [$email, $type]];
       }
+      if ($cmd eq 'signup') {
+        require Net::DNS;
+        require Mail::IMAPTalk;
+
+        my $detail = { %$args };
+        my $force = delete $detail->{force};
+        $detail->{imapPort} ||= 993;
+        $detail->{imapSSL} ||= 2;
+        $detail->{smtpPort} ||= 587;
+        $detail->{smtpSSL} ||= 3;
+
+        # Well-known providers
+        if ($detail->{username} =~ m/\@icloud\.com/) {
+          $detail->{imapHost} = 'imap.mail.me.com';
+          $detail->{smtpHost} = 'smtp.mail.me.com';
+          $detail->{caldavURL} = 'https://caldav.icloud.com/';
+          $detail->{carddavURL} = 'https://contacts.icloud.com/';
+          $force = 1;
+        }
+        elsif ($detail->{username} =~ m/\@yahoo\.com/) {
+          $detail->{imapHost} = 'imap.mail.yahoo.com';
+          $detail->{smtpHost} = 'smtp.mail.yahoo.com';
+          $detail->{caldavURL} = 'https://caldav.calendar.yahoo.com';
+          $detail->{carddavURL} = 'https://carddav.address.yahoo.com';
+          $force = 1;
+        }
+        elsif (!$detail->{imapHost}) {
+          # DNS SRV lookup
+          my $resolver = Net::DNS::Resolver->new;
+          my $domain = $detail->{username};
+          $domain =~ s/.*\@//;
+
+          for my $try (["_imaps._tcp.$domain", 'imapHost', 'imapPort', 2],
+                       ["_imap._tcp.$domain",  'imapHost', 'imapPort', 3]) {
+            my $reply = $resolver->query($try->[0], 'SRV');
+            if ($reply) {
+              my @d = $reply->answer;
+              if (@d) {
+                $detail->{$try->[1]} = $d[0]->target;
+                $detail->{$try->[2]} = $d[0]->port;
+                $detail->{imapSSL} = $try->[3];
+                last;
+              }
+            }
+          }
+
+          for my $try (["_smtps._tcp.$domain",      'smtpHost', 'smtpPort', 2],
+                       ["_submission._tcp.$domain",  'smtpHost', 'smtpPort', 3]) {
+            my $reply = $resolver->query($try->[0], 'SRV');
+            if ($reply) {
+              my @d = $reply->answer;
+              if (@d) {
+                $detail->{$try->[1]} = $d[0]->target;
+                $detail->{$try->[2]} = $d[0]->port;
+                $detail->{smtpSSL} = $try->[3];
+                last;
+              }
+            }
+          }
+
+          for my $try (["_caldavs._tcp.$domain",  'caldavURL',  'https', 443],
+                       ["_caldav._tcp.$domain",   'caldavURL',  'http',  80],
+                       ["_carddavs._tcp.$domain", 'carddavURL', 'https', 443],
+                       ["_carddav._tcp.$domain",  'carddavURL', 'http',  80]) {
+            my $reply = $resolver->query($try->[0], 'SRV');
+            if ($reply) {
+              my @d = $reply->answer;
+              if (@d) {
+                my $host = $d[0]->target;
+                my $port = $d[0]->port;
+                my $url = "$try->[2]://$host";
+                $url .= ":$port" unless $port == $try->[3];
+                $detail->{$try->[1]} = $url;
+              }
+            }
+          }
+        }
+
+        unless ($force) {
+          return ['signup', ['continue', $detail]];
+        }
+
+        # Test IMAP login
+        my $imap = Mail::IMAPTalk->new(
+          Server => $detail->{imapHost},
+          Port => $detail->{imapPort},
+          UseSSL => ($detail->{imapSSL} > 1),
+          UseBlocking => ($detail->{imapSSL} > 1),
+        );
+        die "Cannot connect to IMAP server $detail->{imapHost}:$detail->{imapPort}\n" unless $imap;
+
+        my $ok = $imap->login($detail->{username}, $detail->{password});
+        die "Login failed for $detail->{username}\n" unless $ok;
+        $imap->logout();
+
+        # Create account in accounts DB
+        my $existing_aid = $dbh->selectrow_array(
+          "SELECT accountid FROM accounts WHERE email = ?", {}, $detail->{username});
+        my $final_aid;
+        if ($existing_aid) {
+          $final_aid = $existing_aid;
+        } else {
+          $final_aid = $accountid;
+          $dbh->do("INSERT INTO accounts (email, accountid, type) VALUES (?, ?, ?)",
+            {}, $detail->{username}, $accountid, 'imap');
+        }
+
+        # Set up the account
+        $db->setuser($detail);
+        $db->firstsync();
+
+        return ['signup', ['done', $final_aid, $detail->{username}]];
+      }
       if ($cmd eq 'setup') {
         $db->setuser({
           username   => $args->{username}   || $accountid,
@@ -500,9 +613,85 @@ sub do_raw {
 sub do_landing {
   my ($httpd, $req) = @_;
   my $html = '';
-  $TT->process("landing.html", { baseurl => $BASEURL }, \$html)
-    || $req->respond([500, 'error', {}, $Template::ERROR]);
+  $TT->process("index.html", { baseurl => $BASEURL }, \$html)
+    || return $req->respond([500, 'error', {}, $Template::ERROR]);
   $req->respond({ content => ['text/html', $html] });
+}
+
+sub do_static {
+  my ($httpd, $req) = @_;
+  my $path = $req->url->path;
+  $path =~ s{^/}{};
+  # Only serve known safe extensions
+  return not_found($req) unless $path =~ /\.(css|js|html|png|ico)$/;
+  my $file = "$jmaphome/htdocs/$path";
+  return not_found($req) unless -f $file;
+  my %types = (css => 'text/css', js => 'text/javascript', html => 'text/html',
+               png => 'image/png', ico => 'image/x-icon');
+  my ($ext) = $path =~ /\.(\w+)$/;
+  open my $fh, '<', $file or return not_found($req);
+  local $/;
+  my $content = <$fh>;
+  close $fh;
+  $req->respond([200, 'ok', { 'Content-Type' => $types{$ext} || 'application/octet-stream' }, $content]);
+}
+
+sub do_signup {
+  my ($httpd, $req) = @_;
+
+  return invalid_request($req) unless lc $req->method eq 'post';
+
+  my %opts;
+  for my $key (qw(username password imapHost imapPort imapSSL smtpHost smtpPort smtpSSL caldavURL carddavURL force)) {
+    $opts{$key} = $req->parm($key);
+  }
+
+  return invalid_request($req) unless $opts{username} && $opts{password};
+
+  my $accountid = new_uuid_string();
+
+  $httpd->stop_request();
+
+  # Step 1: send signup to a per-account child for DNS resolution + IMAP test
+  send_backend_request($accountid, 'signup', \%opts, sub {
+    my $result = shift;
+
+    if ($result->[0] eq 'continue') {
+      # Need user confirmation — show signup.html with resolved details
+      my $html = '';
+      $TT->process("signup.html", $result->[1], \$html)
+        || return $req->respond([500, 'error', {}, $Template::ERROR]);
+      # This child was just for DNS/IMAP test, clean it up
+      delete $backend{$accountid};
+      $req->respond({ content => ['text/html', $html] });
+      return;
+    }
+
+    if ($result->[0] eq 'done') {
+      my ($final_accountid, $username) = @{$result}[1, 2];
+      # Trigger background sync
+      send_backend_request($final_accountid, 'sync', {});
+      # Set cookie and redirect
+      my $cookie = bake_cookie("jmap_$final_accountid", {
+        value => $username,
+        path => '/',
+        expires => '+3M',
+      });
+      $req->respond([301, 'redirected',
+        { 'Set-Cookie' => $cookie, Location => "$BASEURL/jmap/$final_accountid" },
+        "Redirected"]);
+      # Clean up temp child if a different accountid was used
+      delete $backend{$accountid} unless $final_accountid eq $accountid;
+      return;
+    }
+  }, sub {
+    my $err = shift;
+    delete $backend{$accountid};
+    my $html = '';
+    $TT->process("index.html", { baseurl => $BASEURL, error => "$err" }, \$html)
+      || return $req->respond([500, 'error', {}, $Template::ERROR]);
+    $req->respond({ content => ['text/html', $html] });
+  });
 }
 
 #
@@ -516,6 +705,8 @@ $httpd->reg_cb(
   '/jmap'   => \&do_jmap,
   '/upload' => \&do_upload,
   '/raw'    => \&do_raw,
+  '/signup' => \&do_signup,
+  '/main.css' => \&do_static,
   '/'       => \&do_landing,
 );
 
