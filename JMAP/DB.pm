@@ -816,6 +816,16 @@ sub put_file {
   my $content = shift;
   my $expires = shift // time() + (7 * 86400);
 
+  # Support passing a filename instead of content
+  if (ref $content eq 'HASH' && $content->{file}) {
+    my $file = $content->{file};
+    open my $fh, '<', $file or die "Cannot open upload file $file: $!";
+    local $/;
+    $content = <$fh>;
+    close $fh;
+    unlink $file;
+  }
+
   my $size = length($content);
 
   $Self->begin();

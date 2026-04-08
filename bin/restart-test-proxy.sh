@@ -73,6 +73,23 @@ export JMAP_PORT="$FRONTEND_PORT"
 perl -I"$JMAP_HOME" -Ilib "$JMAP_HOME/bin/jmap-proxy.pl" 2>/tmp/jmap-proxy.log &
 sleep 3
 
+# Write test config for JMAP-TestSuite
+cat > "$DATADIR/test-config.json" <<TESTCONFIG
+{
+  "adapter"                    : "JMAPProxy",
+  "accountIds"                 : [ "$CYRUS_USER" ],
+  "base_uri"                   : "http://localhost:$FRONTEND_PORT/",
+  "mgmt_uri"                   : "http://localhost:$JMAP_MGMT_PORT/",
+  "cyrus_host"                 : "localhost",
+  "cyrus_port"                 : $CYRUS_IMAP_PORT,
+  "cyrus_http_url"             : "$CYRUS_URL",
+  "cyrus_password"             : "$CYRUS_PASS",
+  "cyrus_admin_user"           : "admin",
+  "cyrus_admin_pass"           : "admin",
+  "cyrus_hierarchy_separator"  : "."
+}
+TESTCONFIG
+
 echo "JMAP proxy running: frontend=:$FRONTEND_PORT mgmt=:$JMAP_MGMT_PORT"
 echo "  JMAP_DATADIR=$DATADIR"
 echo "  JMAP_HOME=$JMAP_HOME"

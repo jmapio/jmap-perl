@@ -12,17 +12,16 @@ use AnyEvent;
 use AnyEvent::HTTPD;
 use AnyEvent::Handle;
 use AnyEvent::HTTP;
-use AnyEvent::Socket;
 use AnyEvent::Util;
 use Cookie::Baker;
 use Data::Dumper;
 use Data::UUID::LibUUID;
 use DBI;
 use Encode qw(encode_utf8);
+use File::Temp ();
 use HTML::GenerateUtil qw(escape_html escape_uri);
 use HTTP::Request;
 use HTTP::Response;
-use IO::Socket::UNIX;
 use JSON::XS qw(decode_json);
 use MIME::Base64::URLSafe;
 use POSIX qw(:sys_wait_h);
@@ -36,6 +35,8 @@ use URI;
 my $BASEURL = $ENV{BASEURL} || 'http://localhost:' . ($ENV{JMAP_PORT} || 9000);
 my $jmaphome = $ENV{JMAP_HOME} || '/home/jmap/jmap-perl';
 my $datadir = $ENV{JMAP_DATADIR} || '/data';
+
+mkdir "$datadir/tmp" unless -d "$datadir/tmp";
 
 my $TT = Template->new(INCLUDE_PATH => "$jmaphome/htdocs");
 my $json = JSON::XS->new->utf8->canonical->pretty();
@@ -234,8 +235,8 @@ sub run_backend_worker {
         return ['setup', $JSON::true];
       }
       if ($cmd eq 'upload') {
-        my ($aid, $utype, $content) = @{$args}{qw(accountId type content)};
-        my ($r) = $api->uploadFile($aid || $accountid, $utype, $content);
+        my ($aid, $utype, $file) = @{$args}{qw(accountId type file)};
+        my ($r) = $api->uploadFile($aid || $accountid, $utype, { file => $file });
         return ['upload', $r];
       }
       if ($cmd eq 'download') {
@@ -452,15 +453,22 @@ sub do_upload {
   my $type = $req->headers->{'content-type'} || 'application/octet-stream';
   my $content = $req->content;
 
+  # Write upload content to tempfile to avoid passing binary through JSON socketpair
+  my $tmp = File::Temp->new(DIR => "$datadir/tmp", UNLINK => 0);
+  print $tmp $content;
+  close $tmp;
+  my $tmpfile = $tmp->filename;
+
   $httpd->stop_request();
 
-  send_backend_request($accountid, 'upload', { accountId => $accountid, type => $type, content => $content }, sub {
+  send_backend_request($accountid, 'upload', { accountId => $accountid, type => $type, file => $tmpfile }, sub {
     my $result = shift;
     $req->respond({
       content => ['application/json', $json->encode($result)],
     });
   }, sub {
     my $error = shift;
+    unlink $tmpfile;
     $req->respond([500, 'error', {}, "upload failed: $error"]);
   });
 }
