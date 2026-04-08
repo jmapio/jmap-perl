@@ -103,7 +103,6 @@ sub get_backend {
       %waiting = ();
 
       eval {
-        require EV;
         require IO::Socket::SSL;
         require JMAP::API;
         require JMAP::ImapDB;
@@ -139,12 +138,36 @@ sub get_backend {
 sub run_backend_worker {
   my ($sock, $accountid) = @_;
 
-  # This runs in the forked child
-  my $hdl = AnyEvent::Handle->new(
-    fh => $sock,
-    on_error => sub { EV::unloop() },
-    on_eof => sub { EV::unloop() },
-  );
+  $0 = "[jmap worker] $accountid";
+
+  # Blocking JSON I/O over the socketpair
+  my $jenc = JSON::XS->new->utf8->canonical;
+  my $buf = '';
+
+  my $read_json = sub {
+    while (1) {
+      # Try to decode from buffer
+      my $obj = eval { $jenc->incr_parse($buf) };
+      if ($obj) {
+        $buf = $jenc->incr_text // '';
+        $jenc->incr_reset;
+        return $obj;
+      }
+      # Read more data
+      my $n = sysread($sock, $buf, 65536, length($buf));
+      return undef unless $n;  # EOF
+    }
+  };
+
+  my $write_json = sub {
+    my $data = $jenc->encode($_[0]) . "\n";
+    my $off = 0;
+    while ($off < length($data)) {
+      my $n = syswrite($sock, $data, length($data) - $off, $off);
+      die "write failed: $!" unless defined $n;
+      $off += $n;
+    }
+  };
 
   # Load the account database
   my $dbh = DBI->connect("dbi:SQLite:dbname=$datadir/accounts.sqlite3");
@@ -162,34 +185,19 @@ sub run_backend_worker {
 
   my $api = JMAP::API->new($db);
 
-  # Send initial ready signal
-  my $change_cb = sub {
+  # Push state changes back to parent
+  $db->{change_cb} = sub {
     my ($db, $states) = @_;
-    eval { $hdl->push_write(json => ['push', $states, 'state']) };
+    eval { $write_json->(['push', $states, 'state']) };
   };
-  $db->{change_cb} = $change_cb;
 
-  # Set up idle timeout
-  my $timeout;
-  my $reset_timeout = sub {
-    $timeout = AnyEvent->timer(after => 600, cb => sub {
-      warn "SHUTTING DOWN $accountid ON TIMEOUT\n";
-      eval { $hdl->push_write(json => ['bye', 'timeout', 'bye']) };
-      EV::unloop();
-    });
-  };
-  $reset_timeout->();
+  my $last_activity = time();
 
-  # Process commands
-  my $handler;
-  $handler = sub {
-    my ($h, $request) = @_;
-    $reset_timeout->();
-
+  # Simple blocking request loop
+  while (my $request = $read_json->()) {
     my ($cmd, $args, $tag) = @$request;
     my $t0 = [Time::HiRes::gettimeofday()];
 
-    $in_request = 1;
     my $res = eval {
       if ($cmd eq 'ping') {
         return ['pong', $accountid];
@@ -198,17 +206,17 @@ sub run_backend_worker {
         return ['info', [$email, $type]];
       }
       if ($cmd eq 'upload') {
-        my ($aid, $type, $content) = @{$args}{qw(accountId type content)};
-        my ($r) = $api->uploadFile($aid || $accountid, $type, $content);
+        my ($aid, $utype, $content) = @{$args}{qw(accountId type content)};
+        my ($r) = $api->uploadFile($aid || $accountid, $utype, $content);
         return ['upload', $r];
       }
       if ($cmd eq 'download') {
-        my ($type, $content) = $api->downloadFile($args);
-        return ['download', [$type, $content]];
+        my ($dtype, $content) = $api->downloadFile($args);
+        return ['download', [$dtype, $content]];
       }
       if ($cmd eq 'raw') {
-        my ($type, $content, $filename) = $api->getRawBlob($args);
-        return ['raw', [$type, $content, $filename]];
+        my ($rtype, $content, $filename) = $api->getRawBlob($args);
+        return ['raw', [$rtype, $content, $filename]];
       }
       if ($cmd eq 'jmap') {
         return ['jmap', $api->handle_request($args)];
@@ -225,38 +233,28 @@ sub run_backend_worker {
       if ($cmd eq 'delete') {
         $dbh->do("DELETE FROM accounts WHERE accountid = ?", {}, $accountid);
         $db->delete() if $db;
-        $hdl->{timer} = AnyEvent->timer(after => 0, cb => sub { EV::unloop() });
         return ['deleted', $JSON::true];
       }
       die "Unknown command: $cmd\n";
     };
     unless ($res) {
-      $res = ['error', "$@"];
+      my $err = "$@";
+      eval { $db->rollback() } if $db && $db->in_transaction();
+      warn "ERROR $cmd ($tag) ($accountid): $err\n";
+      $write_json->(['error', $err, $tag]);
+      last;  # die on error — parent will spawn fresh child
     }
-    if ($db && $db->in_transaction()) {
-      $db->rollback();
-    }
-    $in_request = 0;
     $res->[2] = $tag;
-    eval { $hdl->push_write(json => $res) };
+    $write_json->($res);
 
     my $elapsed = Time::HiRes::tv_interval($t0);
     warn "HANDLED $cmd ($tag) => ($accountid) in $elapsed\n";
 
-    $h->push_read(json => $handler);
-  };
+    $last_activity = time();
 
-  $hdl->push_read(json => $handler);
-
-  # Also run periodic sync
-  my $in_request = 0;
-  my $sync_timer = AnyEvent->timer(after => 5, interval => 30, cb => sub {
-    return if $in_request;  # don't sync while handling a request
-    eval { $db->sync_imap() };
-    warn "Sync error for $accountid: $@" if $@;
-  });
-
-  EV::run();
+    # Exit after 'delete' command
+    last if $cmd eq 'delete';
+  }
 }
 
 sub send_backend_request {
