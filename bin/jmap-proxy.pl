@@ -103,10 +103,12 @@ sub get_backend {
       %waiting = ();
 
       eval {
-        require IO::Socket::SSL;
-        require JMAP::API;
-        require JMAP::ImapDB;
-        require JMAP::DB;
+        if ($accountid ne '__accounts__') {
+          require IO::Socket::SSL;
+          require JMAP::API;
+          require JMAP::ImapDB;
+          require JMAP::DB;
+        }
         run_backend_worker($child_sock, $accountid);
       };
       warn "Backend worker $accountid died: $@" if $@;
@@ -135,27 +137,21 @@ sub get_backend {
   return $backend{$accountid};
 }
 
-sub run_backend_worker {
-  my ($sock, $accountid) = @_;
-
-  $0 = "[jmap worker] $accountid";
-
-  # Blocking JSON I/O over the socketpair
+sub _make_json_io {
+  my ($sock) = @_;
   my $jenc = JSON::XS->new->utf8->canonical;
   my $buf = '';
 
   my $read_json = sub {
     while (1) {
-      # Try to decode from buffer
       my $obj = eval { $jenc->incr_parse($buf) };
       if ($obj) {
         $buf = $jenc->incr_text // '';
         $jenc->incr_reset;
         return $obj;
       }
-      # Read more data
       my $n = sysread($sock, $buf, 65536, length($buf));
-      return undef unless $n;  # EOF
+      return undef unless $n;
     }
   };
 
@@ -168,6 +164,21 @@ sub run_backend_worker {
       $off += $n;
     }
   };
+
+  return ($read_json, $write_json);
+}
+
+sub run_backend_worker {
+  my ($sock, $name) = @_;
+
+  if ($name eq '__accounts__') {
+    return run_accounts_worker($sock);
+  }
+
+  my $accountid = $name;
+  $0 = "[jmap worker] $accountid";
+
+  my ($read_json, $write_json) = _make_json_io($sock);
 
   # Load the account database
   my $dbh = DBI->connect("dbi:SQLite:dbname=$datadir/accounts.sqlite3");
@@ -205,17 +216,35 @@ sub run_backend_worker {
       if ($cmd eq 'getinfo') {
         return ['info', [$email, $type]];
       }
+      if ($cmd eq 'setup') {
+        $db->setuser({
+          username   => $args->{username}   || $accountid,
+          password   => $args->{password}   || '',
+          imapHost   => $args->{imapHost},
+          imapPort   => $args->{imapPort}   || 993,
+          imapSSL    => $args->{imapSSL}    // 0,
+          smtpHost   => $args->{smtpHost}   || $args->{imapHost},
+          smtpPort   => $args->{smtpPort}   || 587,
+          smtpSSL    => $args->{smtpSSL}    // 0,
+          caldavURL  => $args->{caldavURL}  || '',
+          carddavURL => $args->{carddavURL} || '',
+        });
+        $db->firstsync();
+        $db->sync_imap();
+        return ['setup', $JSON::true];
+      }
       if ($cmd eq 'upload') {
         my ($aid, $utype, $content) = @{$args}{qw(accountId type content)};
         my ($r) = $api->uploadFile($aid || $accountid, $utype, $content);
         return ['upload', $r];
       }
       if ($cmd eq 'download') {
-        my ($dtype, $content) = $api->downloadFile($args);
+        my ($dtype, $content) = $api->downloadFile($args->{blobId});
         return ['download', [$dtype, $content]];
       }
       if ($cmd eq 'raw') {
-        my ($rtype, $content, $filename) = $api->getRawBlob($args);
+        my $selector = "$args->{blobId}/$args->{name}";
+        my ($rtype, $content, $filename) = $api->getRawBlob($selector);
         return ['raw', [$rtype, $content, $filename]];
       }
       if ($cmd eq 'jmap') {
@@ -231,7 +260,6 @@ sub run_backend_worker {
         return ['davsync', $JSON::true];
       }
       if ($cmd eq 'delete') {
-        $dbh->do("DELETE FROM accounts WHERE accountid = ?", {}, $accountid);
         $db->delete() if $db;
         return ['deleted', $JSON::true];
       }
@@ -255,6 +283,101 @@ sub run_backend_worker {
     # Exit after 'delete' command
     last if $cmd eq 'delete';
   }
+}
+
+sub run_accounts_worker {
+  my ($sock) = @_;
+
+  $0 = "[jmap accounts]";
+
+  my ($read_json, $write_json) = _make_json_io($sock);
+
+  my $dbh = DBI->connect("dbi:SQLite:dbname=$datadir/accounts.sqlite3");
+  $dbh->do("CREATE TABLE IF NOT EXISTS accounts (email TEXT PRIMARY KEY, accountid TEXT, type TEXT)");
+
+  while (my $request = $read_json->()) {
+    my ($cmd, $args, $tag) = @$request;
+    my $t0 = [Time::HiRes::gettimeofday()];
+
+    my $res = eval {
+      if ($cmd eq 'ping') {
+        return ['pong', '__accounts__'];
+      }
+
+      if ($cmd eq 'list_accounts') {
+        my $rows = $dbh->selectall_arrayref(
+          "SELECT email, accountid, type FROM accounts ORDER BY accountid",
+          { Slice => {} });
+        for my $row (@$rows) {
+          my $details = _account_details_child($row->{accountid});
+          $row->{$_} = $details->{$_} for keys %$details;
+        }
+        return ['list_accounts', $rows];
+      }
+
+      if ($cmd eq 'get_account') {
+        my $aid = $args->{accountid};
+        my $row = $dbh->selectrow_hashref(
+          "SELECT email, accountid, type FROM accounts WHERE accountid = ?",
+          {}, $aid);
+        return ['get_account', undef] unless $row;
+        my $details = _account_details_child($aid);
+        $row->{$_} = $details->{$_} for keys %$details;
+        return ['get_account', $row];
+      }
+
+      if ($cmd eq 'create_account') {
+        my $aid = $args->{accountid};
+        my $type = $args->{type} || 'imap';
+        my $email = $args->{email} || $aid;
+        $dbh->do("INSERT OR REPLACE INTO accounts (email, accountid, type) VALUES (?, ?, ?)",
+          {}, $email, $aid, $type);
+        return ['create_account', { accountid => $aid, type => $type }];
+      }
+
+      if ($cmd eq 'delete_account') {
+        my $aid = $args->{accountid};
+        $dbh->do("DELETE FROM accounts WHERE accountid = ?", {}, $aid);
+        unlink "$datadir/$aid.sqlite3";
+        unlink "$datadir/$aid.lock";
+        return ['delete_account', { deleted => $aid }];
+      }
+
+      die "Unknown accounts command: $cmd\n";
+    };
+    unless ($res) {
+      my $err = "$@";
+      warn "ERROR accounts $cmd ($tag): $err\n";
+      $write_json->(['error', $err, $tag]);
+      next;  # accounts worker stays alive on error
+    }
+    $res->[2] = $tag;
+    $write_json->($res);
+
+    my $elapsed = Time::HiRes::tv_interval($t0);
+    warn "HANDLED accounts $cmd ($tag) in $elapsed\n";
+  }
+}
+
+sub _account_details_child {
+  my ($accountid) = @_;
+  my $dbfile = "$datadir/$accountid.sqlite3";
+  return {} unless -f $dbfile;
+  my $udb = eval { DBI->connect("dbi:SQLite:dbname=$dbfile") };
+  return {} unless $udb;
+  my $user = eval { $udb->selectrow_hashref("SELECT * FROM account LIMIT 1") } || {};
+  my ($folders) = eval { $udb->selectrow_array("SELECT COUNT(*) FROM ifolders") } // 0;
+  my ($messages) = eval { $udb->selectrow_array("SELECT COUNT(*) FROM jmessages WHERE active = 1") } // 0;
+  return {
+    configured => (defined $user->{username} ? 1 : 0),
+    username   => $user->{username},
+    imapHost   => $user->{imapHost},
+    imapPort   => $user->{imapPort},
+    caldavURL  => $user->{caldavURL},
+    carddavURL => $user->{carddavURL},
+    folders    => $folders,
+    messages   => $messages,
+  };
 }
 
 sub send_backend_request {
@@ -393,63 +516,46 @@ warn "  Base URL: $BASEURL\n";
 # Management API & UI
 #
 
-sub _accounts_db {
-  my $dbh = DBI->connect("dbi:SQLite:dbname=$datadir/accounts.sqlite3");
-  $dbh->do("CREATE TABLE IF NOT EXISTS accounts (email TEXT PRIMARY KEY, accountid TEXT, type TEXT)");
-  return $dbh;
-}
-
-sub _account_details {
-  my ($accountid) = @_;
-  my $dbfile = "$datadir/$accountid.sqlite3";
-  return {} unless -f $dbfile;
-  my $udb = DBI->connect("dbi:SQLite:dbname=$dbfile");
-  my $user = $udb->selectrow_hashref("SELECT * FROM account LIMIT 1") || {};
-  my ($folders) = $udb->selectrow_array("SELECT COUNT(*) FROM ifolders") // 0;
-  my ($messages) = $udb->selectrow_array("SELECT COUNT(*) FROM jmessages WHERE active = 1") // 0;
-  return {
-    configured => (defined $user->{username} ? 1 : 0),
-    username   => $user->{username},
-    imapHost   => $user->{imapHost},
-    imapPort   => $user->{imapPort},
-    caldavURL  => $user->{caldavURL},
-    carddavURL => $user->{carddavURL},
-    folders    => $folders,
-    messages   => $messages,
-  };
-}
-
 sub mgmt_api_accounts {
   my ($httpd, $req) = @_;
   my $method = lc $req->method;
   my $path = $req->url->path;
 
   if ($path eq '/api/accounts' && $method eq 'get') {
-    my $dbh = _accounts_db();
-    my $rows = $dbh->selectall_arrayref(
-      "SELECT email, accountid, type FROM accounts ORDER BY accountid",
-      { Slice => {} });
-    for my $row (@$rows) {
-      my $details = _account_details($row->{accountid});
-      $row->{$_} = $details->{$_} for keys %$details;
-    }
-    return $req->respond([200, 'ok',
-      { 'Content-Type' => 'application/json' },
-      JSON::XS::encode_json($rows)]);
+    $httpd->stop_request();
+    send_backend_request('__accounts__', 'list_accounts', {}, sub {
+      my $rows = shift;
+      $req->respond([200, 'ok',
+        { 'Content-Type' => 'application/json' },
+        JSON::XS::encode_json($rows)]);
+    }, sub {
+      my $err = shift;
+      $req->respond([500, 'error',
+        { 'Content-Type' => 'application/json' },
+        JSON::XS::encode_json({ error => "$err" })]);
+    });
+    return;
   }
 
   if ($path =~ m{^/api/accounts/([^/]+)$} && $method eq 'get') {
     my $aid = $1;
-    my $dbh = _accounts_db();
-    my $row = $dbh->selectrow_hashref(
-      "SELECT email, accountid, type FROM accounts WHERE accountid = ?",
-      {}, $aid);
-    return $req->respond([404, 'not found', {}, '{"error":"not found"}']) unless $row;
-    my $details = _account_details($aid);
-    $row->{$_} = $details->{$_} for keys %$details;
-    return $req->respond([200, 'ok',
-      { 'Content-Type' => 'application/json' },
-      JSON::XS::encode_json($row)]);
+    $httpd->stop_request();
+    send_backend_request('__accounts__', 'get_account', { accountid => $aid }, sub {
+      my $row = shift;
+      unless ($row) {
+        $req->respond([404, 'not found', {}, '{"error":"not found"}']);
+        return;
+      }
+      $req->respond([200, 'ok',
+        { 'Content-Type' => 'application/json' },
+        JSON::XS::encode_json($row)]);
+    }, sub {
+      my $err = shift;
+      $req->respond([500, 'error',
+        { 'Content-Type' => 'application/json' },
+        JSON::XS::encode_json({ error => "$err" })]);
+    });
+    return;
   }
 
   if ($path eq '/api/accounts' && $method eq 'post') {
@@ -459,60 +565,94 @@ sub mgmt_api_accounts {
       unless $data->{accountid};
 
     my $aid = $data->{accountid};
-    my $type = $data->{type} || 'imap';
-    my $email = $data->{email} || $aid;
+    $httpd->stop_request();
 
-    my $dbh = _accounts_db();
-    $dbh->do("INSERT OR REPLACE INTO accounts (email, accountid, type) VALUES (?, ?, ?)",
-      {}, $email, $aid, $type);
+    # Step 1: Create account in accounts DB via __accounts__ child
+    send_backend_request('__accounts__', 'create_account', $data, sub {
+      my $result = shift;
 
-    # Set up backend config if provided
-    if ($data->{imapHost}) {
-      eval {
-        require JMAP::ImapDB;
-        my $db = JMAP::ImapDB->new($aid);
-        $db->setuser({
-          username   => $data->{username}   || $aid,
-          password   => $data->{password}   || '',
-          imapHost   => $data->{imapHost},
-          imapPort   => $data->{imapPort}   || 993,
-          imapSSL    => $data->{imapSSL}    // 1,
-          smtpHost   => $data->{smtpHost}   || $data->{imapHost},
-          smtpPort   => $data->{smtpPort}   || 587,
-          smtpSSL    => $data->{smtpSSL}    // 1,
-          caldavURL  => $data->{caldavURL}  || '',
-          carddavURL => $data->{carddavURL} || '',
+      # Kill existing backend child so it reconnects with new config
+      delete $backend{$aid} if $backend{$aid};
+
+      # Step 2: If IMAP config provided, set up via per-account child
+      if ($data->{imapHost}) {
+        send_backend_request($aid, 'setup', $data, sub {
+          $req->respond([201, 'created',
+            { 'Content-Type' => 'application/json' },
+            JSON::XS::encode_json({ accountid => $aid, type => $result->{type} })]);
+        }, sub {
+          my $err = shift;
+          # Account created but sync failed
+          $req->respond([201, 'created',
+            { 'Content-Type' => 'application/json' },
+            JSON::XS::encode_json({ accountid => $aid, type => $result->{type},
+              warning => "setup failed: $err" })]);
         });
-        $db->firstsync();
-        $db->sync_imap();
-      };
-      if ($@) {
-        return $req->respond([500, 'error',
-          { 'Content-Type' => 'application/json' },
-          JSON::XS::encode_json({ error => "$@", accountid => $aid })]);
       }
-    }
-
-    # Kill existing backend child so it reconnects with new config
-    if ($backend{$aid}) {
-      delete $backend{$aid};
-    }
-
-    return $req->respond([201, 'created',
-      { 'Content-Type' => 'application/json' },
-      JSON::XS::encode_json({ accountid => $aid, type => $type })]);
+      else {
+        $req->respond([201, 'created',
+          { 'Content-Type' => 'application/json' },
+          JSON::XS::encode_json({ accountid => $aid, type => $result->{type} })]);
+      }
+    }, sub {
+      my $err = shift;
+      $req->respond([500, 'error',
+        { 'Content-Type' => 'application/json' },
+        JSON::XS::encode_json({ error => "$err" })]);
+    });
+    return;
   }
 
   if ($path =~ m{^/api/accounts/([^/]+)$} && $method eq 'delete') {
     my $aid = $1;
-    my $dbh = _accounts_db();
-    $dbh->do("DELETE FROM accounts WHERE accountid = ?", {}, $aid);
-    unlink "$datadir/$aid.sqlite3";
-    unlink "$datadir/$aid.lock";
-    delete $backend{$aid};
-    return $req->respond([200, 'ok',
-      { 'Content-Type' => 'application/json' },
-      JSON::XS::encode_json({ deleted => $aid })]);
+    $httpd->stop_request();
+
+    # Tell the per-account child to clean up first (if running)
+    if ($backend{$aid}) {
+      send_backend_request($aid, 'delete', {}, sub {
+        delete $backend{$aid};
+        # Now remove from accounts DB
+        send_backend_request('__accounts__', 'delete_account', { accountid => $aid }, sub {
+          my $result = shift;
+          $req->respond([200, 'ok',
+            { 'Content-Type' => 'application/json' },
+            JSON::XS::encode_json($result)]);
+        }, sub {
+          my $err = shift;
+          $req->respond([500, 'error',
+            { 'Content-Type' => 'application/json' },
+            JSON::XS::encode_json({ error => "$err" })]);
+        });
+      }, sub {
+        # Per-account child error, still delete from accounts DB
+        delete $backend{$aid};
+        send_backend_request('__accounts__', 'delete_account', { accountid => $aid }, sub {
+          my $result = shift;
+          $req->respond([200, 'ok',
+            { 'Content-Type' => 'application/json' },
+            JSON::XS::encode_json($result)]);
+        }, sub {
+          my $err = shift;
+          $req->respond([500, 'error',
+            { 'Content-Type' => 'application/json' },
+            JSON::XS::encode_json({ error => "$err" })]);
+        });
+      });
+    }
+    else {
+      send_backend_request('__accounts__', 'delete_account', { accountid => $aid }, sub {
+        my $result = shift;
+        $req->respond([200, 'ok',
+          { 'Content-Type' => 'application/json' },
+          JSON::XS::encode_json($result)]);
+      }, sub {
+        my $err = shift;
+        $req->respond([500, 'error',
+          { 'Content-Type' => 'application/json' },
+          JSON::XS::encode_json({ error => "$err" })]);
+      });
+    }
+    return;
   }
 
   if ($path =~ m{^/api/accounts/([^/]+)/sync$} && $method eq 'post') {

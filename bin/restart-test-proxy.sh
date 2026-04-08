@@ -6,7 +6,6 @@
 set -e
 
 DATADIR="${JMAP_DATADIR:-/tmp/jmap-proxy-test}"
-BACKEND_PORT="${JMAP_BACKEND_PORT:-5050}"
 FRONTEND_PORT=9000
 JMAP_HOME="${JMAP_HOME:-$(cd "$(dirname "$0")/.." && pwd)}"
 CYRUS_USER="${CYRUS_USER:-user1}"
@@ -16,12 +15,11 @@ CYRUS_URL="${CYRUS_URL:-http://localhost:8080}"
 
 export JMAP_DATADIR="$DATADIR"
 export JMAP_HOME
-export JMAP_BACKEND_PORT="$BACKEND_PORT"
 export BASEURL="http://localhost:$FRONTEND_PORT"
 
 # Kill old servers (including forked children) by port
-lsof -ti :"$BACKEND_PORT" -ti :"$FRONTEND_PORT" 2>/dev/null | xargs kill -9 2>/dev/null || true
-pkill -9 -f 'apiendpoint.pl|bin/server.pl' 2>/dev/null || true
+lsof -ti :"$FRONTEND_PORT" 2>/dev/null | xargs kill -9 2>/dev/null || true
+pkill -9 -f 'jmap-proxy.pl|apiendpoint.pl|bin/server.pl' 2>/dev/null || true
 sleep 2
 
 mkdir -p "$DATADIR"
@@ -67,15 +65,14 @@ if [ "$1" = "clean" ]; then
     "
 fi
 
-# Start backend
-perl -I"$JMAP_HOME" -Ilib "$JMAP_HOME/bin/apiendpoint.pl" \
-    --port "$BACKEND_PORT" --host 127.0.0.1 2>/tmp/jmap-backend.log &
-sleep 2
+# Start single-process proxy
+JMAP_MGMT_PORT="${JMAP_MGMT_PORT:-8081}"
+export JMAP_MGMT_PORT
+export JMAP_PORT="$FRONTEND_PORT"
 
-# Start frontend
-perl -I"$JMAP_HOME" -Ilib "$JMAP_HOME/bin/server.pl" 2>/tmp/jmap-frontend.log &
-sleep 2
+perl -I"$JMAP_HOME" -Ilib "$JMAP_HOME/bin/jmap-proxy.pl" 2>/tmp/jmap-proxy.log &
+sleep 3
 
-echo "JMAP proxy running: frontend=:$FRONTEND_PORT backend=:$BACKEND_PORT"
+echo "JMAP proxy running: frontend=:$FRONTEND_PORT mgmt=:$JMAP_MGMT_PORT"
 echo "  JMAP_DATADIR=$DATADIR"
 echo "  JMAP_HOME=$JMAP_HOME"

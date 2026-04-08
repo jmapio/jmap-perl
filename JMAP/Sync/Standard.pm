@@ -66,7 +66,7 @@ sub connect_imap {
   delete $Self->{imap};
 
   for (1..3) {
-    my $usessl = $Self->{auth}{imapSSL} - 1; # IDs for Mail::IMAPTalk are one lower than our internal format
+    my $usessl = ($Self->{auth}{imapSSL} || 1) - 1; # Internal: 1=plain, 2=SSL; IMAPTalk: 0=plain, 1=SSL; default to plain
     $Self->{imap} = Mail::IMAPTalk->new(
       Server   => $Self->{auth}{imapHost},
       Port     => $Self->{auth}{imapPort},
