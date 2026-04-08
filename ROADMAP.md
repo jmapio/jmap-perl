@@ -7,28 +7,23 @@ backends and exposes them over the JMAP protocol (RFCs 8620/8621).
 
 - **81/81 JMAP TestSuite tests passing** against Cyrus IMAP
 - Conversion logic extracted into standalone CPAN modules:
-  Data::JSEmail, Text::JSCalendar, Text::JSContact
-- Per-user SQLite databases, Net::Server::Fork backend
-- Single backend per user (IMAP + CalDAV + CardDAV at the same host)
+  Data::JSEmail (0.03), Text::JSCalendar (0.03), Text::JSContact (0.01)
+- Docker image with single-process architecture and management UI
+- Per-account SQLite databases, forked workers per account
 
-## Phase 1: Docker & Deployment
-
-Package the proxy as a self-contained Docker image.
+## Phase 1: Docker & Deployment ✅
 
 ### Architecture
 ```
 ┌──────────────────────────────────┐
 │ Docker container                  │
 │                                   │
-│  :$JMAP_PORT (configurable)       │
-│    └─ server.pl (HTTP frontend)   │
-│         └─ localhost:5050         │
-│              └─ apiendpoint.pl    │
-│                                   │
-│  :$MGMT_PORT (management UI)     │
-│    └─ account CRUD                │
-│    └─ backend management          │
-│    └─ sync status / triggers      │
+│  jmap-proxy.pl (parent process)   │
+│    ├─ :$JMAP_PORT  AnyEvent HTTP  │
+│    ├─ :$MGMT_PORT  Management UI  │
+│    └─ fork per account            │
+│         └─ blocking JSON worker   │
+│              └─ SQLite + IMAP     │
 │                                   │
 │  Volume: /data                    │
 │    └─ accounts.sqlite3            │
@@ -37,16 +32,27 @@ Package the proxy as a self-contained Docker image.
 ```
 
 ### Environment Variables
-- `JMAP_PORT` — external JMAP endpoint (default 443)
-- `MGMT_PORT` — management UI (default 8080, bind localhost only)
-- `JMAP_DATA` — data directory (default /data)
+- `JMAP_PORT` — external JMAP endpoint (default 9000)
+- `JMAP_MGMT_PORT` — management UI (default 8080)
+- `JMAP_MGMT_HOST` — management bind address (default 127.0.0.1, 0.0.0.0 in Docker)
+- `JMAP_DATADIR` — data directory (default /data)
+- `BASEURL` — public URL for the proxy
 
-### Tasks
-- [ ] Dockerfile with all CPAN dependencies
-- [ ] Management web UI (user/account CRUD, backend config, sync status)
+### Done
+- [x] Single-process server (bin/jmap-proxy.pl)
+- [x] Non-blocking parent (AnyEvent HTTP), blocking forked children per account
+- [x] Children: simple JSON read/process/write loop, no event loop
+- [x] Children die on error for clean state restart
+- [x] Dockerfile with all CPAN dependencies (Debian bookworm-slim)
+- [x] docker-entrypoint.sh with accounts DB init
+- [x] Management REST API (account CRUD, sync triggers, stats)
+- [x] HTML dashboard (self-contained, no template files)
+
+### Still TODO
 - [ ] Health check endpoint
 - [ ] Graceful shutdown (drain connections, close DBs)
-- [ ] TLS termination (or document reverse proxy setup)
+- [ ] TLS termination documentation (reverse proxy setup)
+- [ ] Idle timeout for backend children (parent closes socketpair)
 
 ### Database: SQLite stays
 Per-account SQLite files are the right model: zero contention between
@@ -144,8 +150,8 @@ Client ──JMAP──▶ Proxy ──JMAP──▶ Cyrus (passthrough, acc-wor
 - [ ] Session management with proper token lifecycle
 
 ### Performance
-- [ ] Connection pooling for IMAP backends (replace fork-per-request)
-- [ ] Incremental sync (CONDSTORE/QRESYNC already used, but scheduling)
+- [ ] Connection pooling for IMAP backends
+- [ ] Incremental sync scheduling (CONDSTORE/QRESYNC already used)
 - [ ] Query result caching for proper queryChanges with filters
 - [ ] Lazy body fetching (don't download until client requests)
 
