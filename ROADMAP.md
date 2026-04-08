@@ -150,13 +150,16 @@ Client ──JMAP──▶ Proxy ──JMAP──▶ Cyrus (passthrough, acc-wor
 - [ ] Session management with proper token lifecycle
 
 ### Performance
-Connection management is already in place: persistent forked child per
-account holds IMAP/CalDAV/CardDAV connections open across requests,
-with separate connections for sync vs interactive operations.
+Much of the performance work is already done:
+- Connection reuse: persistent forked child per account holds
+  IMAP/CalDAV/CardDAV connections open across requests, with
+  separate connections for sync vs interactive operations
+- Lazy body fetching: sync only fetches envelope/flags/size;
+  full RFC822 bodies are fetched on demand via `fill_messages`
+  and cached in `jrawmessage`
 
 - [ ] Incremental sync scheduling (CONDSTORE/QRESYNC already used)
 - [ ] Query result caching for proper queryChanges with filters
-- [ ] Lazy body fetching (don't download until client requests)
 
 ### Monitoring
 - [ ] Prometheus metrics endpoint
