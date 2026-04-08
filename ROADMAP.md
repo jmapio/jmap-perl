@@ -150,7 +150,10 @@ Client ──JMAP──▶ Proxy ──JMAP──▶ Cyrus (passthrough, acc-wor
 - [ ] Session management with proper token lifecycle
 
 ### Performance
-- [x] IMAP connection reuse (persistent forked child per account holds connection open)
+Connection management is already in place: persistent forked child per
+account holds IMAP/CalDAV/CardDAV connections open across requests,
+with separate connections for sync vs interactive operations.
+
 - [ ] Incremental sync scheduling (CONDSTORE/QRESYNC already used)
 - [ ] Query result caching for proper queryChanges with filters
 - [ ] Lazy body fetching (don't download until client requests)
