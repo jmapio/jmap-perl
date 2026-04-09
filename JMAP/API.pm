@@ -209,6 +209,16 @@ sub api_Core_echo {
   return ['Core/echo', $args];
 }
 
+# Convert empty containers to undef for JSON: {} → null, [] → null
+# RFC 8620 /set responses use null (not empty) for absent result groups
+sub _nullempty {
+  my ($val) = @_;
+  return undef unless defined $val;
+  return undef if ref $val eq 'HASH' && !%$val;
+  return undef if ref $val eq 'ARRAY' && !@$val;
+  return $val;
+}
+
 sub push_results {
   my $Self = shift;
   my $tag = shift;
@@ -521,12 +531,12 @@ sub api_UserPreferences_set {
     accountId => $accountid,
     oldState => $oldState,
     newState => $newState,
-    created => $created,
-    notCreated => $notCreated,
-    updated => $updated,
-    notUpdated => $notUpdated,
-    destroyed => $destroyed,
-    notDestroyed => $notDestroyed,
+    created => _nullempty($created),
+    notCreated => _nullempty($notCreated),
+    updated => _nullempty($updated),
+    notUpdated => _nullempty($notUpdated),
+    destroyed => _nullempty($destroyed),
+    notDestroyed => _nullempty($notDestroyed),
   }];
 
   return @res;
@@ -658,12 +668,12 @@ sub api_ClientPreferences_set {
     accountId => $accountid,
     oldState => $oldState,
     newState => $newState,
-    created => $created,
-    notCreated => $notCreated,
-    updated => $updated,
-    notUpdated => $notUpdated,
-    destroyed => $destroyed,
-    notDestroyed => $notDestroyed,
+    created => _nullempty($created),
+    notCreated => _nullempty($notCreated),
+    updated => _nullempty($updated),
+    notUpdated => _nullempty($notUpdated),
+    destroyed => _nullempty($destroyed),
+    notDestroyed => _nullempty($notDestroyed),
   }];
 
   return @res;
@@ -795,12 +805,12 @@ sub api_CalendarPreferences_set {
     accountId => $accountid,
     oldState => $oldState,
     newState => $newState,
-    created => $created,
-    notCreated => $notCreated,
-    updated => $updated,
-    notUpdated => $notUpdated,
-    destroyed => $destroyed,
-    notDestroyed => $notDestroyed,
+    created => _nullempty($created),
+    notCreated => _nullempty($notCreated),
+    updated => _nullempty($updated),
+    notUpdated => _nullempty($notUpdated),
+    destroyed => _nullempty($destroyed),
+    notDestroyed => _nullempty($notDestroyed),
   }];
 
   return @res;
@@ -1389,12 +1399,12 @@ sub api_Mailbox_set {
     accountId => $accountid,
     oldState => $oldState,
     newState => $newState,
-    created => $created,
-    notCreated => $notCreated,
-    updated => $updated,
-    notUpdated => $notUpdated,
-    destroyed => $destroyed,
-    notDestroyed => $notDestroyed,
+    created => _nullempty($created),
+    notCreated => _nullempty($notCreated),
+    updated => _nullempty($updated),
+    notUpdated => _nullempty($notUpdated),
+    destroyed => _nullempty($destroyed),
+    notDestroyed => _nullempty($notDestroyed),
   }];
 
   return @res;
@@ -2457,12 +2467,12 @@ sub api_Email_set {
     accountId => $accountid,
     oldState => $oldState,
     newState => $newState,
-    created => $created,
-    notCreated => $notCreated,
-    updated => $updated,
-    notUpdated => $notUpdated,
-    destroyed => $destroyed,
-    notDestroyed => $notDestroyed,
+    created => _nullempty($created),
+    notCreated => _nullempty($notCreated),
+    updated => _nullempty($updated),
+    notUpdated => _nullempty($notUpdated),
+    destroyed => _nullempty($destroyed),
+    notDestroyed => _nullempty($notDestroyed),
   }];
 
   return @res;
@@ -2563,8 +2573,8 @@ sub api_Email_import {
   my @res;
   push @res, ['Email/import', {
     accountId => $accountid,
-    created => \%created,
-    notCreated => \%notcreated,
+    created => _nullempty(\%created),
+    notCreated => _nullempty(\%notcreated),
     oldState => $oldState,
     newState => $newState,
   }];
@@ -3515,12 +3525,12 @@ sub api_ContactGroup_set {
     accountId => $accountid,
     oldState => $oldState,
     newState => $newState,
-    created => $created,
-    notCreated => $notCreated,
-    updated => $updated,
-    notUpdated => $notUpdated,
-    destroyed => $destroyed,
-    notDestroyed => $notDestroyed,
+    created => _nullempty($created),
+    notCreated => _nullempty($notCreated),
+    updated => _nullempty($updated),
+    notUpdated => _nullempty($notUpdated),
+    destroyed => _nullempty($destroyed),
+    notDestroyed => _nullempty($notDestroyed),
   }];
 
   return @res;
@@ -3573,12 +3583,12 @@ sub api_Contact_set {
     accountId => $accountid,
     oldState => $oldState,
     newState => $newState,
-    created => $created,
-    notCreated => $notCreated,
-    updated => $updated,
-    notUpdated => $notUpdated,
-    destroyed => $destroyed,
-    notDestroyed => $notDestroyed,
+    created => _nullempty($created),
+    notCreated => _nullempty($notCreated),
+    updated => _nullempty($updated),
+    notUpdated => _nullempty($notUpdated),
+    destroyed => _nullempty($destroyed),
+    notDestroyed => _nullempty($notDestroyed),
   }];
 
   return @res;
@@ -3632,12 +3642,12 @@ sub api_CalendarEvent_set {
     accountId => $accountid,
     oldState => $oldState,
     newState => $newState,
-    created => $created,
-    notCreated => $notCreated,
-    updated => $updated,
-    notUpdated => $notUpdated,
-    destroyed => $destroyed,
-    notDestroyed => $notDestroyed,
+    created => _nullempty($created),
+    notCreated => _nullempty($notCreated),
+    updated => _nullempty($updated),
+    notUpdated => _nullempty($notUpdated),
+    destroyed => _nullempty($destroyed),
+    notDestroyed => _nullempty($notDestroyed),
   }];
 
   return @res;
@@ -3690,12 +3700,12 @@ sub api_Calendar_set {
     accountId => $accountid,
     oldState => $oldState,
     newState => $newState,
-    created => $created,
-    notCreated => $notCreated,
-    updated => $updated,
-    notUpdated => $notUpdated,
-    destroyed => $destroyed,
-    notDestroyed => $notDestroyed,
+    created => _nullempty($created),
+    notCreated => _nullempty($notCreated),
+    updated => _nullempty($updated),
+    notUpdated => _nullempty($notUpdated),
+    destroyed => _nullempty($destroyed),
+    notDestroyed => _nullempty($notDestroyed),
   }];
 
   return @res;
@@ -4079,12 +4089,12 @@ sub api_EmailSubmission_set {
     accountId => $accountid,
     oldState => $oldState,
     newState => $newState,
-    created => $created,
-    notCreated => $notCreated,
-    updated => $updated,
-    notUpdated => $notUpdated,
-    destroyed => $destroyed,
-    notDestroyed => $notDestroyed,
+    created => _nullempty($created),
+    notCreated => _nullempty($notCreated),
+    updated => _nullempty($updated),
+    notUpdated => _nullempty($notUpdated),
+    destroyed => _nullempty($destroyed),
+    notDestroyed => _nullempty($notDestroyed),
   }];
 
   if (%updateEmails or @destroyEmails) {
