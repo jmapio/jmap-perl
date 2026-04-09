@@ -262,31 +262,33 @@ sub run_backend_worker {
           my $domain = $detail->{username};
           $domain =~ s/.*\@//;
 
+          my $srv_lookup = sub {
+            my ($name) = @_;
+            my $reply = $resolver->query($name, 'SRV') or return ();
+            my @rr = grep { $_->type eq 'SRV' && $_->target ne '.' && $_->port > 0 } $reply->answer;
+            return @rr;
+          };
+
           for my $try (["_imaps._tcp.$domain", 'imapHost', 'imapPort', 2],
                        ["_imap._tcp.$domain",  'imapHost', 'imapPort', 3]) {
-            my $reply = $resolver->query($try->[0], 'SRV');
-            if ($reply) {
-              my @d = $reply->answer;
-              if (@d) {
-                $detail->{$try->[1]} = $d[0]->target;
-                $detail->{$try->[2]} = $d[0]->port;
-                $detail->{imapSSL} = $try->[3];
-                last;
-              }
+            my @d = $srv_lookup->($try->[0]);
+            if (@d) {
+              $detail->{$try->[1]} = $d[0]->target;
+              $detail->{$try->[2]} = $d[0]->port;
+              $detail->{imapSSL} = $try->[3];
+              last;
             }
           }
 
-          for my $try (["_smtps._tcp.$domain",      'smtpHost', 'smtpPort', 2],
-                       ["_submission._tcp.$domain",  'smtpHost', 'smtpPort', 3]) {
-            my $reply = $resolver->query($try->[0], 'SRV');
-            if ($reply) {
-              my @d = $reply->answer;
-              if (@d) {
-                $detail->{$try->[1]} = $d[0]->target;
-                $detail->{$try->[2]} = $d[0]->port;
-                $detail->{smtpSSL} = $try->[3];
-                last;
-              }
+          for my $try (["_submissions._tcp.$domain",  'smtpHost', 'smtpPort', 2],
+                       ["_smtps._tcp.$domain",        'smtpHost', 'smtpPort', 2],
+                       ["_submission._tcp.$domain",    'smtpHost', 'smtpPort', 3]) {
+            my @d = $srv_lookup->($try->[0]);
+            if (@d) {
+              $detail->{$try->[1]} = $d[0]->target;
+              $detail->{$try->[2]} = $d[0]->port;
+              $detail->{smtpSSL} = $try->[3];
+              last;
             }
           }
 
@@ -294,16 +296,13 @@ sub run_backend_worker {
                        ["_caldav._tcp.$domain",   'caldavURL',  'http',  80],
                        ["_carddavs._tcp.$domain", 'carddavURL', 'https', 443],
                        ["_carddav._tcp.$domain",  'carddavURL', 'http',  80]) {
-            my $reply = $resolver->query($try->[0], 'SRV');
-            if ($reply) {
-              my @d = $reply->answer;
-              if (@d) {
-                my $host = $d[0]->target;
-                my $port = $d[0]->port;
-                my $url = "$try->[2]://$host";
-                $url .= ":$port" unless $port == $try->[3];
-                $detail->{$try->[1]} = $url;
-              }
+            my @d = $srv_lookup->($try->[0]);
+            if (@d) {
+              my $host = $d[0]->target;
+              my $port = $d[0]->port;
+              my $url = "$try->[2]://$host";
+              $url .= ":$port" unless $port == $try->[3];
+              $detail->{$try->[1]} = $url;
             }
           }
         }
