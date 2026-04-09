@@ -100,7 +100,7 @@ TODO:
 - [ ] Push (EventSource or WebSocket)
 - [ ] MDN (RFC 9007)
 - [ ] Per-type creation ID mapping (currently shared across types)
-- [ ] onSuccessUpdateEmail/onSuccessDestroyEmail in EmailSubmission/set
+- [x] onSuccessUpdateEmail/onSuccessDestroyEmail in EmailSubmission/set
 - [ ] Move raw SQL out of API.pm into DB layer
 
 ### Auth
@@ -121,7 +121,7 @@ TODO:
 - [ ] Landing page with introduction (what is the JMAP proxy, who is it for)
 - [ ] Setup guide (Docker, reverse proxy, connecting backends)
 - [ ] API documentation for management endpoints
-- [ ] SMTP submission error handling and reporting to client
+- [x] SMTP submission error handling and reporting to client
 
 ## Non-Goals
 

@@ -2439,10 +2439,19 @@ sub create_submissions {
 
   foreach my $cid (sort keys %todo) {
     my $sub = $new->{$cid};
-    # XXX - on error?  Should remove $createmap{$cid} and set $notcreated{$cid}
     my ($type, $rfc822) = $Self->get_raw_message($todo{$cid});
-    # XXX - does this die on error?
-    $Self->backend_cmd('send_email', $rfc822, $sub->{envelope});
+    eval { $Self->backend_cmd('send_email', $rfc822, $sub->{envelope}) };
+    if ($@) {
+      my $err = "$@";
+      $err =~ s/\s+at \S+ line \d+.*//s;
+      warn "send_email failed for $cid: $err\n";
+      # Roll back the submission row we created
+      $Self->begin();
+      $Self->ddelete('jsubmission', { id => $createmap{$cid}{id} });
+      $Self->commit();
+      delete $createmap{$cid};
+      $notcreated{$cid} = { type => 'serverFail', description => $err };
+    }
   }
 
   return (\%createmap, \%notcreated);

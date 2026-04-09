@@ -120,7 +120,7 @@ sub send_email {
     %args,
     transport => Email::Sender::Transport::SMTP->new($detail),
   });
-  warn "EMAIL from $args{from} => " . $res->{message};
+  warn "send_email: sent from $args{from}\n";
 }
 
 1;
