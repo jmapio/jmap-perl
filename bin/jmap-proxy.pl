@@ -185,27 +185,32 @@ sub run_backend_worker {
 
   my ($read_json, $write_json) = _make_json_io($sock);
 
-  # Load the account database
+  # Load the account database — may not exist yet (signup creates it)
   my $dbh = DBI->connect("dbi:SQLite:dbname=$datadir/accounts.sqlite3");
   my ($email, $type) = $dbh->selectrow_array(
     "SELECT email, type FROM accounts WHERE accountid = ?", {}, $accountid);
-  die "No such account: $accountid\n" unless $type;
 
-  my $db;
-  if ($type eq 'imap') {
-    $db = JMAP::ImapDB->new($accountid);
-  }
-  else {
-    die "Unsupported account type: $type\n";
-  }
-
-  my $api = JMAP::API->new($db);
-
-  # Push state changes back to parent
-  $db->{change_cb} = sub {
-    my ($db, $states) = @_;
-    eval { $write_json->(['push', $states, 'state']) };
+  my ($db, $api);
+  my $init_db = sub {
+    return if $db;
+    ($email, $type) = $dbh->selectrow_array(
+      "SELECT email, type FROM accounts WHERE accountid = ?", {}, $accountid)
+      unless $type;
+    die "No such account: $accountid\n" unless $type;
+    if ($type eq 'imap') {
+      $db = JMAP::ImapDB->new($accountid);
+    } else {
+      die "Unsupported account type: $type\n";
+    }
+    $api = JMAP::API->new($db);
+    $db->{change_cb} = sub {
+      my ($db, $states) = @_;
+      eval { $write_json->(['push', $states, 'state']) };
+    };
   };
+
+  # Initialize now if account exists, otherwise defer to signup/setup
+  eval { $init_db->() } if $type;
 
   my $last_activity = time();
 
@@ -221,6 +226,10 @@ sub run_backend_worker {
       if ($cmd eq 'getinfo') {
         return ['info', [$email, $type]];
       }
+
+      # Initialize DB for commands that need it (not signup — it creates the account first)
+      $init_db->() if $cmd ne 'signup' && !$db;
+
       if ($cmd eq 'signup') {
         require Net::DNS;
         require Mail::IMAPTalk;
@@ -333,6 +342,10 @@ sub run_backend_worker {
           $dbh->do("INSERT INTO accounts (email, accountid, type, poolid) VALUES (?, ?, ?, ?)",
             {}, $detail->{username}, $accountid, 'imap', $poolid);
         }
+
+        # Initialize DB now that the account exists
+        $type = 'imap';
+        $init_db->();
 
         # Set up the account
         $db->setuser($detail);
