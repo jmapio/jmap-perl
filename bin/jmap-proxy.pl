@@ -575,16 +575,16 @@ sub _account_details_child {
   return {} unless -f $dbfile;
   my $udb = eval { DBI->connect("dbi:SQLite:dbname=$dbfile") };
   return {} unless $udb;
-  my $user = eval { $udb->selectrow_hashref("SELECT * FROM account LIMIT 1") } || {};
+  my $iserver = eval { $udb->selectrow_hashref("SELECT * FROM iserver LIMIT 1") } || {};
   my ($folders) = eval { $udb->selectrow_array("SELECT COUNT(*) FROM ifolders") } // 0;
   my ($messages) = eval { $udb->selectrow_array("SELECT COUNT(*) FROM jmessages WHERE active = 1") } // 0;
   return {
-    configured => (defined $user->{username} ? 1 : 0),
-    username   => $user->{username},
-    imapHost   => $user->{imapHost},
-    imapPort   => $user->{imapPort},
-    caldavURL  => $user->{caldavURL},
-    carddavURL => $user->{carddavURL},
+    configured => (defined $iserver->{username} ? 1 : 0),
+    username   => $iserver->{username},
+    imapHost   => $iserver->{imapHost},
+    imapPort   => $iserver->{imapPort},
+    caldavURL  => $iserver->{caldavURL},
+    carddavURL => $iserver->{carddavURL},
     folders    => $folders,
     messages   => $messages,
   };
