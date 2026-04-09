@@ -1182,9 +1182,13 @@ CREATE TABLE IF NOT EXISTS account (
   jstateUserPreferences TEXT NOT NULL DEFAULT 1,
   jstateClientPreferences TEXT NOT NULL DEFAULT 1,
   jstateCalendarPreferences TEXT NOT NULL DEFAULT 1,
+  jstateEmailSubmission TEXT NOT NULL DEFAULT 1,
   mtime DATE
 );
 EOF
+
+  # Migration: add jstateEmailSubmission to existing accounts
+  eval { $dbh->do("ALTER TABLE account ADD COLUMN jstateEmailSubmission TEXT NOT NULL DEFAULT 1") };
 
   $dbh->do(<<EOF);
 CREATE TABLE IF NOT EXISTS jrawmessage (
