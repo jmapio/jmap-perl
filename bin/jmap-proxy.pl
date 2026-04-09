@@ -393,6 +393,7 @@ sub run_backend_worker {
         return ['jmap', $api->handle_request($args)];
       }
       if ($cmd eq 'sync') {
+        $db->sync_folders();
         $db->sync_imap();
         return ['sync', $JSON::true];
       }

@@ -12,6 +12,7 @@ use Email::Sender::Simple qw(sendmail);
 use Email::Sender::Transport::SMTP;
 use Net::CalDAVTalk;
 use Net::CardDAVTalk;
+use Sys::Hostname;
 
 sub connect_calendars {
   my $Self = shift;
@@ -104,15 +105,14 @@ sub send_email {
   }
 
   my $helo = $ENV{HOSTNAME} || hostname();
-  my $ssl;
-  $ssl = 'ssl' if $Self->{auth}{smtpSSL} == 2;
-  $ssl = 'starttls' if $Self->{auth}{smtpSSL} == 3;
+  my $smtpSSL = $Self->{auth}{smtpSSL} || 1;
   my $email = Email::Simple->new($rfc822);
   my $detail = {
       helo => $helo,
       host => $Self->{auth}{smtpHost},
       port => $Self->{auth}{smtpPort},
-      ssl => $ssl,
+      ($smtpSSL == 2 ? (ssl => 'ssl') : ()),
+      ($smtpSSL == 3 ? (ssl => 'starttls') : ()),
       sasl_username => $Self->{auth}{username},
       sasl_password => $Self->{auth}{password},
   };
