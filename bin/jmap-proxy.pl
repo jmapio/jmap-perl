@@ -1707,6 +1707,22 @@ my $token_flush_timer = AnyEvent->timer(
 );
 
 #
+# Periodic sync: send sync+backfill to each idle per-account child every 30s
+#
+my $SYNC_INTERVAL = $ENV{JMAP_SYNC_INTERVAL} || 30;
+my $sync_timer = AnyEvent->timer(
+  after    => $SYNC_INTERVAL,
+  interval => $SYNC_INTERVAL,
+  cb       => sub {
+    for my $name (keys %backend) {
+      next if $name eq '__accounts__';
+      next if %{$waiting{$name} || {}};  # skip if handling a request
+      send_backend_request($name, 'sync', {}, sub {}, sub {});
+    }
+  },
+);
+
+#
 # Graceful shutdown
 #
 
