@@ -644,6 +644,7 @@ sub do_session {
           isReadOnly => JSON::false,
           accountCapabilities => {
             'urn:ietf:params:jmap:mail' => {},
+            'urn:ietf:params:jmap:submission' => {},
           },
         };
         $primary_aid //= $a->{accountid};
@@ -663,10 +664,12 @@ sub do_session {
             collationAlgorithms => [],
           },
           'urn:ietf:params:jmap:mail' => {},
+          'urn:ietf:params:jmap:submission' => {},
         },
         accounts => $accounts,
         primaryAccounts => {
           'urn:ietf:params:jmap:mail' => $primary_aid,
+          'urn:ietf:params:jmap:submission' => $primary_aid,
         },
         username => ($pool->{accounts} && $pool->{accounts}[0] ? $pool->{accounts}[0]{email} : ''),
         apiUrl => "$BASEURL/jmap",
