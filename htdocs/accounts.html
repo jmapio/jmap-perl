@@ -64,6 +64,15 @@
 </tbody>
 </table>
 
+[% IF token %]
+<h2>API Access</h2>
+<div class="add-form">
+  <p>Use this token with JMAP clients that support Bearer authentication:</p>
+  <p><strong>Session URL:</strong> <code>[% baseurl %]/.well-known/jmap</code></p>
+  <p><strong>Bearer Token:</strong> <code style="word-break:break-all">[% token %]</code></p>
+</div>
+[% END %]
+
 <h2>Add Another Account</h2>
 <div class="add-form">
   <form action="/signup" method="post">

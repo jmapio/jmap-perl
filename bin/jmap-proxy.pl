@@ -1076,10 +1076,12 @@ sub _do_accounts_authed {
   send_backend_request('__accounts__', 'get_pool', { accountid => $auth_aid }, sub {
     my $pool = shift;
     my $html = '';
+    my $cookies = crush_cookie($req->headers->{cookie} || '');
     $TT->process("accounts.html", {
       baseurl  => $BASEURL,
       auth_aid => $auth_aid,
       accounts => $pool->{accounts} || [],
+      token    => $cookies->{jmap_proxy},
     }, \$html) || return $req->respond([500, 'error', {}, $Template::ERROR]);
     $req->respond([200, 'ok', { 'Content-Type' => 'text/html; charset=utf-8' }, $html]);
   }, sub {
