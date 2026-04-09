@@ -58,6 +58,12 @@ my %backend;   # accountid => [AnyEvent::Handle, cmd_counter, pid, last_active]
 my %waiting;   # accountid => { cmd_id => [success_cb, error_cb] }
 my $start_time = time();
 
+# Token touch cache: token => [ip, time] — flushed to __accounts__ every 5 min
+my %token_touch;
+my $TOKEN_TOUCH_INTERVAL = 300;
+
+my $shutting_down = 0;
+
 sub mk_json {
   my $accountid = shift;
   return sub {
@@ -80,6 +86,7 @@ sub mk_json {
         $waiting{$accountid}{$res->[2]}[0]->($res->[1]);
       }
       delete $waiting{$accountid}{$res->[2]};
+      _maybe_finish_shutdown() if $shutting_down;
     }
     else {
       warn "Unexpected response for $accountid: $res->[0]\n";
@@ -445,7 +452,11 @@ sub run_accounts_worker {
 
   my $dbh = DBI->connect("dbi:SQLite:dbname=$datadir/accounts.sqlite3");
   $dbh->do("CREATE TABLE IF NOT EXISTS accounts (email TEXT PRIMARY KEY, accountid TEXT, type TEXT, poolid TEXT)");
-  $dbh->do("CREATE TABLE IF NOT EXISTS tokens (token TEXT PRIMARY KEY, accountid TEXT NOT NULL)");
+  $dbh->do("CREATE TABLE IF NOT EXISTS tokens (token TEXT PRIMARY KEY, accountid TEXT NOT NULL, last_used INTEGER, last_ip TEXT)");
+  # Migrate: add columns if they don't exist yet
+  for my $col (qw(last_used last_ip)) {
+    eval { $dbh->do("ALTER TABLE tokens ADD COLUMN $col " . ($col eq 'last_used' ? 'INTEGER' : 'TEXT')) };
+  }
   # Backfill poolid for any rows that don't have it
   $dbh->do("UPDATE accounts SET poolid = accountid WHERE poolid IS NULL");
 
@@ -525,6 +536,18 @@ sub run_accounts_worker {
         my $row = $dbh->selectrow_hashref(
           "SELECT accountid FROM tokens WHERE token = ?", {}, $token);
         return ['resolve_token', $row ? $row->{accountid} : undef];
+      }
+
+      if ($cmd eq 'touch_tokens') {
+        # Batch update last_used/last_ip for a set of tokens
+        # args: { tokens => [ [token, ip, time], ... ] }
+        my $sth = $dbh->prepare(
+          "UPDATE tokens SET last_used = ?, last_ip = ? WHERE token = ?");
+        for my $entry (@{$args->{tokens}}) {
+          my ($token, $ip, $ts) = @$entry;
+          $sth->execute($ts, $ip, $token);
+        }
+        return ['touch_tokens', { count => scalar @{$args->{tokens}} }];
       }
 
       if ($cmd eq 'auth') {
@@ -880,6 +903,18 @@ sub _check_cache {
   return undef;
 }
 
+sub _client_ip {
+  my ($req) = @_;
+  my $xff = $req->headers->{'x-forwarded-for'};
+  return (split /\s*,\s*/, $xff)[0] if $xff;
+  return $req->client_host;
+}
+
+sub _touch_token {
+  my ($token, $ip) = @_;
+  $token_touch{$token} = [$ip, time()];
+}
+
 # Authenticate via Basic auth, Bearer token, or cookie.
 # All are async since token/Basic resolution goes through __accounts__ child.
 # Calls $cb->($accountid) on success, $errcb->() on failure.
@@ -890,13 +925,15 @@ sub _authenticate {
   # Bearer token — resolve to accountid
   if ($auth_header =~ /^Bearer\s+(\S+)$/i) {
     my $token = $1;
+    my $ip = _client_ip($req);
     my $cached = _check_cache("bearer:$token");
-    if ($cached) { $cb->($cached); return; }
+    if ($cached) { _touch_token($token, $ip); $cb->($cached); return; }
     $httpd->stop_request();
     send_backend_request('__accounts__', 'resolve_token', { token => $token }, sub {
       my $aid = shift;
       if ($aid) {
         $auth_cache{"bearer:$token"} = [$aid, time() + $AUTH_CACHE_TTL];
+        _touch_token($token, $ip);
         $cb->($aid);
       } else {
         $errcb->();
@@ -908,13 +945,15 @@ sub _authenticate {
   # Cookie — token in cookie, resolve to accountid
   my $cookies = crush_cookie($req->headers->{cookie} || '');
   if (my $token = $cookies->{jmap_proxy}) {
+    my $ip = _client_ip($req);
     my $cached = _check_cache("bearer:$token");
-    if ($cached) { $cb->($cached); return; }
+    if ($cached) { _touch_token($token, $ip); $cb->($cached); return; }
     $httpd->stop_request();
     send_backend_request('__accounts__', 'resolve_token', { token => $token }, sub {
       my $aid = shift;
       if ($aid) {
         $auth_cache{"bearer:$token"} = [$aid, time() + $AUTH_CACHE_TTL];
+        _touch_token($token, $ip);
         $cb->($aid);
       } else {
         $errcb->();
@@ -1501,32 +1540,72 @@ if ($idle_timeout) {
 }
 
 #
+# Token touch flush: write cached last_used/last_ip to accounts DB every 5 min
+#
+sub _flush_token_touches {
+  return unless %token_touch;
+  my @entries = map { [$_, @{$token_touch{$_}}] } keys %token_touch;
+  %token_touch = ();
+  send_backend_request('__accounts__', 'touch_tokens', { tokens => \@entries },
+    sub { }, sub { });
+}
+
+my $token_flush_timer = AnyEvent->timer(
+  after    => $TOKEN_TOUCH_INTERVAL,
+  interval => $TOKEN_TOUCH_INTERVAL,
+  cb       => \&_flush_token_touches,
+);
+
+#
 # Graceful shutdown
 #
-my $shutting_down = 0;
 
-my $shutdown = sub {
-  return if $shutting_down;
-  $shutting_down = 1;
-  warn "Shutting down...\n";
+sub _maybe_finish_shutdown {
+  # Wait until all in-flight requests (except __accounts__ itself) are done
+  for my $name (keys %waiting) {
+    next if $name eq '__accounts__';
+    return if %{$waiting{$name}};
+  }
 
-  # Stop accepting new connections
+  # All in-flight requests are done — stop accepting, close idle backends
   $httpd = undef;
   $mgmt = undef;
-
-  # Close all backend children (they'll see EOF and exit)
   for my $name (keys %backend) {
-    warn "Closing backend $name\n";
+    next if $name eq '__accounts__';
     delete $backend{$name};
     delete $waiting{$name};
   }
 
-  # Give children a moment to exit, then stop event loop
-  my $exit_timer; $exit_timer = AnyEvent->timer(after => 2, cb => sub {
-    undef $exit_timer;
+  # Flush token touches; exit in the callback
+  my $do_exit = sub {
+    delete $backend{__accounts__};
+    delete $waiting{__accounts__};
     warn "Shutdown complete\n";
     exit 0;
-  });
+  };
+
+  if (%token_touch) {
+    my @entries = map { [$_, @{$token_touch{$_}}] } keys %token_touch;
+    %token_touch = ();
+    send_backend_request('__accounts__', 'touch_tokens', { tokens => \@entries },
+      sub { $do_exit->() },
+      sub { $do_exit->() });
+  } else {
+    $do_exit->();
+  }
+}
+
+my $shutdown = sub {
+  return if $shutting_down;
+  $shutting_down = 1;
+  warn "Shutting down — draining in-flight requests...\n";
+
+  # Reject new requests on both ports while keeping existing connections alive
+  $httpd->reg_cb('' => sub { $_[1]->respond([503, 'shutting down', {}, 'Server shutting down']) });
+  $mgmt->reg_cb( '' => sub { $_[1]->respond([503, 'shutting down', {}, 'Server shutting down']) });
+
+  # If nothing is in flight, finish immediately
+  _maybe_finish_shutdown();
 };
 
 my $sig_term = AnyEvent->signal(signal => 'TERM', cb => $shutdown);

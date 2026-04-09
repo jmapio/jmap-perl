@@ -12,7 +12,7 @@ mkdir -p "$JMAP_DATADIR"
 perl -MDBI -e "
   my \$dbh = DBI->connect('dbi:SQLite:dbname=$JMAP_DATADIR/accounts.sqlite3');
   \$dbh->do('CREATE TABLE IF NOT EXISTS accounts (email TEXT PRIMARY KEY, accountid TEXT, type TEXT, poolid TEXT)');
-  \$dbh->do('CREATE TABLE IF NOT EXISTS tokens (token TEXT PRIMARY KEY, accountid TEXT NOT NULL)');
+  \$dbh->do('CREATE TABLE IF NOT EXISTS tokens (token TEXT PRIMARY KEY, accountid TEXT NOT NULL, last_used INTEGER, last_ip TEXT)');
   \$dbh->do('UPDATE accounts SET poolid = accountid WHERE poolid IS NULL');
 "
 
