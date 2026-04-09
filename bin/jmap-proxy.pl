@@ -54,8 +54,9 @@ my $child_watcher = AnyEvent->signal(signal => 'CHLD', cb => sub {
 #
 # Backend connection management
 #
-my %backend;   # accountid => [AnyEvent::Handle, cmd_counter, pid, last_active]
-my %waiting;   # accountid => { cmd_id => [success_cb, error_cb] }
+my %backend;     # name => [AnyEvent::Handle, cmd_counter, pid, last_active]
+my %waiting;     # name => { cmd_id => [success_cb, error_cb] }
+my %backfilling; # accountid => 1 while prod_backfill loop is active
 my $start_time = time();
 
 # Token touch cache: token => [ip, time] — flushed to __accounts__ every 5 min
@@ -188,8 +189,12 @@ sub run_backend_worker {
     return run_accounts_worker($sock);
   }
 
+  # Strip worker-type suffix: "$accountid:backfill" shares account data
+  # but MUST run in a separate process from the jmap/sync worker.
+  # RULE: backfill and sync/jmap MUST NEVER share a worker process.
   my $accountid = $name;
-  $0 = "[jmap worker] $accountid";
+  $accountid =~ s/:[^:]+$//;
+  $0 = "[jmap worker] $name";
 
   my ($read_json, $write_json) = _make_json_io($sock);
 
@@ -410,8 +415,13 @@ sub run_backend_worker {
       if ($cmd eq 'sync') {
         $db->sync_folders();
         $db->sync_imap();
-        $db->backfill();
         return ['sync', $JSON::true];
+      }
+      # IMPORTANT: 'backfill' MUST only be sent to "$accountid:backfill" workers,
+      # never to the jmap/sync worker. See prod_backfill() in the parent.
+      if ($cmd eq 'backfill') {
+        my $more = $db->backfill() ? 1 : 0;
+        return ['backfill', $more];
       }
       if ($cmd eq 'davsync') {
         $db->sync_calendars();
@@ -1138,6 +1148,7 @@ sub _do_signup_new {
     if ($result->[0] eq 'done') {
       my ($final_accountid, $username) = @{$result}[1, 2];
       send_backend_request($final_accountid, 'sync', {});
+      prod_backfill($final_accountid);
       delete $backend{$accountid} unless $final_accountid eq $accountid;
 
       if ($auth_aid) {
@@ -1707,17 +1718,50 @@ my $token_flush_timer = AnyEvent->timer(
 );
 
 #
-# Periodic sync: send sync+backfill to each idle per-account child every 30s
+# Periodic sync: send sync to each idle per-account child every 30s.
+# Backfill runs in a SEPARATE "$accountid:backfill" child via prod_backfill.
+# RULE: backfill and sync/jmap MUST NEVER share a worker process.
 #
 my $SYNC_INTERVAL = $ENV{JMAP_SYNC_INTERVAL} || 30;
+
+# prod_backfill: repeatedly send 'backfill' to a dedicated backfill child
+# until backfill() returns false (nothing left to backfill). Mirrors
+# server.pl's prod_backfill() which uses "$accountid:backfill" as the
+# backend name to guarantee a separate process from the sync/jmap worker.
+sub prod_backfill {
+  my ($accountid) = @_;
+  return if $backfilling{$accountid};
+  $backfilling{$accountid} = 1;
+
+  my $do_backfill;
+  $do_backfill = sub {
+    send_backend_request("$accountid:backfill", 'backfill', {}, sub {
+      my $more = shift;
+      if ($more) {
+        my $t; $t = AnyEvent->timer(after => 10, cb => sub {
+          $t = undef;
+          $do_backfill->();
+        });
+      } else {
+        delete $backfilling{$accountid};
+      }
+    }, sub {
+      delete $backfilling{$accountid};
+    });
+  };
+  $do_backfill->();
+}
+
 my $sync_timer = AnyEvent->timer(
   after    => $SYNC_INTERVAL,
   interval => $SYNC_INTERVAL,
   cb       => sub {
     for my $name (keys %backend) {
       next if $name eq '__accounts__';
+      next if $name =~ /:/;  # skip backfill and other sub-workers
       next if %{$waiting{$name} || {}};  # skip if handling a request
       send_backend_request($name, 'sync', {}, sub {}, sub {});
+      prod_backfill($name);
     }
   },
 );
