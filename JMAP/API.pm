@@ -326,6 +326,7 @@ sub handle_request {
 
         @items = eval { $Self->$FuncRef($myargs, $tag) };
         if ($@) {
+          warn "JMAP METHOD ERROR $command ($tag): $@\n";
           @items = ['error', { type => "serverError", message => "$@" }];
           eval { $Self->rollback() };
         }
