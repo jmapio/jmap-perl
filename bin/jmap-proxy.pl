@@ -438,8 +438,7 @@ sub run_accounts_worker {
   my $dbh = DBI->connect("dbi:SQLite:dbname=$datadir/accounts.sqlite3");
   $dbh->do("CREATE TABLE IF NOT EXISTS accounts (email TEXT PRIMARY KEY, accountid TEXT, type TEXT, poolid TEXT)");
   $dbh->do("CREATE TABLE IF NOT EXISTS tokens (token TEXT PRIMARY KEY, accountid TEXT NOT NULL)");
-  # Migrate: ensure poolid column exists and backfill
-  eval { $dbh->do("ALTER TABLE accounts ADD COLUMN poolid TEXT") };
+  # Backfill poolid for any rows that don't have it
   $dbh->do("UPDATE accounts SET poolid = accountid WHERE poolid IS NULL");
 
   while (my $request = $read_json->()) {
@@ -654,6 +653,7 @@ sub do_session {
             'urn:ietf:params:jmap:submission' => {
               maxDelayedSend => 0,
             },
+            'urn:ietf:params:jmap:quota' => {},
           },
         };
         $primary_aid //= $a->{accountid};
@@ -674,6 +674,7 @@ sub do_session {
           },
           'urn:ietf:params:jmap:mail' => {},
           'urn:ietf:params:jmap:submission' => {},
+          'urn:ietf:params:jmap:quota' => {},
         },
         accounts => $accounts,
         primaryAccounts => {
