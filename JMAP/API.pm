@@ -328,7 +328,10 @@ sub handle_request {
         if ($@) {
           warn "JMAP METHOD ERROR $command ($tag): $@\n";
           @items = ['error', { type => "serverError", message => "$@" }];
-          eval { $Self->rollback() };
+        }
+        if ($Self->{db}->in_transaction()) {
+          warn "JMAP STALE TRANSACTION after $command ($tag) - rolling back\n";
+          $Self->{db}->reset();
         }
       }
       else {
