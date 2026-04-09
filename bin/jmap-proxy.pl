@@ -454,20 +454,36 @@ sub run_backend_worker {
   }
 }
 
+my $ACCOUNTS_SCHEMA_VERSION = 1;
+
 sub _migrate_accounts_db {
   my ($dbh) = @_;
   my ($v) = $dbh->selectrow_array('PRAGMA user_version');
-  if ($v < 1) {
-    # New installs have needs_backfill in the CREATE TABLE; only ALTER for existing DBs
-    my $cols = $dbh->selectall_arrayref('PRAGMA table_info(accounts)');
-    my %has = map { $_->[1] => 1 } @$cols;
-    unless ($has{needs_backfill}) {
-      $dbh->do('ALTER TABLE accounts ADD COLUMN needs_backfill INTEGER NOT NULL DEFAULT 1');
-      $dbh->do('UPDATE accounts SET needs_backfill = 1');
-      warn "accounts.sqlite3: migrated to schema version 1\n";
-    }
-    $dbh->do('PRAGMA user_version = 1');
+
+  if ($v == 0) {
+    # Fresh install — create full schema at version 1 (the baseline; no migration needed).
+    $dbh->begin_work;
+    eval {
+      $dbh->do("CREATE TABLE accounts (email TEXT PRIMARY KEY, accountid TEXT, type TEXT, poolid TEXT, needs_backfill INTEGER NOT NULL DEFAULT 1)");
+      $dbh->do("CREATE TABLE tokens (token TEXT PRIMARY KEY, accountid TEXT NOT NULL, last_used INTEGER, last_ip TEXT)");
+      $dbh->do("PRAGMA user_version = $ACCOUNTS_SCHEMA_VERSION");
+      $dbh->commit;
+    };
+    if ($@) { $dbh->rollback; die "accounts DB init failed: $@" }
+    warn "accounts.sqlite3: created at schema version $ACCOUNTS_SCHEMA_VERSION\n";
+    return;
   }
+
+  # Incremental migrations — each in its own transaction, version bumped atomically.
+  # To add version 2: add a block here:
+  #   if ($v < 2) {
+  #     $dbh->begin_work;
+  #     eval { ... ALTER TABLE ...; $dbh->do('PRAGMA user_version = 2'); $dbh->commit };
+  #     if ($@) { $dbh->rollback; die "migration to v2 failed: $@" }
+  #     warn "accounts.sqlite3: migrated to schema version 2\n";
+  #     $v = 2;
+  #   }
+  # Then bump $ACCOUNTS_SCHEMA_VERSION above.
 }
 
 sub run_accounts_worker {
@@ -478,8 +494,6 @@ sub run_accounts_worker {
   my ($read_json, $write_json) = _make_json_io($sock);
 
   my $dbh = DBI->connect("dbi:SQLite:dbname=$datadir/accounts.sqlite3");
-  $dbh->do("CREATE TABLE IF NOT EXISTS accounts (email TEXT PRIMARY KEY, accountid TEXT, type TEXT, poolid TEXT, needs_backfill INTEGER NOT NULL DEFAULT 1)");
-  $dbh->do("CREATE TABLE IF NOT EXISTS tokens (token TEXT PRIMARY KEY, accountid TEXT NOT NULL, last_used INTEGER, last_ip TEXT)");
   _migrate_accounts_db($dbh);
 
   while (my $request = $read_json->()) {
@@ -1800,7 +1814,8 @@ my $sync_timer = AnyEvent->timer(
 #
 # On startup: resume backfill for any accounts that didn't finish last time
 #
-my $startup_backfill_timer = AnyEvent->timer(after => 5, cb => sub {
+my $startup_backfill_timer;
+$startup_backfill_timer = AnyEvent->timer(after => 5, cb => sub {
   $startup_backfill_timer = undef;
   send_backend_request('__accounts__', 'get_needs_backfill', {}, sub {
     my $aids = shift || [];

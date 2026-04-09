@@ -1077,10 +1077,14 @@ sub dgetcol {
   return [ map { $_->{$field} } @$data ];
 }
 
-sub _initdb {
-  my $Self = shift;
-  my $dbh = shift;
+my $USER_SCHEMA_VERSION = 1;
 
+sub _create_user_tables {
+  my ($Self, $dbh) = @_;
+  # All CREATE TABLE statements for the current schema version.
+  # When bumping $USER_SCHEMA_VERSION, update these to the new target schema
+  # and add an incremental migration block in _initdb below.
+  # ImapDB overrides this to add IMAP-specific tables after calling SUPER.
   $dbh->do(<<EOF);
 CREATE TABLE IF NOT EXISTS jmessages (
   msgid TEXT PRIMARY KEY,
@@ -1350,6 +1354,35 @@ CREATE TABLE IF NOT EXISTS jcalendarprefs (
 );
 EOF
 
+}
+
+sub _initdb {
+  my $Self = shift;
+  my $dbh = shift;
+
+  my ($v) = $dbh->selectrow_array('PRAGMA user_version');
+
+  if ($v == 0) {
+    # Fresh install — create full schema at version 1 (the baseline).
+    $dbh->begin_work;
+    eval {
+      $Self->_create_user_tables($dbh);
+      $dbh->do("PRAGMA user_version = $USER_SCHEMA_VERSION");
+      $dbh->commit;
+    };
+    if ($@) { $dbh->rollback; die "user DB init failed: $@" }
+    return;
+  }
+
+  # Incremental migrations — each in its own transaction, version bumped atomically.
+  # To add version 2:
+  #   if ($v < 2) {
+  #     $dbh->begin_work;
+  #     eval { ... ALTER TABLE ...; $dbh->do('PRAGMA user_version = 2'); $dbh->commit };
+  #     if ($@) { $dbh->rollback; die "user DB migration to v2 failed: $@" }
+  #     $v = 2;
+  #   }
+  # Then bump $USER_SCHEMA_VERSION above.
 }
 
 1;

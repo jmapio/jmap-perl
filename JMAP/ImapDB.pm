@@ -2497,11 +2497,10 @@ sub destroy_submissions {
   return (\@destroyed, \%notdestroyed);
 }
 
-sub _initdb {
-  my $Self = shift;
-  my $dbh = shift;
+sub _create_user_tables {
+  my ($Self, $dbh) = @_;
 
-  $Self->SUPER::_initdb($dbh);
+  $Self->SUPER::_create_user_tables($dbh);
 
   # XXX - password encryption?
   $dbh->do(<<EOF);
