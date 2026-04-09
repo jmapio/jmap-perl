@@ -203,6 +203,12 @@ sub new {
   return bless {db => $db}, ref($class) || $class;
 }
 
+sub api_Core_echo {
+  my $Self = shift;
+  my $args = shift;
+  return ['Core/echo', $args];
+}
+
 sub push_results {
   my $Self = shift;
   my $tag = shift;
