@@ -725,10 +725,14 @@ sub do_jmap {
 
 sub _do_jmap_request {
   my ($req, $accountid, $data) = @_;
+  my @methods = map { $_->[0] } @{$data->{methodCalls} || []};
+  warn "JMAP REQUEST ($accountid): " . join(', ', @methods) . "\n";
+  warn "JMAP REQUEST BODY: " . $json->encode($data) . "\n" if $ENV{JMAP_DEBUG};
   send_backend_request($accountid, 'jmap', $data, sub {
     my $result = shift;
     my $body = $json->encode($result);
     warn "JMAP RESPONSE: " . length($body) . " bytes\n";
+    warn "JMAP RESPONSE BODY: $body\n" if $ENV{JMAP_DEBUG};
     $req->respond([200, 'ok', { 'Content-Type' => 'application/json' }, $body]);
   }, sub {
     my $error = shift;
