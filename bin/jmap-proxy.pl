@@ -709,7 +709,7 @@ sub do_session {
       for my $a (@{$pool->{accounts} || []}) {
         $accounts->{$a->{accountid}} = {
           name => $a->{email} || $a->{accountid},
-          isPersonal => ($a->{accountid} eq $auth_aid ? JSON::true : JSON::false),
+          isPersonal => JSON::true,
           isReadOnly => JSON::false,
           accountCapabilities => {
             'urn:ietf:params:jmap:mail' => {},
@@ -752,6 +752,7 @@ sub do_session {
         state => "$pool->{poolid}:" . time(),
       };
 
+      warn "SESSION " . JSON::XS::encode_json($session) . "\n";
       $req->respond([200, 'ok', { 'Content-Type' => 'application/json' },
         JSON::XS::encode_json($session)]);
     }, sub {

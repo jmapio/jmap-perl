@@ -55,10 +55,12 @@
     <td>[% a.folders || 0 %]</td>
     <td>[% a.messages || 0 %]</td>
     <td class="actions">
+      [% UNLESS a.accountid == auth_aid %]
       <form method="post" action="/accounts/detach">
         <input type="hidden" name="accountid" value="[% a.accountid %]">
         <button class="detach" type="submit">Detach</button>
       </form>
+      [% END %]
       <form method="post" action="/accounts/delete" onsubmit="return confirm('Delete account [% a.email || a.accountid %]? This removes all data.')">
         <input type="hidden" name="accountid" value="[% a.accountid %]">
         <button class="delete" type="submit">Delete</button>
