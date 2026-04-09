@@ -17,6 +17,7 @@ use Cookie::Baker;
 use Data::Dumper;
 use Data::UUID::LibUUID;
 use DBI;
+use Digest::SHA qw(sha1_hex);
 use Encode qw(encode_utf8);
 use File::Temp ();
 use HTML::GenerateUtil qw(escape_html escape_uri);
@@ -390,7 +391,14 @@ sub run_backend_worker {
         return ['raw', [$rtype, $content, $filename]];
       }
       if ($cmd eq 'jmap') {
-        return ['jmap', $api->handle_request($args)];
+        my $result = $api->handle_request($args);
+        # Add sessionState: checksum of sorted accountIds in pool (RFC 8620)
+        my $poolid = $dbh->selectrow_array(
+          "SELECT poolid FROM accounts WHERE accountid = ?", {}, $accountid) || $accountid;
+        my $aids = $dbh->selectcol_arrayref(
+          "SELECT accountid FROM accounts WHERE poolid = ? ORDER BY accountid", {}, $poolid);
+        $result->{sessionState} = Digest::SHA::sha1_hex(join(',', @$aids));
+        return ['jmap', $result];
       }
       if ($cmd eq 'sync') {
         $db->sync_folders();
