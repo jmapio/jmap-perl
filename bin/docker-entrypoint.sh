@@ -16,8 +16,8 @@ perl -MDBI -e "
   \$dbh->do('UPDATE accounts SET poolid = accountid WHERE poolid IS NULL');
   my (\$v) = \$dbh->selectrow_array('PRAGMA user_version');
   if (\$v < 1) {
-    my \$cols = \$dbh->selectall_arrayref('PRAGMA table_info(accounts)', { Slice => {} });
-    my %has = map { \$_->{name} => 1 } \@\$cols;
+    my \$cols = \$dbh->selectall_arrayref('PRAGMA table_info(accounts)');
+    my %has = map { \$_->[1] => 1 } \@\$cols;
     unless (\$has{needs_backfill}) {
       \$dbh->do('ALTER TABLE accounts ADD COLUMN needs_backfill INTEGER NOT NULL DEFAULT 1');
       \$dbh->do('UPDATE accounts SET needs_backfill = 1');
