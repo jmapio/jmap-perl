@@ -550,6 +550,25 @@ sub run_accounts_worker {
         return ['touch_tokens', { count => scalar @{$args->{tokens}} }];
       }
 
+      if ($cmd eq 'list_tokens') {
+        # List all tokens for accounts in the given pool
+        my $poolid = $args->{poolid};
+        my $rows = $dbh->selectall_arrayref(
+          "SELECT t.token, t.accountid, t.last_used, t.last_ip
+           FROM tokens t
+           JOIN accounts a ON a.accountid = t.accountid
+           WHERE a.poolid = ?
+           ORDER BY t.last_used DESC NULLS LAST",
+          { Slice => {} }, $poolid);
+        return ['list_tokens', $rows || []];
+      }
+
+      if ($cmd eq 'delete_token') {
+        my $token = $args->{token};
+        $dbh->do("DELETE FROM tokens WHERE token = ?", {}, $token);
+        return ['delete_token', { ok => 1 }];
+      }
+
       if ($cmd eq 'auth') {
         # Authenticate by email + password: look up account, check stored password
         my $email = $args->{username};
@@ -1088,6 +1107,34 @@ sub do_accounts {
 sub _do_accounts_authed {
   my ($httpd, $req, $auth_aid, $method, $path) = @_;
 
+  # POST /accounts/tokens/delete — revoke a token
+  if ($path eq '/accounts/tokens/delete' && $method eq 'post') {
+    my $token = $req->parm('token');
+    return invalid_request($req) unless $token;
+    $httpd->stop_request();
+
+    my $cookies = crush_cookie($req->headers->{cookie} || '');
+    my $my_token = $cookies->{jmap_proxy};
+    # Invalidate auth cache entry for this token
+    delete $auth_cache{"bearer:$token"};
+    delete $token_touch{$token};
+
+    send_backend_request('__accounts__', 'delete_token', { token => $token }, sub {
+      # If the user deleted their own session token, log them out
+      if ($my_token && $token eq $my_token) {
+        my $cookie = bake_cookie("jmap_proxy", { value => '', path => '/', expires => '-1d' });
+        $req->respond([301, 'redirected',
+          { 'Set-Cookie' => $cookie, Location => "$BASEURL/" }, "Redirected"]);
+      } else {
+        $req->respond([301, 'redirected', { Location => "$BASEURL/accounts" }, "Redirected"]);
+      }
+    }, sub {
+      my $err = shift;
+      $req->respond([500, 'error', {}, "delete token failed: $err"]);
+    });
+    return;
+  }
+
   # POST /accounts/detach — detach an account from the pool
   if ($path eq '/accounts/detach' && $method eq 'post') {
     my $aid = $req->parm('accountid');
@@ -1142,17 +1189,33 @@ sub _do_accounts_authed {
 
   # GET /accounts — show the accounts page
   $httpd->stop_request();
+  my $cookies = crush_cookie($req->headers->{cookie} || '');
+  my $my_token = $cookies->{jmap_proxy};
   send_backend_request('__accounts__', 'get_pool', { accountid => $auth_aid }, sub {
     my $pool = shift;
-    my $html = '';
-    my $cookies = crush_cookie($req->headers->{cookie} || '');
-    $TT->process("accounts.html", {
-      baseurl  => $BASEURL,
-      auth_aid => $auth_aid,
-      accounts => $pool->{accounts} || [],
-      token    => $cookies->{jmap_proxy},
-    }, \$html) || return $req->respond([500, 'error', {}, $Template::ERROR]);
-    $req->respond([200, 'ok', { 'Content-Type' => 'text/html; charset=utf-8' }, $html]);
+    send_backend_request('__accounts__', 'list_tokens', { poolid => $pool->{poolid} }, sub {
+      my $tokens = shift;
+      my $html = '';
+      $TT->process("accounts.html", {
+        baseurl   => $BASEURL,
+        auth_aid  => $auth_aid,
+        accounts  => $pool->{accounts} || [],
+        token     => $my_token,
+        tokens    => $tokens || [],
+      }, \$html) || return $req->respond([500, 'error', {}, $Template::ERROR]);
+      $req->respond([200, 'ok', { 'Content-Type' => 'text/html; charset=utf-8' }, $html]);
+    }, sub {
+      # Token listing failed — still show the page without tokens
+      my $html = '';
+      $TT->process("accounts.html", {
+        baseurl  => $BASEURL,
+        auth_aid => $auth_aid,
+        accounts => $pool->{accounts} || [],
+        token    => $my_token,
+        tokens   => [],
+      }, \$html) || return $req->respond([500, 'error', {}, $Template::ERROR]);
+      $req->respond([200, 'ok', { 'Content-Type' => 'text/html; charset=utf-8' }, $html]);
+    });
   }, sub {
     my $err = shift;
     $req->respond([500, 'error', {}, "error: $err"]);

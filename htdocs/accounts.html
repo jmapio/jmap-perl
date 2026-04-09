@@ -7,21 +7,26 @@
 <link href="/main.css" rel="stylesheet" type="text/css">
 <title>JMAP Proxy - My Accounts</title>
 <style>
-  table.accounts { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-  table.accounts th, table.accounts td { padding: 8px 12px; text-align: left; border-bottom: 1px solid #ddd; }
-  table.accounts th { background: #2c3e50; color: white; }
-  table.accounts tr:hover { background: #f8f9fa; }
+  table.accounts, table.tokens { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+  table.accounts th, table.accounts td,
+  table.tokens th, table.tokens td { padding: 8px 12px; text-align: left; border-bottom: 1px solid #ddd; }
+  table.accounts th, table.tokens th { background: #2c3e50; color: white; }
+  table.accounts tr:hover, table.tokens tr:hover { background: #f8f9fa; }
   .actions { display: flex; gap: 6px; }
   .actions form { display: inline; }
   button.detach { background: #f39c12; color: white; border: none; padding: 4px 10px; border-radius: 3px; cursor: pointer; }
   button.detach:hover { background: #e67e22; }
   button.delete { background: #e74c3c; color: white; border: none; padding: 4px 10px; border-radius: 3px; cursor: pointer; }
   button.delete:hover { background: #c0392b; }
+  button.logout { background: #7f8c8d; color: white; border: none; padding: 4px 10px; border-radius: 3px; cursor: pointer; }
+  button.logout:hover { background: #636e72; }
   .add-form { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-top: 20px; }
   .add-form label { display: block; font-weight: 500; margin-bottom: 4px; }
   .add-form input[type=email], .add-form input[type=password] { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; margin-bottom: 12px; }
   .add-form button { background: #27ae60; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-size: 16px; }
   .add-form button:hover { background: #219a52; }
+  code.token-preview { font-size: 12px; color: #555; }
+  .current-session { font-size: 11px; color: #27ae60; font-weight: 600; margin-left: 4px; }
 </style>
 </head>
 <body>
@@ -45,7 +50,7 @@
 <tbody>
 [% FOREACH a IN accounts %]
   <tr>
-    <td><a href="[% baseurl %]/jmap/[% a.accountid %]">[% a.email || a.accountid %]</a>[% IF a.accountid == auth_aid %] (logged in)[% END %]</td>
+    <td><a href="[% baseurl %]/jmap/[% a.accountid %]">[% a.email || a.accountid %]</a>[% IF a.accountid == auth_aid %]<span class="current-session">&#x2714; active</span>[% END %]</td>
     <td>[% a.imapHost || '-' %]:[% a.imapPort || '' %]</td>
     <td>[% a.folders || 0 %]</td>
     <td>[% a.messages || 0 %]</td>
@@ -63,6 +68,40 @@
 [% END %]
 </tbody>
 </table>
+
+<h2>Active Sessions</h2>
+[% IF tokens.size %]
+<table class="tokens">
+<thead>
+  <tr><th>Token</th><th>Last used</th><th>Last IP</th><th>Action</th></tr>
+</thead>
+<tbody>
+[% FOREACH t IN tokens %]
+  [% SET is_current = (t.token == token) %]
+  <tr>
+    <td>
+      <code class="token-preview">[% t.token.substr(0, 12) %]…</code>
+      [% IF is_current %]<span class="current-session">&#x2714; this session</span>[% END %]
+    </td>
+    <td>[% IF t.last_used %][% t.last_used %][% ELSE %]never[% END %]</td>
+    <td>[% t.last_ip || '-' %]</td>
+    <td>
+      <form method="post" action="/accounts/tokens/delete">
+        <input type="hidden" name="token" value="[% t.token %]">
+        [% IF is_current %]
+        <button class="logout" type="submit">Log out</button>
+        [% ELSE %]
+        <button class="delete" type="submit" onclick="return confirm('Revoke this session?')">Revoke</button>
+        [% END %]
+      </form>
+    </td>
+  </tr>
+[% END %]
+</tbody>
+</table>
+[% ELSE %]
+<p>No active sessions found.</p>
+[% END %]
 
 [% IF token %]
 <h2>API Access</h2>
