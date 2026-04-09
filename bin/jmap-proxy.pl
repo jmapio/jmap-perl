@@ -230,6 +230,12 @@ sub run_backend_worker {
       # Initialize DB for commands that need it (not signup — it creates the account first)
       $init_db->() if $cmd ne 'signup' && !$db;
 
+      # Defensive: clean up stale transactions between commands
+      if ($db && $db->in_transaction()) {
+        warn "WORKER STALE TRANSACTION before $cmd ($tag) - rolling back\n";
+        $db->reset();
+      }
+
       if ($cmd eq 'signup') {
         require Net::DNS;
         require Mail::IMAPTalk;
