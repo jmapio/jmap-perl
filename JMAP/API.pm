@@ -924,6 +924,11 @@ sub commit {
   $Self->{db}->commit();
 }
 
+sub rollback {
+  my $Self = shift;
+  $Self->{db}->reset();
+}
+
 sub _transError {
   my $Self = shift;
   if ($Self->{db}->in_transaction()) {
