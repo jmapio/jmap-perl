@@ -4079,9 +4079,11 @@ sub api_EmailSubmission_set {
   }];
 
   if (%updateEmails or @destroyEmails) {
+    warn "EmailSubmission/set: onSuccess processing update=" . scalar(keys %updateEmails) . " destroy=" . scalar(@destroyEmails) . "\n";
     push @res, $Self->api_Email_set({update => \%updateEmails, destroy => \@destroyEmails});
   }
 
+  warn "EmailSubmission/set: in_transaction=" . ($Self->{db}->in_transaction() ? "YES" : "no") . " at end\n";
   return @res;
 }
 
