@@ -1187,8 +1187,6 @@ CREATE TABLE IF NOT EXISTS account (
 );
 EOF
 
-  # Migration: add jstateEmailSubmission to existing accounts
-  eval { $dbh->do("ALTER TABLE account ADD COLUMN jstateEmailSubmission TEXT NOT NULL DEFAULT 1") };
 
   $dbh->do(<<EOF);
 CREATE TABLE IF NOT EXISTS jrawmessage (
