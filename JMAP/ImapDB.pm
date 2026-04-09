@@ -66,6 +66,11 @@ sub setuser {
   my $args = shift;
   # XXX - picture, etc
 
+  # Strip fields that belong to accounts.sqlite3, not the per-account iserver table
+  my %iserver = %$args;
+  delete $iserver{$_} for qw(poolid accountid force);
+  $args = \%iserver;
+
   $Self->begin();
 
   my $data = $Self->dgetone('iserver');

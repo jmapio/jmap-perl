@@ -102,6 +102,9 @@ TODO:
 - [ ] Per-type creation ID mapping (currently shared across types)
 - [x] onSuccessUpdateEmail/onSuccessDestroyEmail in EmailSubmission/set
 - [ ] Move raw SQL out of API.pm into DB layer
+- [ ] Schema versioning for SQLite DBs (à la Cyrus dav_db.c): store schema_version
+  in a metadata table, apply numbered migrations in sequence, bump version after
+  each — replaces scattered `eval { ALTER TABLE }` hacks
 
 ### Auth
 - [ ] OAuth2 / OpenID Connect support

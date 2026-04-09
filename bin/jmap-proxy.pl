@@ -521,7 +521,10 @@ sub run_accounts_worker {
       if ($cmd eq 'create_token') {
         my $token = $args->{token};
         my $aid = $args->{accountid};
-        $dbh->do("INSERT OR REPLACE INTO tokens (token, accountid) VALUES (?, ?)", {}, $token, $aid);
+        my $ip = $args->{last_ip};
+        my $ts = $args->{last_used} || time();
+        $dbh->do("INSERT OR REPLACE INTO tokens (token, accountid, last_used, last_ip) VALUES (?, ?, ?, ?)",
+          {}, $token, $aid, $ts, $ip);
         return ['create_token', { token => $token, accountid => $aid }];
       }
 
@@ -1051,7 +1054,8 @@ sub do_signup {
       # Create a token for the cookie
       my $token = _generate_token();
       send_backend_request('__accounts__', 'create_token',
-        { token => $token, accountid => $final_accountid }, sub {
+        { token => $token, accountid => $final_accountid,
+          last_ip => _client_ip($req), last_used => time() }, sub {
         $auth_cache{"bearer:$token"} = [$final_accountid, time() + $AUTH_CACHE_TTL];
         my $cookie = bake_cookie("jmap_proxy", {
           value => $token,
