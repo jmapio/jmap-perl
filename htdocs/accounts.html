@@ -83,7 +83,7 @@
       <code class="token-preview">[% t.token.substr(0, 12) %]…</code>
       [% IF is_current %]<span class="current-session">&#x2714; this session</span>[% END %]
     </td>
-    <td>[% IF t.last_used %][% t.last_used %][% ELSE %]never[% END %]</td>
+    <td>[% human_time(t.last_used) %]</td>
     <td>[% t.last_ip || '-' %]</td>
     <td>
       <form method="post" action="/accounts/tokens/delete">

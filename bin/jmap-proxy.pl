@@ -597,6 +597,22 @@ sub run_accounts_worker {
                           token => $token, accounts => $pool }];
       }
 
+      if ($cmd eq 'verify_credentials') {
+        my $email = $args->{username};
+        my $password = $args->{password};
+        my $row = $dbh->selectrow_hashref(
+          "SELECT accountid FROM accounts WHERE email = ?", {}, $email);
+        return ['verify_credentials', undef] unless $row;
+        my $aid = $row->{accountid};
+        my $dbfile = "$datadir/$aid.sqlite3";
+        return ['verify_credentials', undef] unless -f $dbfile;
+        my $udb = DBI->connect("dbi:SQLite:dbname=$dbfile");
+        my $stored = $udb->selectrow_hashref(
+          "SELECT password FROM iserver WHERE username = ?", {}, $email);
+        return ['verify_credentials', undef] unless $stored && $stored->{password} eq $password;
+        return ['verify_credentials', { accountid => $aid }];
+      }
+
       if ($cmd eq 'delete_account') {
         my $aid = $args->{accountid};
         $dbh->do("DELETE FROM accounts WHERE accountid = ?", {}, $aid);
@@ -893,6 +909,16 @@ sub _generate_token {
   return unpack('H*', $bytes);
 }
 
+sub _time_ago {
+  my ($ts) = @_;
+  return 'never' unless $ts;
+  my $diff = time() - $ts;
+  return 'just now'               if $diff < 60;
+  return int($diff/60)   . ' minutes ago' if $diff < 3600;
+  return int($diff/3600) . ' hours ago'   if $diff < 86400;
+  return int($diff/86400). ' days ago';
+}
+
 sub _get_auth_accountid {
   my ($req) = @_;
   # Cookie contains a token, not an accountid — check the cache
@@ -902,6 +928,22 @@ sub _get_auth_accountid {
   my $cached = _check_cache("bearer:$token");
   return $cached;
   # Note: if not cached, caller must use _authenticate() for async resolution
+}
+
+# Like _authenticate but cookie-only, never errors — calls $cb->(undef) if not logged in.
+sub _try_authenticate {
+  my ($req, $httpd, $cb) = @_;
+  my $cookies = crush_cookie($req->headers->{cookie} || '');
+  my $token = $cookies->{jmap_proxy};
+  unless ($token) { $cb->(undef); return; }
+  my $cached = _check_cache("bearer:$token");
+  if ($cached) { $cb->($cached); return; }
+  $httpd->stop_request();
+  send_backend_request('__accounts__', 'resolve_token', { token => $token }, sub {
+    my $aid = shift;
+    $auth_cache{"bearer:$token"} = [$aid, time() + $AUTH_CACHE_TTL] if $aid;
+    $cb->($aid);
+  }, sub { $cb->(undef) });
 }
 
 # Cache auth results: key => [accountid, expire_time]
@@ -1023,17 +1065,62 @@ sub do_signup {
 
   return invalid_request($req) unless $opts{username} && $opts{password};
 
-  # If logged in, new account joins the existing pool
-  # Use sync cache check — if not cached, pool join will be skipped (acceptable)
-  my $auth_aid = _get_auth_accountid($req);
-  $opts{poolid} = $auth_aid if $auth_aid;
-
-  my $accountid = new_uuid_string();
-
   $httpd->stop_request();
 
+  _try_authenticate($req, $httpd, sub {
+    my ($auth_aid) = @_;
+
+    # Fast path: account already exists with these credentials — log in or join pool
+    send_backend_request('__accounts__', 'verify_credentials',
+      { username => $opts{username}, password => $opts{password} }, sub {
+      my $existing = shift;
+      if ($existing) {
+        my $existing_aid = $existing->{accountid};
+        if ($auth_aid) {
+          # Already logged in — join existing account into our pool (or no-op if same)
+          if ($existing_aid eq $auth_aid) {
+            $req->respond([301, 'redirected', { Location => "$BASEURL/accounts" }, "Redirected"]);
+          } else {
+            send_backend_request('__accounts__', 'set_poolid',
+              { accountid => $existing_aid, poolid => $auth_aid }, sub {
+              $req->respond([301, 'redirected', { Location => "$BASEURL/accounts" }, "Redirected"]);
+            }, sub {
+              $req->respond([301, 'redirected', { Location => "$BASEURL/accounts" }, "Redirected"]);
+            });
+          }
+        } else {
+          # Not logged in — create a new token and log in
+          my $token = _generate_token();
+          send_backend_request('__accounts__', 'create_token',
+            { token => $token, accountid => $existing_aid,
+              last_ip => _client_ip($req), last_used => time() }, sub {
+            $auth_cache{"bearer:$token"} = [$existing_aid, time() + $AUTH_CACHE_TTL];
+            my $cookie = bake_cookie("jmap_proxy", { value => $token, path => '/', expires => '+3M' });
+            $req->respond([301, 'redirected',
+              { 'Set-Cookie' => $cookie, Location => "$BASEURL/accounts" }, "Redirected"]);
+          }, sub {
+            $req->respond([500, 'error', {}, 'failed to create session']);
+          });
+        }
+        return;
+      }
+
+      # Account not found (or wrong password) — do full signup flow
+      _do_signup_new($httpd, $req, $auth_aid, \%opts);
+    }, sub {
+      _do_signup_new($httpd, $req, $auth_aid, \%opts);
+    });
+  });
+}
+
+sub _do_signup_new {
+  my ($httpd, $req, $auth_aid, $opts) = @_;
+
+  $opts->{poolid} = $auth_aid if $auth_aid;
+  my $accountid = new_uuid_string();
+
   # Step 1: send signup to a per-account child for DNS resolution + IMAP test
-  send_backend_request($accountid, 'signup', \%opts, sub {
+  send_backend_request($accountid, 'signup', $opts, sub {
     my $result = shift;
 
     if ($result->[0] eq 'continue') {
@@ -1041,7 +1128,6 @@ sub do_signup {
       my $html = '';
       $TT->process("signup.html", $result->[1], \$html)
         || return $req->respond([500, 'error', {}, $Template::ERROR]);
-      # This child was just for DNS/IMAP test, clean it up
       delete $backend{$accountid};
       $req->respond({ content => ['text/html', $html] });
       return;
@@ -1049,34 +1135,33 @@ sub do_signup {
 
     if ($result->[0] eq 'done') {
       my ($final_accountid, $username) = @{$result}[1, 2];
-      # Trigger background sync
       send_backend_request($final_accountid, 'sync', {});
-      # Create a token for the cookie
+      delete $backend{$accountid} unless $final_accountid eq $accountid;
+
+      if ($auth_aid) {
+        # Already logged in — just redirect, keep existing session
+        $req->respond([301, 'redirected', { Location => "$BASEURL/accounts" }, "Redirected"]);
+        return;
+      }
+
+      # Not logged in — create new token
       my $token = _generate_token();
       send_backend_request('__accounts__', 'create_token',
         { token => $token, accountid => $final_accountid,
           last_ip => _client_ip($req), last_used => time() }, sub {
         $auth_cache{"bearer:$token"} = [$final_accountid, time() + $AUTH_CACHE_TTL];
-        my $cookie = bake_cookie("jmap_proxy", {
-          value => $token,
-          path => '/',
-          expires => '+3M',
-        });
+        my $cookie = bake_cookie("jmap_proxy", { value => $token, path => '/', expires => '+3M' });
         $req->respond([301, 'redirected',
-          { 'Set-Cookie' => $cookie, Location => "$BASEURL/accounts" },
-          "Redirected"]);
+          { 'Set-Cookie' => $cookie, Location => "$BASEURL/accounts" }, "Redirected"]);
       }, sub {
         $req->respond([500, 'error', {}, 'failed to create session']);
       });
-      # Clean up temp child if a different accountid was used
-      delete $backend{$accountid} unless $final_accountid eq $accountid;
       return;
     }
   }, sub {
     my $err = shift;
     delete $backend{$accountid};
     if ($auth_aid) {
-      # User was logged in — redirect back to accounts page
       $req->respond([301, 'redirected', { Location => "$BASEURL/accounts" }, "Redirected"]);
     } else {
       my $html = '';
@@ -1195,22 +1280,24 @@ sub _do_accounts_authed {
       my $tokens = shift;
       my $html = '';
       $TT->process("accounts.html", {
-        baseurl   => $BASEURL,
-        auth_aid  => $auth_aid,
-        accounts  => $pool->{accounts} || [],
-        token     => $my_token,
-        tokens    => $tokens || [],
+        baseurl     => $BASEURL,
+        auth_aid    => $auth_aid,
+        accounts    => $pool->{accounts} || [],
+        token       => $my_token,
+        tokens      => $tokens || [],
+        human_time  => \&_time_ago,
       }, \$html) || return $req->respond([500, 'error', {}, $Template::ERROR]);
       $req->respond([200, 'ok', { 'Content-Type' => 'text/html; charset=utf-8' }, $html]);
     }, sub {
       # Token listing failed — still show the page without tokens
       my $html = '';
       $TT->process("accounts.html", {
-        baseurl  => $BASEURL,
-        auth_aid => $auth_aid,
-        accounts => $pool->{accounts} || [],
-        token    => $my_token,
-        tokens   => [],
+        baseurl    => $BASEURL,
+        auth_aid   => $auth_aid,
+        accounts   => $pool->{accounts} || [],
+        token      => $my_token,
+        tokens     => [],
+        human_time => \&_time_ago,
       }, \$html) || return $req->respond([500, 'error', {}, $Template::ERROR]);
       $req->respond([200, 'ok', { 'Content-Type' => 'text/html; charset=utf-8' }, $html]);
     });
