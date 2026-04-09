@@ -1019,10 +1019,15 @@ sub do_signup {
   }, sub {
     my $err = shift;
     delete $backend{$accountid};
-    my $html = '';
-    $TT->process("index.html", { baseurl => $BASEURL, error => "$err" }, \$html)
-      || return $req->respond([500, 'error', {}, $Template::ERROR]);
-    $req->respond({ content => ['text/html', $html] });
+    if ($auth_aid) {
+      # User was logged in — redirect back to accounts page
+      $req->respond([301, 'redirected', { Location => "$BASEURL/accounts" }, "Redirected"]);
+    } else {
+      my $html = '';
+      $TT->process("index.html", { baseurl => $BASEURL, error => "$err" }, \$html)
+        || return $req->respond([500, 'error', {}, $Template::ERROR]);
+      $req->respond({ content => ['text/html', $html] });
+    }
   });
 }
 
