@@ -170,7 +170,7 @@ sub rollback {
 sub reset {
   my $Self = shift;
   return unless $Self->{t};
-  $Self->{t}{dbh}->rollback();
+  $Self->{t}{dbh}->rollback() if $Self->{t}{dbh};
   delete $Self->{t};
 }
 
@@ -599,6 +599,7 @@ sub create_messages {
   my $draftid = $Self->dgetfield('jmailboxes', { role => 'drafts' }, 'jmailboxid');
   my $mailboxdata = $Self->dget('jmailboxes', { active => 1 });
   my %validids = map { $_->{jmailboxid} => 1 } @$mailboxdata;
+  my $user_email = ($Self->get_user() || {})->{email};
 
   $Self->commit();
 
@@ -659,8 +660,7 @@ sub create_messages {
     my $defaults_cb = sub {
       my ($name) = @_;
       if (lc($name) eq 'message-id') {
-        my $user = $Self->get_user();
-        my $domain = ($user->{email} && $user->{email} =~ /\@(.+)/) ? $1 : hostname();
+        my $domain = ($user_email && $user_email =~ /\@(.+)/) ? $1 : hostname();
         my $mid = new_uuid_string() . ".$item->{msgdate}\@$domain";
         $generated_defaults{'messageId'} = [$mid];
         return "<$mid>";
