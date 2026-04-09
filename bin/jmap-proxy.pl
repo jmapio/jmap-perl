@@ -410,6 +410,7 @@ sub run_backend_worker {
       if ($cmd eq 'sync') {
         $db->sync_folders();
         $db->sync_imap();
+        $db->backfill();
         return ['sync', $JSON::true];
       }
       if ($cmd eq 'davsync') {
