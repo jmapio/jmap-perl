@@ -644,7 +644,9 @@ sub do_session {
           isReadOnly => JSON::false,
           accountCapabilities => {
             'urn:ietf:params:jmap:mail' => {},
-            'urn:ietf:params:jmap:submission' => {},
+            'urn:ietf:params:jmap:submission' => {
+              maxDelayedSend => 0,
+            },
           },
         };
         $primary_aid //= $a->{accountid};
