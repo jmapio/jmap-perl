@@ -930,6 +930,10 @@ sub _get_auth_accountid {
   # Note: if not cached, caller must use _authenticate() for async resolution
 }
 
+# Cache auth results: key => [accountid, expire_time]
+my %auth_cache;
+my $AUTH_CACHE_TTL = 300;  # 5 minutes
+
 # Like _authenticate but cookie-only, never errors — calls $cb->(undef) if not logged in.
 sub _try_authenticate {
   my ($req, $httpd, $cb) = @_;
@@ -945,10 +949,6 @@ sub _try_authenticate {
     $cb->($aid);
   }, sub { $cb->(undef) });
 }
-
-# Cache auth results: key => [accountid, expire_time]
-my %auth_cache;
-my $AUTH_CACHE_TTL = 300;  # 5 minutes
 
 sub _check_cache {
   my ($key) = @_;
