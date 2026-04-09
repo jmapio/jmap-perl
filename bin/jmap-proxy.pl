@@ -454,6 +454,22 @@ sub run_backend_worker {
   }
 }
 
+sub _migrate_accounts_db {
+  my ($dbh) = @_;
+  my ($v) = $dbh->selectrow_array('PRAGMA user_version');
+  if ($v < 1) {
+    # New installs have needs_backfill in the CREATE TABLE; only ALTER for existing DBs
+    my $cols = $dbh->selectall_arrayref('PRAGMA table_info(accounts)', { Slice => {} });
+    my %has = map { $_->{name} => 1 } @$cols;
+    unless ($has{needs_backfill}) {
+      $dbh->do('ALTER TABLE accounts ADD COLUMN needs_backfill INTEGER NOT NULL DEFAULT 1');
+      $dbh->do('UPDATE accounts SET needs_backfill = 1');
+      warn "accounts.sqlite3: migrated to schema version 1\n";
+    }
+    $dbh->do('PRAGMA user_version = 1');
+  }
+}
+
 sub run_accounts_worker {
   my ($sock) = @_;
 
@@ -462,8 +478,9 @@ sub run_accounts_worker {
   my ($read_json, $write_json) = _make_json_io($sock);
 
   my $dbh = DBI->connect("dbi:SQLite:dbname=$datadir/accounts.sqlite3");
-  $dbh->do("CREATE TABLE IF NOT EXISTS accounts (email TEXT PRIMARY KEY, accountid TEXT, type TEXT, poolid TEXT)");
+  $dbh->do("CREATE TABLE IF NOT EXISTS accounts (email TEXT PRIMARY KEY, accountid TEXT, type TEXT, poolid TEXT, needs_backfill INTEGER NOT NULL DEFAULT 1)");
   $dbh->do("CREATE TABLE IF NOT EXISTS tokens (token TEXT PRIMARY KEY, accountid TEXT NOT NULL, last_used INTEGER, last_ip TEXT)");
+  _migrate_accounts_db($dbh);
 
   while (my $request = $read_json->()) {
     my ($cmd, $args, $tag) = @$request;
@@ -501,7 +518,7 @@ sub run_accounts_worker {
         my $type = $args->{type} || 'imap';
         my $email = $args->{email} || $aid;
         my $poolid = $args->{poolid} || $aid;
-        $dbh->do("INSERT OR REPLACE INTO accounts (email, accountid, type, poolid) VALUES (?, ?, ?, ?)",
+        $dbh->do("INSERT OR REPLACE INTO accounts (email, accountid, type, poolid, needs_backfill) VALUES (?, ?, ?, ?, 1)",
           {}, $email, $aid, $type, $poolid);
         return ['create_account', { accountid => $aid, type => $type, poolid => $poolid }];
       }
@@ -622,6 +639,18 @@ sub run_accounts_worker {
           "SELECT password FROM iserver WHERE username = ?", {}, $email);
         return ['verify_credentials', undef] unless $stored && $stored->{password} eq $password;
         return ['verify_credentials', { accountid => $aid }];
+      }
+
+      if ($cmd eq 'get_needs_backfill') {
+        my $rows = $dbh->selectcol_arrayref(
+          "SELECT accountid FROM accounts WHERE needs_backfill = 1");
+        return ['get_needs_backfill', $rows || []];
+      }
+
+      if ($cmd eq 'clear_backfill') {
+        my $aid = $args->{accountid};
+        $dbh->do("UPDATE accounts SET needs_backfill = 0 WHERE accountid = ?", {}, $aid);
+        return ['clear_backfill', { accountid => $aid }];
       }
 
       if ($cmd eq 'delete_account') {
@@ -1743,6 +1772,9 @@ sub prod_backfill {
           $do_backfill->();
         });
       } else {
+        # Backfill complete — clear flag in DB so we don't restart on next boot
+        send_backend_request('__accounts__', 'clear_backfill', { accountid => $accountid },
+          sub {}, sub {});
         delete $backfilling{$accountid};
       }
     }, sub {
@@ -1761,10 +1793,23 @@ my $sync_timer = AnyEvent->timer(
       next if $name =~ /:/;  # skip backfill and other sub-workers
       next if %{$waiting{$name} || {}};  # skip if handling a request
       send_backend_request($name, 'sync', {}, sub {}, sub {});
-      prod_backfill($name);
     }
   },
 );
+
+#
+# On startup: resume backfill for any accounts that didn't finish last time
+#
+my $startup_backfill_timer = AnyEvent->timer(after => 5, cb => sub {
+  $startup_backfill_timer = undef;
+  send_backend_request('__accounts__', 'get_needs_backfill', {}, sub {
+    my $aids = shift || [];
+    for my $aid (@$aids) {
+      warn "Resuming backfill for $aid\n";
+      prod_backfill($aid);
+    }
+  }, sub { warn "Failed to query needs_backfill: $_[0]\n" });
+});
 
 #
 # Graceful shutdown
