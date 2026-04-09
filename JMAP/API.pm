@@ -2560,16 +2560,16 @@ sub api_Email_import {
 sub _good_keywords {
   my $val = shift;
   return unless ref($val) eq 'HASH';
-  for my $key (sort keys %$val) {
+  # Strip null/false values (some clients send them for unset keywords)
+  for my $key (keys %$val) {
+    if (!$val->{$key} || !JSON::is_bool($val->{$key})) {
+      delete $val->{$key};
+      next;
+    }
+  }
+  for my $key (keys %$val) {
     # bad characters
-    warn "CHECKING KEY $key";
     return if $key =~ m/[\x00-\x20\(\)\{\}\%\*\"\\]/;
-    # false or null
-    return unless $val->{$key};
-    # not a boolean
-    warn "CHECKING BOOL";
-    return unless JSON::is_bool($val->{$key});
-    # must be true!  This one is OK
   }
   return 1;
 }
