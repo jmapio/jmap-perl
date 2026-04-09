@@ -47,6 +47,7 @@ my %TABLE2GROUPS = (
   jcontactgroups => ['ContactGroup'],
   jcontactgroupmap => ['ContactGroup'],
   jcontacts => ['Contact'],
+  jsubmission => ['EmailSubmission'],
   jclientprefs => ['ClientPreferences'],
   jcalendarprefs => ['CalendarPreferences'],
 );
@@ -658,8 +659,9 @@ sub create_messages {
     my $defaults_cb = sub {
       my ($name) = @_;
       if (lc($name) eq 'message-id') {
-        my $hostname = $ENV{HOSTNAME} || hostname();
-        my $mid = new_uuid_string() . ".$item->{msgdate}\@$hostname";
+        my $user = $Self->get_user();
+        my $domain = ($user->{email} && $user->{email} =~ /\@(.+)/) ? $1 : hostname();
+        my $mid = new_uuid_string() . ".$item->{msgdate}\@$domain";
         $generated_defaults{'messageId'} = [$mid];
         return "<$mid>";
       }

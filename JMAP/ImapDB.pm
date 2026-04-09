@@ -2434,6 +2434,7 @@ sub create_submissions {
     $todo{$cid} = $msgid;
   }
 
+  $Self->dirty('jsubmission') if %createmap;
   $Self->commit();
 
   foreach my $cid (sort keys %todo) {
