@@ -803,7 +803,7 @@ sub do_session {
         downloadUrl => "$BASEURL/raw/{accountId}/{blobId}/{name}",
         uploadUrl => "$BASEURL/upload/{accountId}",
         eventSourceUrl => "$BASEURL/eventsource?types={types}&closeafter={closeafter}&ping={ping}",
-        state => "$pool->{poolid}:" . time(),
+        state => sha1_hex(join(',', sort map { $_->{accountid} } @{$pool->{accounts} || []})),
       };
 
       warn "SESSION " . JSON::XS::encode_json($session) . "\n";
