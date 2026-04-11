@@ -59,6 +59,22 @@
     <td><input type="password" class="host" name="password" value="" required placeholder="Enter password to confirm changes"></td>
   </tr>
 
+[% IF settings.type == 'jmap' %]
+  <tr><td colspan="2" class="section-head">JMAP</td></tr>
+  <tr>
+    <th>Session URL</th>
+    <td><input type="url" class="url" name="sessionUrl" value="[% settings.sessionUrl || '' %]" required></td>
+  </tr>
+  <tr>
+    <th>Auth type</th>
+    <td>
+      <select name="authType">
+        <option value="basic"[% IF settings.authType != 'bearer' %] selected[% END %]>Basic (username + password)</option>
+        <option value="bearer"[% IF settings.authType == 'bearer' %] selected[% END %]>Bearer token</option>
+      </select>
+    </td>
+  </tr>
+[% ELSE %]
   <tr><td colspan="2" class="section-head">IMAP</td></tr>
   <tr>
     <th>Host</th>
@@ -96,6 +112,7 @@
     <th>CardDAV URL</th>
     <td><input type="text" class="url" name="carddavURL" value="[% settings.carddavURL || '' %]"></td>
   </tr>
+[% END %]
 </table>
 
 <div class="actions">

@@ -226,14 +226,18 @@ sub run_backend_worker {
     die "No such account: $accountid\n" unless $type;
     if ($type eq 'imap') {
       $db = JMAP::ImapDB->new($accountid);
+      $api = JMAP::API->new($db);
+      $db->{change_cb} = sub {
+        my ($db, $states) = @_;
+        eval { $write_json->(['push', $states, 'state']) };
+      };
+    } elsif ($type eq 'jmap') {
+      require JMAP::JmapDB;
+      $db = JMAP::JmapDB->new($accountid);
+      # No $api — JMAP passthrough bypasses the local API layer entirely
     } else {
       die "Unsupported account type: $type\n";
     }
-    $api = JMAP::API->new($db);
-    $db->{change_cb} = sub {
-      my ($db, $states) = @_;
-      eval { $write_json->(['push', $states, 'state']) };
-    };
   };
 
   # Initialize now if account exists, otherwise defer to signup/setup
@@ -254,8 +258,8 @@ sub run_backend_worker {
         return ['info', [$email, $type]];
       }
 
-      # Initialize DB for commands that need it (not signup — it creates the account first)
-      $init_db->() if $cmd ne 'signup' && !$db;
+      # Initialize DB for commands that need it (not signup/signup_jmap — they create the account first)
+      $init_db->() if $cmd ne 'signup' && $cmd ne 'signup_jmap' && !$db;
 
       # Defensive: clean up stale transactions between commands
       if ($db && $db->in_transaction()) {
@@ -385,6 +389,59 @@ sub run_backend_worker {
 
         return ['signup', ['done', $final_aid, $detail->{username}]];
       }
+      if ($cmd eq 'signup_jmap') {
+        require JMAP::JmapDB;
+        require MIME::Base64;
+
+        # Verify credentials by fetching the upstream JMAP session
+        my $tmp = JMAP::JmapDB->new($accountid);
+        my ($session) = $tmp->fetch_session($args);
+
+        my $api_url = $session->{apiUrl}
+          or die "No apiUrl in upstream JMAP session\n";
+
+        # Find the primary mail accountId on the upstream server
+        my $mail_cap   = 'urn:ietf:params:jmap:mail';
+        my $backend_aid = $session->{primaryAccounts}{$mail_cap}
+          or die "No primary mail account in upstream JMAP session\n";
+        my $capabilities = $session->{accounts}{$backend_aid} || {};
+        my $display_email = $args->{username} || $backend_aid;
+
+        # Create the account entry in accounts.sqlite3
+        my $existing_aid = $dbh->selectrow_array(
+          "SELECT accountid FROM accounts WHERE email = ?", {}, $display_email);
+        my $final_aid;
+        if ($existing_aid) {
+          $final_aid = $existing_aid;
+          if ($args->{poolid}) {
+            $dbh->do("UPDATE accounts SET poolid = ? WHERE accountid = ?",
+              {}, $args->{poolid}, $existing_aid);
+          }
+        } else {
+          $final_aid = $accountid;
+          my $poolid = $args->{poolid} || $accountid;
+          $dbh->do(
+            "INSERT INTO accounts (email, accountid, type, poolid, needs_backfill)
+             VALUES (?,?,?,?,?)",
+            {}, $display_email, $accountid, 'jmap', $poolid, 0);
+        }
+
+        # Initialise JmapDB and store credentials
+        $type = 'jmap';
+        $init_db->();
+
+        $db->setuser({
+          username         => $args->{username} // '',
+          password         => $args->{password} // '',
+          authType         => $args->{authType} || 'basic',
+          sessionUrl       => $args->{sessionUrl},
+          apiUrl           => $api_url,
+          backendAccountId => $backend_aid,
+          capabilities     => $capabilities,
+        });
+
+        return ['signup_jmap', [$final_aid, $display_email]];
+      }
       if ($cmd eq 'setup') {
         $db->setuser({
           username   => $args->{username}   || $accountid,
@@ -417,7 +474,13 @@ sub run_backend_worker {
         return ['raw', [$rtype, $content, $filename]];
       }
       if ($cmd eq 'jmap') {
-        my $result = $api->handle_request($args);
+        my $result;
+        if ($db->can('handle_jmap')) {
+          # JMAP passthrough — forward directly to upstream, rewriting accountIds
+          $result = $db->handle_jmap($args);
+        } else {
+          $result = $api->handle_request($args);
+        }
         # Add sessionState: checksum of sorted accountIds in pool (RFC 8620)
         my $poolid = $dbh->selectrow_array(
           "SELECT poolid FROM accounts WHERE accountid = ?", {}, $accountid) || $accountid;
@@ -427,6 +490,8 @@ sub run_backend_worker {
         return ['jmap', $result];
       }
       if ($cmd eq 'sync') {
+        # JMAP passthrough accounts have no local sync
+        return ['sync', $JSON::true] if $db->can('handle_jmap');
         $db->sync_folders();
         $db->sync_imap();
         return ['sync', $JSON::true];
@@ -434,6 +499,8 @@ sub run_backend_worker {
       # IMPORTANT: 'backfill' MUST only be sent to "$accountid:backfill" workers,
       # never to the jmap/sync worker. See prod_backfill() in the parent.
       if ($cmd eq 'backfill') {
+        # JMAP passthrough accounts have no backfill
+        return ['backfill', 0] if $db->can('handle_jmap');
         my $more = $db->backfill() ? 1 : 0;
         return ['backfill', $more];
       }
@@ -443,13 +510,36 @@ sub run_backend_worker {
         return ['davsync', $JSON::true];
       }
       if ($cmd eq 'get_settings') {
-        $db->begin();
-        my $data = $db->dgetone('iserver');
-        $db->commit();
-        delete $data->{password} if $data;
-        return ['get_settings', $data || {}];
+        my $data;
+        if ($db->can('handle_jmap')) {
+          $data = $db->access_data();  # includes type='jmap'
+        } else {
+          $db->begin();
+          $data = $db->dgetone('iserver') || {};
+          $db->commit();
+          $data->{type} = 'imap';
+        }
+        delete $data->{password};
+        return ['get_settings', $data];
       }
       if ($cmd eq 'update_settings') {
+        if ($db->can('handle_jmap')) {
+          # Verify new JMAP credentials then update stored settings
+          my ($session) = $db->fetch_session($args);
+          my $mail_cap  = 'urn:ietf:params:jmap:mail';
+          my $backend_aid = $session->{primaryAccounts}{$mail_cap}
+            or die "No primary mail account in upstream JMAP session\n";
+          $db->setuser({
+            username         => $args->{username} // '',
+            password         => $args->{password} // '',
+            authType         => $args->{authType} || 'basic',
+            sessionUrl       => $args->{sessionUrl},
+            apiUrl           => $session->{apiUrl},
+            backendAccountId => $backend_aid,
+            capabilities     => $session->{accounts}{$backend_aid} || {},
+          });
+          return ['update_settings', $JSON::true];
+        }
         require Mail::IMAPTalk;
         my $host = $args->{imapHost} or die "imapHost required\n";
         my $port = $args->{imapPort} || 993;
@@ -1267,6 +1357,74 @@ sub _do_signup_new {
   });
 }
 
+sub do_signup_jmap {
+  my ($httpd, $req) = @_;
+  $httpd->stop_request();
+
+  _try_authenticate($req, $httpd, sub {
+    my $auth_aid = shift;  # undef if not logged in
+
+    my %opts = (
+      sessionUrl => scalar($req->parm('sessionUrl')),
+      username   => scalar($req->parm('username')),
+      password   => scalar($req->parm('password')),
+      authType   => scalar($req->parm('authType')) || 'basic',
+    );
+    $opts{poolid} = $auth_aid if $auth_aid;
+
+    return $req->respond([400, 'bad request', {}, 'sessionUrl and password required'])
+      unless $opts{sessionUrl} && $opts{password};
+
+    my $accountid = new_uuid_string();
+
+    send_backend_request($accountid, 'signup_jmap', \%opts, sub {
+      my $result = shift;
+      my ($final_aid, $email) = @$result;
+      delete $backend{$accountid} unless $final_aid eq $accountid;
+
+      if ($auth_aid) {
+        $req->respond([301, 'redirected', { Location => "$BASEURL/accounts" }, "Redirected"]);
+        return;
+      }
+
+      # Not logged in — create a session token
+      my $token = _generate_token();
+      send_backend_request('__accounts__', 'create_token',
+        { token => $token, accountid => $final_aid,
+          last_ip => _client_ip($req), last_used => time() }, sub {
+        $auth_cache{"bearer:$token"} = [$final_aid, time() + $AUTH_CACHE_TTL];
+        my $cookie = bake_cookie("jmap_proxy", { value => $token, path => '/', expires => '+3M' });
+        $req->respond([301, 'redirected',
+          { 'Set-Cookie' => $cookie, Location => "$BASEURL/accounts" }, "Redirected"]);
+      }, sub {
+        $req->respond([500, 'error', {}, 'failed to create session']);
+      });
+    }, sub {
+      my $err = shift;
+      delete $backend{$accountid};
+      # Show error on the accounts page if logged in, otherwise on index
+      if ($auth_aid) {
+        my $html = '';
+        $TT->process("accounts.html", {
+          baseurl    => $BASEURL,
+          auth_aid   => $auth_aid,
+          accounts   => [],
+          token      => undef,
+          tokens     => [],
+          human_time => \&_time_ago,
+          jmap_error => "$err",
+        }, \$html) || return $req->respond([500, 'error', {}, $Template::ERROR]);
+        $req->respond([400, 'error', { 'Content-Type' => 'text/html; charset=utf-8' }, $html]);
+      } else {
+        my $html = '';
+        $TT->process("index.html", { baseurl => $BASEURL, error => "$err" }, \$html)
+          || return $req->respond([500, 'error', {}, $Template::ERROR]);
+        $req->respond([400, 'error', { 'Content-Type' => 'text/html' }, $html]);
+      }
+    });
+  });
+}
+
 sub do_accounts {
   my ($httpd, $req) = @_;
 
@@ -1573,6 +1731,7 @@ $httpd->reg_cb(
   '/upload'       => \&do_upload,
   '/raw'          => \&do_raw,
   '/signup'       => \&do_signup,
+  '/signup_jmap'  => \&do_signup_jmap,
   '/accounts'     => \&do_accounts,
   '/logout'       => \&do_logout,
   '/main.css'     => \&do_static,
