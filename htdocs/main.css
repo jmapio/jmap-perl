@@ -161,6 +161,13 @@ sup {
         font-size: 32px;
         font-weight: 600;
     }
+    #logo a {
+        color: #fff;
+        text-decoration: none;
+    }
+    #logo a:hover {
+        color: #e0eaf0;
+    }
     #nav {
         position: absolute;
         top: 0;
@@ -194,87 +201,28 @@ sup {
     /* Content */
     article {
         margin: 75px auto 30px;
-        max-width: 700px;
-        padding: 0 30px 0 260px;
+        max-width: 860px;
+        padding: 20px 40px;
     }
     #last-update {
         margin: -7px 0 15px;
         font-size: 14px;
         text-align: center;
     }
-    /* Sidebar (Table of Contents) */
-    aside {
-        position: fixed;
-        overflow: auto;
-        top: 50px;
-        bottom: 0;
-        width: 229px;
-        border-right: 1px solid #eee;
-        background: #f8f8f8;
-    }
-    .toc {
-        position: relative;
-        margin: 0;
-        padding: 15px 0;
-        list-style: none;
-        font-size: 14px;
-    }
-    .toc-selected {
-        position: absolute;
-        background: #e5eaed;
-        -webkit-transition: all .2s;
-           -moz-transition: all .2s;
-             -o-transition: all .2s;
-                transition: all .2s;
-        left: 0;
-        right: 0;
-        top: 0;
-        height: 0;
-    }
-    .toc-item {
-        margin: 0;
-        padding: 0;
-    }
-    .toc-link {
-        display: block;
-        padding: 4px 15px;
-        color: inherit;
-        text-decoration: none;
-    }
-    .toc-link:hover {
-        color: inherit;
-    }
-    .toc-link:hover > span {
-        border-bottom: 1px solid;
-    }
-    .toc-h2 {
-        font-weight: bold;
-    }
-    .toc-h3 {
-        padding-left: 15px;
-    }
 }
 @media screen and (max-width: 768px) {
     header {
         position: relative;
     }
-    #logo,
-    #github {
+    #logo {
         display: none;
     }
     #nav {
         left: 0;
     }
     article {
-        margin: 30px;
-        padding: 0;
-    }
-    aside {
-        position: relative;
-        top: 0;
-        width: 100%;
-        border-top: 1px solid #eee;
-        border-right: none;
+        margin: 20px;
+        padding: 10px;
     }
 }
 @media print {

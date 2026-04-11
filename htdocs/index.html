@@ -6,53 +6,74 @@
 <link href='https://fonts.googleapis.com/css?family=Source+Sans+Pro:300,400,600,700,400italic' rel='stylesheet' type='text/css'>
 <link href="/main.css" rel="stylesheet" type="text/css">
 <title>JMAP Proxy</title>
+<style>
+  .login-wrap { display: flex; gap: 40px; align-items: flex-start; flex-wrap: wrap; }
+  .login-form { background: white; padding: 24px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.12); min-width: 280px; flex: 0 0 auto; }
+  .login-form h2 { margin: 0 0 16px; font-size: 20px; border: none; padding: 0; }
+  .login-form label { display: block; font-weight: 500; margin-bottom: 4px; font-size: 14px; }
+  .login-form input[type=email], .login-form input[type=password] {
+    width: 100%; padding: 8px 10px; border: 1px solid #ddd; border-radius: 4px;
+    font-size: 14px; margin-bottom: 12px; box-sizing: border-box;
+  }
+  .login-form button { background: #27ae60; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-size: 15px; width: 100%; }
+  .login-form button:hover { background: #219a52; }
+  .intro { flex: 1; min-width: 260px; }
+  .intro h2 { margin-top: 0; border: none; padding: 0; font-size: 22px; }
+  .intro p { color: #444; line-height: 1.6; margin-bottom: 12px; }
+  .intro ul { color: #444; line-height: 1.6; padding-left: 20px; }
+  .intro li { margin: 6px 0; }
+  .error-box { background: #fdecea; border: 1px solid #e74c3c; color: #c0392b; padding: 10px 14px; border-radius: 4px; margin-bottom: 14px; font-size: 14px; }
+  .links { margin-top: 16px; font-size: 13px; color: #7f8c8d; }
+  .links a { color: #3498db; }
+</style>
 </head>
 <body>
 <header>
-<div id="logo">JMAP</div>
+<div id="logo"><a href="/">JMAP Proxy</a></div>
 <ul id="nav" style="left:0">
-    <li class="nav-item"><a class="nav-link" href="http://jmap.io/index.html">Intro</a></li>
-    <li class="nav-item"><a class="nav-link" href="http://jmap.io/spec.html">The Spec</a> </li>
-    <li class="nav-item"><a class="nav-link" href="http://jmap.io/client.html">Using JMAP</a></li>
-    <li class="nav-item"><a class="nav-link" href="http://jmap.io/server.html">Implementing JMAP</a></li>
-    <li class="nav-item"><a class="nav-link" href="/">Try It</a></li>
+    <li class="nav-item"><a class="nav-link" href="https://jmap.io">About JMAP</a></li>
+    <li class="nav-item"><a class="nav-link" href="https://github.com/jmapio/jmap-perl">GitHub</a></li>
 </ul>
-<a id="github" href="https://github.com/jmapio"><img style="position: absolute; top: 0; right: 0; border: 0;" src="https://s3.amazonaws.com/github/ribbons/forkme_right_darkblue_121621.png" alt="Fork me on GitHub"></a>
 </header>
-<article style="padding:0">
+<article>
 
 <h1>JMAP Proxy</h1>
+<p style="text-align:center;color:#555;margin-bottom:30px;">Connect any IMAP server to the modern <a href="https://jmap.io">JMAP protocol</a></p>
 
-[% sessions %]
+<div class="login-wrap">
 
-<p>Oauth to a <a href="/register/gmail">Gmail</a> or <a href="/register/aol">AOL</a> account, or log in to an IMAP server below:</p>
+  <div class="login-form">
+    <h2>Sign in / Register</h2>
+    [% IF error %]
+    <div class="error-box">[% error %]</div>
+    [% END %]
+    <form action="/signup" method="post">
+      <label>Email address</label>
+      <input type="email" name="username" required autofocus>
+      <label>Password</label>
+      <input type="password" name="password" required>
+      <button type="submit">Connect</button>
+    </form>
+    <div class="links">
+      Already signed in? <a href="/accounts">Go to My Accounts &rarr;</a>
+    </div>
+  </div>
 
-<form action="/signup" method="post">
-<table border="1">
-<tr>
-  <th>Email</th>
-  <td><input type="text" name="username"></td>
-</tr>
-<tr>
-  <th>Password</th>
-  <td><input type="password" name="password"></td>
-</tr>
-<tr>
-  <th>Submit</th>
-  <td><input type="submit" value="Create"></td>
-</tr>
-</table>
-</form>
+  <div class="intro">
+    <h2>What is the JMAP Proxy?</h2>
+    <p>The JMAP Proxy sits in front of any standard IMAP/SMTP mail server and exposes it via <a href="https://jmap.io">JMAP</a> — the modern, efficient JSON email API defined in <a href="https://www.rfc-editor.org/rfc/rfc8620">RFC 8620</a> and <a href="https://www.rfc-editor.org/rfc/rfc8621">RFC 8621</a>.</p>
+    <ul>
+      <li>Enter your email and IMAP password to connect your mail server</li>
+      <li>Server settings are auto-discovered via DNS SRV records</li>
+      <li>Use any JMAP-compatible client, including <a href="https://webmail.jmap.io">Bulwark webmail</a></li>
+      <li>Add multiple accounts and access them through a single JMAP session</li>
+    </ul>
+    <p>The JMAP session URL is <code>[% baseurl %]/.well-known/jmap</code></p>
+    <p style="font-size:13px;color:#888;">Source code is <a href="https://github.com/jmapio/jmap-perl">available on GitHub</a> under the MIT licence.</p>
+  </div>
 
-<p>The JMAP proxy is a work in a progress. It is currently stable enough to test out and get a feel for JMAP in action. All the methods in the spec are implemented, though some atomic guarantees are not possible with other users accessing your servers at the same time</p>
+</div>
 
-<p>The eventual goal is to have a proxy you can stick in front of any IMAP server and get a usable JMAP out the other end. The proxy supports Gmail and modern IMAP implementations (it will be quite inefficient if they don't implement CONDSTORE). Source code is <a href="https://github.com/jmapio/jmap-perl">available on GitHub</a> and is MIT licensed.</p>
-
-<p>The web client hooked up for this demo is a simple example (no compose, contacts, calendars). It is also MIT licenced and <a href="https://github.com/jmapio/jmap-demo-webmail">available on GitHub</a>. The code is unminified, so takes much longer to initially load than it would in a production setting, but can be viewed with standard web-dev tools. These can also show the data exchanges being made to load the data and get delta updates.</p>
-
-<p>The service is not running with all of the security measures employed on a production site such as FastMail, so DO NOT USE THIS PROXY FOR ACCOUNTS WITH SENSITIVE DATA.</p>
-
-<p>When you create your account, the most recent 50 emails will be downloaded in their entirety, so the first page should be snappy immediately.  After that, you are redirected to the landing page.  A background task will continue to pull in batches of messages and add them to your account, so you will see older messages appear while you are using the interface.</p>
 </article>
 </body>
 </html>
