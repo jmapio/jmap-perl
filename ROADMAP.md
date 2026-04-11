@@ -3,7 +3,8 @@
 ## Current State (April 2026)
 
 The JMAP proxy syncs email, calendars, and contacts from IMAP/CalDAV/CardDAV
-backends and exposes them over the JMAP protocol (RFCs 8620/8621).
+backends and exposes them over the JMAP protocol (RFCs 8620/8621).  It also
+supports direct JMAP-to-JMAP passthrough for backends that already speak JMAP.
 
 - **84/84 JMAP TestSuite tests passing** against Cyrus IMAP
 - Conversion logic extracted into standalone CPAN modules:
@@ -25,6 +26,7 @@ backends and exposes them over the JMAP protocol (RFCs 8620/8621).
 │    └─ fork per account            │
 │         └─ blocking JSON worker   │
 │              └─ SQLite + IMAP     │
+│              or JMAP passthrough  │
 │                                   │
 │  Volume: /data                    │
 │    └─ accounts.sqlite3            │
@@ -59,33 +61,49 @@ backends and exposes them over the JMAP protocol (RFCs 8620/8621).
 - [x] Auth cache: 5 min TTL in parent process
 - [x] Account pools: poolid groups linked accounts
 - [x] Session response lists all pool accounts with capabilities
-- [x] sessionState: SHA1 of sorted pool accountIds
+- [x] sessionState: SHA1 of sorted pool accountIds (RFC 8620)
 - [x] Signup flow: DNS SRV auto-discovery (IMAP/SMTP/CalDAV/CardDAV)
 - [x] Accounts page: add/detach/delete, bearer token display
 - [x] POST /jmap with auth (standard) + /jmap/{accountid} (legacy)
-
-### Still TODO
 - [x] Edit account settings (IMAP/SMTP/DAV credentials and hosts)
 - [x] Signup confirmation form: consistent nav and styling
-- [x] Token lifecycle: listing, revocation, expiry
+- [x] Token lifecycle: listing, revocation (via Accounts page)
 - [x] Schema versioning for SQLite DBs (PRAGMA user_version, versioned migrations)
+- [x] Human-readable timestamps on Accounts page ("2 hours ago")
+- [x] Stay-in-session when adding a second account (no new token if already logged in)
+- [x] Detach button hidden for the active account
 
-## Phase 3: JMAP Backend Passthrough
+## Phase 3: JMAP Backend Passthrough ✅
 
 When a backend already speaks JMAP (Cyrus, Fastmail, etc.), the proxy
-should pass requests through directly instead of syncing via IMAP.
+passes requests through directly instead of syncing via IMAP.
 
-### Tasks
-- [ ] JMAP client module (HTTP::Tiny + JSON, or LWP)
-- [ ] JmapDB.pm backend type (parallel to ImapDB.pm)
-- [ ] Request routing by accountId → backend type
-- [ ] Blob upload/download proxying
-- [ ] Push subscription relay
+### Done
+- [x] JMAP/JmapDB.pm — new backend type parallel to ImapDB.pm
+- [x] Signup: fetch upstream JMAP session, discover apiUrl + backendAccountId
+- [x] Request routing: worker branches on account type ('imap' vs 'jmap')
+- [x] accountId rewriting: proxy UUID ↔ backend accountId in JSON payloads
+- [x] Basic and Bearer auth to upstream
+- [x] Edit settings for JMAP accounts (re-verify session URL on save)
+- [x] needs_backfill=0 for JMAP accounts (no local sync needed)
 
-## Phase 4: Polish & Production Readiness
+### Still TODO
+- [ ] Blob upload/download proxying for JMAP passthrough accounts
+- [ ] Upload: rewrite accountId in upload URL, proxy binary to upstream
+- [ ] Download: proxy raw blob responses from upstream
 
-### Spec Compliance
-Done:
+## Phase 4: Push Notifications ✅
+
+- [x] GET /eventsource — Server-Sent Events endpoint (RFC 8620 §7.3)
+- [x] %PushMap routes state changes from workers to open SSE connections
+- [x] Per-pool subscriptions: one SSE connection covers all accounts in a pool
+- [x] Ping keepalive timer (client-configurable, 30s minimum)
+- [x] closeafter=state support
+- [x] X-Accel-Buffering: no for Caddy/nginx
+
+## Phase 5: Spec Compliance & Polish
+
+### Done
 - [x] Core/echo (RFC 8620 Section 4)
 - [x] sessionState in JMAP responses (RFC 8620)
 - [x] Null empty /set result fields (RFC 8620 Section 5.3)
@@ -95,17 +113,19 @@ Done:
 - [x] Tolerate null keyword values in Email/import
 - [x] Message-ID uses email domain, not container hostname
 - [x] SRV lookup: _submissions._tcp (RFC 8314), skip null records
+- [x] SMTP submission error handling and reporting to client
+- [x] onSuccessUpdateEmail/onSuccessDestroyEmail in EmailSubmission/set
+- [x] backfill: separate worker process, needs_backfill flag with schema migration
 
-TODO:
-- [ ] IMAP MYRIGHTS for real permissions (currently hardcoded)
-- [ ] Push (EventSource or WebSocket)
+### Still TODO
+- [ ] IMAP MYRIGHTS for real permissions (currently hardcoded isReadOnly=false)
 - [ ] MDN (RFC 9007)
 - [ ] Per-type creation ID mapping (currently shared across types)
-- [x] onSuccessUpdateEmail/onSuccessDestroyEmail in EmailSubmission/set
 - [ ] Move raw SQL out of API.pm into DB layer
+- [ ] queryChanges: currently sends spurious removals (spec-compliant but suboptimal)
 
 ### Auth
-- [ ] OAuth2 / OpenID Connect support
+- [ ] OAuth2 / OpenID Connect support (Gmail, Outlook, etc.)
 - [ ] Per-backend credential storage (encrypted at rest)
 
 ### Performance
@@ -117,12 +137,11 @@ TODO:
 - [ ] Sync lag per account
 - [ ] Error rate tracking
 
-## Phase 5: Documentation & Developer Experience
+## Phase 6: Documentation & Developer Experience
 
-- [ ] Landing page with introduction (what is the JMAP proxy, who is it for)
+- [x] Landing page (proxy.jmap.io/): describes what the proxy is, signup form
 - [ ] Setup guide (Docker, reverse proxy, connecting backends)
 - [ ] API documentation for management endpoints
-- [x] SMTP submission error handling and reporting to client
 
 ## Non-Goals
 
