@@ -428,6 +428,31 @@ sub run_backend_worker {
         $db->sync_addressbooks();
         return ['davsync', $JSON::true];
       }
+      if ($cmd eq 'get_settings') {
+        $db->begin();
+        my $data = $db->dgetone('iserver');
+        $db->commit();
+        delete $data->{password} if $data;
+        return ['get_settings', $data || {}];
+      }
+      if ($cmd eq 'update_settings') {
+        require Mail::IMAPTalk;
+        my $host = $args->{imapHost} or die "imapHost required\n";
+        my $port = $args->{imapPort} || 993;
+        my $ssl  = $args->{imapSSL} // 2;
+        my $imap = Mail::IMAPTalk->new(
+          Server      => $host,
+          Port        => $port,
+          UseSSL      => ($ssl > 1),
+          UseBlocking => ($ssl > 1),
+        );
+        die "Cannot connect to IMAP server $host:$port\n" unless $imap;
+        my $ok = $imap->login($args->{username}, $args->{password});
+        die "Login failed for $args->{username}\n" unless $ok;
+        $imap->logout();
+        $db->setuser($args);
+        return ['update_settings', $JSON::true];
+      }
       if ($cmd eq 'delete') {
         $db->delete() if $db;
         return ['deleted', $JSON::true];
@@ -1245,6 +1270,66 @@ sub do_accounts {
 
 sub _do_accounts_authed {
   my ($httpd, $req, $auth_aid, $method, $path) = @_;
+
+  # GET /accounts/edit?accountid=X — show edit-settings form
+  if ($path eq '/accounts/edit' && $method eq 'get') {
+    my $aid = $req->parm('accountid') || $auth_aid;
+    $httpd->stop_request();
+    send_backend_request($aid, 'get_settings', {}, sub {
+      my $settings = shift;
+      my $html = '';
+      $TT->process("edit-settings.html", {
+        baseurl    => $BASEURL,
+        accountid  => $aid,
+        settings   => $settings,
+      }, \$html) || return $req->respond([500, 'error', {}, $Template::ERROR]);
+      $req->respond([200, 'ok', { 'Content-Type' => 'text/html; charset=utf-8' }, $html]);
+    }, sub {
+      my $err = shift;
+      $req->respond([500, 'error', {}, "get settings failed: $err"]);
+    });
+    return;
+  }
+
+  # POST /accounts/update — save edited settings
+  if ($path eq '/accounts/update' && $method eq 'post') {
+    my $aid = $req->parm('accountid') || $auth_aid;
+    return invalid_request($req) unless $aid;
+    $httpd->stop_request();
+
+    my %args = (
+      username   => $req->parm('username'),
+      password   => $req->parm('password'),
+      imapHost   => $req->parm('imapHost'),
+      imapPort   => $req->parm('imapPort') || 993,
+      imapSSL    => $req->parm('imapSSL')  // 2,
+      smtpHost   => $req->parm('smtpHost'),
+      smtpPort   => $req->parm('smtpPort') || 587,
+      smtpSSL    => $req->parm('smtpSSL')  // 3,
+      caldavURL  => $req->parm('caldavURL')  || '',
+      carddavURL => $req->parm('carddavURL') || '',
+    );
+
+    send_backend_request($aid, 'update_settings', \%args, sub {
+      # Kill the running worker so next request gets fresh IMAP connection
+      if ($backend{$aid}) {
+        send_backend_request($aid, 'delete', {}, sub { delete $backend{$aid} }, sub { delete $backend{$aid} });
+      }
+      $req->respond([301, 'redirected', { Location => "$BASEURL/accounts" }, "Redirected"]);
+    }, sub {
+      my $err = shift;
+      # Show error back on the edit form
+      my $html = '';
+      $TT->process("edit-settings.html", {
+        baseurl   => $BASEURL,
+        accountid => $aid,
+        settings  => \%args,
+        error     => $err,
+      }, \$html) || return $req->respond([500, 'error', {}, $Template::ERROR]);
+      $req->respond([200, 'ok', { 'Content-Type' => 'text/html; charset=utf-8' }, $html]);
+    });
+    return;
+  }
 
   # POST /accounts/tokens/delete — revoke a token
   if ($path eq '/accounts/tokens/delete' && $method eq 'post') {

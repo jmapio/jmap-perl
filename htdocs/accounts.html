@@ -14,6 +14,8 @@
   table.accounts tr:hover, table.tokens tr:hover { background: #f8f9fa; }
   .actions { display: flex; gap: 6px; }
   .actions form { display: inline; }
+  a.edit-btn, button.edit { background: #3498db; color: white; border: none; padding: 4px 10px; border-radius: 3px; cursor: pointer; text-decoration: none; font-size: inherit; display: inline-block; }
+  a.edit-btn:hover, button.edit:hover { background: #2980b9; }
   button.detach { background: #f39c12; color: white; border: none; padding: 4px 10px; border-radius: 3px; cursor: pointer; }
   button.detach:hover { background: #e67e22; }
   button.delete { background: #e74c3c; color: white; border: none; padding: 4px 10px; border-radius: 3px; cursor: pointer; }
@@ -55,6 +57,7 @@
     <td>[% a.folders || 0 %]</td>
     <td>[% a.messages || 0 %]</td>
     <td class="actions">
+      <a class="edit-btn" href="/accounts/edit?accountid=[% a.accountid %]">Edit</a>
       [% UNLESS a.accountid == auth_aid %]
       <form method="post" action="/accounts/detach">
         <input type="hidden" name="accountid" value="[% a.accountid %]">

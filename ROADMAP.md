@@ -65,9 +65,10 @@ backends and exposes them over the JMAP protocol (RFCs 8620/8621).
 - [x] POST /jmap with auth (standard) + /jmap/{accountid} (legacy)
 
 ### Still TODO
-- [ ] Edit account settings (currently set-once at signup)
-- [ ] Signup confirmation form integration with /accounts page
-- [ ] Token lifecycle: listing, revocation, expiry
+- [x] Edit account settings (IMAP/SMTP/DAV credentials and hosts)
+- [x] Signup confirmation form: consistent nav and styling
+- [x] Token lifecycle: listing, revocation, expiry
+- [x] Schema versioning for SQLite DBs (PRAGMA user_version, versioned migrations)
 
 ## Phase 3: JMAP Backend Passthrough
 
@@ -102,9 +103,6 @@ TODO:
 - [ ] Per-type creation ID mapping (currently shared across types)
 - [x] onSuccessUpdateEmail/onSuccessDestroyEmail in EmailSubmission/set
 - [ ] Move raw SQL out of API.pm into DB layer
-- [ ] Schema versioning for SQLite DBs (à la Cyrus dav_db.c): store schema_version
-  in a metadata table, apply numbered migrations in sequence, bump version after
-  each — replaces scattered `eval { ALTER TABLE }` hacks
 
 ### Auth
 - [ ] OAuth2 / OpenID Connect support
