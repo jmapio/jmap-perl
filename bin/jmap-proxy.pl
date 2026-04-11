@@ -57,6 +57,20 @@ my $child_watcher = AnyEvent->signal(signal => 'CHLD', cb => sub {
 my %backend;     # name => [AnyEvent::Handle, cmd_counter, pid, last_active]
 my %waiting;     # name => { cmd_id => [success_cb, error_cb] }
 my %backfilling; # accountid => 1 while prod_backfill loop is active
+
+# EventSource (SSE) push connections
+# %PushMap: accountid => { conn_id => { write => sub, accountids => [...], close_after => '' } }
+my %PushMap;
+my $push_conn_counter = 0;
+
+# Send an SSE event to all open connections subscribed to $accountid.
+# Cleanup on dead connections is handled inside write_sse itself.
+sub PushEvent {
+  my ($accountid, $event, $data) = @_;
+  $accountid =~ s/:[^:]+$//;
+  my $map = $PushMap{$accountid} or return;
+  $map->{$_}{write}->($event, $data) for keys %$map;
+}
 my $start_time = time();
 
 # Token touch cache: token => [ip, time] — flushed to __accounts__ every 5 min
@@ -70,7 +84,7 @@ sub mk_json {
   return sub {
     my ($hdl, $res) = @_;
     if ($res->[0] eq 'push') {
-      # PushEvent - TODO
+      PushEvent($accountid, 'state', { changed => { $accountid => $res->[1] } });
     }
     elsif ($res->[0] eq 'bye') {
       warn "Backend closing $accountid\n";
@@ -1455,6 +1469,95 @@ sub do_logout {
     { 'Set-Cookie' => $cookie, Location => "$BASEURL/" }, "Redirected"]);
 }
 
+# GET /eventsource — Server-Sent Events endpoint (RFC 8620 §7.3)
+# AnyEvent::HTTPD supports streaming by passing a CODE ref as the response body.
+# The CODE is called with a $chunk_cb whenever the write buffer drains. Saving
+# $chunk_cb and calling it later (from PushEvent or the ping timer) writes data
+# and re-arms the drain callback for the next event.
+sub do_eventsource {
+  my ($httpd, $req) = @_;
+  $httpd->stop_request();
+
+  _authenticate($req, $httpd, sub {
+    my $auth_aid = shift;
+
+    my $ping_interval = int($req->parm('ping') || 300);
+    $ping_interval = 30 unless $ping_interval > 0;  # minimum for cleanup detection
+    my $close_after = $req->parm('closeafter') || '';
+
+    send_backend_request('__accounts__', 'get_pool', { accountid => $auth_aid }, sub {
+      my $pool = shift;
+      my @aids = map { $_->{accountid} } @{$pool->{accounts} || []};
+
+      my $conn_id = ++$push_conn_counter;
+      my $chunk_cb_slot;  # current drain callback; undef briefly while the hdl is flushing
+      my $dead = 0;       # set to 1 once the connection is confirmed dead
+
+      my $ping_timer;
+
+      my $cleanup = sub {
+        return if $dead;
+        $dead = 1;
+        delete $PushMap{$_}{$conn_id} for @aids;
+        undef $ping_timer;
+        warn "SSE $conn_id closed ($auth_aid)\n";
+      };
+
+      # Write one SSE event. Returns 1=ok, 0=dead. If chunk_cb_slot is
+      # temporarily undef (mid-flush), the event is silently dropped — the
+      # next sync will catch up.  Death is detected when chunk_cb returns 0.
+      my $write_sse = sub {
+        my ($event, $data_ref) = @_;
+        return 0 if $dead;
+        return 1 unless defined $chunk_cb_slot;  # mid-flush: drop but not dead
+        my $cb = $chunk_cb_slot;
+        $chunk_cb_slot = undef;
+        my $line = "event: $event\r\ndata: " . JSON::XS::encode_json($data_ref) . "\r\n\r\n";
+        my $ok = $cb->($line);
+        unless ($ok) { $cleanup->(); return 0; }
+        # RFC 8620 §7.3 closeafter — close after first matching event type
+        if ($close_after && $close_after eq $event) {
+          $cleanup->();
+          $cb->(undef);  # empty write → response_done
+          return 0;
+        }
+        return 1;
+      };
+
+      # Register for all pool accounts
+      my $conn = { write => $write_sse, accountids => \@aids };
+      $PushMap{$_}{$conn_id} = $conn for @aids;
+
+      # Ping keepalive — also acts as dead-connection detector
+      $ping_timer = AnyEvent->timer(
+        after    => $ping_interval,
+        interval => $ping_interval,
+        cb       => sub { $write_sse->('ping', { servertimestamp => time() + 0 }) },
+      );
+
+      warn "SSE $conn_id opened ($auth_aid, pool: @aids, ping: ${ping_interval}s)\n";
+
+      # AnyEvent::HTTPD streaming: CODE ref is called with a $chunk_cb each time
+      # the write buffer drains. We save it and call it when we have data to send.
+      $req->respond([200, 'ok', {
+        'Content-Type'      => 'text/event-stream; charset=utf-8',
+        'Cache-Control'     => 'no-cache',
+        'X-Accel-Buffering' => 'no',   # disable nginx/Caddy buffering
+      }, sub {
+        my ($cb) = @_;
+        $chunk_cb_slot = $cb;
+        # Don't call $cb here — wait for a push event or ping timer
+      }]);
+
+    }, sub {
+      $req->respond([500, 'error', {}, 'Failed to get pool info']);
+    });
+
+  }, sub {
+    $req->respond([401, 'unauthorized', { 'WWW-Authenticate' => 'Bearer realm="JMAP"' }, 'Unauthorized']);
+  });
+}
+
 #
 # Start HTTP server
 #
@@ -1463,16 +1566,17 @@ my $port = $ENV{JMAP_PORT} || 9000;
 my $httpd = AnyEvent::HTTPD->new(port => $port);
 
 $httpd->reg_cb(
-  '/.well-known' => \&do_wellknown,
-  '/session'     => \&do_session,
-  '/jmap'        => \&do_jmap,
-  '/upload'      => \&do_upload,
-  '/raw'         => \&do_raw,
-  '/signup'      => \&do_signup,
-  '/accounts'    => \&do_accounts,
-  '/logout'      => \&do_logout,
-  '/main.css'    => \&do_static,
-  '/'            => \&do_landing,
+  '/.well-known'  => \&do_wellknown,
+  '/session'      => \&do_session,
+  '/eventsource'  => \&do_eventsource,
+  '/jmap'         => \&do_jmap,
+  '/upload'       => \&do_upload,
+  '/raw'          => \&do_raw,
+  '/signup'       => \&do_signup,
+  '/accounts'     => \&do_accounts,
+  '/logout'       => \&do_logout,
+  '/main.css'     => \&do_static,
+  '/'             => \&do_landing,
 );
 
 warn "JMAP proxy listening on port $port\n";
