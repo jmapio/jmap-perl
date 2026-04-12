@@ -26,7 +26,8 @@ mkdir -p "$DATADIR"
 
 if [ "$1" = "clean" ]; then
     echo "Cleaning DB and Cyrus user..."
-    rm -f "$DATADIR/$CYRUS_USER.sqlite3" "$DATADIR/$CYRUS_USER.lock"
+    # Wipe all local state — accounts.sqlite3 will be re-created by the proxy
+    rm -f "$DATADIR"/*.sqlite3 "$DATADIR"/*.lock
 
     # Nuke and recreate user on Cyrus
     perl -e '
@@ -41,37 +42,42 @@ if [ "$1" = "clean" ]; then
       print $s "F LOGOUT\r\n";
       close $s;
     ' 2>/dev/null
-
-    # Create accounts DB
-    perl -MDBI -e "
-      my \$dbh = DBI->connect('dbi:SQLite:dbname=$DATADIR/accounts.sqlite3');
-      \$dbh->do('CREATE TABLE IF NOT EXISTS accounts (email TEXT PRIMARY KEY, accountid TEXT, type TEXT)');
-      \$dbh->do('INSERT OR REPLACE INTO accounts (email, accountid, type) VALUES (?, ?, ?)', {}, '$CYRUS_USER', '$CYRUS_USER', 'imap');
-    "
-
-    # Initialize and sync
-    perl -I"$JMAP_HOME" -Ilib -e "
-      use JMAP::ImapDB;
-      my \$db = JMAP::ImapDB->new('$CYRUS_USER');
-      \$db->setuser({
-        username => '$CYRUS_USER', password => '$CYRUS_PASS',
-        imapHost => 'localhost', imapPort => $CYRUS_IMAP_PORT, imapSSL => 1,
-        smtpHost => 'localhost', smtpPort => 25, smtpSSL => 1,
-        caldavURL => '$CYRUS_URL', carddavURL => '$CYRUS_URL',
-      });
-      \$db->firstsync();
-      \$db->sync_imap();
-      print \"Initialized and synced\\n\";
-    "
 fi
 
-# Start single-process proxy
+# Start single-process proxy (creates accounts.sqlite3 with correct schema on first run)
 JMAP_MGMT_PORT="${JMAP_MGMT_PORT:-8081}"
 export JMAP_MGMT_PORT
 export JMAP_PORT="$FRONTEND_PORT"
 
 perl -I"$JMAP_HOME" -Ilib "$JMAP_HOME/bin/jmap-proxy.pl" 2>/tmp/jmap-proxy.log &
-sleep 3
+
+# Wait for the management port to be ready
+for i in $(seq 1 30); do
+    curl -sf http://localhost:${JMAP_MGMT_PORT}/healthz >/dev/null 2>&1 && break
+    sleep 1
+done
+
+if [ "$1" = "clean" ]; then
+    # Register the test user via the management API (correct schema, firstsync included)
+    curl -sf -X POST http://localhost:${JMAP_MGMT_PORT}/api/accounts \
+        -H 'Content-Type: application/json' \
+        -d "{
+            \"accountid\": \"$CYRUS_USER\",
+            \"email\":     \"$CYRUS_USER\",
+            \"type\":      \"imap\",
+            \"username\":  \"$CYRUS_USER\",
+            \"password\":  \"$CYRUS_PASS\",
+            \"imapHost\":  \"localhost\",
+            \"imapPort\":  $CYRUS_IMAP_PORT,
+            \"imapSSL\":   1,
+            \"smtpHost\":  \"localhost\",
+            \"smtpPort\":  25,
+            \"smtpSSL\":   1,
+            \"caldavURL\": \"$CYRUS_URL\",
+            \"carddavURL\":\"$CYRUS_URL\"
+        }" >/dev/null
+    echo "Initialized and synced"
+fi
 
 # Write test config for JMAP-TestSuite
 cat > "$DATADIR/test-config.json" <<TESTCONFIG
