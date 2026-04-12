@@ -397,8 +397,19 @@ sub run_backend_worker {
         my $tmp = JMAP::JmapDB->new($accountid);
         my ($session) = $tmp->fetch_session($args);
 
+        # Resolve URLs relative to the session URL (some servers return relative paths).
+        # Do NOT use URI->new_abs here — it percent-encodes URI template variables like {accountId}.
+        # Instead: if the URL is already absolute, keep it; otherwise prepend the origin.
+        my ($session_origin) = ($args->{sessionUrl} =~ m{^(https?://[^/]+)});
+        my $abs_url = sub {
+            my $url = shift // '';
+            return $url if !$url || $url =~ m{^https?://};
+            return "$session_origin$url";  # absolute path (starts with /)
+        };
+
         my $api_url = $session->{apiUrl}
           or die "No apiUrl in upstream JMAP session\n";
+        $api_url = $abs_url->($api_url);
 
         # Find the primary mail accountId on the upstream server
         my $mail_cap   = 'urn:ietf:params:jmap:mail';
@@ -436,8 +447,8 @@ sub run_backend_worker {
           authType         => $args->{authType} || 'basic',
           sessionUrl       => $args->{sessionUrl},
           apiUrl           => $api_url,
-          uploadUrl        => $session->{uploadUrl}   // '',
-          downloadUrl      => $session->{downloadUrl} // '',
+          uploadUrl        => $abs_url->($session->{uploadUrl}   // ''),
+          downloadUrl      => $abs_url->($session->{downloadUrl} // ''),
           backendAccountId => $backend_aid,
           capabilities     => $capabilities,
         });
@@ -1810,7 +1821,27 @@ sub mgmt_api_accounts {
     my $aid = $data->{accountid};
     $httpd->stop_request();
 
-    # Step 1: Create account in accounts DB via __accounts__ child
+    if ($data->{sessionUrl}) {
+      # JMAP passthrough account — signup_jmap creates the accounts.sqlite3 entry itself.
+      # The worker is keyed by $aid so signup_jmap uses it as the new accountid.
+      delete $backend{$aid} if $backend{$aid};
+      send_backend_request($aid, 'signup_jmap', $data, sub {
+        my ($final_aid, $email) = @{shift()};
+        delete $backend{$aid} if $aid ne $final_aid;
+        $req->respond([201, 'created',
+          { 'Content-Type' => 'application/json' },
+          JSON::XS::encode_json({ accountid => $final_aid, type => 'jmap', email => $email })]);
+      }, sub {
+        my $err = shift;
+        delete $backend{$aid};
+        $req->respond([500, 'error',
+          { 'Content-Type' => 'application/json' },
+          JSON::XS::encode_json({ error => "$err" })]);
+      });
+      return;
+    }
+
+    # IMAP account — Step 1: Create account in accounts DB via __accounts__ child
     send_backend_request('__accounts__', 'create_account', $data, sub {
       my $result = shift;
 
@@ -2241,5 +2272,14 @@ my $shutdown = sub {
 
 my $sig_term = AnyEvent->signal(signal => 'TERM', cb => $shutdown);
 my $sig_int  = AnyEvent->signal(signal => 'INT',  cb => $shutdown);
+
+# Eagerly initialize accounts.sqlite3 before the event loop so all child workers
+# see a properly-schemaed DB from the moment they open it (avoids race conditions
+# when per-account workers are spawned before the __accounts__ worker runs).
+{
+  my $_dbh = DBI->connect("dbi:SQLite:dbname=$datadir/accounts.sqlite3");
+  _migrate_accounts_db($_dbh);
+  $_dbh->disconnect;
+}
 
 EV::run();

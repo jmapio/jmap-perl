@@ -7,7 +7,7 @@ use JSON::XS qw(encode_json decode_json);
 use MIME::Base64 qw(encode_base64);
 use URI::Escape qw(uri_escape);
 
-my $datadir = $ENV{JMAP_DATA} || '/data';
+my $datadir = $ENV{JMAP_DATADIR} || $ENV{JMAP_DATA} || '/data';
 
 =head1 NAME
 
@@ -147,7 +147,19 @@ sub handle_jmap {
     my $res_json = $resp->{content};
     $res_json =~ s/\Q$backend_id\E/$proxy_id/g;
 
-    return decode_json($res_json);
+    my $response = decode_json($res_json);
+
+    # RFC 8620 §5.3: empty notCreated/notUpdated/notDestroyed MUST be null,
+    # not an empty object.  Cyrus returns {} — normalise here.
+    for my $triple (@{ $response->{methodResponses} // [] }) {
+        my $args = $triple->[1] // {};
+        for my $field (qw(notCreated notUpdated notDestroyed)) {
+            $args->{$field} = undef
+                if ref($args->{$field}) eq 'HASH' && !%{ $args->{$field} };
+        }
+    }
+
+    return $response;
 }
 
 # Proxy a blob upload to the upstream JMAP server.

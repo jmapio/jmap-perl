@@ -91,6 +91,9 @@ passes requests through directly instead of syncing via IMAP.
 - [x] Blob upload/download proxying for JMAP passthrough accounts
 - [x] Upload: rewrite accountId in upload URL, proxy binary to upstream
 - [x] Download: proxy raw blob responses from upstream (downloadUrl URI template)
+- [x] **84/84 JMAP TestSuite tests passing in JMAP passthrough mode** (Cyrus backend)
+- [x] Normalise empty notCreated/notUpdated/notDestroyed to null (RFC 8620 §5.3) in passthrough
+- [x] JMAPProxy test adapter: cyrus_backend flag propagates Cyrus-specific TODO blocks
 
 ## Phase 4: Push Notifications ✅
 
