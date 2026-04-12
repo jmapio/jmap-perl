@@ -5,6 +5,7 @@ use DBI;
 use HTTP::Tiny;
 use JSON::XS qw(encode_json decode_json);
 use MIME::Base64 qw(encode_base64);
+use URI::Escape qw(uri_escape);
 
 my $datadir = $ENV{JMAP_DATA} || '/data';
 
@@ -34,6 +35,8 @@ CREATE TABLE IF NOT EXISTS jserver (
     authType         TEXT NOT NULL DEFAULT 'basic',
     sessionUrl       TEXT,
     apiUrl           TEXT,
+    uploadUrl        TEXT,
+    downloadUrl      TEXT,
     backendAccountId TEXT,
     capabilities     TEXT,
     mtime            INTEGER NOT NULL
@@ -50,14 +53,17 @@ sub setuser {
     my $dbh = $Self->{dbh};
     $dbh->do(
         "INSERT OR REPLACE INTO jserver
-         (username, password, authType, sessionUrl, apiUrl, backendAccountId, capabilities, mtime)
-         VALUES (?,?,?,?,?,?,?,?)",
+         (username, password, authType, sessionUrl, apiUrl, uploadUrl, downloadUrl,
+          backendAccountId, capabilities, mtime)
+         VALUES (?,?,?,?,?,?,?,?,?,?)",
         {},
         $args->{username}         // '',
         $args->{password}         // '',
         $args->{authType}         || 'basic',
         $args->{sessionUrl}       // '',
         $args->{apiUrl}           // '',
+        $args->{uploadUrl}        // '',
+        $args->{downloadUrl}      // '',
         $args->{backendAccountId} // '',
         encode_json($args->{capabilities} || {}),
         time(),
@@ -142,6 +148,80 @@ sub handle_jmap {
     $res_json =~ s/\Q$backend_id\E/$proxy_id/g;
 
     return decode_json($res_json);
+}
+
+# Proxy a blob upload to the upstream JMAP server.
+# Returns the upstream BlobUpload response hashref with accountId rewritten.
+sub proxy_upload {
+    my ($Self, $type, $filepath) = @_;
+
+    my $server     = $Self->access_data();
+    my $upload_url = $server->{uploadUrl}
+        or die "No uploadUrl configured for JMAP passthrough account\n";
+    my $proxy_id   = $Self->{accountid};
+    my $backend_id = $server->{backendAccountId}
+        or die "No backendAccountId configured\n";
+
+    # Expand {accountId} template variable in uploadUrl
+    (my $url = $upload_url) =~ s/\{accountId\}/$backend_id/g;
+
+    open my $fh, '<:raw', $filepath or die "Cannot open upload file: $!\n";
+    local $/;
+    my $body = <$fh>;
+    close $fh;
+
+    my $http = HTTP::Tiny->new(timeout => 120);
+    my $resp = $http->request('POST', $url, {
+        headers => {
+            'Content-Type'  => $type || 'application/octet-stream',
+            'Authorization' => $Self->_auth_header($server),
+        },
+        content => $body,
+    });
+    die "Upstream upload failed: $resp->{status} $resp->{reason}\n"
+        unless $resp->{success};
+
+    my $result = eval { decode_json($resp->{content}) };
+    die "Invalid JSON in upload response: $@\n" if $@;
+
+    # Rewrite upstream accountId → proxy UUID in response
+    my $res_json = $resp->{content};
+    $res_json =~ s/\Q$backend_id\E/$proxy_id/g;
+    return decode_json($res_json);
+}
+
+# Proxy a blob download from the upstream JMAP server.
+# $blobid is the proxy-side blobId (may contain the upstream accountId embedded).
+# Returns ($content_type, $body).
+sub proxy_blob {
+    my ($Self, $blobid, $name, $type) = @_;
+
+    my $server      = $Self->access_data();
+    my $download_tpl = $server->{downloadUrl}
+        or die "No downloadUrl configured for JMAP passthrough account\n";
+    my $proxy_id    = $Self->{accountid};
+    my $backend_id  = $server->{backendAccountId}
+        or die "No backendAccountId configured\n";
+
+    # Rewrite proxy UUID → upstream accountId in the blobId (if embedded)
+    (my $upstream_blobid = $blobid) =~ s/\Q$proxy_id\E/$backend_id/g;
+
+    # Expand URI template variables (RFC 8620 §2)
+    my $url = $download_tpl;
+    $url =~ s/\{accountId\}/uri_escape($backend_id)/ge;
+    $url =~ s/\{blobId\}/uri_escape($upstream_blobid)/ge;
+    $url =~ s/\{type\}/uri_escape($type || 'application\/octet-stream')/ge;
+    $url =~ s/\{name\}/uri_escape($name || 'download')/ge;
+
+    my $http = HTTP::Tiny->new(timeout => 120);
+    my $resp = $http->get($url, {
+        headers => { 'Authorization' => $Self->_auth_header($server) },
+    });
+    die "Upstream blob fetch failed: $resp->{status} $resp->{reason}\n"
+        unless $resp->{success};
+
+    my $content_type = $resp->{headers}{'content-type'} || 'application/octet-stream';
+    return ($content_type, $resp->{content});
 }
 
 # Clean up the per-account SQLite file.

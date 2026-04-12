@@ -436,6 +436,8 @@ sub run_backend_worker {
           authType         => $args->{authType} || 'basic',
           sessionUrl       => $args->{sessionUrl},
           apiUrl           => $api_url,
+          uploadUrl        => $session->{uploadUrl}   // '',
+          downloadUrl      => $session->{downloadUrl} // '',
           backendAccountId => $backend_aid,
           capabilities     => $capabilities,
         });
@@ -461,10 +463,20 @@ sub run_backend_worker {
       }
       if ($cmd eq 'upload') {
         my ($aid, $utype, $file) = @{$args}{qw(accountId type file)};
+        if ($db->can('proxy_upload')) {
+          my $r = $db->proxy_upload($utype, $file);
+          unlink $file;
+          return ['upload', $r];
+        }
         my ($r) = $api->uploadFile($aid || $accountid, $utype, { file => $file });
         return ['upload', $r];
       }
       if ($cmd eq 'download') {
+        if ($db->can('proxy_blob')) {
+          my ($dtype, $content) = $db->proxy_blob(
+            $args->{blobId}, $args->{name}, $args->{type});
+          return ['download', [$dtype, $content]];
+        }
         my ($dtype, $content) = $api->downloadFile($args->{blobId});
         return ['download', [$dtype, $content]];
       }
@@ -1046,10 +1058,11 @@ sub do_raw {
 
   return invalid_request($req) unless $path =~ m{^/raw/([^/]+)/([^/]+)/(.+)$};
   my ($accountid, $blobid, $name) = ($1, $2, $3);
+  my $type = $req->url->query_param('type') // '';
 
   $httpd->stop_request();
 
-  send_backend_request($accountid, 'download', { blobId => $blobid, name => $name }, sub {
+  send_backend_request($accountid, 'download', { blobId => $blobid, name => $name, type => $type }, sub {
     my $result = shift;
     my $type = $result->[0] || 'application/octet-stream';
     $req->respond([200, 'ok', { 'Content-Type' => $type }, $result->[1]]);

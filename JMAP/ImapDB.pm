@@ -217,6 +217,30 @@ sub sync_folders {
     $Self->commit();
   }
 
+  # Fetch MYRIGHTS only for folders that have no rights cached yet.
+  # Rights rarely change, so we only check new folders (myrights IS NULL).
+  {
+    $Self->begin();
+    my $current = $Self->dget('ifolders');
+    $Self->commit();
+    my @need_rights = grep { !defined $_->{myrights} && defined $_->{imapname} } @$current;
+    if (@need_rights) {
+      my @names = map { $_->{imapname} } @need_rights;
+      my $rights_data = eval { $Self->backend_cmd('imap_myrights', \@names) } // {};
+      if (%$rights_data) {
+        my %byimapname = map { $_->{imapname} => $_ } @need_rights;
+        $Self->begin();
+        for my $name (keys %$rights_data) {
+          my $ifolder = $byimapname{$name};
+          next unless $ifolder;
+          $Self->dmaybeupdate('ifolders', { myrights => $rights_data->{$name} },
+                              { ifolderid => $ifolder->{ifolderid} });
+        }
+        $Self->commit();
+      }
+    }
+  }
+
   $Self->sync_jmailboxes();
 }
 
@@ -291,22 +315,26 @@ sub sync_jmailboxes {
       }
     }
     next unless $name;
-    # XXX - get MYRIGHTS and SUBSCRIBED from the server?
+    # Parse MYRIGHTS (RFC 4314) rights string to set per-mailbox permissions.
+    # Fall back to all-permitted if no rights were fetched (non-ACL servers).
+    my $rights = $folder->{myrights} // '';
+    my %r = map { $_ => 1 } split //, $rights;
+    my $has_rights = length($rights) > 0;
     my %details = (
       name => $name,
       parentId => $parentId,
       sortOrder => $sortOrder,
       isSubscribed => 1,
-      mayReadItems => 1,
-      mayAddItems => 1,
-      mayRemoveItems => 1,
-      maySetSeen => 1,
-      maySetKeywords => 1,
-      mayCreateChild => 1,
-      mayRename => $role ? 0 : 1,
-      mayDelete => $role ? 0 : 1,
-      maySubmit => 1,
-      mayAdmin => 1,
+      mayReadItems    => $has_rights ? ($r{r} ? 1 : 0) : 1,
+      mayAddItems     => $has_rights ? ($r{i} ? 1 : 0) : 1,
+      mayRemoveItems  => $has_rights ? (($r{t} && $r{e}) ? 1 : 0) : 1,
+      maySetSeen      => $has_rights ? ($r{s} ? 1 : 0) : 1,
+      maySetKeywords  => $has_rights ? ($r{w} ? 1 : 0) : 1,
+      mayCreateChild  => $has_rights ? ($r{k} ? 1 : 0) : 1,
+      mayRename       => $role ? 0 : ($has_rights ? ($r{x} ? 1 : 0) : 1),
+      mayDelete       => $role ? 0 : ($has_rights ? ($r{x} ? 1 : 0) : 1),
+      maySubmit       => 1,
+      mayAdmin        => $has_rights ? ($r{a} ? 1 : 0) : 1,
     );
     if ($id) {
       if ($role and $roletoid{$role} and $roletoid{$role} ne $id) {
@@ -2533,6 +2561,7 @@ CREATE TABLE IF NOT EXISTS ifolders (
   uidnext INTEGER,
   highestmodseq INTEGER,
   uniqueid TEXT,
+  myrights TEXT,
   mtime DATE NOT NULL
 );
 EOF

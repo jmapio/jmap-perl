@@ -3789,7 +3789,7 @@ sub api_EmailSubmission_query {
   return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sort']}])
     unless $sort;
 
-  my $data = $dbh->selectall_arrayref("SELECT jsubid,thrid,msgid,sendat FROM jsubmission WHERE active = 1 ORDER BY $sort");
+  my $data = $Self->get_submissions($sort);
 
   $data = $Self->_submission_filter($data, $args->{filter}, {}) if $args->{filter};
   my $total = scalar(@$data);
@@ -3844,7 +3844,7 @@ sub api_EmailSubmission_queryChanges {
   return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sort']}])
     unless $sort;
 
-  my $data = $dbh->selectall_arrayref("SELECT jsubid,thrid,msgid,sendat,jmodseq,active FROM jsubmission ORDER BY $sort");
+  my $data = $Self->get_all_submissions($sort);
 
   $data = $Self->_submission_filter($data, $args->{filter}, {}) if $args->{filter};
   my $total = scalar(@$data);
@@ -3961,7 +3961,7 @@ sub api_EmailSubmission_changes {
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if ($user->{jdeletedmodseq} and $sinceState <= $user->{jdeletedmodseq});
 
-  my $data = $dbh->selectall_arrayref("SELECT jsubid,thrid,msgid,sendat,jmodseq,active,jcreated FROM jsubmission WHERE jmodseq > ? ORDER BY jmodseq ASC", {}, $sinceState);
+  my $data = $Self->get_submission_changes($sinceState);
 
   $Self->commit();
 

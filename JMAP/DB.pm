@@ -1077,7 +1077,32 @@ sub dgetcol {
   return [ map { $_->{$field} } @$data ];
 }
 
-my $USER_SCHEMA_VERSION = 1;
+# EmailSubmission query helpers — keep raw SQL in the DB layer.
+# $sort is a pre-validated SQL ORDER BY clause (built by API layer from JMAP sort spec).
+
+# Active submissions for EmailSubmission/query.
+sub get_submissions {
+  my ($Self, $sort) = @_;
+  return $Self->dbh->selectall_arrayref(
+    "SELECT jsubid,thrid,msgid,sendat FROM jsubmission WHERE active = 1 ORDER BY $sort");
+}
+
+# All submissions (including inactive) for EmailSubmission/queryChanges.
+sub get_all_submissions {
+  my ($Self, $sort) = @_;
+  return $Self->dbh->selectall_arrayref(
+    "SELECT jsubid,thrid,msgid,sendat,jmodseq,active FROM jsubmission ORDER BY $sort");
+}
+
+# Changed submissions since $since_modseq for EmailSubmission/changes.
+sub get_submission_changes {
+  my ($Self, $since_modseq) = @_;
+  return $Self->dbh->selectall_arrayref(
+    "SELECT jsubid,thrid,msgid,sendat,jmodseq,active,jcreated FROM jsubmission WHERE jmodseq > ? ORDER BY jmodseq ASC",
+    {}, $since_modseq);
+}
+
+my $USER_SCHEMA_VERSION = 2;
 
 sub _create_user_tables {
   my ($Self, $dbh) = @_;
@@ -1375,14 +1400,18 @@ sub _initdb {
   }
 
   # Incremental migrations — each in its own transaction, version bumped atomically.
-  # To add version 2:
-  #   if ($v < 2) {
-  #     $dbh->begin_work;
-  #     eval { ... ALTER TABLE ...; $dbh->do('PRAGMA user_version = 2'); $dbh->commit };
-  #     if ($@) { $dbh->rollback; die "user DB migration to v2 failed: $@" }
-  #     $v = 2;
-  #   }
-  # Then bump $USER_SCHEMA_VERSION above.
+  if ($v < 2) {
+    $dbh->begin_work;
+    eval {
+      # ifolders.myrights: IMAP ACL rights string per folder (RFC 4314).
+      # Only present on IMAP account DBs; eval swallows the error on JMAP DBs.
+      eval { $dbh->do("ALTER TABLE ifolders ADD COLUMN myrights TEXT") };
+      $dbh->do('PRAGMA user_version = 2');
+      $dbh->commit;
+    };
+    if ($@) { $dbh->rollback; die "user DB migration to v2 failed: $@" }
+    $v = 2;
+  }
 }
 
 1;

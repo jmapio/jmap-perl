@@ -321,6 +321,22 @@ sub imap_getuniqueid {
   return $metadata;
 }
 
+sub imap_myrights {
+  my $Self = shift;
+  my $folders = shift;
+
+  my $imap = $Self->connect_imap();
+
+  return {} unless $imap->capability->{acl};
+
+  my %rights;
+  for my $name (@$folders) {
+    my (undef, $r) = $imap->myrights($name);
+    $rights{$name} = $r if defined $r;
+  }
+  return \%rights;
+}
+
 # no newname == delete
 sub imap_update {
   my $Self = shift;

@@ -87,10 +87,10 @@ passes requests through directly instead of syncing via IMAP.
 - [x] Edit settings for JMAP accounts (re-verify session URL on save)
 - [x] needs_backfill=0 for JMAP accounts (no local sync needed)
 
-### Still TODO
-- [ ] Blob upload/download proxying for JMAP passthrough accounts
-- [ ] Upload: rewrite accountId in upload URL, proxy binary to upstream
-- [ ] Download: proxy raw blob responses from upstream
+### Done (cont.)
+- [x] Blob upload/download proxying for JMAP passthrough accounts
+- [x] Upload: rewrite accountId in upload URL, proxy binary to upstream
+- [x] Download: proxy raw blob responses from upstream (downloadUrl URI template)
 
 ## Phase 4: Push Notifications ✅
 
@@ -118,10 +118,10 @@ passes requests through directly instead of syncing via IMAP.
 - [x] backfill: separate worker process, needs_backfill flag with schema migration
 
 ### Still TODO
-- [ ] IMAP MYRIGHTS for real permissions (currently hardcoded isReadOnly=false)
+- [x] IMAP MYRIGHTS for real per-mailbox permissions (RFC 4314, lazy-cached in ifolders)
 - [ ] MDN (RFC 9007)
 - [ ] Per-type creation ID mapping (currently shared across types)
-- [ ] Move raw SQL out of API.pm into DB layer
+- [x] Move raw SQL out of API.pm into DB layer (EmailSubmission query methods on DB)
 - [ ] queryChanges: currently sends spurious removals (spec-compliant but suboptimal)
 
 ### Auth
