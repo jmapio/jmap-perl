@@ -27,6 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libswitch-perl            \
     ca-certificates           \
     libcryptx-perl            \
+    sqlite3                   \
     && rm -rf /var/lib/apt/lists/*
 
 # CPAN modules not in Debian

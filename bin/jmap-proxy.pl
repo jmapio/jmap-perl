@@ -351,22 +351,20 @@ sub run_backend_worker {
           $detail->{carddavURL} = 'https://carddav.address.yahoo.com';
           $force = 1;
         }
-        elsif (!$detail->{imapHost}) {
-          # DNS SRV lookup
-          my $resolver = Net::DNS::Resolver->new;
-          my $domain = $detail->{username};
-          $domain =~ s/.*\@//;
+        my $resolver = Net::DNS::Resolver->new;
+        my $domain = $detail->{username};
+        $domain =~ s/.*\@//;
 
-          my $srv_lookup = sub {
-            my ($name) = @_;
-            my $reply = $resolver->query($name, 'SRV') or return ();
-            my @rr = grep { $_->type eq 'SRV' && $_->target ne '.' && $_->port > 0 } $reply->answer;
-            return @rr;
-          };
+        my $srv_lookup = sub {
+          my ($name) = @_;
+          my $reply = $resolver->query($name, 'SRV') or return ();
+          return grep { $_->type eq 'SRV' && $_->target ne '.' && $_->port > 0 } $reply->answer;
+        };
 
-          for my $try (["_imaps._tcp.$domain", 'imapHost', 'imapPort', 2],
-                       ["_imap._tcp.$domain",  'imapHost', 'imapPort', 3]) {
-            my @d = $srv_lookup->($try->[0]);
+        unless ($detail->{imapHost}) {
+          for my $try (['_imaps._tcp', 'imapHost', 'imapPort', 2],
+                       ['_imap._tcp',  'imapHost', 'imapPort', 3]) {
+            my @d = $srv_lookup->("$try->[0].$domain");
             if (@d) {
               $detail->{$try->[1]} = $d[0]->target;
               $detail->{$try->[2]} = $d[0]->port;
@@ -374,11 +372,10 @@ sub run_backend_worker {
               last;
             }
           }
-
-          for my $try (["_submissions._tcp.$domain",  'smtpHost', 'smtpPort', 2],
-                       ["_smtps._tcp.$domain",        'smtpHost', 'smtpPort', 2],
-                       ["_submission._tcp.$domain",    'smtpHost', 'smtpPort', 3]) {
-            my @d = $srv_lookup->($try->[0]);
+          for my $try (['_submissions._tcp', 'smtpHost', 'smtpPort', 2],
+                       ['_smtps._tcp',       'smtpHost', 'smtpPort', 2],
+                       ['_submission._tcp',   'smtpHost', 'smtpPort', 3]) {
+            my @d = $srv_lookup->("$try->[0].$domain");
             if (@d) {
               $detail->{$try->[1]} = $d[0]->target;
               $detail->{$try->[2]} = $d[0]->port;
@@ -386,19 +383,20 @@ sub run_backend_worker {
               last;
             }
           }
+        }
 
-          for my $try (["_caldavs._tcp.$domain",  'caldavURL',  'https', 443],
-                       ["_caldav._tcp.$domain",   'caldavURL',  'http',  80],
-                       ["_carddavs._tcp.$domain", 'carddavURL', 'https', 443],
-                       ["_carddav._tcp.$domain",  'carddavURL', 'http',  80]) {
-            my @d = $srv_lookup->($try->[0]);
-            if (@d) {
-              my $host = $d[0]->target;
-              my $port = $d[0]->port;
-              my $url = "$try->[2]://$host";
-              $url .= ":$port" unless $port == $try->[3];
-              $detail->{$try->[1]} = $url;
-            }
+        # Always look up CalDAV/CardDAV via SRV if not already provided
+        # (Mozilla autoconfig doesn't include DAV URLs)
+        for my $try (['_caldavs._tcp',  'caldavURL',  'https', 443],
+                     ['_caldav._tcp',   'caldavURL',  'http',  80 ],
+                     ['_carddavs._tcp', 'carddavURL', 'https', 443],
+                     ['_carddav._tcp',  'carddavURL', 'http',  80 ]) {
+          next if $detail->{$try->[1]};
+          my @d = $srv_lookup->("$try->[0].$domain");
+          if (@d) {
+            my $url = "$try->[2]://" . $d[0]->target;
+            $url .= ":" . $d[0]->port unless $d[0]->port == $try->[3];
+            $detail->{$try->[1]} = $url;
           }
         }
 
@@ -637,6 +635,8 @@ sub run_backend_worker {
         return ['sync', $JSON::true] if $db->can('handle_jmap');
         $db->sync_folders();
         $db->sync_imap();
+        $db->sync_calendars();
+        $db->sync_addressbooks();
         return ['sync', $JSON::true];
       }
       # IMPORTANT: 'backfill' MUST only be sent to "$accountid:backfill" workers,
@@ -1094,6 +1094,18 @@ sub do_session {
               maxDelayedSend => 0,
             },
             'urn:ietf:params:jmap:quota' => {},
+            ($a->{caldavURL}  ? ('urn:ietf:params:jmap:calendars' => {
+              maxCalendarsPerEvent     => undef,
+              minDateTime              => '1970-01-01T00:00:00Z',
+              maxDateTime              => '2099-12-31T23:59:59Z',
+              maxExpandedQueryDuration => 'P2Y',
+              maxParticipantsPerEvent  => undef,
+              mayCreateCalendar        => JSON::true,
+            }) : ()),
+            ($a->{carddavURL} ? ('urn:ietf:params:jmap:contacts' => {
+              maxAddressBooksPerCard => undef,
+              mayCreateAddressBook   => JSON::true,
+            }) : ()),
           },
         };
         $primary_aid //= $a->{accountid};
@@ -1115,6 +1127,18 @@ sub do_session {
           'urn:ietf:params:jmap:mail' => {},
           'urn:ietf:params:jmap:submission' => {},
           'urn:ietf:params:jmap:quota' => {},
+          'urn:ietf:params:jmap:calendars' => {
+            maxCalendarsPerEvent     => undef,
+            minDateTime              => '1970-01-01T00:00:00Z',
+            maxDateTime              => '2099-12-31T23:59:59Z',
+            maxExpandedQueryDuration => 'P2Y',
+            maxParticipantsPerEvent  => undef,
+            mayCreateCalendar        => JSON::true,
+          },
+          'urn:ietf:params:jmap:contacts' => {
+            maxAddressBooksPerCard => undef,
+            mayCreateAddressBook   => JSON::true,
+          },
         },
         accounts => $accounts,
         primaryAccounts => {

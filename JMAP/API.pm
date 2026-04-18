@@ -3005,7 +3005,7 @@ sub api_CalendarEvent_get {
     }
 
     $item->{id} = $eventuid;
-    $item->{calendarId} = "$data->{jcalendarid}" if _prop_wanted($args, "calendarId");
+    $item->{calendarIds} = { "$data->{jcalendarid}" => JSON::true } if _prop_wanted($args, "calendarIds");
 
     push @list, $item;
   }
@@ -3108,7 +3108,7 @@ sub api_Addressbook_get {
   my @list;
 
   foreach my $item (@$data) {
-    next unless delete $want{$item->[0]};
+    next unless delete $want{$item->{jaddressbookid}};
 
     my %rec = (
       id => "$item->{jaddressbookid}",
@@ -3202,6 +3202,302 @@ sub api_Addressbook_changes {
   }]);
 
   return @res;
+}
+
+# JSContact (RFC 9553) aliases — data is already stored in Card format
+sub api_AddressBook_get {
+  my $Self = shift;
+  my ($r) = $Self->api_Addressbook_get(@_);
+  $r->[0] = 'AddressBook/get' if $r && !ref($r->[0]);
+  return $r;
+}
+
+sub api_AddressBook_changes {
+  my $Self = shift;
+  my @r = $Self->api_Addressbook_changes(@_);
+  $r[0][0] = 'AddressBook/changes' if @r && !ref($r[0][0]);
+  return @r;
+}
+
+sub api_ContactCard_query {
+  my $Self = shift;
+  my @r = $Self->api_Contact_query(@_);
+  $r[0][0] = 'ContactCard/query' if @r && !ref($r[0][0]);
+  return @r;
+}
+
+sub api_ContactCard_get {
+  my $Self = shift;
+  my ($r) = $Self->api_Contact_get(@_);
+  $r->[0] = 'ContactCard/get' if $r && !ref($r->[0]);
+  return $r;
+}
+
+sub api_ContactCard_changes {
+  my $Self = shift;
+  my @r = $Self->api_Contact_changes(@_);
+  $r[0][0] = 'ContactCard/changes' if @r && !ref($r[0][0]);
+  return @r;
+}
+
+sub api_ContactCard_set {
+  my $Self = shift;
+  my $args = shift;
+
+  $Self->begin();
+  my $accountid = $Self->{db}->accountid();
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+  $Self->commit();
+
+  my $create  = $args->{create}  || {};
+  my $update  = $args->{update}  || {};
+  my $destroy = $args->{destroy} || [];
+
+  my $scoped_lock = $Self->{db}->begin_superlock();
+  $Self->{db}->sync_addressbooks();
+
+  $Self->begin();
+  my $user = $Self->{db}->get_user();
+  my $oldState = "$user->{jstateContact}";
+  $Self->commit();
+
+  # Resolve JSON Pointer patches against ContactCard/get (JSContact format)
+  $Self->_resolve_patch($update, 'api_ContactCard_get');
+
+  my ($created, $notCreated) = $Self->{db}->create_contacts_jscontact($create);
+  $Self->setid($_, $created->{$_}{id}) for keys %$created;
+  my ($updated, $notUpdated) = $Self->{db}->update_contacts_jscontact($update);
+  my ($destroyed, $notDestroyed) = $Self->{db}->destroy_contacts($destroy);
+
+  $Self->{db}->sync_addressbooks();
+
+  $Self->begin();
+  $user = $Self->{db}->get_user();
+  my $newState = "$user->{jstateContact}";
+  $Self->commit();
+
+  return ['ContactCard/set', {
+    accountId    => $accountid,
+    oldState     => $oldState,
+    newState     => $newState,
+    created      => _nullempty($created),
+    notCreated   => _nullempty($notCreated),
+    updated      => _nullempty($updated),
+    notUpdated   => _nullempty($notUpdated),
+    destroyed    => _nullempty($destroyed),
+    notDestroyed => _nullempty($notDestroyed),
+  }];
+}
+
+sub api_ContactCard_queryChanges {
+  my $Self = shift;
+  my $args = shift;
+
+  $Self->begin();
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  my $newQueryState = "$user->{jstateContact}";
+  my $sinceQueryState = $args->{sinceQueryState};
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceQueryState']}])
+    unless $sinceQueryState;
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newQueryState => $newQueryState}])
+    if ($user->{jdeletedmodseq} and $sinceQueryState <= $user->{jdeletedmodseq});
+
+  my $data = $Self->{db}->dget('jcontacts', { active => 1 }, 'contactuid,jaddressbookid,jmodseq');
+  $data = $Self->_event_filter($data, $args->{filter}, {}) if $args->{filter};
+  my $total = scalar @$data;
+
+  my %idx;
+  my $i = 0;
+  $idx{$_->{contactuid}} = $i++ for @$data;
+
+  my $changed = $Self->{db}->dget('jcontacts', { jmodseq => ['>', $sinceQueryState] }, 'contactuid,active');
+
+  $Self->commit();
+
+  my @added;
+  my @destroyed;
+  for my $row (@$changed) {
+    push @destroyed, "$row->{contactuid}";
+    if ($row->{active} && exists $idx{$row->{contactuid}}) {
+      push @added, { id => "$row->{contactuid}", index => $idx{$row->{contactuid}} };
+    }
+  }
+
+  return ['ContactCard/queryChanges', {
+    accountId     => $accountid,
+    filter        => $args->{filter},
+    sort          => $args->{sort},
+    oldQueryState => "$sinceQueryState",
+    newQueryState => $newQueryState,
+    total         => $total,
+    removed       => \@destroyed,
+    added         => \@added,
+  }];
+}
+
+sub api_AddressBook_set {
+  my $Self = shift;
+  my $args = shift;
+
+  $Self->begin();
+  my $accountid = $Self->{db}->accountid();
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  my $user = $Self->{db}->get_user();
+  my $oldState = "$user->{jhighestmodseq}";
+  $Self->commit();
+
+  my $create  = $args->{create}  || {};
+  my $update  = $args->{update}  || {};
+  my $destroy = $args->{destroy} || [];
+
+  my (%notCreated, %notUpdated, %notDestroyed);
+
+  # AddressBook CRUD on CardDAV collections not yet implemented
+  $notCreated{$_}  = { type => 'serverFail', description => 'AddressBook creation not supported' } for keys %$create;
+  $notUpdated{$_}  = { type => 'serverFail', description => 'AddressBook update not supported'   } for keys %$update;
+  $notDestroyed{$_}= { type => 'serverFail', description => 'AddressBook deletion not supported' } for @$destroy;
+
+  $Self->begin();
+  $user = $Self->{db}->get_user();
+  my $newState = "$user->{jhighestmodseq}";
+  $Self->commit();
+
+  return ['AddressBook/set', {
+    accountId    => $accountid,
+    oldState     => $oldState,
+    newState     => $newState,
+    created      => undef,
+    notCreated   => _nullempty(\%notCreated),
+    updated      => undef,
+    notUpdated   => _nullempty(\%notUpdated),
+    destroyed    => undef,
+    notDestroyed => _nullempty(\%notDestroyed),
+  }];
+}
+
+sub api_CalendarEvent_queryChanges {
+  my $Self = shift;
+  my $args = shift;
+
+  $Self->begin();
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  my $newQueryState = "$user->{jstateCalendarEvent}";
+  my $sinceQueryState = $args->{sinceQueryState};
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceQueryState']}])
+    unless $sinceQueryState;
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newQueryState => $newQueryState}])
+    if ($user->{jdeletedmodseq} and $sinceQueryState <= $user->{jdeletedmodseq});
+
+  my $data = $Self->{db}->dget('jevents', { active => 1 }, 'eventuid,jmodseq');
+  my $total = scalar @$data;
+
+  my %idx;
+  my $i = 0;
+  $idx{$_->{eventuid}} = $i++ for @$data;
+
+  my $changed = $Self->{db}->dget('jevents', { jmodseq => ['>', $sinceQueryState] }, 'eventuid,active');
+
+  $Self->commit();
+
+  my @added;
+  my @destroyed;
+  for my $row (@$changed) {
+    push @destroyed, "$row->{eventuid}";
+    if ($row->{active} && exists $idx{$row->{eventuid}}) {
+      push @added, { id => "$row->{eventuid}", index => $idx{$row->{eventuid}} };
+    }
+  }
+
+  return ['CalendarEvent/queryChanges', {
+    accountId     => $accountid,
+    filter        => $args->{filter},
+    sort          => $args->{sort},
+    oldQueryState => "$sinceQueryState",
+    newQueryState => $newQueryState,
+    total         => $total,
+    removed       => \@destroyed,
+    added         => \@added,
+  }];
+}
+
+sub api_CalendarEvent_copy {
+  my $Self = shift;
+  my $args = shift;
+  my $accountid = $Self->{db}->accountid();
+  return ['error', { type => 'notImplemented' }];
+}
+
+sub api_CalendarEvent_parse {
+  my $Self = shift;
+  my $args = shift;
+  return ['error', { type => 'notImplemented' }];
+}
+
+sub api_ParticipantIdentity_get {
+  my $Self = shift;
+  my $args = shift;
+  $Self->begin();
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  $Self->commit();
+  return ['ParticipantIdentity/get', {
+    accountId => $accountid,
+    state     => "$user->{jhighestmodseq}",
+    list      => [],
+    notFound  => $args->{ids} ? [map { "$_" } @{$args->{ids}}] : [],
+  }];
+}
+
+sub api_ParticipantIdentity_changes {
+  my $Self = shift;
+  my $args = shift;
+  $Self->begin();
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  $Self->commit();
+  my $state = "$user->{jhighestmodseq}";
+  return ['ParticipantIdentity/changes', {
+    accountId      => $accountid,
+    oldState       => $args->{sinceState} // $state,
+    newState       => $state,
+    created        => [],
+    updated        => [],
+    destroyed      => [],
+    hasMoreChanges => JSON::false,
+  }];
+}
+
+sub api_ParticipantIdentity_set {
+  my $Self = shift;
+  my $args = shift;
+  $Self->begin();
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  $Self->commit();
+  my $state = "$user->{jhighestmodseq}";
+  my %notCreated = map { $_ => { type => 'notImplemented' } } keys %{$args->{create} || {}};
+  return ['ParticipantIdentity/set', {
+    accountId    => $accountid,
+    oldState     => $state,
+    newState     => $state,
+    created      => undef,
+    notCreated   => _nullempty(\%notCreated),
+    updated      => undef,
+    notUpdated   => undef,
+    destroyed    => undef,
+    notDestroyed => undef,
+  }];
 }
 
 sub _contact_match {

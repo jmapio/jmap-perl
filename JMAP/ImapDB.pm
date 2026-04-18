@@ -2014,14 +2014,19 @@ sub create_calendar_events {
   my %notcreated;
   foreach my $cid (sort keys %$new) {
     my $calendar = $new->{$cid};
-    my $href = $Self->dgetfield('icalendars', { icalendarid => $calendar->{calendarId} }, 'href');
+    my ($jcalendarid) = keys %{$calendar->{calendarIds} || {}};
+    $jcalendarid //= $calendar->{calendarId};  # fallback for old clients
+    my $href = $Self->dgetfield('icalendars', { jcalendarid => $jcalendarid }, 'href');
     unless ($href) {
       $notcreated{$cid} = {type => 'notFound', description => "No such calendar on server"};
       next;
     }
     my $uid = new_uuid_string();
 
-    $todo{$cid} = [$href, {%$calendar, uid => $uid}];
+    my %ev = (%$calendar, uid => $uid);
+    delete $ev{calendarIds};
+    delete $ev{calendarId};
+    $todo{$cid} = [$href, \%ev];
 
     $createmap{$cid} = { id => $uid };
   }
@@ -2056,7 +2061,10 @@ sub update_calendar_events {
       next;
     }
 
-    $todo{$href} = $calendar;
+    my %ev = %$calendar;
+    delete $ev{calendarIds};
+    delete $ev{calendarId};
+    $todo{$href} = \%ev;
 
     $changed{$uid} = undef;
   }
@@ -2381,7 +2389,7 @@ sub update_contacts {
   my %notchanged;
   foreach my $carduid (keys %$changes) {
     my $contact = $changes->{$carduid};
-    my $old = $Self->dgetone('icards', { kind => 'contact', uid => $carduid }, 'href,content');
+    my $old = $Self->dgetone('icards', { uid => $carduid }, 'href,content');
     unless ($old) {
       $notchanged{$carduid} = {type => 'notFound', description => "No such card on server"};
       next;
@@ -2419,7 +2427,7 @@ sub destroy_contacts {
   my @destroyed;
   my %notdestroyed;
   foreach my $carduid (@$destroy) {
-    my $old = $Self->dgetone('icards', { kind => 'contact', uid => $carduid }, 'href');
+    my $old = $Self->dgetone('icards', { uid => $carduid }, 'href');
     unless ($old) {
       $notdestroyed{$carduid} = {type => 'notFound', description => "No such card on server"};
       next;
@@ -2435,6 +2443,87 @@ sub destroy_contacts {
   }
 
   return (\@destroyed, \%notdestroyed);
+}
+
+sub create_contacts_jscontact {
+  my $Self = shift;
+  my $new  = shift;
+
+  return ({}, {}) unless keys %$new;
+
+  $Self->begin();
+  my $abookhref = $Self->dgetfield('iaddressbooks', {}, 'href');
+  $Self->commit();
+
+  my %createmap;
+  my %notcreated;
+
+  for my $cid (sort keys %$new) {
+    my $card = $new->{$cid};
+    unless ($abookhref) {
+      $notcreated{$cid} = { type => 'notFound', description => 'No addressbook on server' };
+      next;
+    }
+    $card->{'@type'} //= 'Card';
+    my $uid = new_uuid_string();
+    $card->{uid} = $uid;
+    eval { $Self->backend_cmd('new_card', $abookhref, $card) };
+    if ($@) {
+      $notcreated{$cid} = { type => 'serverFail', description => "$@" };
+      next;
+    }
+    $createmap{$cid} = { id => $uid };
+  }
+
+  return (\%createmap, \%notcreated);
+}
+
+sub update_contacts_jscontact {
+  my $Self  = shift;
+  my $changes = shift;
+
+  return ({}, {}) unless %$changes;
+
+  my %changed;
+  my %notchanged;
+
+  for my $carduid (sort keys %$changes) {
+    my $patch = $changes->{$carduid};
+
+    $Self->begin();
+    my $icard = $Self->dgetone('icards', { uid => $carduid }, 'href,content');
+    $Self->commit();
+
+    unless ($icard) {
+      $notchanged{$carduid} = { type => 'notFound', description => 'No such card on server' };
+      next;
+    }
+
+    # Parse existing vCard to JSContact, apply patch fields, write back
+    my $card = vcard_to_jscontact($icard->{content});
+    unless ($card) {
+      $notchanged{$carduid} = { type => 'serverFail', description => 'Could not parse existing card' };
+      next;
+    }
+
+    # Apply JSContact-format patch (shallow merge of top-level keys)
+    for my $key (keys %$patch) {
+      if (defined $patch->{$key}) {
+        $card->{$key} = $patch->{$key};
+      } else {
+        delete $card->{$key};
+      }
+    }
+
+    eval { $Self->backend_cmd('update_card', $icard->{href}, $card) };
+    if ($@) {
+      $notchanged{$carduid} = { type => 'serverFail', description => "$@" };
+      next;
+    }
+    $changed{$carduid} = undef;
+  }
+
+  return (\%changed, \%notchanged);
 }
 
 sub create_submissions {
