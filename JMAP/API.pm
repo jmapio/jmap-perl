@@ -1336,23 +1336,28 @@ sub _patchitem {
   my $key = shift;
   my $value = shift;
 
-  Carp::confess "missing patch target" unless ref($target) eq 'HASH';
-
   if ($key =~ s{^([^/]+)/}{}) {
-    my $item = $1;
-    $item =~ s{~1}{/}g;
-    $item =~ s{~0}{~}g;
-    return _patchitem($target->{$item}, $key, $value);
+    my $token = $1;
+    $token =~ s{~1}{/}g;
+    $token =~ s{~0}{~}g;
+    if (ref($target) eq 'ARRAY') {
+      return _patchitem($target->[$token], $key, $value);
+    }
+    Carp::confess "missing patch target for '$token'" unless ref($target) eq 'HASH';
+    return _patchitem($target->{$token}, $key, $value);
   }
 
   $key =~ s{~1}{/}g;
   $key =~ s{~0}{~}g;
 
-  if (defined $value) {
-    $target->{$key} = $value;
+  if (ref($target) eq 'ARRAY') {
+    if (defined $value) { $target->[$key] = $value }
+    else                { splice @$target, $key, 1  }
   }
   else {
-    delete $target->{$key};
+    Carp::confess "missing patch target" unless ref($target) eq 'HASH';
+    if (defined $value) { $target->{$key} = $value  }
+    else                { delete $target->{$key}     }
   }
 }
 
@@ -2804,17 +2809,24 @@ sub api_Calendar_get {
     next unless delete $want{$item->{jcalendarid}};
 
     my %rec = (
-      id => "$item->{jcalendarid}",
-      name => "$item->{name}",
-      color => "$item->{color}",
-      isVisible => $item->{isVisible} ? $JSON::true : $JSON::false,
-      mayReadFreeBusy => $item->{mayReadFreeBusy} ? $JSON::true : $JSON::false,
-      mayReadItems => $item->{mayReadItems} ? $JSON::true : $JSON::false,
-      mayAddItems => $item->{mayAddItems} ? $JSON::true : $JSON::false,
-      mayModifyItems => $item->{mayModifyItems} ? $JSON::true : $JSON::false,
-      mayRemoveItems => $item->{mayRemoveItems} ? $JSON::true : $JSON::false,
-      mayDelete => $item->{mayDelete} ? $JSON::true : $JSON::false,
-      mayRename => $item->{mayRename} ? $JSON::true : $JSON::false,
+      id                     => "$item->{jcalendarid}",
+      name                   => "$item->{name}",
+      color                  => "$item->{color}",
+      sortOrder              => $item->{sortOrder}  || 0,
+      isDefault              => $item->{isDefault}  ? $JSON::true : $JSON::false,
+      isSubscribed           => $JSON::true,
+      includeInAvailability  => $item->{includeInAvailability} || 'all',
+      isVisible              => $item->{isVisible}  ? $JSON::true : $JSON::false,
+      myRights => {
+        mayReadFreeBusy  => $item->{mayReadFreeBusy}  ? $JSON::true : $JSON::false,
+        mayReadItems     => $item->{mayReadItems}     ? $JSON::true : $JSON::false,
+        mayWriteAll      => $item->{mayAddItems}      ? $JSON::true : $JSON::false,
+        mayWriteOwn      => $item->{mayAddItems}      ? $JSON::true : $JSON::false,
+        mayUpdatePrivate => $item->{mayModifyItems}   ? $JSON::true : $JSON::false,
+        mayRSVP          => $JSON::false,
+        mayAdmin         => $item->{mayDelete}        ? $JSON::true : $JSON::false,
+        mayDelete        => $item->{mayDelete}        ? $JSON::true : $JSON::false,
+      },
     );
 
     foreach my $key (keys %rec) {
@@ -2912,6 +2924,25 @@ sub _event_match {
     return 0 unless $match;
   }
 
+  # Date-range filter: events must overlap [after, before).
+  # We only filter events that have start in payload (non-recurring check).
+  # Recurring events always pass — expansion is the client's job per spec.
+  if ($condition->{after} || $condition->{before}) {
+    my $payload = $item->{payload} ? decode_json($item->{payload}) : {};
+    my $start = $payload->{start} // '';
+    my $duration = $payload->{duration} // 'PT0S';
+    my $is_recurring = $payload->{recurrenceRules} || $payload->{recurrenceRule};
+    unless ($is_recurring) {
+      if ($condition->{after} && $start lt $condition->{after}) {
+        # simple string compare works for ISO 8601 datetimes
+        return 0;
+      }
+      if ($condition->{before} && $start ge $condition->{before}) {
+        return 0;
+      }
+    }
+  }
+
   return 1;
 }
 
@@ -2943,7 +2974,7 @@ sub api_CalendarEvent_query {
   return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['position']}])
     if $start < 0;
 
-  my $data = $Self->{db}->dget('jevents', { active => 1 }, 'eventuid,jcalendarid');
+  my $data = $Self->{db}->dget('jevents', { active => 1 }, 'eventuid,jcalendarid,payload');
 
   $data = $Self->_event_filter($data, $args->{filter}, {}) if $args->{filter};
 
@@ -3505,9 +3536,10 @@ sub _contact_match {
   my ($item, $condition, $storage) = @_;
 
   # XXX - condition handling code
-  if ($condition->{inAddressbooks}) {
+  my $inab = $condition->{inAddressBook} // $condition->{inAddressbooks};
+  if ($inab) {
     my $match = 0;
-    foreach my $id (@{$condition->{inAddressbooks}}) {
+    foreach my $id (@$inab) {
       next unless $item->{jaddressbookid} eq $id;
       $match = 1;
     }
@@ -3607,6 +3639,8 @@ sub api_Contact_get {
     }
 
     $item->{id} = $id;
+    $item->{addressBookIds} = { "$data->{$id}{jaddressbookid}" => $JSON::true }
+      if _prop_wanted($args, 'addressBookIds');
 
     push @list, $item;
   }
