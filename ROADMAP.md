@@ -123,13 +123,19 @@ passes requests through directly instead of syncing via IMAP.
 ### Still TODO
 - [x] IMAP MYRIGHTS for real per-mailbox permissions (RFC 4314, lazy-cached in ifolders)
 - [ ] MDN (RFC 9007)
-- [ ] Per-type creation ID mapping (currently shared across types)
+- [x] Per-type creation ID mapping (idmap reset per request, createdIds returned in response)
 - [x] Move raw SQL out of API.pm into DB layer (EmailSubmission query methods on DB)
 - [ ] queryChanges: currently sends spurious removals (spec-compliant but suboptimal)
 
 ### Auth
-- [ ] OAuth2 / OpenID Connect support (Gmail, Outlook, etc.)
-- [ ] Per-backend credential storage (encrypted at rest)
+- [x] Email-first signup UX: email → auto-discovery → OAuth redirect or password form
+- [x] PACC discovery (draft-ietf-mailmaint-pacc-02): ua-auto-config.{domain}/.well-known/user-agent-configuration.json
+- [x] RFC 8414 OAuth metadata from PACC issuer URL
+- [x] Mozilla autoconfig XML fallback (IMAP/SMTP pre-fill, oAuth2 detection)
+- [x] PKCE support in OAuth2::Tiny (for public client flows per draft-ietf-mailmaint-oauth-public)
+- [x] Gmail OAuth2: GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET env vars → /cb/oauth callback
+- [x] Fastmail OAuth2 (OAUTHBEARER IMAP/SMTP via Mail::OAuthBearerTalk, PKCE flow)
+- [x] Encrypted credential storage: pluggable backend (AES-256-GCM default, OpenBao Transit optional)
 
 ### Performance
 - [ ] Query result caching for proper queryChanges with filters

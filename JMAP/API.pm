@@ -301,6 +301,19 @@ sub handle_request {
   delete $Self->{results};
   delete $Self->{resultsbytag};
 
+  # Reset the creation-ID map for this request, then seed from any client-supplied
+  # createdIds (RFC 8620 §3.4).  The client can pass previously-returned IDs to
+  # chain across multiple /jmap calls.
+  $Self->{idmap}      = {};
+  $Self->{_seeded_ids} = {};
+  if (ref $request->{createdIds} eq 'HASH') {
+    my %seed = %{$request->{createdIds}};
+    for my $id (keys %seed) {
+      $Self->{idmap}{"#$id"}  = $seed{$id};
+      $Self->{_seeded_ids}{$id} = 1;
+    }
+  }
+
   my $methods = $request->{methodCalls};
 
   foreach my $item (@$methods) {
@@ -363,16 +376,28 @@ sub handle_request {
     warn "JMAP CMD $command$logbit took " . $elapsed . "\n";
   }
 
-  return {
-    methodResponses => $Self->{results},
-  };
+  # Build createdIds: only the IDs that were set during this request
+  # (strip the leading '#' that we store internally).
+  my %created_ids;
+  for my $k (keys %{$Self->{idmap}}) {
+    next unless $k =~ /^#(.+)$/;
+    my $creation_id = $1;
+    my $server_id   = $Self->{idmap}{$k};
+    # Only include mappings that were set during this request, not seeded ones
+    $created_ids{$creation_id} = $server_id
+      if !exists $Self->{_seeded_ids}{$creation_id};
+  }
+
+  my $resp = { methodResponses => $Self->{results} };
+  $resp->{createdIds} = \%created_ids if %created_ids;
+  return $resp;
 }
 
 
 sub setid {
   my $Self = shift;
-  my $key = shift;
-  my $val = shift;
+  my $key  = shift;
+  my $val  = shift;
   $Self->{idmap}{"#$key"} = $val;
 }
 

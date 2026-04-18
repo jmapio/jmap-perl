@@ -28,12 +28,15 @@ sub new {
 
 sub access_token {
   my $Self = shift;
+  require JMAP::CredentialStore;
+
   $Self->begin();
   my $server = $Self->dgetone('iserver');
   $Self->commit();
 
-  my $O = JMAP::Sync::Gmail::O();
-  my $data = $O->refresh($server->{password});
+  my $refresh_token = JMAP::CredentialStore->decrypt($server->{password});
+  my $O    = JMAP::Sync::Gmail::O();
+  my $data = $O->refresh($refresh_token);
 
   return [$server->{imapHost}, $server->{username}, $data->{access_token}, $server->{imapPort}, $server->{imapSSL}];
 }

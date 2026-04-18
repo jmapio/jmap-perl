@@ -64,12 +64,16 @@ my %ROLE_MAP = (
 sub setuser {
   my $Self = shift;
   my $args = shift;
-  # XXX - picture, etc
+  require JMAP::CredentialStore;
 
   # Strip fields that belong to accounts.sqlite3, not the per-account iserver table
   my %iserver = %$args;
   delete $iserver{$_} for qw(poolid accountid force);
   $args = \%iserver;
+
+  # Encrypt the credential before writing
+  $args->{password} = JMAP::CredentialStore->encrypt($args->{password})
+    if defined $args->{password};
 
   $Self->begin();
 
@@ -98,12 +102,15 @@ sub setuser {
 
 sub access_token {
   my $Self = shift;
+  require JMAP::CredentialStore;
 
   $Self->begin();
   my $data = $Self->dgetone('iserver');
   $Self->commit();
 
-  return [$data->{imapHost}, $data->{username}, $data->{password}, $data->{imapPort}, $data->{imapSSL}];
+  return [$data->{imapHost}, $data->{username},
+          JMAP::CredentialStore->decrypt($data->{password}),
+          $data->{imapPort}, $data->{imapSSL}];
 }
 
 sub access_data {
@@ -126,7 +133,9 @@ sub backend_cmd {
   Carp::confess("in transaction") if $Self->in_transaction();
 
   unless ($Self->{backend}) {
+    require JMAP::CredentialStore;
     my $config = $Self->access_data();
+    $config->{password} = JMAP::CredentialStore->decrypt($config->{password} // '');
     my $backend;
     if ($config->{imapHost} eq 'imap.gmail.com') {
       $backend = JMAP::Sync::Gmail->new($config) || die "failed to setup $config->{username}";

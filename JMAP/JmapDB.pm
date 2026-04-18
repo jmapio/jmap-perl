@@ -50,6 +50,7 @@ sub accountid { $_[0]{accountid} }
 # Store/update backend credentials and discovery info.
 sub setuser {
     my ($Self, $args) = @_;
+    require JMAP::CredentialStore;
     my $dbh = $Self->{dbh};
     $dbh->do(
         "INSERT OR REPLACE INTO jserver
@@ -58,7 +59,7 @@ sub setuser {
          VALUES (?,?,?,?,?,?,?,?,?,?)",
         {},
         $args->{username}         // '',
-        $args->{password}         // '',
+        JMAP::CredentialStore->encrypt($args->{password} // ''),
         $args->{authType}         || 'basic',
         $args->{sessionUrl}       // '',
         $args->{apiUrl}           // '',
@@ -79,14 +80,66 @@ sub access_data {
     return $row;
 }
 
+# For authType='fastmail_oauth': perform RFC 7591 dynamic registration (synchronous).
+my $_fm_client_id;
+sub _fm_register_client {
+    my $redirect_uri = ($ENV{BASEURL} || 'http://localhost:9000') . '/cb/oauth';
+    my $ua  = HTTP::Tiny->new(timeout => 15);
+    my $res = $ua->request('POST', 'https://api.fastmail.com/oauth/register', {
+        headers => { 'Content-Type' => 'application/json' },
+        content => encode_json({
+            client_name              => 'jmap-proxy',
+            redirect_uris            => [$redirect_uri],
+            grant_types              => ['authorization_code', 'refresh_token'],
+            response_types           => ['code'],
+            token_endpoint_auth_method => 'none',
+            scope => 'urn:ietf:params:oauth:scope:mail urn:ietf:params:oauth:scope:contacts '
+                   . 'urn:ietf:params:oauth:scope:calendars offline_access',
+        }),
+    });
+    my $data = eval { decode_json($res->{content}) };
+    $data->{client_id} or die "Fastmail dynamic registration failed: $res->{content}\n";
+    return $data->{client_id};
+}
+
+# Exchange a Fastmail OAuth refresh token for a fresh access token (synchronous).
+# Caches the result until 60s before expiry.
+sub _fm_access_token {
+    my ($Self, $refresh_token) = @_;
+    if ($Self->{_fm_access_token} && time() < ($Self->{_fm_access_expiry} || 0)) {
+        return $Self->{_fm_access_token};
+    }
+    my $client_id = $ENV{FASTMAIL_CLIENT_ID} || $_fm_client_id || do {
+        $_fm_client_id = _fm_register_client();
+        $_fm_client_id;
+    };
+    my $ua  = HTTP::Tiny->new(timeout => 15);
+    my $res = $ua->post_form('https://api.fastmail.com/oauth/refresh', {
+        client_id     => $client_id,
+        grant_type    => 'refresh_token',
+        refresh_token => $refresh_token,
+    });
+    my $data = eval { decode_json($res->{content}) };
+    $data->{access_token} or die "Fastmail token refresh failed: $res->{content}\n";
+    $Self->{_fm_access_token}  = $data->{access_token};
+    $Self->{_fm_access_expiry} = time() + ($data->{expires_in} || 3600) - 60;
+    return $Self->{_fm_access_token};
+}
+
 # Build the Authorization header value from stored credentials.
 sub _auth_header {
     my ($Self, $server) = @_;
     $server //= $Self->access_data();
-    if (($server->{authType} || 'basic') eq 'bearer') {
-        return "Bearer $server->{password}";
+    require JMAP::CredentialStore;
+    my $password = JMAP::CredentialStore->decrypt($server->{password} // '');
+    my $auth_type = $server->{authType} || 'basic';
+    if ($auth_type eq 'bearer') {
+        return "Bearer $password";
     }
-    return "Basic " . encode_base64("$server->{username}:$server->{password}", '');
+    if ($auth_type eq 'fastmail_oauth') {
+        return "Bearer " . $Self->_fm_access_token($password);
+    }
+    return "Basic " . encode_base64("$server->{username}:$password", '');
 }
 
 # Fetch and parse the backend JMAP session object.
@@ -101,6 +154,8 @@ sub fetch_session {
 
     my $auth = ($authType eq 'bearer')
         ? "Bearer $password"
+        : ($authType eq 'fastmail_oauth')
+        ? "Bearer " . $Self->_fm_access_token($password)
         : "Basic " . encode_base64("$username:$password", '');
 
     my $http = HTTP::Tiny->new(timeout => 30);

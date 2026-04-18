@@ -122,39 +122,14 @@
 <div style="background:#fdecea;border:1px solid #e74c3c;color:#c0392b;padding:10px 14px;border-radius:4px;margin-bottom:16px">[% jmap_error %]</div>
 [% END %]
 
-<div style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start">
-
-<div class="add-form" style="flex:1;min-width:220px">
-  <h3 style="margin:0 0 12px;font-size:16px">IMAP / SMTP Server</h3>
-  <form action="/signup" method="post">
-    <label>Email</label>
-    <input name="username" type="email" required>
-    <label>Password</label>
-    <input name="password" type="password" required>
-    <div style="margin-top: 8px;">
-      <button type="submit">Connect IMAP</button>
+<div class="add-form" style="max-width:400px">
+  <form action="/discover" method="post">
+    <label>Email address</label>
+    <input type="email" name="username" required placeholder="you@example.com" autofocus>
+    <div style="margin-top:8px">
+      <button type="submit">Continue &rarr;</button>
     </div>
   </form>
-</div>
-
-<div class="add-form" style="flex:1;min-width:220px">
-  <h3 style="margin:0 0 12px;font-size:16px">JMAP Server</h3>
-  <form action="/signup_jmap" method="post">
-    <label>JMAP Session URL</label>
-    <input name="sessionUrl" type="url" required placeholder="https://jmap.example.com/.well-known/jmap">
-    <label>Username (email)</label>
-    <input name="username" type="email">
-    <label>Password / Bearer token</label>
-    <input name="password" type="password" required>
-    <label>Auth type</label>
-    <select name="authType" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;font-size:14px;margin-bottom:12px">
-      <option value="basic">Basic (username + password)</option>
-      <option value="bearer">Bearer token</option>
-    </select>
-    <button type="submit">Connect JMAP</button>
-  </form>
-</div>
-
 </div>
 
 </article>

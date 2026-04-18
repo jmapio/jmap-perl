@@ -26,6 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libmodule-pluggable-perl  \
     libswitch-perl            \
     ca-certificates           \
+    libcryptx-perl            \
     && rm -rf /var/lib/apt/lists/*
 
 # CPAN modules not in Debian
@@ -54,6 +55,7 @@ RUN cpanm --notest \
     Data::UUID                      \
     URI                             \
     EV                              \
+    Crypt::JWT                      \
     && rm -rf /root/.cpanm
 
 COPY . /opt/jmap-perl

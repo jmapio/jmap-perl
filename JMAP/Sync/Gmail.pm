@@ -15,16 +15,29 @@ use Email::Sender::Transport::GmailSMTP;
 use Net::CalDAVTalk;
 use Net::CardDAVTalk;
 use OAuth2::Tiny;
-use IO::File;
 
 my $O;
 sub O {
   unless ($O) {
-    local $/;
-    my $fh = IO::File->new("/home/jmap/jmap-perl/config.json", 'r');
-    my $config = decode_json(<$fh>);
-    close($fh);
-    $O = OAuth2::Tiny->new(%{$config->{gmail}});
+    my $client_id     = $ENV{GOOGLE_CLIENT_ID}
+      or die "GOOGLE_CLIENT_ID environment variable not set\n";
+    my $client_secret = $ENV{GOOGLE_CLIENT_SECRET}
+      or die "GOOGLE_CLIENT_SECRET environment variable not set\n";
+    my $redirect_uri  = $ENV{GOOGLE_REDIRECT_URI}
+      || ($ENV{BASEURL} || 'http://localhost:9000') . '/cb/oauth';
+    $O = OAuth2::Tiny->new(
+      client_id     => $client_id,
+      client_secret => $client_secret,
+      auth_url      => 'https://accounts.google.com/o/oauth2/v2/auth',
+      token_url     => 'https://oauth2.googleapis.com/token',
+      callback_url  => $redirect_uri,
+      scopes        => [
+        'https://mail.google.com/',
+        'https://www.googleapis.com/auth/calendar',
+        'https://www.googleapis.com/auth/carddav',
+        'email',
+      ],
+    );
   }
   return $O;
 }

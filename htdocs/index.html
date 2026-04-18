@@ -47,13 +47,74 @@
     [% IF error %]
     <div class="error-box">[% error %]</div>
     [% END %]
+    [% IF step == 2 %]
     <form action="/signup" method="post">
-      <label>Email address</label>
-      <input type="email" name="username" required autofocus>
+      <input type="hidden" name="username" value="[% email | html %]">
+      [% IF prefill.imapHost %]
+      <input type="hidden" name="imapHost"   value="[% prefill.imapHost | html %]">
+      <input type="hidden" name="imapPort"   value="[% prefill.imapPort | html %]">
+      <input type="hidden" name="imapSSL"    value="[% prefill.imapSSL  | html %]">
+      <input type="hidden" name="smtpHost"   value="[% prefill.smtpHost | html %]">
+      <input type="hidden" name="smtpPort"   value="[% prefill.smtpPort | html %]">
+      <input type="hidden" name="smtpSSL"    value="[% prefill.smtpSSL  | html %]">
+      [% IF prefill.caldavURL  %]<input type="hidden" name="caldavURL"  value="[% prefill.caldavURL  | html %]">[% END %]
+      [% IF prefill.carddavURL %]<input type="hidden" name="carddavURL" value="[% prefill.carddavURL | html %]">[% END %]
+      <input type="hidden" name="force" value="1">
+      [% END %]
+      <div style="padding:6px 0 12px;font-size:14px;color:#555;">
+        Connecting as <strong>[% email | html %]</strong>
+        <a href="/" style="margin-left:8px;font-size:12px;">change</a>
+      </div>
       <label>Password</label>
-      <input type="password" name="password" required>
+      <input type="password" name="password" required autofocus>
       <button type="submit">Connect</button>
     </form>
+    [% ELSIF step == 'oidc_login' %]
+    <form action="/oauth/authorize" method="post">
+      <input type="hidden" name="redirect_uri" value="[% oidc.redirect_uri | html %]">
+      <input type="hidden" name="state"        value="[% oidc.state        | html %]">
+      <label>Email address</label>
+      <input type="email" name="username" required autofocus placeholder="you@example.com">
+      <label>Password</label>
+      <input type="password" name="password" required>
+      <button type="submit">Sign in</button>
+    </form>
+    [% ELSIF step == 'jmap' %]
+    <form action="/signup_jmap" method="post">
+      <input type="hidden" name="username"   value="[% email | html %]">
+      <input type="hidden" name="sessionUrl" value="[% jmap_url | html %]">
+      <div style="padding:6px 0 12px;font-size:14px;color:#555;">
+        Connecting as <strong>[% email | html %]</strong> via JMAP
+        <a href="/" style="margin-left:8px;font-size:12px;">change</a>
+      </div>
+      <label>Password</label>
+      <input type="password" name="password" required autofocus>
+      <button type="submit">Connect via JMAP</button>
+    </form>
+    [% ELSIF step == 'choose' %]
+    <div style="padding:6px 0 12px;font-size:14px;color:#555;">
+      Connecting as <strong>[% email | html %]</strong>
+      <a href="/" style="margin-left:8px;font-size:12px;">change</a>
+    </div>
+    <p style="font-size:14px;color:#555;margin:0 0 14px;">Choose how to connect. Both options use OAuth — you'll be redirected to Fastmail to authorise.</p>
+    <form action="/discover" method="post" style="margin-bottom:10px;">
+      <input type="hidden" name="username" value="[% email | html %]">
+      <input type="hidden" name="via"      value="jmap">
+      <button type="submit">Native JMAP <span style="font-weight:300;font-size:13px;">(recommended)</span></button>
+    </form>
+    <div style="text-align:center;margin:10px 0;font-size:13px;color:#aaa;">— or —</div>
+    <form action="/discover" method="post">
+      <input type="hidden" name="username" value="[% email | html %]">
+      <input type="hidden" name="via"      value="imap">
+      <button type="submit" style="background:#7f8c8d;">IMAP / SMTP / CalDAV</button>
+    </form>
+    [% ELSE %]
+    <form action="/discover" method="post">
+      <label>Email address</label>
+      <input type="email" name="username" required autofocus placeholder="you@example.com">
+      <button type="submit">Continue &rarr;</button>
+    </form>
+    [% END %]
     <div class="links">
       Already signed in? <a href="/accounts">Go to My Accounts &rarr;</a>
     </div>

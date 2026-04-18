@@ -17,7 +17,7 @@ use Cookie::Baker;
 use Data::Dumper;
 use Data::UUID::LibUUID;
 use DBI;
-use Digest::SHA qw(sha1_hex);
+use Digest::SHA qw(sha1_hex sha256);
 use Encode qw(encode_utf8);
 use File::Temp ();
 use HTML::GenerateUtil qw(escape_html escape_uri);
@@ -25,7 +25,9 @@ use HTTP::Request;
 use HTTP::Response;
 use JSON;
 use JSON::XS qw(decode_json);
-use MIME::Base64 qw(decode_base64);
+use Crypt::JWT qw(encode_jwt);
+use Crypt::PK::RSA;
+use MIME::Base64 qw(decode_base64 encode_base64);
 use MIME::Base64::URLSafe;
 use POSIX qw(:sys_wait_h);
 use Socket;
@@ -43,6 +45,32 @@ mkdir "$datadir/tmp" unless -d "$datadir/tmp";
 
 my $TT = Template->new(INCLUDE_PATH => "$jmaphome/htdocs");
 my $json = JSON::XS->new->utf8->canonical->pretty();
+
+# OIDC provider — RSA keypair for signing id_tokens (RS256).
+# Key is persisted to /data/oidc_key.pem so it survives restarts.
+my $_oidc_rsa;
+sub _oidc_rsa_key {
+    return $_oidc_rsa if $_oidc_rsa;
+    my $keyfile = "$datadir/oidc_key.pem";
+    if (-f $keyfile) {
+        $_oidc_rsa = Crypt::PK::RSA->new($keyfile);
+    } else {
+        $_oidc_rsa = Crypt::PK::RSA->new();
+        $_oidc_rsa->generate_key(256);  # 256 bytes = 2048-bit RSA key
+        open my $fh, '>', $keyfile or die "Cannot write $keyfile: $!";
+        print $fh $_oidc_rsa->export_key_pem('private');
+        close $fh;
+        chmod 0600, $keyfile;
+    }
+    return $_oidc_rsa;
+}
+
+# Short-lived auth codes issued by /oauth/authorize, consumed by /oauth/token.
+my %oidc_codes;   # code => { accountid, email, redirect_uri, exp }
+my $oidc_cleanup = AnyEvent->timer(interval => 60, cb => sub {
+    my $now = time();
+    delete $oidc_codes{$_} for grep { $oidc_codes{$_}{exp} < $now } keys %oidc_codes;
+});
 
 # Reap zombie children
 my $child_watcher = AnyEvent->signal(signal => 'CHLD', cb => sub {
@@ -72,6 +100,20 @@ sub PushEvent {
   $map->{$_}{write}->($event, $data) for keys %$map;
 }
 my $start_time = time();
+
+# OAuth2 state: token => { email, auth_aid, provider, code_verifier, token_url,
+#   userinfo_url, client_id, client_secret, account_type, imap, expires }
+# Populated when user starts OAuth flow, consumed by /cb/oauth callback.
+my %oauth_state;
+my $oauth_cleanup_timer = AnyEvent->timer(interval => 120, cb => sub {
+  my $now = time();
+  delete $oauth_state{$_} for grep { $oauth_state{$_}{expires} < $now } keys %oauth_state;
+});
+
+sub _base64url { my $b64 = encode_base64($_[0], ''); $b64 =~ tr|+/|-_|; $b64 =~ s/=+$//; $b64 }
+sub _pkce_verifier  { my $buf=''; open my $f,'<:raw','/dev/urandom'; read $f,$buf,32; _base64url($buf) }
+sub _pkce_challenge { _base64url(sha256($_[0])) }
+sub _form_encode    { my %h=@_; my $u=URI->new('http:'); $u->query_form(%h); $u->query // '' }
 
 # Token touch cache: token => [ip, time] — flushed to __accounts__ every 5 min
 my %token_touch;
@@ -235,6 +277,22 @@ sub run_backend_worker {
       require JMAP::JmapDB;
       $db = JMAP::JmapDB->new($accountid);
       # No $api — JMAP passthrough bypasses the local API layer entirely
+    } elsif ($type eq 'gmail') {
+      require JMAP::GmailDB;
+      $db = JMAP::GmailDB->new($accountid);
+      $api = JMAP::API->new($db);
+      $db->{change_cb} = sub {
+        my ($db, $states) = @_;
+        eval { $write_json->(['push', $states, 'state']) };
+      };
+    } elsif ($type eq 'fastmail') {
+      require JMAP::FastmailDB;
+      $db = JMAP::FastmailDB->new($accountid);
+      $api = JMAP::API->new($db);
+      $db->{change_cb} = sub {
+        my ($db, $states) = @_;
+        eval { $write_json->(['push', $states, 'state']) };
+      };
     } else {
       die "Unsupported account type: $type\n";
     }
@@ -388,6 +446,68 @@ sub run_backend_worker {
         $db->firstsync();
 
         return ['signup', ['done', $final_aid, $detail->{username}]];
+      }
+      if ($cmd eq 'signup_oauth') {
+        # Called after parent completes OAuth code exchange.
+        # $args: email, refresh_token, account_type (gmail/imap), imapHost, imapPort,
+        #        imapSSL, smtpHost, smtpPort, smtpSSL, caldavURL, carddavURL, poolid
+        my $email         = $args->{email}         or die "email required\n";
+        my $refresh_token = $args->{refresh_token} or die "refresh_token required\n";
+        my $acct_type     = $args->{account_type}  || 'gmail';
+
+        my $existing_aid = $dbh->selectrow_array(
+          "SELECT accountid FROM accounts WHERE email = ?", {}, $email);
+        my ($final_aid, $target_aid);
+        if ($existing_aid) {
+          $final_aid  = $existing_aid;
+          $target_aid = $existing_aid;
+          if ($args->{poolid}) {
+            $dbh->do("UPDATE accounts SET poolid = ? WHERE accountid = ?",
+              {}, $args->{poolid}, $existing_aid);
+          }
+        } else {
+          $final_aid  = $accountid;
+          $target_aid = $accountid;
+          my $poolid = $args->{poolid} || $accountid;
+          $dbh->do(
+            "INSERT INTO accounts (email, accountid, type, poolid) VALUES (?,?,?,?)",
+            {}, $email, $accountid, $acct_type, $poolid);
+        }
+
+        # Create/open the per-account DB for the right account ID
+        my $target_db;
+        if ($acct_type eq 'gmail') {
+          require JMAP::GmailDB;
+          $target_db = JMAP::GmailDB->new($target_aid);
+        } elsif ($acct_type eq 'fastmail') {
+          require JMAP::FastmailDB;
+          $target_db = JMAP::FastmailDB->new($target_aid);
+        } else {
+          require JMAP::ImapDB;
+          $target_db = JMAP::ImapDB->new($target_aid);
+        }
+        $target_db->setuser({
+          username   => $email,
+          password   => $refresh_token,
+          imapHost   => $args->{imapHost}   || '',
+          imapPort   => $args->{imapPort}   || 993,
+          imapSSL    => $args->{imapSSL}    // 1,
+          smtpHost   => $args->{smtpHost}   || '',
+          smtpPort   => $args->{smtpPort}   || 587,
+          smtpSSL    => $args->{smtpSSL}    // 1,
+          caldavURL  => $args->{caldavURL}  || '',
+          carddavURL => $args->{carddavURL} || '',
+        });
+        $target_db->firstsync();
+
+        # Make $db point to the right instance for subsequent commands
+        if ($target_aid eq $accountid) {
+          $type = $acct_type;
+          $db   = $target_db;
+          $api  = JMAP::API->new($db);
+        }
+
+        return ['signup_oauth', [$final_aid, $email]];
       }
       if ($cmd eq 'signup_jmap') {
         require JMAP::JmapDB;
@@ -795,15 +915,21 @@ sub run_accounts_worker {
         my $email = $args->{username};
         my $password = $args->{password};
         my $row = $dbh->selectrow_hashref(
-          "SELECT accountid FROM accounts WHERE email = ?", {}, $email);
+          "SELECT accountid, type FROM accounts WHERE email = ?", {}, $email);
         return ['verify_credentials', undef] unless $row;
         my $aid = $row->{accountid};
+        # OAuth accounts have no stored password to compare against
+        return ['verify_credentials', undef]
+          if ($row->{type} // '') eq 'gmail' || ($row->{type} // '') eq 'fastmail';
         my $dbfile = "$datadir/$aid.sqlite3";
         return ['verify_credentials', undef] unless -f $dbfile;
         my $udb = DBI->connect("dbi:SQLite:dbname=$dbfile");
         my $stored = $udb->selectrow_hashref(
           "SELECT password FROM iserver WHERE username = ?", {}, $email);
-        return ['verify_credentials', undef] unless $stored && $stored->{password} eq $password;
+        return ['verify_credentials', undef] unless $stored;
+        require JMAP::CredentialStore;
+        my $actual = JMAP::CredentialStore->decrypt($stored->{password});
+        return ['verify_credentials', undef] unless $actual eq $password;
         return ['verify_credentials', { accountid => $aid }];
       }
 
@@ -821,7 +947,21 @@ sub run_accounts_worker {
 
       if ($cmd eq 'delete_account') {
         my $aid = $args->{accountid};
+        # Find the pool this account belongs to
+        my ($poolid) = $dbh->selectrow_array(
+          "SELECT poolid FROM accounts WHERE accountid = ?", {}, $aid);
+        # Remove the account
         $dbh->do("DELETE FROM accounts WHERE accountid = ?", {}, $aid);
+        # If this account was the poolid, re-pool siblings under themselves
+        if ($poolid && $poolid eq $aid) {
+          my $siblings = $dbh->selectcol_arrayref(
+            "SELECT accountid FROM accounts WHERE poolid = ?", {}, $aid);
+          for my $sib (@$siblings) {
+            $dbh->do("UPDATE accounts SET poolid = ? WHERE accountid = ?", {}, $sib, $sib);
+          }
+        }
+        # Delete tokens that now point to a non-existent account
+        $dbh->do("DELETE FROM tokens WHERE accountid NOT IN (SELECT accountid FROM accounts)");
         unlink "$datadir/$aid.sqlite3";
         unlink "$datadir/$aid.lock";
         return ['delete_account', { deleted => $aid }];
@@ -896,6 +1036,37 @@ sub do_wellknown {
   my $path = $req->url->path;
   if ($path eq '/.well-known/jmap') {
     $req->respond([301, 'redirected', { Location => "$BASEURL/session" }, "Redirected"]);
+    return;
+  }
+  if ($path eq '/.well-known/openid-configuration') {
+    my $cfg = encode_json({
+      issuer                                => $BASEURL,
+      authorization_endpoint                => "$BASEURL/oauth/authorize",
+      token_endpoint                        => "$BASEURL/oauth/token",
+      userinfo_endpoint                     => "$BASEURL/oauth/userinfo",
+      jwks_uri                              => "$BASEURL/oauth/jwks",
+      scopes_supported                      => ['openid', 'email', 'profile'],
+      response_types_supported              => ['code'],
+      grant_types_supported                 => ['authorization_code', 'refresh_token'],
+      subject_types_supported               => ['public'],
+      id_token_signing_alg_values_supported => ['RS256'],
+      token_endpoint_auth_methods_supported => ['none'],
+      code_challenge_methods_supported      => ['S256'],
+    });
+    $req->respond({ content => ['application/json', $cfg] });
+    return;
+  }
+  if ($path eq '/.well-known/webfinger') {
+    # Tell tmail-web that the OIDC issuer is our own BASEURL
+    my $resource = $req->url->query_param('resource') // '';
+    my $body = encode_json({
+      subject => $resource,
+      links   => [{
+        rel  => 'http://openid.net/specs/connect/1.0/issuer',
+        href => $BASEURL,
+      }],
+    });
+    $req->respond({ content => ['application/jrd+json', $body] });
     return;
   }
   not_found($req);
@@ -1085,10 +1256,17 @@ sub do_raw {
 
 sub do_landing {
   my ($httpd, $req) = @_;
-  my $html = '';
-  $TT->process("index.html", { baseurl => $BASEURL }, \$html)
-    || return $req->respond([500, 'error', {}, $Template::ERROR]);
-  $req->respond({ content => ['text/html', $html] });
+  $httpd->stop_request();
+  _try_authenticate($req, $httpd, sub {
+    my ($auth_aid) = @_;
+    if ($auth_aid) {
+      return $req->respond([301, 'redirected', { Location => "$BASEURL/accounts" }, "Redirected"]);
+    }
+    my $html = '';
+    $TT->process("index.html", { baseurl => $BASEURL }, \$html)
+      || return $req->respond([500, 'error', {}, $Template::ERROR]);
+    $req->respond({ content => ['text/html', $html] });
+  });
 }
 
 sub do_static {
@@ -1259,6 +1437,519 @@ sub _require_auth {
   $req->respond([401, 'unauthorized',
     { 'Content-Type' => 'application/json', 'WWW-Authenticate' => 'Basic realm="JMAP Proxy"' },
     '{"type":"unauthorized"}']);
+}
+
+# Render the "step 2" password form (or error) back on index.html.
+# $prefill hashref may contain imapHost/imapPort/imapSSL/smtpHost/smtpPort/caldavURL/carddavURL/force.
+sub _render_step2 {
+  my ($req, $email, $error, $prefill) = @_;
+  my $html = '';
+  $TT->process("index.html", {
+    baseurl => $BASEURL,
+    step    => 2,
+    email   => $email,
+    error   => $error,
+    prefill => $prefill || {},
+  }, \$html) || return $req->respond([500, 'error', {}, $Template::ERROR]);
+  $req->respond([200, 'ok', { 'Content-Type' => 'text/html; charset=utf-8' }, $html]);
+}
+
+# Build a Google OAuth2 authorization URL, store state, return redirect URL.
+sub _start_google_oauth {
+  my ($email, $auth_aid) = @_;
+  my $state_token = _generate_token();
+
+  my $auth_url = URI->new('https://accounts.google.com/o/oauth2/v2/auth');
+  $auth_url->query_param(response_type => 'code');
+  $auth_url->query_param(client_id     => $ENV{GOOGLE_CLIENT_ID});
+  $auth_url->query_param(redirect_uri  => "$BASEURL/cb/oauth");
+  $auth_url->query_param(scope         => join(' ',
+    'https://mail.google.com/',
+    'https://www.googleapis.com/auth/calendar',
+    'https://www.googleapis.com/auth/carddav',
+    'email'));
+  $auth_url->query_param(access_type   => 'offline');
+  $auth_url->query_param(prompt        => 'consent');  # always return refresh_token
+  $auth_url->query_param(login_hint    => $email) if $email;
+  $auth_url->query_param(state         => $state_token);
+
+  $oauth_state{$state_token} = {
+    email         => $email,
+    auth_aid      => $auth_aid,
+    provider      => 'google',
+    code_verifier => undef,
+    token_url     => 'https://oauth2.googleapis.com/token',
+    userinfo_url  => 'https://www.googleapis.com/oauth2/v3/userinfo',
+    client_id     => $ENV{GOOGLE_CLIENT_ID},
+    client_secret => $ENV{GOOGLE_CLIENT_SECRET},
+    account_type  => 'gmail',
+    imap          => {
+      imapHost   => 'imap.gmail.com',
+      imapPort   => 993,
+      imapSSL    => 1,
+      smtpHost   => 'smtp.gmail.com',
+      smtpPort   => 587,
+      smtpSSL    => 1,
+      caldavURL  => 'https://apidata.googleusercontent.com/caldav/v2/',
+      carddavURL => 'https://www.googleapis.com/.well-known/carddav',
+    },
+    expires       => time() + 600,
+  };
+  return "$auth_url";
+}
+
+# Fastmail OAuth constants (matching JMAP::Sync::Fastmail)
+use constant FM_AUTH_URL  => 'https://api.fastmail.com/oauth/authorize';
+use constant FM_TOKEN_URL => 'https://api.fastmail.com/oauth/refresh';
+use constant FM_REG_URL   => 'https://api.fastmail.com/oauth/register';
+use constant FM_SCOPES    => join(' ',
+  'urn:ietf:params:oauth:scope:mail',
+  'urn:ietf:params:oauth:scope:contacts',
+  'urn:ietf:params:oauth:scope:calendars',
+  'offline_access');
+use constant FM_IMAP => {
+  imapHost   => 'imap.fastmail.com',  imapPort   => 993,  imapSSL    => 2,
+  smtpHost   => 'smtp.fastmail.com',  smtpPort   => 465,  smtpSSL    => 2,
+  caldavURL  => 'https://caldav.fastmail.com/',
+  carddavURL => 'https://carddav.fastmail.com/',
+};
+
+my $fastmail_client_id;  # cached from dynamic registration
+
+# Build and store OAuth state, then redirect to Fastmail.
+sub _do_fastmail_redirect {
+  my ($client_id, $email, $auth_aid, $req, $via) = @_;
+
+  my $state_token   = _generate_token();
+  my $code_verifier = _pkce_verifier();
+  my $challenge     = _pkce_challenge($code_verifier);
+
+  my $auth_url = URI->new(FM_AUTH_URL);
+  $auth_url->query_param(response_type         => 'code');
+  $auth_url->query_param(client_id             => $client_id);
+  $auth_url->query_param(redirect_uri          => "$BASEURL/cb/oauth");
+  $auth_url->query_param(scope                 => FM_SCOPES);
+  $auth_url->query_param(code_challenge        => $challenge);
+  $auth_url->query_param(code_challenge_method => 'S256');
+  $auth_url->query_param(login_hint            => $email) if $email;
+  $auth_url->query_param(state                 => $state_token);
+
+  $via //= 'imap';
+  $oauth_state{$state_token} = {
+    email         => $email,
+    auth_aid      => $auth_aid,
+    provider      => 'fastmail',
+    code_verifier => $code_verifier,
+    token_url     => FM_TOKEN_URL,
+    userinfo_url  => undef,   # email comes from login_hint / state
+    client_id     => $client_id,
+    client_secret => '',      # public client
+    account_type  => ($via eq 'jmap' ? 'fastmail_jmap' : 'fastmail'),
+    imap          => FM_IMAP,
+    via           => $via,
+    expires       => time() + 600,
+  };
+
+  $req->respond([302, 'Found', { Location => "$auth_url" }, '']);
+}
+
+# Start Fastmail OAuth flow.  Registers a client_id dynamically if needed
+# (draft-ietf-mailmaint-oauth-public / RFC 7591).
+sub _start_fastmail_oauth {
+  my ($email, $auth_aid, $req, $via) = @_;
+
+  my $client_id = $ENV{FASTMAIL_CLIENT_ID} || $fastmail_client_id;
+  if ($client_id) {
+    _do_fastmail_redirect($client_id, $email, $auth_aid, $req, $via);
+    return;
+  }
+
+  # Dynamic client registration (async — parent event loop)
+  my $redirect_uri = "$BASEURL/cb/oauth";
+  my $reg_body = encode_json({
+    client_name              => 'jmap-proxy',
+    redirect_uris            => [$redirect_uri],
+    grant_types              => ['authorization_code', 'refresh_token'],
+    response_types           => ['code'],
+    token_endpoint_auth_method => 'none',
+    scope                    => FM_SCOPES,
+  });
+
+  my $err_html = sub {
+    my ($msg) = @_;
+    my $html = '';
+    $TT->process("index.html", { baseurl => $BASEURL, error => $msg }, \$html);
+    $req->respond([500, 'error', { 'Content-Type' => 'text/html' }, $html]);
+  };
+
+  AnyEvent::HTTP::http_request('POST', FM_REG_URL,
+    headers => { 'Content-Type' => 'application/json' },
+    body    => $reg_body,
+    timeout => 10,
+    sub {
+      my ($rbody, $hdrs) = @_;
+      unless (($hdrs->{Status} // 0) =~ /^2/) {
+        return $err_html->("Fastmail client registration failed ($hdrs->{Status}). Please try again.");
+      }
+      my $data = eval { decode_json($rbody) };
+      unless ($data && $data->{client_id}) {
+        return $err_html->("Fastmail registration returned no client_id. Please try again.");
+      }
+      $fastmail_client_id = $data->{client_id};
+      _do_fastmail_redirect($fastmail_client_id, $email, $auth_aid, $req, $via);
+    }
+  );
+}
+
+# Kick off an OAuth flow from RFC 8414 metadata + PKCE, for PACC-discovered providers.
+sub _start_pacc_oauth {
+  my ($meta, $email, $auth_aid, $req, $prefill, $client_id, $client_secret) = @_;
+
+  my $state_token   = _generate_token();
+  my $code_verifier = _pkce_verifier();
+  my $challenge     = _pkce_challenge($code_verifier);
+
+  my $scopes = join(' ', @{ $meta->{scopes_supported} // [] });
+  $scopes ||= 'https://mail.google.com/';  # fallback
+
+  my $auth_url = URI->new($meta->{authorization_endpoint});
+  $auth_url->query_param(response_type         => 'code');
+  $auth_url->query_param(client_id             => $client_id);
+  $auth_url->query_param(redirect_uri          => "$BASEURL/cb/oauth");
+  $auth_url->query_param(scope                 => $scopes);
+  $auth_url->query_param(code_challenge        => $challenge);
+  $auth_url->query_param(code_challenge_method => 'S256');
+  $auth_url->query_param(login_hint            => $email) if $email;
+  $auth_url->query_param(state                 => $state_token);
+
+  $oauth_state{$state_token} = {
+    email         => $email,
+    auth_aid      => $auth_aid,
+    provider      => $meta->{issuer} // 'unknown',
+    code_verifier => $code_verifier,
+    token_url     => $meta->{token_endpoint},
+    userinfo_url  => $meta->{userinfo_endpoint},
+    client_id     => $client_id,
+    client_secret => $client_secret,
+    account_type  => 'imap',
+    imap          => $prefill,
+    expires       => time() + 600,
+  };
+
+  $req->respond([302, 'Found', { Location => "$auth_url" }, '']);
+}
+
+# Try PACC, then Mozilla autoconfig, then fall back to step-2 password form.
+sub _discover_fallback {
+  my ($domain, $email, $auth_aid, $req) = @_;
+
+  my $pacc_url = "https://ua-auto-config.$domain/.well-known/user-agent-configuration.json";
+  AnyEvent::HTTP::http_get($pacc_url, timeout => 5,
+    headers => { Accept => 'application/json' },
+    sub {
+      my ($body, $hdrs) = @_;
+      if (($hdrs->{Status} // 0) == 200) {
+        my $cfg = eval { decode_json($body) };
+        if ($cfg) {
+          # Extract protocol pre-fills
+          my %prefill;
+          if (my $imap = $cfg->{protocols}{imap}) {
+            $prefill{imapHost} = $imap->{host} if $imap->{host};
+            $prefill{imapPort} = $imap->{port} if $imap->{port};
+          }
+          if (my $smtp = $cfg->{protocols}{smtp}) {
+            $prefill{smtpHost} = $smtp->{host} if $smtp->{host};
+            $prefill{smtpPort} = $smtp->{port} if $smtp->{port};
+          }
+          $prefill{caldavURL}  = $cfg->{protocols}{caldav}{url}  if $cfg->{protocols}{caldav}{url};
+          $prefill{carddavURL} = $cfg->{protocols}{carddav}{url} if $cfg->{protocols}{carddav}{url};
+          $prefill{force}      = 1 if $prefill{imapHost};
+
+          # If PACC also has a JMAP endpoint, go straight to JMAP passthrough signup
+          if (my $jmap_url = $cfg->{protocols}{jmap}{url}) {
+            my $html = '';
+            $TT->process("index.html", {
+              baseurl    => $BASEURL,
+              step       => 'jmap',
+              email      => $email,
+              jmap_url   => $jmap_url,
+            }, \$html) || return $req->respond([500, 'error', {}, $Template::ERROR]);
+            return $req->respond([200, 'ok', { 'Content-Type' => 'text/html; charset=utf-8' }, $html]);
+          }
+
+          # If PACC advertises OAuth, fetch RFC 8414 metadata
+          if (my $issuer = $cfg->{authentication}{'oauth-public'}{issuer}) {
+            my $meta_url = "${issuer}/.well-known/oauth-authorization-server";
+            AnyEvent::HTTP::http_get($meta_url, timeout => 5,
+              headers => { Accept => 'application/json' },
+              sub {
+                my ($mbody, $mhdrs) = @_;
+                my $meta = (($mhdrs->{Status} // 0) == 200) ? eval { decode_json($mbody) } : undef;
+                if ($meta && $meta->{authorization_endpoint} && $meta->{token_endpoint}) {
+                  # Look for per-domain OAuth credentials in env
+                  # Env var pattern: OAUTH_EXAMPLE_COM_CLIENT_ID (domain uppercased, dots→_)
+                  (my $env_key = uc $domain) =~ s/[^A-Z0-9]/_/g;
+                  my $cid  = $ENV{"OAUTH_${env_key}_CLIENT_ID"};
+                  my $csec = $ENV{"OAUTH_${env_key}_CLIENT_SECRET"};
+                  if ($cid && $csec) {
+                    _start_pacc_oauth($meta, $email, $auth_aid, $req, \%prefill, $cid, $csec);
+                    return;
+                  }
+                }
+                # OAuth configured but we lack client credentials — or metadata fetch failed
+                _render_step2($req, $email, undef, \%prefill);
+              });
+            return;
+          }
+
+          # PACC found, no OAuth — pre-fill and show password form
+          _render_step2($req, $email, undef, \%prefill);
+          return;
+        }
+      }
+
+      # PACC failed — try Mozilla autoconfig
+      _try_mozilla_autoconfig($domain, $email, $auth_aid, $req);
+    });
+}
+
+sub _try_mozilla_autoconfig {
+  my ($domain, $email, $auth_aid, $req) = @_;
+  my $url = "https://autoconfig.$domain/mail/config-v1.1.xml";
+  AnyEvent::HTTP::http_get($url, timeout => 5, sub {
+    my ($body, $hdrs) = @_;
+    my %prefill;
+    if (($hdrs->{Status} // 0) == 200 && $body) {
+      # Extract IMAP settings
+      if ($body =~ m{<incomingServer\s+type="imap"[^>]*>(.*?)</incomingServer>}s) {
+        my $s = $1;
+        $prefill{imapHost} = $1 if $s =~ m{<hostname>(.*?)</hostname>};
+        $prefill{imapPort} = $1 if $s =~ m{<port>(.*?)</port>};
+        if ($s =~ m{<socketType>(.*?)</socketType>}) {
+          $prefill{imapSSL} = ($1 eq 'SSL') ? 2 : (($1 eq 'STARTTLS') ? 3 : 1);
+        }
+      }
+      if ($body =~ m{<outgoingServer\s+type="smtp"[^>]*>(.*?)</outgoingServer>}s) {
+        my $s = $1;
+        $prefill{smtpHost} = $1 if $s =~ m{<hostname>(.*?)</hostname>};
+        $prefill{smtpPort} = $1 if $s =~ m{<port>(.*?)</port>};
+        if ($s =~ m{<socketType>(.*?)</socketType>}) {
+          $prefill{smtpSSL} = ($1 eq 'SSL') ? 2 : (($1 eq 'STARTTLS') ? 3 : 1);
+        }
+      }
+      $prefill{force} = 1 if $prefill{imapHost};
+    }
+    _render_step2($req, $email, undef, \%prefill);
+  });
+}
+
+# POST /discover — email-only submission; does discovery and either redirects to
+# OAuth or renders the step-2 password form.
+sub do_discover {
+  my ($httpd, $req) = @_;
+  return invalid_request($req) unless lc $req->method eq 'post';
+
+  my $email = $req->parm('username') // '';
+  my $via   = $req->parm('via')      // '';
+  $email =~ s/^\s+|\s+$//g;
+  my (undef, $domain) = split /\@/, $email, 2;
+  return invalid_request($req) unless $domain;
+  $domain = lc $domain;
+
+  $httpd->stop_request();
+
+  _try_authenticate($req, $httpd, sub {
+    my ($auth_aid) = @_;
+
+    # Known provider: Google
+    if ($domain =~ /^(gmail|googlemail)\.com$/) {
+      if ($ENV{GOOGLE_CLIENT_ID} && $ENV{GOOGLE_CLIENT_SECRET}) {
+        $req->respond([302, 'Found', { Location => _start_google_oauth($email, $auth_aid) }, '']);
+      } else {
+        _render_step2($req, $email,
+          'Gmail requires OAuth2. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to enable it.', {});
+      }
+      return;
+    }
+
+    # Known provider: Fastmail.
+    # Offer a choice: native JMAP passthrough (password) or IMAP/OAuth.
+    # If the user already chose IMAP (via=imap), skip the choice and start OAuth.
+    if ($domain =~ /^(fastmail\.(com|fm|net|org|to|cn|es|de|in|us)|messagingengine\.com)$/) {
+      if ($via eq 'imap' || $via eq 'jmap') {
+        _start_fastmail_oauth($email, $auth_aid, $req, $via);
+      } else {
+        my $html = '';
+        $TT->process("index.html", {
+          baseurl  => $BASEURL,
+          step     => 'choose',
+          email    => $email,
+          jmap_url => 'https://api.fastmail.com/jmap/session',
+        }, \$html) || return $req->respond([500, 'error', {}, $Template::ERROR]);
+        $req->respond([200, 'ok', { 'Content-Type' => 'text/html; charset=utf-8' }, $html]);
+      }
+      return;
+    }
+
+    # Everything else: PACC → autoconfig → password form
+    _discover_fallback($domain, $email, $auth_aid, $req);
+  });
+}
+
+# GET /cb/oauth — OAuth2 callback (handles all providers via %oauth_state lookup)
+sub do_cb_oauth {
+  my ($httpd, $req) = @_;
+
+  my $state_token = $req->parm('state') // '';
+  my $code        = $req->parm('code')  // '';
+  my $oauth_error = $req->parm('error') // '';
+
+  if ($oauth_error) {
+    my $html = '';
+    $TT->process("index.html", { baseurl => $BASEURL,
+      error => "OAuth authorization failed: $oauth_error" }, \$html);
+    return $req->respond([200, 'ok', { 'Content-Type' => 'text/html' }, $html]);
+  }
+
+  my $state = $oauth_state{$state_token};
+  unless ($state) {
+    my $html = '';
+    $TT->process("index.html", { baseurl => $BASEURL,
+      error => "OAuth session expired or invalid. Please try again." }, \$html);
+    return $req->respond([400, 'bad request', { 'Content-Type' => 'text/html' }, $html]);
+  }
+  delete $oauth_state{$state_token};
+
+  $httpd->stop_request();
+
+  # Exchange authorization code for tokens
+  my $form_body = _form_encode(
+    client_id    => $state->{client_id},
+    redirect_uri => "$BASEURL/cb/oauth",
+    code         => $code,
+    grant_type   => 'authorization_code',
+    ($state->{client_secret} ? (client_secret => $state->{client_secret}) : ()),
+    ($state->{code_verifier} ? (code_verifier => $state->{code_verifier}) : ()),
+  );
+
+  my $err_html = sub {
+    my ($msg) = @_;
+    my $html = '';
+    $TT->process("index.html", { baseurl => $BASEURL, error => $msg }, \$html);
+    $req->respond([500, 'error', { 'Content-Type' => 'text/html' }, $html]);
+  };
+
+  AnyEvent::HTTP::http_request('POST', $state->{token_url},
+    headers => { 'Content-Type' => 'application/x-www-form-urlencoded' },
+    body    => $form_body,
+    timeout => 15,
+    sub {
+      my ($body, $hdrs) = @_;
+      unless (($hdrs->{Status} // 0) =~ /^2/) {
+        return $err_html->("Token exchange failed ($hdrs->{Status}). Please try again.");
+      }
+      my $tokens = eval { decode_json($body) };
+      if (!$tokens || $tokens->{error}) {
+        return $err_html->("OAuth token error: " . ($tokens->{error} // 'invalid response'));
+      }
+
+      my $access_token  = $tokens->{access_token}  or return $err_html->("No access_token in response");
+      my $refresh_token = $tokens->{refresh_token} // '';
+
+      # Get user email from userinfo endpoint (if available)
+      my $userinfo_url = $state->{userinfo_url};
+      my $get_email_cb = sub {
+        my ($email) = @_;
+        $email ||= $state->{email};
+        unless ($email) {
+          return $err_html->("Could not determine account email from OAuth response.");
+        }
+
+        my $auth_aid     = $state->{auth_aid};
+        my $account_type = $state->{account_type};
+        my $imap         = $state->{imap} // {};
+        my $accountid    = new_uuid_string();
+
+        # Fastmail JMAP passthrough via OAuth: use signup_jmap with Bearer token refresh.
+        if ($account_type eq 'fastmail_jmap') {
+          send_backend_request($accountid, 'signup_jmap', {
+            username   => $email,
+            password   => $refresh_token,   # stored as encrypted refresh token
+            authType   => 'fastmail_oauth',
+            sessionUrl => 'https://api.fastmail.com/jmap/session',
+            ($auth_aid ? (poolid => $auth_aid) : ()),
+          }, sub {
+            my $result = shift;
+            my ($final_aid, $final_email) = @$result;
+            delete $backend{$accountid} unless $final_aid eq $accountid;
+            if ($auth_aid) {
+              $req->respond([302, 'Found', { Location => "$BASEURL/accounts" }, '']);
+              return;
+            }
+            my $token = _generate_token();
+            send_backend_request('__accounts__', 'create_token',
+              { token => $token, accountid => $final_aid,
+                last_ip => _client_ip($req), last_used => time() }, sub {
+              $auth_cache{"bearer:$token"} = [$final_aid, time() + $AUTH_CACHE_TTL];
+              my $cookie = bake_cookie("jmap_proxy", { value => $token, path => '/', expires => '+3M' });
+              $req->respond([302, 'Found',
+                { 'Set-Cookie' => $cookie, Location => "$BASEURL/accounts" }, '']);
+            }, sub { $err_html->('Failed to create session after OAuth login') });
+          }, sub {
+            my $err = shift;
+            delete $backend{$accountid};
+            $err_html->("Account setup failed: $err");
+          });
+          return;
+        }
+
+        send_backend_request($accountid, 'signup_oauth', {
+          email         => $email,
+          refresh_token => $refresh_token,
+          account_type  => $account_type,
+          %$imap,
+          ($auth_aid ? (poolid => $auth_aid) : ()),
+        }, sub {
+          my $result = shift;
+          my ($final_aid, $final_email) = @$result;
+          delete $backend{$accountid} unless $final_aid eq $accountid;
+
+          send_backend_request($final_aid, 'sync', {});
+          prod_backfill($final_aid);
+
+          if ($auth_aid) {
+            $req->respond([302, 'Found', { Location => "$BASEURL/accounts" }, '']);
+            return;
+          }
+          my $token = _generate_token();
+          send_backend_request('__accounts__', 'create_token',
+            { token => $token, accountid => $final_aid,
+              last_ip => _client_ip($req), last_used => time() }, sub {
+            $auth_cache{"bearer:$token"} = [$final_aid, time() + $AUTH_CACHE_TTL];
+            my $cookie = bake_cookie("jmap_proxy", { value => $token, path => '/', expires => '+3M' });
+            $req->respond([302, 'Found',
+              { 'Set-Cookie' => $cookie, Location => "$BASEURL/accounts" }, '']);
+          }, sub { $err_html->('Failed to create session after OAuth login') });
+        }, sub {
+          my $err = shift;
+          delete $backend{$accountid};
+          $err_html->("Account setup failed: $err");
+        });
+      };
+
+      if ($userinfo_url) {
+        AnyEvent::HTTP::http_get($userinfo_url,
+          headers => { Authorization => "Bearer $access_token" },
+          timeout => 10,
+          sub {
+            my ($ubody, $uhdrs) = @_;
+            my $info = eval { decode_json($ubody) };
+            $get_email_cb->($info->{email});
+          });
+      } else {
+        $get_email_cb->($state->{email});
+      }
+    });
 }
 
 sub do_signup {
@@ -1740,6 +2431,208 @@ sub do_eventsource {
   });
 }
 
+# ---------------------------------------------------------------------------
+# Minimal OIDC provider (used by tmail-web / Twake Mail)
+# ---------------------------------------------------------------------------
+
+# GET /oauth/jwks — public key for id_token signature verification
+sub do_oidc_jwks {
+  my ($httpd, $req) = @_;
+  my $key  = _oidc_rsa_key();
+  my $pub  = $key->export_key_jwk('public', 1);  # hashref
+  $pub->{use} = 'sig';
+  $pub->{alg} = 'RS256';
+  $pub->{kid} = 'jmap-proxy-1';
+  my $body = encode_json({ keys => [$pub] });
+  $req->respond({ content => ['application/json', $body] });
+}
+
+# GET /oauth/authorize — show login form or issue auth code
+sub do_oidc_authorize {
+  my ($httpd, $req) = @_;
+  my $redirect_uri  = $req->parm('redirect_uri')  // '';
+  my $state         = $req->parm('state')         // '';
+  my $client_id     = $req->parm('client_id')     // '';
+
+  unless ($redirect_uri) {
+    return $req->respond([400, 'bad request', {}, 'Missing redirect_uri']);
+  }
+
+  # If already authenticated, issue code immediately
+  $httpd->stop_request();
+  _try_authenticate($req, $httpd, sub {
+    my ($auth_aid) = @_;
+    if ($auth_aid) {
+      _oidc_issue_code($auth_aid, $redirect_uri, $state, $req);
+      return;
+    }
+    # Not logged in — show login form with OIDC params embedded
+    my $html = '';
+    my $error = $req->parm('login_error') // '';
+    $TT->process('index.html', {
+      baseurl  => $BASEURL,
+      step     => 'oidc_login',
+      oidc     => {
+        redirect_uri => $redirect_uri,
+        state        => $state,
+        client_id    => $client_id,
+      },
+      ($error ? (error => $error) : ()),
+    }, \$html) || return $req->respond([500, 'error', {}, $Template::ERROR]);
+    $req->respond({ content => ['text/html', $html] });
+  });
+}
+
+# POST /oauth/authorize — validate credentials, issue code or show error
+sub do_oidc_authorize_post {
+  my ($httpd, $req) = @_;
+  my $redirect_uri = $req->parm('redirect_uri') // '';
+  my $state        = $req->parm('state')        // '';
+  my $username     = $req->parm('username')     // '';
+  my $password     = $req->parm('password')     // '';
+
+  unless ($redirect_uri && $username && $password) {
+    return $req->respond([400, 'bad request', {}, 'Missing required fields']);
+  }
+
+  $httpd->stop_request();
+  send_backend_request('__accounts__', 'auth',
+    { username => $username, password => $password,
+      last_ip => _client_ip($req), last_used => time() },
+    sub {
+      my $result = shift;
+      unless ($result && $result->{accountid}) {
+        # Bad credentials — re-show the form with error
+        my $html = '';
+        $TT->process('index.html', {
+          baseurl => $BASEURL,
+          step    => 'oidc_login',
+          error   => 'Invalid email or password.',
+          oidc    => { redirect_uri => $redirect_uri, state => $state },
+        }, \$html) || return $req->respond([500, 'error', {}, $Template::ERROR]);
+        return $req->respond([401, 'unauthorized',
+          { 'Content-Type' => 'text/html' }, $html]);
+      }
+      my $aid = $result->{accountid};
+      $auth_cache{"bearer:$result->{token}"} = [$aid, time() + $AUTH_CACHE_TTL]
+        if $result->{token};
+      _oidc_issue_code($aid, $redirect_uri, $state, $req);
+    },
+    sub { $req->respond([500, 'error', {}, 'Authentication backend error']) }
+  );
+}
+
+sub _oidc_issue_code {
+  my ($aid, $redirect_uri, $state, $req) = @_;
+  # Look up email for this account
+  send_backend_request('__accounts__', 'get_pool',
+    { accountid => $aid },
+    sub {
+      my $pool = shift // {};
+      my ($acct) = grep { $_->{accountid} eq $aid } @{$pool->{accounts} || []};
+      my $email = $acct ? ($acct->{email} // $acct->{username} // '') : '';
+
+      my $code = _generate_token();
+      $oidc_codes{$code} = {
+        accountid    => $aid,
+        email        => $email,
+        redirect_uri => $redirect_uri,
+        exp          => time() + 300,
+      };
+      my $loc = URI->new($redirect_uri);
+      $loc->query_param(code  => $code);
+      $loc->query_param(state => $state) if $state;
+      $req->respond([302, 'Found', { Location => "$loc" }, '']);
+    },
+    sub { $req->respond([500, 'error', {}, 'Failed to look up account']) }
+  );
+}
+
+# POST /oauth/token — exchange code for access_token + id_token
+sub do_oidc_token {
+  my ($httpd, $req) = @_;
+  return $req->respond([405, 'method not allowed', {}, ''])
+    unless lc $req->method eq 'post';
+
+  my $grant_type   = $req->parm('grant_type')   // '';
+  my $code         = $req->parm('code')         // '';
+  my $redirect_uri = $req->parm('redirect_uri') // '';
+
+  unless ($grant_type eq 'authorization_code' && $code) {
+    return $req->respond([400, 'bad request', {},
+      encode_json({ error => 'invalid_request' })]);
+  }
+
+  my $entry = delete $oidc_codes{$code};
+  unless ($entry && $entry->{exp} > time()) {
+    return $req->respond([400, 'bad request', {},
+      encode_json({ error => 'invalid_grant' })]);
+  }
+  if ($redirect_uri && $entry->{redirect_uri} ne $redirect_uri) {
+    return $req->respond([400, 'bad request', {},
+      encode_json({ error => 'invalid_grant' })]);
+  }
+
+  $httpd->stop_request();
+  # Create a real Bearer token for this account
+  my $token = _generate_token();
+  send_backend_request('__accounts__', 'create_token',
+    { token => $token, accountid => $entry->{accountid},
+      last_ip => _client_ip($req), last_used => time() },
+    sub {
+      $auth_cache{"bearer:$token"} = [$entry->{accountid}, time() + $AUTH_CACHE_TTL];
+
+      # Build id_token (RS256 JWT)
+      my $now = time();
+      my $id_token = encode_jwt(
+        payload => {
+          iss   => $BASEURL,
+          sub   => $entry->{accountid},
+          aud   => 'tmail-web',
+          iat   => $now,
+          exp   => $now + 3600,
+          email => $entry->{email},
+          email_verified => JSON::true,
+        },
+        alg     => 'RS256',
+        key     => _oidc_rsa_key(),
+        extra_headers => { kid => 'jmap-proxy-1' },
+      );
+
+      my $body = encode_json({
+        access_token  => $token,
+        token_type    => 'Bearer',
+        expires_in    => 3600 * 24 * 90,
+        id_token      => $id_token,
+      });
+      $req->respond({ content => ['application/json', $body] });
+    },
+    sub { $req->respond([500, 'error', {}, encode_json({ error => 'server_error' })]) }
+  );
+}
+
+# GET /oauth/userinfo — return user's email from Bearer token
+sub do_oidc_userinfo {
+  my ($httpd, $req) = @_;
+  $httpd->stop_request();
+  _authenticate($req, $httpd, sub {
+    my ($aid) = @_;
+    send_backend_request('__accounts__', 'get_pool', { accountid => $aid }, sub {
+      my $pool = shift // {};
+      my ($acct) = grep { $_->{accountid} eq $aid } @{$pool->{accounts} || []};
+      my $email = $acct ? ($acct->{email} // $acct->{username} // '') : '';
+      $req->respond({ content => ['application/json', encode_json({
+        sub   => $aid,
+        email => $email,
+        email_verified => JSON::true,
+      })]});
+    }, sub { $req->respond([500, 'error', {}, '{}']) });
+  }, sub {
+    $req->respond([401, 'unauthorized',
+      { 'WWW-Authenticate' => 'Bearer' }, encode_json({ error => 'unauthorized' })]);
+  });
+}
+
 #
 # Start HTTP server
 #
@@ -1748,18 +2641,29 @@ my $port = $ENV{JMAP_PORT} || 9000;
 my $httpd = AnyEvent::HTTPD->new(port => $port);
 
 $httpd->reg_cb(
-  '/.well-known'  => \&do_wellknown,
-  '/session'      => \&do_session,
-  '/eventsource'  => \&do_eventsource,
-  '/jmap'         => \&do_jmap,
-  '/upload'       => \&do_upload,
-  '/raw'          => \&do_raw,
-  '/signup'       => \&do_signup,
-  '/signup_jmap'  => \&do_signup_jmap,
-  '/accounts'     => \&do_accounts,
-  '/logout'       => \&do_logout,
-  '/main.css'     => \&do_static,
-  '/'             => \&do_landing,
+  '/.well-known'      => \&do_wellknown,
+  '/session'          => \&do_session,
+  '/eventsource'      => \&do_eventsource,
+  '/jmap'             => \&do_jmap,
+  '/upload'           => \&do_upload,
+  '/raw'              => \&do_raw,
+  '/discover'         => \&do_discover,
+  '/cb/oauth'         => \&do_cb_oauth,
+  '/signup'           => \&do_signup,
+  '/signup_jmap'      => \&do_signup_jmap,
+  '/accounts'         => \&do_accounts,
+  '/logout'           => \&do_logout,
+  '/main.css'         => \&do_static,
+  '/oauth/authorize'  => sub {
+    my ($httpd, $req) = @_;
+    lc($req->method) eq 'post'
+      ? do_oidc_authorize_post($httpd, $req)
+      : do_oidc_authorize($httpd, $req);
+  },
+  '/oauth/token'      => \&do_oidc_token,
+  '/oauth/userinfo'   => \&do_oidc_userinfo,
+  '/oauth/jwks'       => \&do_oidc_jwks,
+  '/'                 => \&do_landing,
 );
 
 warn "JMAP proxy listening on port $port\n";
