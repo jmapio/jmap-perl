@@ -3381,35 +3381,42 @@ sub api_AddressBook_set {
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
   my $user = $Self->{db}->get_user();
-  my $oldState = "$user->{jhighestmodseq}";
+  my $oldState = "$user->{jstateContact}";
   $Self->commit();
 
   my $create  = $args->{create}  || {};
   my $update  = $args->{update}  || {};
   my $destroy = $args->{destroy} || [];
 
-  my (%notCreated, %notUpdated, %notDestroyed);
+  my ($created, $notCreated, $updated, $notUpdated, $destroyed, $notDestroyed);
 
-  # AddressBook CRUD on CardDAV collections not yet implemented
-  $notCreated{$_}  = { type => 'serverFail', description => 'AddressBook creation not supported' } for keys %$create;
-  $notUpdated{$_}  = { type => 'serverFail', description => 'AddressBook update not supported'   } for keys %$update;
-  $notDestroyed{$_}= { type => 'serverFail', description => 'AddressBook deletion not supported' } for @$destroy;
+  my $scoped_lock = $Self->{db}->begin_superlock();
+
+  $Self->{db}->sync_addressbooks();
+
+  ($created, $notCreated) = $Self->{db}->create_addressbooks($create);
+  $Self->setid($_, $created->{$_}{id}) for keys %$created;
+  $Self->_resolve_patch($update, 'api_AddressBook_get');
+  ($updated, $notUpdated) = $Self->{db}->update_addressbooks($update);
+  ($destroyed, $notDestroyed) = $Self->{db}->destroy_addressbooks($destroy);
+
+  $Self->{db}->sync_addressbooks();
 
   $Self->begin();
   $user = $Self->{db}->get_user();
-  my $newState = "$user->{jhighestmodseq}";
+  my $newState = "$user->{jstateContact}";
   $Self->commit();
 
   return ['AddressBook/set', {
     accountId    => $accountid,
     oldState     => $oldState,
     newState     => $newState,
-    created      => undef,
-    notCreated   => _nullempty(\%notCreated),
-    updated      => undef,
-    notUpdated   => _nullempty(\%notUpdated),
-    destroyed    => undef,
-    notDestroyed => _nullempty(\%notDestroyed),
+    created      => _nullempty($created),
+    notCreated   => _nullempty($notCreated),
+    updated      => _nullempty($updated),
+    notUpdated   => _nullempty($notUpdated),
+    destroyed    => _nullempty($destroyed),
+    notDestroyed => _nullempty($notDestroyed),
   }];
 }
 

@@ -110,6 +110,36 @@ sub sync_event_links {
   return ($added, $removed, $errors, $newtoken);
 }
 
+sub new_calendar {
+  my $Self = shift;
+  my $args = shift;
+
+  my $talk = $Self->connect_calendars();
+  return unless $talk;
+
+  $talk->NewCalendar($args);
+}
+
+sub update_calendar {
+  my $Self = shift;
+  my $args = shift;
+
+  my $talk = $Self->connect_calendars();
+  return unless $talk;
+
+  $talk->UpdateCalendar($args);
+}
+
+sub delete_calendar {
+  my $Self = shift;
+  my $id = shift;
+
+  my $talk = $Self->connect_calendars();
+  return unless $talk;
+
+  $talk->DeleteCalendar($id);
+}
+
 sub new_event {
   my $Self = shift;
   my $collection = shift; # is collection of the calendar
@@ -216,6 +246,36 @@ sub sync_card_links {
   return ($added, $removed, $errors, $newtoken);
 }
 
+sub new_addressbook {
+  my $Self = shift;
+  my $args = shift;  # { id => ..., name => ... }
+
+  my $talk = $Self->connect_contacts();
+  return unless $talk;
+
+  $talk->NewAddressBook($args->{id}, name => $args->{name});
+}
+
+sub update_addressbook {
+  my $Self = shift;
+  my $args = shift;  # { id => ..., name => ... }
+
+  my $talk = $Self->connect_contacts();
+  return unless $talk;
+
+  $talk->UpdateAddressBook($args->{id}, name => $args->{name});
+}
+
+sub delete_addressbook {
+  my $Self = shift;
+  my $id = shift;
+
+  my $talk = $Self->connect_contacts();
+  return unless $talk;
+
+  $talk->DeleteAddressBook($id);
+}
+
 sub new_card {
   my $Self = shift;
   my $collection = shift;
@@ -258,6 +318,7 @@ sub folders {
 
   my $namespace = $imap->namespace();
   my $prefix = $namespace->[0][0][0];
+  my $sep    = $namespace->[0][0][1];
   my $listcmd = $imap->capability()->{xlist} ? 'xlist' : 'list';
   my @folders = $imap->$listcmd('', '*');
 
@@ -277,7 +338,7 @@ sub folders {
     $folders{$name} = [$folder->[1], $label];
   }
 
-  return [$prefix, \%folders];
+  return [$prefix, \%folders, $sep];
 }
 
 sub capability {

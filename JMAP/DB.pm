@@ -1102,7 +1102,7 @@ sub get_submission_changes {
     {}, $since_modseq);
 }
 
-my $USER_SCHEMA_VERSION = 2;
+my $USER_SCHEMA_VERSION = 3;
 
 sub _create_user_tables {
   my ($Self, $dbh) = @_;
@@ -1411,6 +1411,18 @@ sub _initdb {
     };
     if ($@) { $dbh->rollback; die "user DB migration to v2 failed: $@" }
     $v = 2;
+  }
+
+  if ($v < 3) {
+    $dbh->begin_work;
+    eval {
+      # iserver.imapSep: IMAP hierarchy separator detected from server namespace.
+      eval { $dbh->do("ALTER TABLE iserver ADD COLUMN imapSep TEXT") };
+      $dbh->do('PRAGMA user_version = 3');
+      $dbh->commit;
+    };
+    if ($@) { $dbh->rollback; die "user DB migration to v3 failed: $@" }
+    $v = 3;
   }
 }
 

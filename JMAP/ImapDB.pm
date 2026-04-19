@@ -157,7 +157,7 @@ sub sync_folders {
   my $Self = shift;
 
   my $data = $Self->backend_cmd('folders');
-  my ($prefix, $folders) = @$data;
+  my ($prefix, $folders, $sep) = @$data;
 
   $Self->begin();
 
@@ -193,7 +193,7 @@ sub sync_folders {
     $Self->ddelete('ifolders', {ifolderid => $id});
   }
 
-  $Self->dmaybeupdate('iserver', {imapPrefix => $prefix, lastfoldersync => time()});
+  $Self->dmaybeupdate('iserver', {imapPrefix => $prefix, imapSep => $sep, lastfoldersync => time()});
 
   $Self->commit();
 
@@ -572,6 +572,129 @@ sub do_calendars {
   $Self->commit();
 }
 
+sub create_calendars {
+  my $Self = shift;
+  my $new  = shift;
+
+  return ({}, {}) unless keys %$new;
+
+  my %createmap;
+  my %notcreated;
+
+  for my $cid (sort keys %$new) {
+    my $cal = $new->{$cid};
+    unless (defined $cal->{name} && $cal->{name} ne '') {
+      $notcreated{$cid} = { type => 'invalidProperties', properties => ['name'] };
+      next;
+    }
+    my $uid = new_uuid_string();
+    my $args = { id => $uid, name => $cal->{name} };
+    $args->{color}     = $cal->{color}     if defined $cal->{color};
+    $args->{isVisible} = $cal->{isVisible} if exists $cal->{isVisible};
+    eval { $Self->backend_cmd('new_calendar', $args) };
+    if ($@) {
+      $notcreated{$cid} = { type => 'serverFail', description => "$@" };
+      next;
+    }
+
+    # sync to pick up the new calendar and get its jcalendarid
+    $Self->sync_calendars();
+
+    $Self->begin();
+    my $ical = $Self->dgetone('icalendars', {}, 'href,jcalendarid');
+    # find the newly created one by matching the uuid in the href
+    my $all = $Self->dget('icalendars', {});
+    my ($found) = grep { ($_->{href} // '') =~ m{\Q$uid\E} } @$all;
+    $Self->commit();
+
+    if ($found && $found->{jcalendarid}) {
+      $createmap{$cid} = { id => "$found->{jcalendarid}" };
+    } else {
+      $notcreated{$cid} = { type => 'serverFail', description => 'calendar created but not found after sync' };
+    }
+  }
+
+  return (\%createmap, \%notcreated);
+}
+
+sub update_calendars {
+  my $Self = shift;
+  my $changes = shift;
+
+  return ({}, {}) unless keys %$changes;
+
+  my %changed;
+  my %notchanged;
+
+  for my $jcalendarid (sort keys %$changes) {
+    my $patch = $changes->{$jcalendarid};
+
+    $Self->begin();
+    my $ical = $Self->dgetone('icalendars', { jcalendarid => $jcalendarid }, 'href');
+    $Self->commit();
+
+    unless ($ical) {
+      $notchanged{$jcalendarid} = { type => 'notFound' };
+      next;
+    }
+
+    # extract the calendar ID (last path component) from the href
+    (my $cal_id = $ical->{href}) =~ s{.*/([^/]+)/?$}{$1};
+
+    my %args = ( id => $cal_id );
+    $args{name}      = $patch->{name}      if exists $patch->{name};
+    $args{color}     = $patch->{color}     if exists $patch->{color};
+    $args{isVisible} = $patch->{isVisible} if exists $patch->{isVisible};
+
+    eval { $Self->backend_cmd('update_calendar', \%args) };
+    if ($@) {
+      $notchanged{$jcalendarid} = { type => 'serverFail', description => "$@" };
+      next;
+    }
+
+    $changed{$jcalendarid} = undef;
+  }
+
+  $Self->sync_calendars() if keys %changed;
+
+  return (\%changed, \%notchanged);
+}
+
+sub destroy_calendars {
+  my $Self = shift;
+  my $destroy = shift;
+
+  return ([], {}) unless @$destroy;
+
+  my @destroyed;
+  my %notdestroyed;
+
+  for my $jcalendarid (@$destroy) {
+    $Self->begin();
+    my $ical = $Self->dgetone('icalendars', { jcalendarid => $jcalendarid }, 'href');
+    $Self->commit();
+
+    unless ($ical) {
+      $notdestroyed{$jcalendarid} = { type => 'notFound' };
+      next;
+    }
+
+    (my $cal_id = $ical->{href}) =~ s{.*/([^/]+)/?$}{$1};
+
+    eval { $Self->backend_cmd('delete_calendar', $cal_id) };
+    if ($@) {
+      $notdestroyed{$jcalendarid} = { type => 'serverFail', description => "$@" };
+      next;
+    }
+
+    push @destroyed, $jcalendarid;
+  }
+
+  $Self->sync_calendars() if @destroyed;
+
+  return (\@destroyed, \%notdestroyed);
+}
+
 # synchronise list from CardDAV server to local folder cache
 # call in transaction
 sub sync_addressbooks {
@@ -668,6 +791,120 @@ sub sync_jaddressbooks {
     $Self->dnuke('jcontactgroups', {jaddressbookid => $jid});
     $Self->dnuke('jcontacts', {jaddressbookid => $jid});
   }
+}
+
+sub create_addressbooks {
+  my $Self = shift;
+  my $new  = shift;
+
+  return ({}, {}) unless keys %$new;
+
+  my %createmap;
+  my %notcreated;
+
+  for my $cid (sort keys %$new) {
+    my $ab = $new->{$cid};
+    unless (defined $ab->{name} && $ab->{name} ne '') {
+      $notcreated{$cid} = { type => 'invalidProperties', properties => ['name'] };
+      next;
+    }
+    my $uid = new_uuid_string();
+    eval { $Self->backend_cmd('new_addressbook', { id => $uid, name => $ab->{name} }) };
+    if ($@) {
+      $notcreated{$cid} = { type => 'serverFail', description => "$@" };
+      next;
+    }
+
+    $Self->sync_addressbooks();
+
+    $Self->begin();
+    my $all = $Self->dget('iaddressbooks', {});
+    my ($found) = grep { ($_->{href} // '') =~ m{\Q$uid\E} } @$all;
+    $Self->commit();
+
+    if ($found && $found->{jaddressbookid}) {
+      $createmap{$cid} = { id => "$found->{jaddressbookid}" };
+    } else {
+      $notcreated{$cid} = { type => 'serverFail', description => 'addressbook created but not found after sync' };
+    }
+  }
+
+  return (\%createmap, \%notcreated);
+}
+
+sub update_addressbooks {
+  my $Self = shift;
+  my $changes = shift;
+
+  return ({}, {}) unless keys %$changes;
+
+  my %changed;
+  my %notchanged;
+
+  for my $jaddressbookid (sort keys %$changes) {
+    my $patch = $changes->{$jaddressbookid};
+
+    $Self->begin();
+    my $iab = $Self->dgetone('iaddressbooks', { jaddressbookid => $jaddressbookid }, 'href');
+    $Self->commit();
+
+    unless ($iab) {
+      $notchanged{$jaddressbookid} = { type => 'notFound' };
+      next;
+    }
+
+    (my $ab_id = $iab->{href}) =~ s{.*/([^/]+)/?$}{$1};
+
+    my %args = ( id => $ab_id );
+    $args{name} = $patch->{name} if exists $patch->{name};
+
+    eval { $Self->backend_cmd('update_addressbook', \%args) };
+    if ($@) {
+      $notchanged{$jaddressbookid} = { type => 'serverFail', description => "$@" };
+      next;
+    }
+
+    $changed{$jaddressbookid} = undef;
+  }
+
+  $Self->sync_addressbooks() if keys %changed;
+
+  return (\%changed, \%notchanged);
+}
+
+sub destroy_addressbooks {
+  my $Self = shift;
+  my $destroy = shift;
+
+  return ([], {}) unless @$destroy;
+
+  my @destroyed;
+  my %notdestroyed;
+
+  for my $jaddressbookid (@$destroy) {
+    $Self->begin();
+    my $iab = $Self->dgetone('iaddressbooks', { jaddressbookid => $jaddressbookid }, 'href');
+    $Self->commit();
+
+    unless ($iab) {
+      $notdestroyed{$jaddressbookid} = { type => 'notFound' };
+      next;
+    }
+
+    (my $ab_id = $iab->{href}) =~ s{.*/([^/]+)/?$}{$1};
+
+    eval { $Self->backend_cmd('delete_addressbook', $ab_id) };
+    if ($@) {
+      $notdestroyed{$jaddressbookid} = { type => 'serverFail', description => "$@" };
+      next;
+    }
+
+    push @destroyed, $jaddressbookid;
+  }
+
+  $Self->sync_addressbooks() if @destroyed;
+
+  return (\@destroyed, \%notdestroyed);
 }
 
 sub do_addressbooks {
@@ -1695,8 +1932,8 @@ sub create_mailboxes {
       # would be to use namespace to lift it when we lift the prefix
       # DBNOTE: this one is a little weird with use or ORDER BY
       my ($sep) = $Self->dbh->selectrow_array("SELECT sep FROM ifolders ORDER BY ifolderid");
-      my $prefix = $Self->dgetfield('iserver', {}, 'imapPrefix');
-      $prefix = '' unless defined $prefix;
+      $sep //= $Self->dgetfield('iserver', {}, 'imapSep') // '/';
+      my $prefix = $Self->dgetfield('iserver', {}, 'imapPrefix') // '';
       $todo{$cid} = [$prefix . $encname, $sep];
     }
 
@@ -2637,6 +2874,7 @@ CREATE TABLE IF NOT EXISTS iserver (
   imapPort INTEGER,
   imapSSL INTEGER,
   imapPrefix TEXT,
+  imapSep TEXT,
   smtpHost TEXT,
   smtpPort INTEGER,
   smtpSSL INTEGER,
