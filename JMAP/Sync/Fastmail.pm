@@ -12,11 +12,7 @@ use base qw(JMAP::Sync::Common);
 # is not set.  IMAP/SMTP use RFC 7628 OAUTHBEARER; CalDAV/CardDAV use Bearer.
 
 use Mail::OAuthBearerTalk;
-use Email::Simple;
-use Email::Sender::Simple qw(sendmail);
 use Email::Sender::Transport::OAuthBearerSMTP;
-use Net::CalDAVTalk;
-use Net::CardDAVTalk;
 use OAuth2::Tiny;
 use HTTP::Tiny;
 use JSON::XS qw(decode_json encode_json);
@@ -84,97 +80,21 @@ sub access_token {
   return $Self->{access_token};
 }
 
-sub connect_imap {
-  my $Self  = shift;
-  my $force = shift;
+sub _imap_class  { 'Mail::OAuthBearerTalk' }
+sub _imap_auth   { my $Self = shift; (Password => $Self->access_token()) }
+sub _dav_auth    { my $Self = shift; (access_token => $Self->access_token()) }
+sub _caldav_url  { $_[0]->{auth}{caldavURL}  || 'https://caldav.fastmail.com/' }
+sub _carddav_url { $_[0]->{auth}{carddavURL} || 'https://carddav.fastmail.com/' }
 
-  if ($Self->{imap} and not $force) {
-    $Self->{lastused} = time();
-    return $Self->{imap};
-  }
-
-  $Self->{imap}->disconnect() if $Self->{imap};
-  delete $Self->{imap};
-
-  for (1..3) {
-    $Self->{imap} = Mail::OAuthBearerTalk->new(
-      Server        => $Self->{auth}{imapHost} || 'imap.fastmail.com',
-      Port          => $Self->{auth}{imapPort} || 993,
-      Username      => $Self->{auth}{username},
-      Password      => $Self->access_token(),
-      UseSSL        => 1,
-      UseBlocking   => 1,
-      PreserveINBOX => 1,
-    );
-    next unless $Self->{imap};
-    $Self->{lastused} = time();
-    return $Self->{imap};
-  }
-
-  die "Could not connect to Fastmail IMAP server: $@";
-}
-
-sub connect_calendars {
-  my $Self = shift;
-
-  if ($Self->{calendars}) {
-    $Self->{lastused} = time();
-    return $Self->{calendars};
-  }
-
-  $Self->{calendars} = Net::CalDAVTalk->new(
-    user         => $Self->{auth}{username},
-    access_token => $Self->access_token(),
-    url          => $Self->{auth}{caldavURL} || 'https://caldav.fastmail.com/',
-    expandurl    => 1,
-  );
-
-  return $Self->{calendars};
-}
-
-sub connect_contacts {
-  my $Self = shift;
-
-  if ($Self->{contacts}) {
-    $Self->{lastused} = time();
-    return $Self->{contacts};
-  }
-
-  $Self->{contacts} = Net::CardDAVTalk->new(
-    user         => $Self->{auth}{username},
-    access_token => $Self->access_token(),
-    url          => $Self->{auth}{carddavURL} || 'https://carddav.fastmail.com/',
-    expandurl    => 1,
-  );
-
-  return $Self->{contacts};
-}
-
-sub send_email {
-  my $Self     = shift;
-  my $rfc822   = shift;
-  my $envelope = shift;
-
-  my %args;
-  if ($envelope) {
-    $args{from} = $envelope->{mailFrom}{email};
-    $args{to}   = [ map { $_->{email} } @{$envelope->{rcptTo}} ];
-  } else {
-    $args{from} = $Self->{auth}{username};
-  }
-
-  my $helo  = $ENV{HOSTNAME} || hostname();
-  my $email = Email::Simple->new($rfc822);
-  sendmail($email, {
-    %args,
-    transport => Email::Sender::Transport::OAuthBearerSMTP->new({
-      helo          => $helo,
-      host          => $Self->{auth}{smtpHost} || 'smtp.fastmail.com',
-      port          => $Self->{auth}{smtpPort} || 465,
-      ssl           => 1,
-      sasl_username => $Self->{auth}{username},
-      access_token  => $Self->access_token(),
-    }),
+sub _smtp_transport {
+  my ($Self, $helo) = @_;
+  Email::Sender::Transport::OAuthBearerSMTP->new({
+    helo          => $helo,
+    host          => $Self->{auth}{smtpHost} || 'smtp.fastmail.com',
+    port          => $Self->{auth}{smtpPort} || 465,
+    ssl           => 1,
+    sasl_username => $Self->{auth}{username},
+    access_token  => $Self->access_token(),
   });
 }
 

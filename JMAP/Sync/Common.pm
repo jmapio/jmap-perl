@@ -14,6 +14,7 @@ use Net::CalDAVTalk;
 use Net::CardDAVTalk;
 use MIME::Base64 qw(decode_base64);
 use MIME::QuotedPrint qw(decode_qp);
+use Sys::Hostname;
 
 my %KNOWN_SPECIALS = map { lc $_ => 1 } qw(\\HasChildren \\HasNoChildren \\NoSelect \\NoInferiors);
 
@@ -48,6 +49,113 @@ sub disconnect {
     $Self->{imap}->logout();
     delete $Self->{imap};
   }
+}
+
+# --- Hook methods (subclasses override as needed) ---
+
+sub _imap_class { 'Mail::IMAPTalk' }
+sub _imap_ssl   { 1 }
+sub _imap_auth  { my $Self = shift; (Password => $Self->{auth}{password}) }
+sub _imap_extra { () }
+
+sub _caldav_url  { $_[0]->{auth}{caldavURL} }
+sub _carddav_url { $_[0]->{auth}{carddavURL} }
+sub _dav_auth    { my $Self = shift; (password => $Self->{auth}{password}) }
+
+# --- Connection methods ---
+
+sub connect_imap {
+  my $Self  = shift;
+  my $force = shift;
+
+  if ($Self->{imap} and not $force) {
+    $Self->{lastused} = time();
+    return $Self->{imap};
+  }
+
+  if ($Self->{imap}) {
+    $Self->{imap}->disconnect();
+    delete $Self->{imap};
+  }
+
+  my $usessl = $Self->_imap_ssl();
+  for (1..3) {
+    $Self->{imap} = $Self->_imap_class()->new(
+      Server        => $Self->{auth}{imapHost},
+      Port          => $Self->{auth}{imapPort},
+      Username      => $Self->{auth}{username},
+      $Self->_imap_auth(),
+      UseSSL        => $usessl,
+      UseBlocking   => $usessl,
+      PreserveINBOX => 1,
+      $Self->_imap_extra(),
+    );
+    next unless $Self->{imap};
+    $Self->{lastused} = time();
+    return $Self->{imap};
+  }
+
+  die "Could not connect to IMAP server: $@";
+}
+
+sub connect_calendars {
+  my $Self = shift;
+  my $url  = $Self->_caldav_url() or return;
+
+  if ($Self->{calendars}) {
+    $Self->{lastused} = time();
+    return $Self->{calendars};
+  }
+
+  $Self->{calendars} = Net::CalDAVTalk->new(
+    user      => $Self->{auth}{username},
+    $Self->_dav_auth(),
+    url       => $url,
+    expandurl => 1,
+  );
+
+  return $Self->{calendars};
+}
+
+sub connect_contacts {
+  my $Self = shift;
+  my $url  = $Self->_carddav_url() or return;
+
+  if ($Self->{contacts}) {
+    $Self->{lastused} = time();
+    return $Self->{contacts};
+  }
+
+  $Self->{contacts} = Net::CardDAVTalk->new(
+    user      => $Self->{auth}{username},
+    $Self->_dav_auth(),
+    url       => $url,
+    expandurl => 1,
+  );
+
+  return $Self->{contacts};
+}
+
+sub send_email {
+  my $Self     = shift;
+  my $rfc822   = shift;
+  my $envelope = shift;
+
+  my %args;
+  if ($envelope) {
+    $args{from} = $envelope->{mailFrom}{email};
+    $args{to}   = [ map { $_->{email} } @{$envelope->{rcptTo}} ];
+  } else {
+    $args{from} = $Self->{auth}{username};
+  }
+
+  my $helo  = $ENV{HOSTNAME} || hostname();
+  my $email = Email::Simple->new($rfc822);
+  sendmail($email, {
+    %args,
+    transport => $Self->_smtp_transport($helo),
+  });
+  warn "send_email: sent from $args{from}\n";
 }
 
 sub get_calendars {

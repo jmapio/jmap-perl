@@ -7,120 +7,34 @@ package JMAP::Sync::Standard;
 use base qw(JMAP::Sync::Common);
 
 use Mail::IMAPTalk;
-use Email::Simple;
-use Email::Sender::Simple qw(sendmail);
 use Email::Sender::Transport::SMTP;
-use Net::CalDAVTalk;
-use Net::CardDAVTalk;
 use Sys::Hostname;
 
-sub connect_calendars {
+sub _imap_class { 'Mail::IMAPTalk' }
+
+sub _imap_ssl {
   my $Self = shift;
-
-  return unless $Self->{auth}{caldavURL};
-
-  if ($Self->{calendars}) {
-    $Self->{lastused} = time();
-    return $Self->{calendars};
-  }
-
-  $Self->{calendars} = Net::CalDAVTalk->new(
-    user => $Self->{auth}{username},
-    password => $Self->{auth}{password},
-    url => $Self->{auth}{caldavURL},
-    expandurl => 1,
-  );
-
-  return $Self->{calendars};
+  ($Self->{auth}{imapSSL} || 1) - 1;  # Internal: 1=plain, 2=SSL; IMAPTalk: 0=plain, 1=SSL
 }
 
-sub connect_contacts {
-  my $Self = shift;
-
-  return unless $Self->{auth}{carddavURL};
-
-  if ($Self->{contacts}) {
-    $Self->{lastused} = time();
-    return $Self->{contacts};
-  }
-
-  $Self->{contacts} = Net::CardDAVTalk->new(
-    user => $Self->{auth}{username},
-    password => $Self->{auth}{password},
-    url => $Self->{auth}{carddavURL},
-    expandurl => 1,
-  );
-
-  return $Self->{contacts};
+sub _imap_extra {
+  $ENV{IGNORE_INVALID_CERT}
+    ? (SSL_verify_mode => 0, verify_hostname => 0)
+    : ();
 }
 
-sub connect_imap {
-  my $Self = shift;
-  my $force = shift;
-
-  if ($Self->{imap} and not $force) {
-    $Self->{lastused} = time();
-    return $Self->{imap};
-  }
-
-  $Self->{imap}->disconnect() if $Self->{imap};
-  delete $Self->{imap};
-
-  for (1..3) {
-    my $usessl = ($Self->{auth}{imapSSL} || 1) - 1; # Internal: 1=plain, 2=SSL; IMAPTalk: 0=plain, 1=SSL; default to plain
-    $Self->{imap} = Mail::IMAPTalk->new(
-      Server   => $Self->{auth}{imapHost},
-      Port     => $Self->{auth}{imapPort},
-      Username => $Self->{auth}{username},
-      Password => $Self->{auth}{password},
-      UseSSL   => $usessl,
-      UseBlocking => $usessl,
-      PreserveINBOX => 1,
-      ($ENV{IGNORE_INVALID_CERT}
-        ? (SSL_verify_mode => 0, verify_hostname => 0)
-        : ()),
-    );
-    next unless $Self->{imap};
-    $Self->{lastused} = time();
-    return $Self->{imap};
-  }
-
-  die "Could not connect to IMAP server: $@";
-}
-
-
-sub send_email {
-  my $Self = shift;
-  my $rfc822 = shift;
-  my $envelope = shift;
-
-  # XXX - die if we don't understand envelope params
-  my %args;
-  if ($envelope) {
-    $args{from} = $envelope->{mailFrom}{email};
-    $args{to} = [ map { $_->{email} } @{$envelope->{rcptTo}} ];
-  }
-  else {
-    $args{from} = $Self->{auth}{username};
-  }
-
-  my $helo = $ENV{HOSTNAME} || hostname();
+sub _smtp_transport {
+  my ($Self, $helo) = @_;
   my $smtpSSL = $Self->{auth}{smtpSSL} || 1;
-  my $email = Email::Simple->new($rfc822);
-  my $detail = {
-      helo => $helo,
-      host => $Self->{auth}{smtpHost},
-      port => $Self->{auth}{smtpPort},
-      ($smtpSSL == 2 ? (ssl => 'ssl') : ()),
-      ($smtpSSL == 3 ? (ssl => 'starttls') : ()),
-      sasl_username => $Self->{auth}{username},
-      sasl_password => $Self->{auth}{password},
-  };
-  my $res = sendmail($email, {
-    %args,
-    transport => Email::Sender::Transport::SMTP->new($detail),
+  Email::Sender::Transport::SMTP->new({
+    helo          => $helo,
+    host          => $Self->{auth}{smtpHost},
+    port          => $Self->{auth}{smtpPort},
+    ($smtpSSL == 2 ? (ssl => 'ssl') : ()),
+    ($smtpSSL == 3 ? (ssl => 'starttls') : ()),
+    sasl_username => $Self->{auth}{username},
+    sasl_password => $Self->{auth}{password},
   });
-  warn "send_email: sent from $args{from}\n";
 }
 
 1;
