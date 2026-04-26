@@ -17,15 +17,12 @@ use OAuth2::Tiny;
 use HTTP::Tiny;
 use JSON::XS qw(decode_json encode_json);
 use Sys::Hostname;
+use JMAP::OAuth::Fastmail ();
 
-# Fastmail OAuth2 server metadata (from https://api.fastmail.com/.well-known/oauth-authorization-server)
-use constant FM_AUTH_URL    => 'https://api.fastmail.com/oauth/authorize';
-use constant FM_TOKEN_URL   => 'https://api.fastmail.com/oauth/refresh';
-use constant FM_REG_URL     => 'https://api.fastmail.com/oauth/register';
-use constant FM_SCOPES      => 'urn:ietf:params:oauth:scope:mail '
-                             . 'urn:ietf:params:oauth:scope:contacts '
-                             . 'urn:ietf:params:oauth:scope:calendars '
-                             . 'offline_access';
+use constant FM_AUTH_URL => JMAP::OAuth::Fastmail::AUTH_URL;
+use constant FM_TOKEN_URL => JMAP::OAuth::Fastmail::TOKEN_URL;
+use constant FM_REG_URL   => JMAP::OAuth::Fastmail::REG_URL;
+use constant FM_SCOPES    => JMAP::OAuth::Fastmail::SCOPES;
 
 # Per-process cache of the registered client_id (avoids re-registering on every
 # access_token() call within the same worker process).
@@ -37,14 +34,7 @@ sub _register_client {
   my $ua  = HTTP::Tiny->new(timeout => 15);
   my $res = $ua->request('POST', FM_REG_URL, {
     headers => { 'Content-Type' => 'application/json' },
-    content => encode_json({
-      client_name              => 'jmap-proxy',
-      redirect_uris            => [$redirect_uri],
-      grant_types              => ['authorization_code', 'refresh_token'],
-      response_types           => ['code'],
-      token_endpoint_auth_method => 'none',
-      scope                    => FM_SCOPES,
-    }),
+    content => JMAP::OAuth::Fastmail->registration_body($redirect_uri),
   });
   unless ($res->{success}) {
     die "Fastmail dynamic registration failed: $res->{status} $res->{reason}\n";

@@ -33,6 +33,11 @@ use POSIX qw(:sys_wait_h);
 use Socket;
 use Template;
 use URI;
+use JMAP::OAuth::PKCE;
+use JMAP::OAuth::Google;
+use JMAP::OAuth::Fastmail;
+use JMAP::OAuth::PACC;
+use JMAP::OAuth::OIDC;
 
 # Backend modules (loaded in child after fork)
 # use JMAP::API; use JMAP::ImapDB; etc.
@@ -46,24 +51,7 @@ mkdir "$datadir/tmp" unless -d "$datadir/tmp";
 my $TT = Template->new(INCLUDE_PATH => "$jmaphome/htdocs");
 my $json = JSON::XS->new->utf8->canonical->pretty();
 
-# OIDC provider — RSA keypair for signing id_tokens (RS256).
-# Key is persisted to /data/oidc_key.pem so it survives restarts.
-my $_oidc_rsa;
-sub _oidc_rsa_key {
-    return $_oidc_rsa if $_oidc_rsa;
-    my $keyfile = "$datadir/oidc_key.pem";
-    if (-f $keyfile) {
-        $_oidc_rsa = Crypt::PK::RSA->new($keyfile);
-    } else {
-        $_oidc_rsa = Crypt::PK::RSA->new();
-        $_oidc_rsa->generate_key(256);  # 256 bytes = 2048-bit RSA key
-        open my $fh, '>', $keyfile or die "Cannot write $keyfile: $!";
-        print $fh $_oidc_rsa->export_key_pem('private');
-        close $fh;
-        chmod 0600, $keyfile;
-    }
-    return $_oidc_rsa;
-}
+sub _oidc_rsa_key { JMAP::OAuth::OIDC->rsa_key("$datadir/oidc_key.pem") }
 
 # Short-lived auth codes issued by /oauth/authorize, consumed by /oauth/token.
 my %oidc_codes;   # code => { accountid, email, redirect_uri, exp }
@@ -121,9 +109,9 @@ my $oauth_cleanup_timer = AnyEvent->timer(interval => 120, cb => sub {
   delete $oauth_state{$_} for grep { $oauth_state{$_}{expires} < $now } keys %oauth_state;
 });
 
-sub _base64url { my $b64 = encode_base64($_[0], ''); $b64 =~ tr|+/|-_|; $b64 =~ s/=+$//; $b64 }
-sub _pkce_verifier  { my $buf=''; open my $f,'<:raw','/dev/urandom'; read $f,$buf,32; _base64url($buf) }
-sub _pkce_challenge { _base64url(sha256($_[0])) }
+sub _base64url     { JMAP::OAuth::PKCE::base64url($_[0]) }
+sub _pkce_verifier { JMAP::OAuth::PKCE::verifier() }
+sub _pkce_challenge{ JMAP::OAuth::PKCE::challenge($_[0]) }
 sub _form_encode    { my %h=@_; my $u=URI->new('http:'); $u->query_form(%h); $u->query // '' }
 
 # Token touch cache: token => [ip, time] — flushed to __accounts__ every 5 min
@@ -1499,137 +1487,58 @@ sub _render_step2 {
   $req->respond([200, 'ok', { 'Content-Type' => 'text/html; charset=utf-8' }, $html]);
 }
 
-# Build a Google OAuth2 authorization URL, store state, return redirect URL.
 sub _start_google_oauth {
   my ($email, $auth_aid) = @_;
   my $state_token = _generate_token();
-
-  my $auth_url = URI->new('https://accounts.google.com/o/oauth2/v2/auth');
-  $auth_url->query_param(response_type => 'code');
-  $auth_url->query_param(client_id     => $ENV{GOOGLE_CLIENT_ID});
-  $auth_url->query_param(redirect_uri  => "$BASEURL/cb/oauth");
-  $auth_url->query_param(scope         => join(' ',
-    'https://mail.google.com/',
-    'https://www.googleapis.com/auth/calendar',
-    'https://www.googleapis.com/auth/carddav',
-    'email'));
-  $auth_url->query_param(access_type   => 'offline');
-  $auth_url->query_param(prompt        => 'consent');  # always return refresh_token
-  $auth_url->query_param(login_hint    => $email) if $email;
-  $auth_url->query_param(state         => $state_token);
-
-  $oauth_state{$state_token} = {
+  my ($url, $state) = JMAP::OAuth::Google->auth_url_and_state(
     email         => $email,
     auth_aid      => $auth_aid,
-    provider      => 'google',
-    code_verifier => undef,
-    token_url     => 'https://oauth2.googleapis.com/token',
-    userinfo_url  => 'https://www.googleapis.com/oauth2/v3/userinfo',
+    baseurl       => $BASEURL,
+    state_token   => $state_token,
     client_id     => $ENV{GOOGLE_CLIENT_ID},
     client_secret => $ENV{GOOGLE_CLIENT_SECRET},
-    account_type  => 'gmail',
-    imap          => {
-      imapHost   => 'imap.gmail.com',
-      imapPort   => 993,
-      imapSSL    => 1,
-      smtpHost   => 'smtp.gmail.com',
-      smtpPort   => 587,
-      smtpSSL    => 1,
-      caldavURL  => 'https://apidata.googleusercontent.com/caldav/v2/',
-      carddavURL => 'https://www.googleapis.com/.well-known/carddav',
-    },
-    expires       => time() + 600,
-  };
-  return "$auth_url";
+  );
+  $oauth_state{$state_token} = $state;
+  return $url;
 }
 
-# Fastmail OAuth constants (matching JMAP::Sync::Fastmail)
-use constant FM_AUTH_URL  => 'https://api.fastmail.com/oauth/authorize';
-use constant FM_TOKEN_URL => 'https://api.fastmail.com/oauth/refresh';
-use constant FM_REG_URL   => 'https://api.fastmail.com/oauth/register';
-use constant FM_SCOPES    => join(' ',
-  'urn:ietf:params:oauth:scope:mail',
-  'urn:ietf:params:oauth:scope:contacts',
-  'urn:ietf:params:oauth:scope:calendars',
-  'offline_access');
-use constant FM_IMAP => {
-  imapHost   => 'imap.fastmail.com',  imapPort   => 993,  imapSSL    => 2,
-  smtpHost   => 'smtp.fastmail.com',  smtpPort   => 465,  smtpSSL    => 2,
-  caldavURL  => 'https://caldav.fastmail.com/',
-  carddavURL => 'https://carddav.fastmail.com/',
-};
+my $fastmail_client_id;  # cached from dynamic client registration
 
-my $fastmail_client_id;  # cached from dynamic registration
-
-# Build and store OAuth state, then redirect to Fastmail.
 sub _do_fastmail_redirect {
   my ($client_id, $email, $auth_aid, $req, $via) = @_;
-
-  my $state_token   = _generate_token();
-  my $code_verifier = _pkce_verifier();
-  my $challenge     = _pkce_challenge($code_verifier);
-
-  my $auth_url = URI->new(FM_AUTH_URL);
-  $auth_url->query_param(response_type         => 'code');
-  $auth_url->query_param(client_id             => $client_id);
-  $auth_url->query_param(redirect_uri          => "$BASEURL/cb/oauth");
-  $auth_url->query_param(scope                 => FM_SCOPES);
-  $auth_url->query_param(code_challenge        => $challenge);
-  $auth_url->query_param(code_challenge_method => 'S256');
-  $auth_url->query_param(login_hint            => $email) if $email;
-  $auth_url->query_param(state                 => $state_token);
-
-  $via //= 'imap';
-  $oauth_state{$state_token} = {
+  my $state_token = _generate_token();
+  my $verifier    = _pkce_verifier();
+  my ($url, $state) = JMAP::OAuth::Fastmail->auth_url_and_state(
+    client_id     => $client_id,
     email         => $email,
     auth_aid      => $auth_aid,
-    provider      => 'fastmail',
-    code_verifier => $code_verifier,
-    token_url     => FM_TOKEN_URL,
-    userinfo_url  => undef,   # email comes from login_hint / state
-    client_id     => $client_id,
-    client_secret => '',      # public client
-    account_type  => ($via eq 'jmap' ? 'fastmail_jmap' : 'fastmail'),
-    imap          => FM_IMAP,
+    baseurl       => $BASEURL,
+    state_token   => $state_token,
+    code_verifier => $verifier,
+    challenge     => _pkce_challenge($verifier),
     via           => $via,
-    expires       => time() + 600,
-  };
-
-  $req->respond([302, 'Found', { Location => "$auth_url" }, '']);
+  );
+  $oauth_state{$state_token} = $state;
+  $req->respond([302, 'Found', { Location => $url }, '']);
 }
 
-# Start Fastmail OAuth flow.  Registers a client_id dynamically if needed
-# (draft-ietf-mailmaint-oauth-public / RFC 7591).
 sub _start_fastmail_oauth {
   my ($email, $auth_aid, $req, $via) = @_;
-
   my $client_id = $ENV{FASTMAIL_CLIENT_ID} || $fastmail_client_id;
   if ($client_id) {
     _do_fastmail_redirect($client_id, $email, $auth_aid, $req, $via);
     return;
   }
-
   # Dynamic client registration (async — parent event loop)
-  my $redirect_uri = "$BASEURL/cb/oauth";
-  my $reg_body = encode_json({
-    client_name              => 'jmap-proxy',
-    redirect_uris            => [$redirect_uri],
-    grant_types              => ['authorization_code', 'refresh_token'],
-    response_types           => ['code'],
-    token_endpoint_auth_method => 'none',
-    scope                    => FM_SCOPES,
-  });
-
   my $err_html = sub {
     my ($msg) = @_;
     my $html = '';
     $TT->process("index.html", { baseurl => $BASEURL, error => $msg }, \$html);
     $req->respond([500, 'error', { 'Content-Type' => 'text/html' }, $html]);
   };
-
-  AnyEvent::HTTP::http_request('POST', FM_REG_URL,
+  AnyEvent::HTTP::http_request('POST', JMAP::OAuth::Fastmail::REG_URL,
     headers => { 'Content-Type' => 'application/json' },
-    body    => $reg_body,
+    body    => JMAP::OAuth::Fastmail->registration_body("$BASEURL/cb/oauth"),
     timeout => 10,
     sub {
       my ($rbody, $hdrs) = @_;
@@ -1646,42 +1555,24 @@ sub _start_fastmail_oauth {
   );
 }
 
-# Kick off an OAuth flow from RFC 8414 metadata + PKCE, for PACC-discovered providers.
 sub _start_pacc_oauth {
   my ($meta, $email, $auth_aid, $req, $prefill, $client_id, $client_secret) = @_;
-
-  my $state_token   = _generate_token();
-  my $code_verifier = _pkce_verifier();
-  my $challenge     = _pkce_challenge($code_verifier);
-
-  my $scopes = join(' ', @{ $meta->{scopes_supported} // [] });
-  $scopes ||= 'https://mail.google.com/';  # fallback
-
-  my $auth_url = URI->new($meta->{authorization_endpoint});
-  $auth_url->query_param(response_type         => 'code');
-  $auth_url->query_param(client_id             => $client_id);
-  $auth_url->query_param(redirect_uri          => "$BASEURL/cb/oauth");
-  $auth_url->query_param(scope                 => $scopes);
-  $auth_url->query_param(code_challenge        => $challenge);
-  $auth_url->query_param(code_challenge_method => 'S256');
-  $auth_url->query_param(login_hint            => $email) if $email;
-  $auth_url->query_param(state                 => $state_token);
-
-  $oauth_state{$state_token} = {
+  my $state_token = _generate_token();
+  my $verifier    = _pkce_verifier();
+  my ($url, $state) = JMAP::OAuth::PACC->auth_url_and_state(
+    meta          => $meta,
     email         => $email,
     auth_aid      => $auth_aid,
-    provider      => $meta->{issuer} // 'unknown',
-    code_verifier => $code_verifier,
-    token_url     => $meta->{token_endpoint},
-    userinfo_url  => $meta->{userinfo_endpoint},
+    baseurl       => $BASEURL,
+    state_token   => $state_token,
+    code_verifier => $verifier,
+    challenge     => _pkce_challenge($verifier),
+    prefill       => $prefill,
     client_id     => $client_id,
     client_secret => $client_secret,
-    account_type  => 'imap',
-    imap          => $prefill,
-    expires       => time() + 600,
-  };
-
-  $req->respond([302, 'Found', { Location => "$auth_url" }, '']);
+  );
+  $oauth_state{$state_token} = $state;
+  $req->respond([302, 'Found', { Location => $url }, '']);
 }
 
 # Try PACC, then Mozilla autoconfig, then fall back to step-2 password form.
@@ -2627,21 +2518,11 @@ sub do_oidc_token {
     sub {
       $auth_cache{"bearer:$token"} = [$entry->{accountid}, time() + $AUTH_CACHE_TTL];
 
-      # Build id_token (RS256 JWT)
-      my $now = time();
-      my $id_token = encode_jwt(
-        payload => {
-          iss   => $BASEURL,
-          sub   => $entry->{accountid},
-          aud   => 'tmail-web',
-          iat   => $now,
-          exp   => $now + 3600,
-          email => $entry->{email},
-          email_verified => JSON::true,
-        },
-        alg     => 'RS256',
+      my $id_token = JMAP::OAuth::OIDC->id_token(
+        aid     => $entry->{accountid},
+        email   => $entry->{email},
+        baseurl => $BASEURL,
         key     => _oidc_rsa_key(),
-        extra_headers => { kid => 'jmap-proxy-1' },
       );
 
       my $body = encode_json({
