@@ -85,6 +85,7 @@ my $child_watcher = AnyEvent->signal(signal => 'CHLD', cb => sub {
 my %backend;     # name => [AnyEvent::Handle, cmd_counter, pid, last_active]
 my %waiting;     # name => { cmd_id => [success_cb, error_cb] }
 my %backfilling; # accountid => 1 while prod_backfill loop is active
+my %sync_times;  # accountid => unix timestamp of last successful sync
 
 # EventSource (SSE) push connections
 # %PushMap: accountid => { conn_id => { write => sub, accountids => [...], close_after => '' } }
@@ -137,6 +138,9 @@ sub mk_json {
     my ($hdl, $res) = @_;
     if ($res->[0] eq 'push') {
       PushEvent($accountid, 'state', { changed => { $accountid => $res->[1] } });
+    }
+    elsif ($res->[0] eq 'synced') {
+      $sync_times{$accountid} = $res->[1];
     }
     elsif ($res->[0] eq 'bye') {
       warn "Backend closing $accountid\n";
@@ -648,6 +652,7 @@ sub run_backend_worker {
         $db->sync_imap();
         $db->sync_calendars();
         $db->sync_addressbooks();
+        eval { $write_json->(['synced', time()]) };
         return ['sync', $JSON::true];
       }
       # IMPORTANT: 'backfill' MUST only be sent to "$accountid:backfill" workers,
@@ -3085,6 +3090,15 @@ sub mgmt_metrics {
   $c->('jmap_backend_errors',          'Backend worker error responses received',        $stat{backend_errors});
   $c->('jmap_auth_cache_hits',         'Auth cache lookups that returned a cached result', $stat{auth_cache_hits});
   $c->('jmap_auth_cache_misses',       'Auth cache lookups that required a backend call',  $stat{auth_cache_misses});
+
+  if (%sync_times) {
+    push @out, '# HELP jmap_account_last_sync_age_seconds Seconds since last successful sync per account';
+    push @out, '# TYPE jmap_account_last_sync_age_seconds gauge';
+    for my $aid (sort keys %sync_times) {
+      my $label = $aid =~ s/"/\\"/gr;
+      push @out, "jmap_account_last_sync_age_seconds{accountid=\"$label\"} " . ($now - $sync_times{$aid});
+    }
+  }
 
   $req->respond([200, 'ok',
     { 'Content-Type' => 'text/plain; version=0.0.4; charset=utf-8' },
