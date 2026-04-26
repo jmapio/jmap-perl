@@ -1,0 +1,604 @@
+package JMAP::API;
+use strict;
+use warnings;
+
+use JSON::XS;
+use JSON;
+
+my $json = JSON::XS->new->utf8->canonical();
+
+sub getCalendarPreferences {
+  return ['calendarPreferences', {
+    autoAddCalendarId         => '',
+    autoAddInvitations        => JSON::false,
+    autoAddGroupId            => JSON::null,
+    autoRSVPGroupId           => JSON::null,
+    autoRSVP                  => JSON::false,
+    autoUpdate                => JSON::false,
+    birthdaysAreVisible       => JSON::false,
+    defaultAlerts             => {},
+    defaultAllDayAlerts       => {},
+    defaultCalendarId         => '',
+    firstDayOfWeek            => 1,
+    markReadAndFileAutoAdd    => JSON::false,
+    markReadAndFileAutoUpdate => JSON::false,
+    onlyAutoAddIfInGroup      => JSON::false,
+    onlyAutoRSVPIfInGroup     => JSON::false,
+    showWeekNumbers           => JSON::false,
+    timeZone                  => JSON::null,
+    useTimeZones              => JSON::false,
+  }];
+}
+
+sub api_Calendar_get {
+  my $Self = shift;
+  my $args = shift;
+
+  $Self->begin();
+
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  my $newState = "$user->{jstateCalendar}";
+
+  my $data = $Self->{db}->dget('jcalendars', { active => 1 });
+
+  my %want;
+  if ($args->{ids}) {
+    %want = map { $Self->idmap($_) => 1 } @{$args->{ids}};
+  }
+  else {
+    %want = map { $_->{jcalendarid} => 1 } @$data;
+  }
+
+  my @list;
+
+  foreach my $item (@$data) {
+    next unless delete $want{$item->{jcalendarid}};
+
+    my %rec = (
+      id                     => "$item->{jcalendarid}",
+      name                   => "$item->{name}",
+      color                  => "$item->{color}",
+      sortOrder              => $item->{sortOrder}  || 0,
+      isDefault              => $item->{isDefault}  ? $JSON::true : $JSON::false,
+      isSubscribed           => $JSON::true,
+      includeInAvailability  => $item->{includeInAvailability} || 'all',
+      isVisible              => $item->{isVisible}  ? $JSON::true : $JSON::false,
+      myRights => {
+        mayReadFreeBusy  => $item->{mayReadFreeBusy}  ? $JSON::true : $JSON::false,
+        mayReadItems     => $item->{mayReadItems}     ? $JSON::true : $JSON::false,
+        mayWriteAll      => $item->{mayAddItems}      ? $JSON::true : $JSON::false,
+        mayWriteOwn      => $item->{mayAddItems}      ? $JSON::true : $JSON::false,
+        mayUpdatePrivate => $item->{mayModifyItems}   ? $JSON::true : $JSON::false,
+        mayRSVP          => $JSON::false,
+        mayAdmin         => $item->{mayDelete}        ? $JSON::true : $JSON::false,
+        mayDelete        => $item->{mayDelete}        ? $JSON::true : $JSON::false,
+      },
+    );
+
+    foreach my $key (keys %rec) {
+      delete $rec{$key} unless _prop_wanted($args, $key);
+    }
+
+    push @list, \%rec;
+  }
+
+  $Self->commit();
+
+  my %missingids = %want;
+
+  return ['Calendar/get', {
+    list => \@list,
+    accountId => $accountid,
+    state => $newState,
+    notFound => [map { "$_" } keys %missingids],
+  }];
+}
+
+sub api_Calendar_changes {
+  my $Self = shift;
+  my $args = shift;
+
+  $Self->begin();
+
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  my $newState = "$user->{jstateCalendar}";
+
+  my $sinceState = $args->{sinceState};
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['position']}])
+    if not $args->{sinceState};
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
+    if ($user->{jdeletedmodseq} and $sinceState <= $user->{jdeletedmodseq});
+
+  my $data = $Self->{db}->dget('jcalendars', {}, 'jcalendarid,jmodseq,active,jcreated');
+
+  if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
+    return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
+  }
+
+  $Self->commit();
+
+  my @created;
+  my @updated;
+  my @destroyed;
+  foreach my $item (@$data) {
+    if ($item->{jmodseq} > $sinceState) {
+      if ($item->{active}) {
+        if ($item->{jcreated} <= $sinceState) {
+          push @updated, $item->{jcalendarid};
+        }
+        else {
+          push @created, $item->{jcalendarid};
+        }
+      }
+      else {
+        if ($item->{jcreated} <= $sinceState) {
+          push @destroyed, $item->{jcalendarid};
+        }
+        # otherwise never seen
+      }
+    }
+  }
+
+  my @res = (['Calendar/changes', {
+    accountId => $accountid,
+    oldState => "$sinceState",
+    newState => $newState,
+    created => [map { "$_" } @created],
+    updated => [map { "$_" } @updated],
+    destroyed => [map { "$_" } @destroyed],
+    hasMoreChanges => JSON::false,
+  }]);
+
+  return @res;
+}
+
+sub api_Calendar_set {
+  my $Self = shift;
+  my $args = shift;
+
+  $Self->begin();
+
+  my $accountid = $Self->{db}->accountid();
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  $Self->commit();
+
+  my $create = $args->{create} || {};
+  my $update = $args->{update} || {};
+  my $destroy = $args->{destroy} || [];
+
+  my ($created, $notCreated, $updated, $notUpdated, $destroyed, $notDestroyed);
+  my ($oldState, $newState);
+
+  my $scoped_lock = $Self->{db}->begin_superlock();
+
+  $Self->{db}->sync_calendars();
+
+  $Self->begin();
+  my $user = $Self->{db}->get_user();
+  $oldState = "$user->{jstateCalendar}";
+  $Self->commit();
+
+  ($created, $notCreated) = $Self->{db}->create_calendars($create);
+  $Self->setid($_, $created->{$_}{id}) for keys %$created;
+  $Self->_resolve_patch($update, 'api_Calendar_get');
+  ($updated, $notUpdated) = $Self->{db}->update_calendars($update, sub { $Self->idmap(shift) });
+  ($destroyed, $notDestroyed) = $Self->{db}->destroy_calendars($destroy);
+
+  # XXX - cheap dumb racy version
+  $Self->{db}->sync_calendars();
+
+  $Self->begin();
+  $user = $Self->{db}->get_user();
+  $newState = "$user->{jstateCalendar}";
+  $Self->commit();
+
+  my @res;
+  push @res, ['Calendar/set', {
+    accountId => $accountid,
+    oldState => $oldState,
+    newState => $newState,
+    created => _nullempty($created),
+    notCreated => _nullempty($notCreated),
+    updated => _nullempty($updated),
+    notUpdated => _nullempty($notUpdated),
+    destroyed => _nullempty($destroyed),
+    notDestroyed => _nullempty($notDestroyed),
+  }];
+
+  return @res;
+}
+
+sub _event_match {
+  my $Self = shift;
+  my ($item, $condition, $storage) = @_;
+
+  # XXX - condition handling code
+  if ($condition->{inCalendars}) {
+    my $match = 0;
+    foreach my $id (@{$condition->{inCalendars}}) {
+      next unless $item->{jcalendarid} eq $id;
+      $match = 1;
+    }
+    return 0 unless $match;
+  }
+
+  # Date-range filter: events must overlap [after, before).
+  # We only filter events that have start in payload (non-recurring check).
+  # Recurring events always pass — expansion is the client's job per spec.
+  if ($condition->{after} || $condition->{before}) {
+    my $payload = $Self->{db}->read_jevent_payload($item->{eventuid}) // {};
+    my $start = $payload->{start} // '';
+    my $duration = $payload->{duration} // 'PT0S';
+    my $is_recurring = $payload->{recurrenceRules} || $payload->{recurrenceRule};
+    unless ($is_recurring) {
+      if ($condition->{after} && $start lt $condition->{after}) {
+        # simple string compare works for ISO 8601 datetimes
+        return 0;
+      }
+      if ($condition->{before} && $start ge $condition->{before}) {
+        return 0;
+      }
+    }
+  }
+
+  return 1;
+}
+
+sub _event_filter {
+  my $Self = shift;
+  my ($data, $filter, $storage) = @_;
+  my @res;
+  foreach my $item (@$data) {
+    next unless $Self->_event_match($item, $filter, $storage);
+    push @res, $item;
+  }
+  return \@res;
+}
+
+sub api_CalendarEvent_query {
+  my $Self = shift;
+  my $args = shift;
+
+  $Self->begin();
+
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  my $newQueryState = "$user->{jstateCalendarEvent}";
+
+  my $start = $args->{position} || 0;
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['position']}])
+    if $start < 0;
+
+  my $data = $Self->{db}->dget('jevents', { active => 1 }, 'eventuid,jcalendarid');
+
+  $data = $Self->_event_filter($data, $args->{filter}, {}) if $args->{filter};
+
+  my $end = $args->{limit} ? $start + $args->{limit} - 1 : $#$data;
+  $end = $#$data if $end > $#$data;
+
+  my @result = map { $data->[$_]{eventuid} } $start..$end;
+
+  $Self->commit();
+
+  my @res;
+  push @res, ['CalendarEvent/query', {
+    accountId => $accountid,
+    filter => $args->{filter},
+    sort => $args->{sort},
+    queryState => $newQueryState,
+    position => $start,
+    total => scalar(@$data),
+    ids => [map { "$_" } @result],
+  }];
+
+  return @res;
+}
+
+sub api_CalendarEvent_get {
+  my $Self = shift;
+  my $args = shift;
+
+  $Self->begin();
+
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  my $newState = "$user->{jstateCalendarEvent}";
+
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['ids']}])
+    unless $args->{ids};
+  #properties: String[] A list of properties to fetch for each message.
+
+  my %seenids;
+  my %missingids;
+  my @list;
+  foreach my $eventuid (map { $Self->idmap($_) } @{$args->{ids}}) {
+    next if $seenids{$eventuid};
+    $seenids{$eventuid} = 1;
+
+    my $data = $Self->{db}->dgetone('jevents', { eventuid => $eventuid }, 'jcalendarid');
+    unless ($data) {
+      $missingids{$eventuid} = 1;
+      next;
+    }
+
+    my $item = $Self->{db}->read_jevent_payload($eventuid);
+    unless ($item) {
+      $missingids{$eventuid} = 1;
+      next;
+    }
+
+    foreach my $key (keys %$item) {
+      delete $item->{$key} unless _prop_wanted($args, $key);
+    }
+
+    $item->{id} = $eventuid;
+    $item->{calendarIds} = { "$data->{jcalendarid}" => JSON::true } if _prop_wanted($args, "calendarIds");
+
+    push @list, $item;
+  }
+
+  $Self->commit();
+
+  return ['CalendarEvent/get', {
+    list => \@list,
+    accountId => $accountid,
+    state => $newState,
+    notFound => [map { "$_" } keys %missingids],
+  }];
+}
+
+sub api_CalendarEvent_changes {
+  my $Self = shift;
+  my $args = shift;
+
+  $Self->begin();
+
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  my $newState = "$user->{jstateCalendarEvent}";
+
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceState']}])
+    if not $args->{sinceState};
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
+    if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
+
+  my $data = $Self->{db}->dget('jevents', { jmodseq => ['>', $args->{sinceState}] }, 'eventuid,active,jcreated');
+
+  if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
+    return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
+  }
+
+  $Self->commit();
+
+  my @created;
+  my @updated;
+  my @destroyed;
+
+  foreach my $row (@$data) {
+    if ($row->{active}) {
+      if ($row->{jcreated} <= $args->{sinceState}) {
+        push @updated, $row->{eventuid};
+      }
+      else {
+        push @created, $row->{eventuid};
+      }
+    }
+    else {
+      if ($row->{jcreated} <= $args->{sinceState}) {
+        push @destroyed, $row->{eventuid};
+      }
+      # otherwise never seen
+    }
+  }
+
+  my @res;
+  push @res, ['CalendarEvent/changes', {
+    accountId => $accountid,
+    oldState => "$args->{sinceState}",
+    newState => $newState,
+    created => [map { "$_" } @created],
+    updated => [map { "$_" } @updated],
+    destroyed => [map { "$_" } @destroyed],
+    hasMoreChanges => JSON::false,
+  }];
+
+  return @res;
+}
+
+sub api_CalendarEvent_queryChanges {
+  my $Self = shift;
+  my $args = shift;
+
+  $Self->begin();
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  my $newQueryState = "$user->{jstateCalendarEvent}";
+  my $sinceQueryState = $args->{sinceQueryState};
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceQueryState']}])
+    unless $sinceQueryState;
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newQueryState => $newQueryState}])
+    if ($user->{jdeletedmodseq} and $sinceQueryState <= $user->{jdeletedmodseq});
+
+  my $data = $Self->{db}->dget('jevents', { active => 1 }, 'eventuid,jmodseq');
+  my $total = scalar @$data;
+
+  my %idx;
+  my $i = 0;
+  $idx{$_->{eventuid}} = $i++ for @$data;
+
+  my $changed = $Self->{db}->dget('jevents', { jmodseq => ['>', $sinceQueryState] }, 'eventuid,active');
+
+  $Self->commit();
+
+  my @added;
+  my @destroyed;
+  for my $row (@$changed) {
+    push @destroyed, "$row->{eventuid}";
+    if ($row->{active} && exists $idx{$row->{eventuid}}) {
+      push @added, { id => "$row->{eventuid}", index => $idx{$row->{eventuid}} };
+    }
+  }
+
+  return ['CalendarEvent/queryChanges', {
+    accountId     => $accountid,
+    filter        => $args->{filter},
+    sort          => $args->{sort},
+    oldQueryState => "$sinceQueryState",
+    newQueryState => $newQueryState,
+    total         => $total,
+    removed       => \@destroyed,
+    added         => \@added,
+  }];
+}
+
+sub api_CalendarEvent_copy {
+  my $Self = shift;
+  my $args = shift;
+  my $accountid = $Self->{db}->accountid();
+  return ['error', { type => 'notImplemented' }];
+}
+
+sub api_CalendarEvent_parse {
+  my $Self = shift;
+  my $args = shift;
+  return ['error', { type => 'notImplemented' }];
+}
+
+sub api_CalendarEvent_set {
+  my $Self = shift;
+  my $args = shift;
+
+  $Self->begin();
+
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return $Self->_transError(['error', {type => 'accountNotFound'}])
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+
+  $Self->commit();
+
+  my $create = $args->{create} || {};
+  my $update = $args->{update} || {};
+  my $destroy = $args->{destroy} || [];
+
+  my ($created, $notCreated, $updated, $notUpdated, $destroyed, $notDestroyed);
+  my ($oldState, $newState);
+
+  my $scoped_lock = $Self->{db}->begin_superlock();
+
+  $Self->{db}->sync_calendars();
+
+  $Self->begin();
+  $user = $Self->{db}->get_user();
+  $oldState = "$user->{jstateCalendarEvent}";
+  $Self->commit();
+
+  ($created, $notCreated) = $Self->{db}->create_calendar_events($create);
+  $Self->setid($_, $created->{$_}{id}) for keys %$created;
+  $Self->_resolve_patch($update, 'api_CalendarEvent_get');
+  ($updated, $notUpdated) = $Self->{db}->update_calendar_events($update, sub { $Self->idmap(shift) });
+  ($destroyed, $notDestroyed) = $Self->{db}->destroy_calendar_events($destroy);
+
+  # XXX - cheap dumb racy version
+  $Self->{db}->sync_calendars();
+
+  $Self->begin();
+  $user = $Self->{db}->get_user();
+  $newState = "$user->{jstateCalendarEvent}";
+  $Self->commit();
+
+  my @res;
+  push @res, ['CalendarEvent/set', {
+    accountId => $accountid,
+    oldState => $oldState,
+    newState => $newState,
+    created => _nullempty($created),
+    notCreated => _nullempty($notCreated),
+    updated => _nullempty($updated),
+    notUpdated => _nullempty($notUpdated),
+    destroyed => _nullempty($destroyed),
+    notDestroyed => _nullempty($notDestroyed),
+  }];
+
+  return @res;
+}
+
+sub api_ParticipantIdentity_get {
+  my $Self = shift;
+  my $args = shift;
+  $Self->begin();
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  $Self->commit();
+  return ['ParticipantIdentity/get', {
+    accountId => $accountid,
+    state     => "$user->{jhighestmodseq}",
+    list      => [],
+    notFound  => $args->{ids} ? [map { "$_" } @{$args->{ids}}] : [],
+  }];
+}
+
+sub api_ParticipantIdentity_changes {
+  my $Self = shift;
+  my $args = shift;
+  $Self->begin();
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  $Self->commit();
+  my $state = "$user->{jhighestmodseq}";
+  return ['ParticipantIdentity/changes', {
+    accountId      => $accountid,
+    oldState       => $args->{sinceState} // $state,
+    newState       => $state,
+    created        => [],
+    updated        => [],
+    destroyed      => [],
+    hasMoreChanges => JSON::false,
+  }];
+}
+
+sub api_ParticipantIdentity_set {
+  my $Self = shift;
+  my $args = shift;
+  $Self->begin();
+  my $user = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  $Self->commit();
+  my $state = "$user->{jhighestmodseq}";
+  my %notCreated = map { $_ => { type => 'notImplemented' } } keys %{$args->{create} || {}};
+  return ['ParticipantIdentity/set', {
+    accountId    => $accountid,
+    oldState     => $state,
+    newState     => $state,
+    created      => undef,
+    notCreated   => _nullempty(\%notCreated),
+    updated      => undef,
+    notUpdated   => undef,
+    destroyed    => undef,
+    notDestroyed => undef,
+  }];
+}
+
+1;
