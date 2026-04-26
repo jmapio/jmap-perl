@@ -12,12 +12,8 @@ sub api_Thread_get {
   my $Self = shift;
   my $args = shift;
 
-  $Self->begin();
-
-  my $user = $Self->{db}->get_user();
-  my $accountid = $Self->{db}->accountid();
-  return $Self->_transError(['error', {type => 'accountNotFound'}])
-    if ($args->{accountId} and $args->{accountId} ne $accountid);
+  my ($user, $accountid) = $Self->_api_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
 
   my $newState = "$user->{jstateThread}";
 
@@ -58,12 +54,8 @@ sub api_Thread_changes {
   my $Self = shift;
   my $args = shift;
 
-  $Self->begin();
-
-  my $user = $Self->{db}->get_user();
-  my $accountid = $Self->{db}->accountid();
-  return $Self->_transError(['error', {type => 'accountNotFound'}])
-    if ($args->{accountId} and $args->{accountId} ne $accountid);
+  my ($user, $accountid) = $Self->_api_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
 
   my $newState = "$user->{jstateThread}";
 
@@ -88,34 +80,16 @@ sub api_Thread_changes {
 
   $Self->commit();
 
-  my @created;
-  my @updated;
-  my @destroyed;
-  foreach my $row (@$data) {
-    if ($row->{active}) {
-      if ($row->{jcreated} <= $args->{sinceState}) {
-        push @updated, $row->{thrid};
-      }
-      else {
-        push @created, $row->{thrid};
-      }
-    }
-    else {
-      if ($row->{jcreated} <= $args->{sinceState}) {
-        push @destroyed, $row->{thrid};
-      }
-      # otherwise never seen
-    }
-  }
+  my ($created, $updated, $destroyed) = $Self->_classify_changes($data, $args->{sinceState}, 'thrid');
 
   my @res;
   push @res, ['Thread/changes', {
     accountId => $accountid,
     oldState => $args->{sinceState},
     newState => $newState,
-    created => \@created,
-    updated => \@updated,
-    destroyed => \@destroyed,
+    created => $created,
+    updated => $updated,
+    destroyed => $destroyed,
     hasMoreChanges => $partial ? JSON::true : JSON::false,
   }];
 

@@ -13,11 +13,8 @@ sub api_MDN_send {
   my $Self = shift;
   my $args = shift;
 
-  $Self->begin();
-  my $user      = $Self->{db}->get_user();
-  my $accountid = $Self->{db}->accountid();
-  return $Self->_transError(['error', {type => 'accountNotFound'}])
-    if ($args->{accountId} and $args->{accountId} ne $accountid);
+  my ($user, $accountid) = $Self->_api_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
   $Self->commit();
 
   return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['identityId']}])

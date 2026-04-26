@@ -198,12 +198,8 @@ sub api_Mailbox_get {
   my $Self = shift;
   my $args = shift;
 
-  $Self->begin();
-
-  my $user = $Self->{db}->get_user();
-  my $accountid = $Self->{db}->accountid();
-  return $Self->_transError(['error', {type => 'accountNotFound'}])
-    if ($args->{accountId} and $args->{accountId} ne $accountid);
+  my ($user, $accountid) = $Self->_api_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
 
   my $newState = "$user->{jstateMailbox}";
 
@@ -259,12 +255,8 @@ sub api_Mailbox_query {
   my $Self = shift;
   my $args = shift;
 
-  $Self->begin();
-
-  my $user = $Self->{db}->get_user();
-  my $accountid = $Self->{db}->accountid();
-  return $Self->_transError(['error', {type => 'accountNotFound'}])
-    if ($args->{accountId} and $args->{accountId} ne $accountid);
+  my ($user, $accountid) = $Self->_api_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
 
   my $newQueryState = "$user->{jstateMailbox}";
 
@@ -343,11 +335,8 @@ sub api_Mailbox_changes {
   my $Self = shift;
   my $args = shift;
 
-  $Self->begin();
-  my $user = $Self->{db}->get_user();
-  my $accountid = $Self->{db}->accountid();
-  return $Self->_transError(['error', {type => 'accountNotFound'}])
-    if ($args->{accountId} and $args->{accountId} ne $accountid);
+  my ($user, $accountid) = $Self->_api_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
 
   my $newState = "$user->{jstateMailbox}";
 

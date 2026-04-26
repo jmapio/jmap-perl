@@ -110,11 +110,8 @@ sub api_UserPreferences_set {
   my $Self = shift;
   my $args = shift;
 
-  $Self->begin();
-  my $user = $Self->{db}->get_user();
-  my $accountid = $Self->{db}->accountid();
-  return $Self->_transError(['error', {type => 'accountNotFound'}])
-    if ($args->{accountId} and $args->{accountId} ne $accountid);
+  my ($user, $accountid) = $Self->_api_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
   $Self->commit();
 
   my $oldState = "$user->{jstateUserPreferences}";
@@ -252,11 +249,8 @@ sub api_ClientPreferences_set {
   my $Self = shift;
   my $args = shift;
 
-  $Self->begin();
-  my $user = $Self->{db}->get_user();
-  my $accountid = $Self->{db}->accountid();
-  return $Self->_transError(['error', {type => 'accountNotFound'}])
-    if ($args->{accountId} and $args->{accountId} ne $accountid);
+  my ($user, $accountid) = $Self->_api_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
   $Self->commit();
 
   my $create = $args->{create} || {};
@@ -388,11 +382,8 @@ sub api_CalendarPreferences_set {
   my $Self = shift;
   my $args = shift;
 
-  $Self->begin();
-  my $user = $Self->{db}->get_user();
-  my $accountid = $Self->{db}->accountid();
-  return $Self->_transError(['error', {type => 'accountNotFound'}])
-    if ($args->{accountId} and $args->{accountId} ne $accountid);
+  my ($user, $accountid) = $Self->_api_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
   $Self->commit();
 
   my $oldState = "$user->{jstateCalendarPreferences}";

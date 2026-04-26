@@ -34,12 +34,8 @@ sub api_Calendar_get {
   my $Self = shift;
   my $args = shift;
 
-  $Self->begin();
-
-  my $user = $Self->{db}->get_user();
-  my $accountid = $Self->{db}->accountid();
-  return $Self->_transError(['error', {type => 'accountNotFound'}])
-    if ($args->{accountId} and $args->{accountId} ne $accountid);
+  my ($user, $accountid) = $Self->_api_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
 
   my $newState = "$user->{jstateCalendar}";
 
@@ -102,12 +98,8 @@ sub api_Calendar_changes {
   my $Self = shift;
   my $args = shift;
 
-  $Self->begin();
-
-  my $user = $Self->{db}->get_user();
-  my $accountid = $Self->{db}->accountid();
-  return $Self->_transError(['error', {type => 'accountNotFound'}])
-    if ($args->{accountId} and $args->{accountId} ne $accountid);
+  my ($user, $accountid) = $Self->_api_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
 
   my $newState = "$user->{jstateCalendar}";
 
@@ -125,35 +117,16 @@ sub api_Calendar_changes {
 
   $Self->commit();
 
-  my @created;
-  my @updated;
-  my @destroyed;
-  foreach my $item (@$data) {
-    if ($item->{jmodseq} > $sinceState) {
-      if ($item->{active}) {
-        if ($item->{jcreated} <= $sinceState) {
-          push @updated, $item->{jcalendarid};
-        }
-        else {
-          push @created, $item->{jcalendarid};
-        }
-      }
-      else {
-        if ($item->{jcreated} <= $sinceState) {
-          push @destroyed, $item->{jcalendarid};
-        }
-        # otherwise never seen
-      }
-    }
-  }
+  my @changed = grep { $_->{jmodseq} > $sinceState } @$data;
+  my ($created, $updated, $destroyed) = $Self->_classify_changes(\@changed, $sinceState, 'jcalendarid');
 
   my @res = (['Calendar/changes', {
     accountId => $accountid,
     oldState => "$sinceState",
     newState => $newState,
-    created => [map { "$_" } @created],
-    updated => [map { "$_" } @updated],
-    destroyed => [map { "$_" } @destroyed],
+    created => [map { "$_" } @$created],
+    updated => [map { "$_" } @$updated],
+    destroyed => [map { "$_" } @$destroyed],
     hasMoreChanges => JSON::false,
   }]);
 
@@ -269,12 +242,8 @@ sub api_CalendarEvent_query {
   my $Self = shift;
   my $args = shift;
 
-  $Self->begin();
-
-  my $user = $Self->{db}->get_user();
-  my $accountid = $Self->{db}->accountid();
-  return $Self->_transError(['error', {type => 'accountNotFound'}])
-    if ($args->{accountId} and $args->{accountId} ne $accountid);
+  my ($user, $accountid) = $Self->_api_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
 
   my $newQueryState = "$user->{jstateCalendarEvent}";
 
@@ -311,12 +280,8 @@ sub api_CalendarEvent_get {
   my $Self = shift;
   my $args = shift;
 
-  $Self->begin();
-
-  my $user = $Self->{db}->get_user();
-  my $accountid = $Self->{db}->accountid();
-  return $Self->_transError(['error', {type => 'accountNotFound'}])
-    if ($args->{accountId} and $args->{accountId} ne $accountid);
+  my ($user, $accountid) = $Self->_api_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
 
   my $newState = "$user->{jstateCalendarEvent}";
 
@@ -367,12 +332,8 @@ sub api_CalendarEvent_changes {
   my $Self = shift;
   my $args = shift;
 
-  $Self->begin();
-
-  my $user = $Self->{db}->get_user();
-  my $accountid = $Self->{db}->accountid();
-  return $Self->_transError(['error', {type => 'accountNotFound'}])
-    if ($args->{accountId} and $args->{accountId} ne $accountid);
+  my ($user, $accountid) = $Self->_api_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
 
   my $newState = "$user->{jstateCalendarEvent}";
 
@@ -389,35 +350,16 @@ sub api_CalendarEvent_changes {
 
   $Self->commit();
 
-  my @created;
-  my @updated;
-  my @destroyed;
-
-  foreach my $row (@$data) {
-    if ($row->{active}) {
-      if ($row->{jcreated} <= $args->{sinceState}) {
-        push @updated, $row->{eventuid};
-      }
-      else {
-        push @created, $row->{eventuid};
-      }
-    }
-    else {
-      if ($row->{jcreated} <= $args->{sinceState}) {
-        push @destroyed, $row->{eventuid};
-      }
-      # otherwise never seen
-    }
-  }
+  my ($created, $updated, $destroyed) = $Self->_classify_changes($data, $args->{sinceState}, 'eventuid');
 
   my @res;
   push @res, ['CalendarEvent/changes', {
     accountId => $accountid,
     oldState => "$args->{sinceState}",
     newState => $newState,
-    created => [map { "$_" } @created],
-    updated => [map { "$_" } @updated],
-    destroyed => [map { "$_" } @destroyed],
+    created => [map { "$_" } @$created],
+    updated => [map { "$_" } @$updated],
+    destroyed => [map { "$_" } @$destroyed],
     hasMoreChanges => JSON::false,
   }];
 
@@ -428,11 +370,8 @@ sub api_CalendarEvent_queryChanges {
   my $Self = shift;
   my $args = shift;
 
-  $Self->begin();
-  my $user = $Self->{db}->get_user();
-  my $accountid = $Self->{db}->accountid();
-  return $Self->_transError(['error', {type => 'accountNotFound'}])
-    if ($args->{accountId} and $args->{accountId} ne $accountid);
+  my ($user, $accountid) = $Self->_api_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
 
   my $newQueryState = "$user->{jstateCalendarEvent}";
   my $sinceQueryState = $args->{sinceQueryState};

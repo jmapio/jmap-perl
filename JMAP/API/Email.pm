@@ -362,12 +362,8 @@ sub api_Email_query {
   my $Self = shift;
   my $args = shift;
 
-  $Self->begin();
-
-  my $user = $Self->{db}->get_user();
-  my $accountid = $Self->{db}->accountid();
-  return $Self->_transError(['error', {type => 'accountNotFound'}])
-    if ($args->{accountId} and $args->{accountId} ne $accountid);
+  my ($user, $accountid) = $Self->_api_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
 
   my $newQueryState = "$user->{jstateEmail}";
 
@@ -430,12 +426,8 @@ sub api_Email_queryChanges {
   my $Self = shift;
   my $args = shift;
 
-  $Self->begin();
-
-  my $user = $Self->{db}->get_user();
-  my $accountid = $Self->{db}->accountid();
-  return $Self->_transError(['error', {type => 'accountNotFound'}])
-    if ($args->{accountId} and $args->{accountId} ne $accountid);
+  my ($user, $accountid) = $Self->_api_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
 
   my $newQueryState = "$user->{jstateEmail}";
 
@@ -590,12 +582,8 @@ sub api_Email_get {
   my $Self = shift;
   my $args = shift;
 
-  $Self->begin();
-
-  my $user = $Self->{db}->get_user();
-  my $accountid = $Self->{db}->accountid();
-  return $Self->_transError(['error', {type => 'accountNotFound'}])
-    if ($args->{accountId} and $args->{accountId} ne $accountid);
+  my ($user, $accountid) = $Self->_api_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
 
   my $newState = "$user->{jstateEmail}";
 
@@ -953,12 +941,8 @@ sub api_Email_changes {
   my $Self = shift;
   my $args = shift;
 
-  $Self->begin();
-
-  my $user = $Self->{db}->get_user();
-  my $accountid = $Self->{db}->accountid();
-  return $Self->_transError(['error', {type => 'accountNotFound'}])
-    if ($args->{accountId} and $args->{accountId} ne $accountid);
+  my ($user, $accountid) = $Self->_api_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
 
   my $newState = "$user->{jstateEmail}";
 
@@ -982,34 +966,16 @@ sub api_Email_changes {
 
   $Self->commit();
 
-  my @created;
-  my @updated;
-  my @destroyed;
-
-  foreach my $row (@$data) {
-    if ($row->{active}) {
-      if ($row->{jcreated} <= $args->{sinceState}) {
-        push @updated, $row->{msgid};
-      } else {
-        push @created, $row->{msgid};
-      }
-    }
-    else {
-      if ($row->{jcreated} <= $args->{sinceState}) {
-        push @destroyed, $row->{msgid};
-      }
-      # otherwise never seen
-    }
-  }
+  my ($created, $updated, $destroyed) = $Self->_classify_changes($data, $args->{sinceState}, 'msgid');
 
   my @res;
   push @res, ['Email/changes', {
     accountId => $accountid,
     oldState => "$args->{sinceState}",
     newState => $newState,
-    created => [map { "$_" } @created],
-    updated => [map { "$_" } @updated],
-    destroyed => [map { "$_" } @destroyed],
+    created => [map { "$_" } @$created],
+    updated => [map { "$_" } @$updated],
+    destroyed => [map { "$_" } @$destroyed],
     hasMoreChanges => $partial ? JSON::true : JSON::false,
   }];
 
@@ -1094,12 +1060,8 @@ sub api_Email_import {
   # make sure our DB is up to date
   $Self->{db}->sync_folders();
 
-  $Self->begin();
-
-  my $user = $Self->{db}->get_user();
-  my $accountid = $Self->{db}->accountid();
-  return $Self->_transError(['error', {type => 'accountNotFound'}])
-    if ($args->{accountId} and $args->{accountId} ne $accountid);
+  my ($user, $accountid) = $Self->_api_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
 
   return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['emails']}])
     if (not $args->{emails} or ref($args->{emails}) ne 'HASH');

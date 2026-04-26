@@ -40,12 +40,8 @@ sub api_Contact_query {
   my $Self = shift;
   my $args = shift;
 
-  $Self->begin();
-
-  my $user = $Self->{db}->get_user();
-  my $accountid = $Self->{db}->accountid();
-  return $Self->_transError(['error', {type => 'accountNotFound'}])
-    if ($args->{accountId} and $args->{accountId} ne $accountid);
+  my ($user, $accountid) = $Self->_api_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
 
   my $newQueryState = "$user->{jstateContact}";
 
@@ -82,12 +78,8 @@ sub api_Contact_get {
   my $Self = shift;
   my $args = shift;
 
-  $Self->begin();
-
-  my $user = $Self->{db}->get_user();
-  my $accountid = $Self->{db}->accountid();
-  return $Self->_transError(['error', {type => 'accountNotFound'}])
-    if ($args->{accountId} and $args->{accountId} ne $accountid);
+  my ($user, $accountid) = $Self->_api_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
 
   my $newState = "$user->{jstateContact}";
 
@@ -137,12 +129,8 @@ sub api_Contact_changes {
   my $Self = shift;
   my $args = shift;
 
-  $Self->begin();
-
-  my $user = $Self->{db}->get_user();
-  my $accountid = $Self->{db}->accountid();
-  return $Self->_transError(['error', {type => 'accountNotFound'}])
-    if ($args->{accountId} and $args->{accountId} ne $accountid);
+  my ($user, $accountid) = $Self->_api_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
 
   my $newState = "$user->{jstateContact}";
 
@@ -158,35 +146,16 @@ sub api_Contact_changes {
   }
   $Self->commit();
 
-  my @created;
-  my @updated;
-  my @destroyed;
-
-  foreach my $row (@$data) {
-    if ($row->{active}) {
-      if ($row->{jcreated} <= $args->{sinceState}) {
-        push @updated, $row->{contactuid};
-      }
-      else {
-        push @created, $row->{contactuid};
-      }
-    }
-    else {
-      if ($row->{jcreated} <= $args->{sinceState}) {
-        push @destroyed, $row->{contactuid};
-      }
-      # otherwise never seen
-    }
-  }
+  my ($created, $updated, $destroyed) = $Self->_classify_changes($data, $args->{sinceState}, 'contactuid');
 
   my @res;
   push @res, ['Contact/changes', {
     accountId => $accountid,
     oldState => "$args->{sinceState}",
     newState => $newState,
-    created => [map { "$_" } @created],
-    updated => [map { "$_" } @updated],
-    destroyed => [map { "$_" } @destroyed],
+    created => [map { "$_" } @$created],
+    updated => [map { "$_" } @$updated],
+    destroyed => [map { "$_" } @$destroyed],
     hasMoreChanges => JSON::false,
   }];
 
@@ -255,12 +224,8 @@ sub api_ContactGroup_get {
   my $Self = shift;
   my $args = shift;
 
-  $Self->begin();
-
-  my $user = $Self->{db}->get_user();
-  my $accountid = $Self->{db}->accountid();
-  return $Self->_transError(['error', {type => 'accountNotFound'}])
-    if ($args->{accountId} and $args->{accountId} ne $accountid);
+  my ($user, $accountid) = $Self->_api_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
 
   my $newState = "$user->{jstateContactGroup}";
 
@@ -310,12 +275,8 @@ sub api_ContactGroup_changes {
   my $Self = shift;
   my $args = shift;
 
-  $Self->begin();
-
-  my $user = $Self->{db}->get_user();
-  my $accountid = $Self->{db}->accountid();
-  return $Self->_transError(['error', {type => 'accountNotFound'}])
-    if ($args->{accountId} and $args->{accountId} ne $accountid);
+  my ($user, $accountid) = $Self->_api_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
 
   my $newState = "$user->{jstateContactGroup}";
 
@@ -332,26 +293,7 @@ sub api_ContactGroup_changes {
     return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
   }
 
-  my @created;
-  my @updated;
-  my @destroyed;
-
-  foreach my $row (@$data) {
-    if ($row->{active}) {
-      if ($row->{jcreated} <= $args->{sinceState}) {
-        push @updated, $row->{groupuid};
-      }
-      else {
-        push @created, $row->{groupuid};
-      }
-    }
-    else {
-      if ($row->{jcreated} <= $args->{sinceState}) {
-        push @destroyed, $row->{groupuid};
-      }
-      # otherwise never seen
-    }
-  }
+  my ($created, $updated, $destroyed) = $Self->_classify_changes($data, $args->{sinceState}, 'groupuid');
   $Self->commit();
 
   my @res;
@@ -359,9 +301,9 @@ sub api_ContactGroup_changes {
     accountId => $accountid,
     oldState => "$args->{sinceState}",
     newState => $newState,
-    created => [map { "$_" } @created],
-    updated => [map { "$_" } @updated],
-    destroyed => [map { "$_" } @destroyed],
+    created => [map { "$_" } @$created],
+    updated => [map { "$_" } @$updated],
+    destroyed => [map { "$_" } @$destroyed],
     hasMoreChanges => JSON::false,
   }];
 
@@ -430,12 +372,8 @@ sub api_Addressbook_get {
   my $Self = shift;
   my $args = shift;
 
-  $Self->begin();
-
-  my $user = $Self->{db}->get_user();
-  my $accountid = $Self->{db}->accountid();
-  return $Self->_transError(['error', {type => 'accountNotFound'}])
-    if ($args->{accountId} and $args->{accountId} ne $accountid);
+  my ($user, $accountid) = $Self->_api_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
 
   # we have no datatype for this yet
   my $newState = "$user->{jhighestmodseq}";
@@ -490,12 +428,8 @@ sub api_Addressbook_changes {
   my $Self = shift;
   my $args = shift;
 
-  $Self->begin();
-
-  my $user = $Self->{db}->get_user();
-  my $accountid = $Self->{db}->accountid();
-  return $Self->_transError(['error', {type => 'accountNotFound'}])
-    if ($args->{accountId} and $args->{accountId} ne $accountid);
+  my ($user, $accountid) = $Self->_api_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
 
   # we have no datatype for you yet
   my $newState = "$user->{jhighestmodseq}";
@@ -514,35 +448,16 @@ sub api_Addressbook_changes {
 
   $Self->commit();
 
-  my @created;
-  my @updated;
-  my @destroyed;
-  foreach my $item (@$data) {
-    if ($item->{jmodseq} > $sinceState) {
-      if ($item->{active}) {
-        if ($item->{jcreated} <= $sinceState) {
-          push @updated, $item->{jaddressbookid};
-        }
-        else {
-          push @created, $item->{jaddressbookid};
-        }
-      }
-      else {
-        if ($item->{jcreated} <= $sinceState) {
-          push @destroyed, $item->{jaddressbookid};
-        }
-        # otherwise never seen
-      }
-    }
-  }
+  my @changed = grep { $_->{jmodseq} > $sinceState } @$data;
+  my ($created, $updated, $destroyed) = $Self->_classify_changes(\@changed, $sinceState, 'jaddressbookid');
 
   my @res = (['Addressbook/changes', {
     accountId => $accountid,
     oldState => "$sinceState",
     newState => $newState,
-    created => [map { "$_" } @created],
-    updated => [map { "$_" } @updated],
-    destroyed => [map { "$_" } @destroyed],
+    created => [map { "$_" } @$created],
+    updated => [map { "$_" } @$updated],
+    destroyed => [map { "$_" } @$destroyed],
     hasMoreChanges => JSON::false,
   }]);
 
@@ -688,11 +603,8 @@ sub api_ContactCard_queryChanges {
   my $Self = shift;
   my $args = shift;
 
-  $Self->begin();
-  my $user = $Self->{db}->get_user();
-  my $accountid = $Self->{db}->accountid();
-  return $Self->_transError(['error', {type => 'accountNotFound'}])
-    if ($args->{accountId} and $args->{accountId} ne $accountid);
+  my ($user, $accountid) = $Self->_api_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
 
   my $newQueryState = "$user->{jstateContact}";
   my $sinceQueryState = $args->{sinceQueryState};

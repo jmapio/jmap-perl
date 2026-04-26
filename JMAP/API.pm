@@ -412,6 +412,33 @@ sub idmap {
   return $val;
 }
 
+sub _api_init {
+  my ($Self, $args) = @_;
+  $Self->begin();
+  my $user      = $Self->{db}->get_user();
+  my $accountid = $Self->{db}->accountid();
+  return (undef, undef)
+    if ($args->{accountId} and $args->{accountId} ne $accountid);
+  return ($user, $accountid);
+}
+
+sub _classify_changes {
+  my ($Self, $data, $sinceState, $idField) = @_;
+  my (@created, @updated, @destroyed);
+  foreach my $row (@$data) {
+    if ($row->{active}) {
+      if ($row->{jcreated} <= $sinceState) {
+        push @updated, $row->{$idField};
+      } else {
+        push @created, $row->{$idField};
+      }
+    } else {
+      push @destroyed, $row->{$idField} if $row->{jcreated} <= $sinceState;
+    }
+  }
+  return (\@created, \@updated, \@destroyed);
+}
+
 sub begin {
   my $Self = shift;
   $Self->{db}->begin();
