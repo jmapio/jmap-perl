@@ -1104,6 +1104,7 @@ sub do_session {
             'urn:ietf:params:jmap:submission' => {
               maxDelayedSend => 0,
             },
+            'urn:ietf:params:jmap:mdn'   => {},
             'urn:ietf:params:jmap:quota' => {},
             ($a->{caldavURL}  ? ('urn:ietf:params:jmap:calendars' => {
               maxCalendarsPerEvent     => undef,
@@ -1137,6 +1138,7 @@ sub do_session {
           },
           'urn:ietf:params:jmap:mail' => {},
           'urn:ietf:params:jmap:submission' => {},
+          'urn:ietf:params:jmap:mdn'   => {},
           'urn:ietf:params:jmap:quota' => {},
           'urn:ietf:params:jmap:calendars' => {
             maxCalendarsPerEvent     => undef,
