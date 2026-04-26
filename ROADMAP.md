@@ -119,13 +119,10 @@ passes requests through directly instead of syncing via IMAP.
 - [x] SMTP submission error handling and reporting to client
 - [x] onSuccessUpdateEmail/onSuccessDestroyEmail in EmailSubmission/set
 - [x] backfill: separate worker process, needs_backfill flag with schema migration
-
-### Still TODO
 - [x] IMAP MYRIGHTS for real per-mailbox permissions (RFC 4314, lazy-cached in ifolders)
-- [ ] MDN (RFC 9007)
+- [x] MDN/send and MDN/parse (RFC 9007)
 - [x] Per-type creation ID mapping (idmap reset per request, createdIds returned in response)
 - [x] Move raw SQL out of API.pm into DB layer (EmailSubmission query methods on DB)
-- [ ] queryChanges: currently sends spurious removals (spec-compliant but suboptimal)
 
 ### Auth
 - [x] Email-first signup UX: email → auto-discovery → OAuth redirect or password form
@@ -135,18 +132,58 @@ passes requests through directly instead of syncing via IMAP.
 - [x] PKCE support in OAuth2::Tiny (for public client flows per draft-ietf-mailmaint-oauth-public)
 - [x] Gmail OAuth2: GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET env vars → /cb/oauth callback
 - [x] Fastmail OAuth2 (OAUTHBEARER IMAP/SMTP via Mail::OAuthBearerTalk, PKCE flow)
+- [x] OIDC id_token generation (RS256, auto-generated or loaded RSA key) for webmail SSO
 - [x] Encrypted credential storage: pluggable backend (AES-256-GCM default, OpenBao Transit optional)
 
-### Performance
+### Monitoring
+- [x] Prometheus metrics endpoint (`GET /metrics` on management port)
+- [x] Sync lag per account in metrics
+- [ ] Error rate tracking
+
+### Still TODO
+- [ ] queryChanges: currently sends spurious removals (spec-compliant but suboptimal)
 - [ ] Query result caching for proper queryChanges with filters
 - [ ] Move parsed message cache out of SQLite into flat files
 
-### Monitoring
-- [ ] Prometheus metrics endpoint
-- [ ] Sync lag per account
-- [ ] Error rate tracking
+## Phase 6: CalDAV/CardDAV Sync ✅
 
-## Phase 6: Documentation & Developer Experience
+The proxy syncs calendars and contacts from CalDAV/CardDAV backends and exposes
+them via the JMAP Calendars (JSCalendar) and Contacts (JSContact) extensions.
+
+### Done
+- [x] SRV-based CalDAV/CardDAV discovery (falling back to well-known URLs)
+- [x] IMAP hierarchy separator auto-detected from IMAP NAMESPACE (stored in iserver.imapSep)
+- [x] Calendar/get, Calendar/changes, Calendar/query, Calendar/set (create/update/destroy)
+- [x] CalendarEvent/get, CalendarEvent/changes, CalendarEvent/query, CalendarEvent/set (create/update)
+- [x] ContactCard/get, ContactCard/changes, ContactCard/query, ContactCard/set (create/update)
+- [x] AddressBook/get, AddressBook/changes, AddressBook/query, AddressBook/set (create/update/destroy)
+- [x] JSCalendar ↔ iCalendar conversion via Text::JSCalendar
+- [x] JSContact ↔ vCard conversion via Text::JSContact
+- [x] Fastmail CalDAV/CardDAV via OAuth Bearer token
+- [x] Gmail CalDAV/CardDAV via OAuth Bearer token
+
+### Still TODO
+- [ ] CalendarEvent/set destroy
+- [ ] Recurrence expansion (CalendarEvent/get with recurrenceOverrides)
+- [ ] Free/busy queries
+
+## Phase 7: Code Architecture ✅
+
+Internal refactoring to improve maintainability; no user-visible changes.
+
+### Done
+- [x] Sync providers: extract `connect_*` and `send_email` boilerplate into `JMAP::Sync::Common`
+      (Standard/Gmail/Fastmail/AOL override only what differs via hook methods)
+- [x] API.pm split: decomposed 4,900-line god object into 9 domain files
+      (Mailbox, Email, Thread, Calendar, Contact, Submission, Preferences, StorageNode, MDN)
+- [x] OAuth extraction: Google/Fastmail/PACC flows into `JMAP::OAuth::*` pure-computation modules;
+      PKCE helpers in `JMAP::OAuth::PKCE`; OIDC token generation in `JMAP::OAuth::OIDC`
+- [x] Shared `_api_init` helper (begin + get_user + accountId check)
+- [x] Shared `_classify_changes` helper (created/updated/destroyed classification)
+- [x] Shared `_check_since_state` helper (sinceState + jdeletedmodseq validation)
+- [x] Shared `_limit_changes` helper (maxChanges sort/truncate with partial-state update)
+
+## Phase 8: Documentation & Developer Experience
 
 - [x] Landing page (proxy.jmap.io/): describes what the proxy is, signup form
 - [ ] Setup guide (Docker, reverse proxy, connecting backends)
