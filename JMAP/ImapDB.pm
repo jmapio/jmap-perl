@@ -543,12 +543,16 @@ sub do_calendars {
       my $existing = $exists{$id}[1]{$href};
 
       if ($change) {
+        my $uid = $change->[2]{uid};
+        my $path = $Self->_event_content_path($uid);
+        open my $fh, '>:raw', $path or die "Cannot write event content $path: $!";
+        print $fh encode_utf8($change->[1]); close $fh;
+
         my $item = {
           icalendarid => $id,
-          uid => $change->[2]{uid},
-          href => $href,
-          etag => $change->[0],
-          content => encode_utf8($change->[1]),
+          uid         => $uid,
+          href        => $href,
+          etag        => $change->[0],
         };
 
         if ($existing) {
@@ -561,6 +565,7 @@ sub do_calendars {
         $Self->set_event($jcalendarid, $change->[2]);
       }
       elsif ($existing) {
+        unlink $Self->_event_content_path($existing->{uid});
         $Self->ddelete('ievents', {ieventid => $existing->{ieventid}});
         $Self->delete_event($jcalendarid, $existing->{uid});
       }
@@ -970,13 +975,17 @@ sub do_addressbooks {
       my $existing = $exists{$id}[1]{$href};
 
       if ($change) {
+        my $uid = $change->[2]{uid};
+        my $path = $Self->_card_content_path($uid);
+        open my $fh, '>:raw', $path or die "Cannot write card content $path: $!";
+        print $fh encode_utf8($change->[1]); close $fh;
+
         my $item = {
           iaddressbookid => $id,
-          uid => $change->[2]{uid},
-          kind => $change->[2]{kind},
-          href => $href,
-          etag => $change->[0],
-          content => encode_utf8($change->[1]),
+          uid            => $uid,
+          kind           => $change->[2]{kind},
+          href           => $href,
+          etag           => $change->[0],
         };
 
         if ($existing) {
@@ -989,6 +998,7 @@ sub do_addressbooks {
         $Self->set_card($jaddressbookid, $change->[2]);
       }
       elsif ($existing) {
+        unlink $Self->_card_content_path($existing->{uid});
         $Self->ddelete('icards', {icardid => $existing->{icardid}});
         $Self->delete_card($jaddressbookid, $existing->{uid}, $existing->{kind});
       }
@@ -1385,10 +1395,13 @@ sub import_message {
   # save us having to download it again - drop out of transaction so we don't wait on the parse
   my $message = Data::JSEmail::parse($rfc822, $msgdata->{msgid});
 
+  my $path = $Self->_parsed_path($msgdata->{msgid});
+  open my $fh, '>:raw', $path or die "Cannot write parsed cache $path: $!";
+  print $fh $json->encode($message); close $fh;
+
   $Self->begin();
   $Self->dinsert('jrawmessage', {
-    msgid => $msgdata->{msgid},
-    parsed => $json->encode($message),
+    msgid         => $msgdata->{msgid},
     hasAttachment => $message->{hasAttachment},
   });
   $Self->commit();
@@ -1710,13 +1723,18 @@ sub fill_messages {
 
   $Self->begin();
 
-  # DBNOTE: because of IN not being supported
-  my $data = $Self->dbh->selectall_arrayref("SELECT msgid, parsed FROM jrawmessage WHERE msgid IN (" . join(', ', map { "?" } @ids) . ")", {}, @ids);
   my %result;
-  foreach my $line (@$data) {
-    $result{$line->[0]} = decode_json($line->[1]);
+  my @need;
+  for my $msgid (@ids) {
+    my $path = $Self->_parsed_path($msgid);
+    if (-f $path) {
+      open my $fh, '<:raw', $path or die "Cannot read parsed cache $path: $!";
+      local $/; my $json_bytes = <$fh>; close $fh;
+      $result{$msgid} = decode_json($json_bytes);
+    } else {
+      push @need, $msgid;
+    }
   }
-  my @need = grep { not $result{$_} } @ids;
 
   my %udata;
   if (@need) {
@@ -1763,13 +1781,19 @@ sub fill_messages {
     }
   }
 
+  foreach my $msgid (sort keys %parsed) {
+    my $message = $parsed{$msgid};
+    my $path = $Self->_parsed_path($msgid);
+    open my $fh, '>:raw', $path or die "Cannot write parsed cache $path: $!";
+    print $fh $json->encode($message); close $fh;
+  }
+
   $Self->begin();
   foreach my $msgid (sort keys %parsed) {
     my $message = $parsed{$msgid};
     $Self->dinsert('jrawmessage', {
-     msgid => $msgid,
-     parsed => $json->encode($message),
-     hasAttachment => $message->{hasAttachment},
+      msgid        => $msgid,
+      hasAttachment => $message->{hasAttachment},
     });
   }
   $Self->commit();
@@ -2409,12 +2433,13 @@ sub update_contact_groups {
   my %notchanged;
   foreach my $carduid (keys %$changes) {
     my $contact = $changes->{$carduid};
-    my $old = $Self->dgetone('icards', { kind => 'group', uid => $carduid }, 'href,content');
+    my $old = $Self->dgetone('icards', { kind => 'group', uid => $carduid }, 'href');
     unless ($old) {
       $notchanged{$carduid} = {type => 'notFound', description => "No such card on server"};
       next;
     }
-    my $card = vcard_to_jscontact($old->{content});
+    my $raw_vcf = do { my $p = $Self->_card_content_path($carduid); open my $fh, '<:raw', $p or ''; local $/; <$fh> };
+    my $card = vcard_to_jscontact($raw_vcf);
     unless ($card) {
       $notchanged{$carduid} = {type => 'parseError', description => "Could not parse existing card"};
       next;
@@ -2626,12 +2651,13 @@ sub update_contacts {
   my %notchanged;
   foreach my $carduid (keys %$changes) {
     my $contact = $changes->{$carduid};
-    my $old = $Self->dgetone('icards', { uid => $carduid }, 'href,content');
+    my $old = $Self->dgetone('icards', { uid => $carduid }, 'href');
     unless ($old) {
       $notchanged{$carduid} = {type => 'notFound', description => "No such card on server"};
       next;
     }
-    my $card = vcard_to_jscontact($old->{content});
+    my $raw_vcf = do { my $p = $Self->_card_content_path($carduid); open my $fh, '<:raw', $p or ''; local $/; <$fh> };
+    my $card = vcard_to_jscontact($raw_vcf);
     unless ($card) {
       $notchanged{$carduid} = {type => 'parseError', description => "Could not parse existing card"};
       next;
@@ -2728,7 +2754,7 @@ sub update_contacts_jscontact {
     my $patch = $changes->{$carduid};
 
     $Self->begin();
-    my $icard = $Self->dgetone('icards', { uid => $carduid }, 'href,content');
+    my $icard = $Self->dgetone('icards', { uid => $carduid }, 'href');
     $Self->commit();
 
     unless ($icard) {
@@ -2737,7 +2763,8 @@ sub update_contacts_jscontact {
     }
 
     # Parse existing vCard to JSContact, apply patch fields, write back
-    my $card = vcard_to_jscontact($icard->{content});
+    my $raw_vcf = do { my $p = $Self->_card_content_path($carduid); open my $fh, '<:raw', $p or ''; local $/; <$fh> };
+    my $card = vcard_to_jscontact($raw_vcf);
     unless ($card) {
       $notchanged{$carduid} = { type => 'serverFail', description => 'Could not parse existing card' };
       next;
@@ -2960,7 +2987,6 @@ CREATE TABLE IF NOT EXISTS ievents (
   href TEXT,
   etag TEXT,
   uid TEXT,
-  content TEXT,
   mtime DATE NOT NULL
 );
 EOF
@@ -2991,7 +3017,6 @@ CREATE TABLE IF NOT EXISTS icards (
   etag TEXT,
   uid TEXT,
   kind TEXT,
-  content TEXT,
   mtime DATE NOT NULL
 );
 EOF

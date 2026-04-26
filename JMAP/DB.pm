@@ -63,11 +63,42 @@ sub new {
   return $Self;
 }
 
+sub _acct_dir {
+  my ($Self) = @_;
+  my $dir = "$DATADIR/" . $Self->accountid;
+  mkdir $dir unless -d $dir;
+  return $dir;
+}
+
+sub _subdir_path {
+  my ($Self, $subdir, $key) = @_;
+  my $dir = $Self->_acct_dir . "/$subdir";
+  mkdir $dir unless -d $dir;
+  return "$dir/$key";
+}
+
+sub _parsed_path          { $_[0]->_subdir_path('parsed',   "$_[1].json") }
+sub _files_path           { $_[0]->_subdir_path('files',    $_[1])        }
+sub _event_content_path   { $_[0]->_subdir_path('events',   "$_[1].ics")  }
+sub _card_content_path    { $_[0]->_subdir_path('cards',    "$_[1].vcf")  }
+sub _jevent_payload_path  { $_[0]->_subdir_path('jevents',  "$_[1].json") }
+sub _jcontact_payload_path{ $_[0]->_subdir_path('jcontacts',"$_[1].json") }
+
 sub delete {
   my $Self = shift;
   my $accountid = $Self->accountid();
   delete $Self->{dbh};
   unlink("$DATADIR/$accountid.sqlite3");
+  my $dir = "$DATADIR/$accountid";
+  if (-d $dir) {
+    for my $sub (glob("$dir/*")) {
+      if (-d $sub) {
+        unlink $_ for glob("$sub/*");
+        rmdir $sub;
+      }
+    }
+    rmdir $dir;
+  }
 }
 
 sub accountid {
@@ -739,10 +770,13 @@ sub set_event {
   my $jcalendarid = shift;
   my $event = shift;
   my $eventuid = delete $event->{uid};
+  my $path = $Self->_jevent_payload_path($eventuid);
+  open my $fh, '>:raw', $path or die "Cannot write event payload $path: $!";
+  print $fh $json->encode($event);
+  close $fh;
   $Self->dmake('jevents', {
-    eventuid => $eventuid,
+    eventuid    => $eventuid,
     jcalendarid => $jcalendarid,
-    payload => $json->encode($event),
   });
 }
 
@@ -750,6 +784,7 @@ sub delete_event {
   my $Self = shift;
   my $jcalendarid = shift; # doesn't matter
   my $eventuid = shift;
+  unlink $Self->_jevent_payload_path($eventuid);
   return $Self->dmaybedirty('jevents', {active => 0}, {eventuid => $eventuid});
 }
 
@@ -772,11 +807,13 @@ sub set_card {
   $carduid =~ s/^urn:uuid://;
   my $kind = $card->{kind} // 'individual';
   if ($kind ne 'group') {
-    # Store the full JSContact card as payload
+    my $path = $Self->_jcontact_payload_path($carduid);
+    open my $fh, '>:raw', $path or die "Cannot write contact payload $path: $!";
+    print $fh $json->encode($card);
+    close $fh;
     $Self->dmake('jcontacts', {
-      contactuid => $carduid,
+      contactuid     => $carduid,
       jaddressbookid => $jaddressbookid,
-      payload => $json->encode($card),
     });
   }
   else {
@@ -804,6 +841,7 @@ sub delete_card {
   my $carduid = shift;
   my $kind = shift;
   if ($kind eq 'contact') {
+    unlink $Self->_jcontact_payload_path($carduid);
     $Self->dmaybedirty('jcontacts', {active => 0}, {contactuid => $carduid, jaddressbookid => $jaddressbookid});
   }
   else {
@@ -831,18 +869,18 @@ sub put_file {
   my $size = length($content);
 
   $Self->begin();
-
-  my $statement = $Self->dbh->prepare('INSERT OR REPLACE INTO jfiles (type, size, content, expires) VALUES (?, ?, ?, ?)');
-
+  my $statement = $Self->dbh->prepare('INSERT OR REPLACE INTO jfiles (type, size, expires) VALUES (?, ?, ?)');
   $statement->bind_param(1, $type);
   $statement->bind_param(2, $size);
-  $statement->bind_param(3, $content, SQL_BLOB);
-  $statement->bind_param(4, $expires);
+  $statement->bind_param(3, $expires);
   $statement->execute();
-
   my $id = $Self->dbh->last_insert_id(undef, undef, undef, undef);
-
   $Self->commit();
+
+  my $path = $Self->_files_path($id);
+  open my $fh, '>:raw', $path or die "Cannot write upload file $path: $!";
+  print $fh $content;
+  close $fh;
 
   return {
     accountId => "$accountid",
@@ -858,13 +896,19 @@ sub get_file {
   my $id = shift;
 
   $Self->begin();
-  my $data = $Self->dgetone('jfiles', { jfileid => $id }, 'type,content');
-  use Data::Dumper;
-  warn "GET FILE $id: " . Dumper($data);
+  my $data = $Self->dgetone('jfiles', { jfileid => $id }, 'type');
   $Self->commit();
 
   return unless $data;
-  return ($data->{type}, $data->{content});
+
+  my $path = $Self->_files_path($id);
+  return unless -f $path;
+
+  open my $fh, '<:raw', $path or die "Cannot read upload file $path: $!";
+  local $/;
+  my $content = <$fh>;
+  close $fh;
+  return ($data->{type}, $content);
 }
 
 sub _dbl {
@@ -1102,7 +1146,7 @@ sub get_submission_changes {
     {}, $since_modseq);
 }
 
-my $USER_SCHEMA_VERSION = 3;
+my $USER_SCHEMA_VERSION = 5;
 
 sub _create_user_tables {
   my ($Self, $dbh) = @_;
@@ -1220,7 +1264,6 @@ EOF
   $dbh->do(<<EOF);
 CREATE TABLE IF NOT EXISTS jrawmessage (
   msgid TEXT PRIMARY KEY,
-  parsed TEXT,
   hasAttachment INTEGER,
   mtime DATE
 );
@@ -1231,7 +1274,6 @@ CREATE TABLE IF NOT EXISTS jfiles (
   jfileid INTEGER PRIMARY KEY,
   type TEXT,
   size INTEGER,
-  content BLOB,
   expires DATE,
   mtime DATE,
   active BOOLEAN
@@ -1264,7 +1306,6 @@ CREATE TABLE IF NOT EXISTS jevents (
   jcalendarid INTEGER,
   firststart DATE,
   lastend DATE,
-  payload TEXT,
   jcreated INTEGER,
   jmodseq INTEGER,
   mtime DATE,
@@ -1322,7 +1363,6 @@ CREATE TABLE IF NOT EXISTS jcontacts (
   contactuid TEXT PRIMARY KEY,
   jaddressbookid INTEGER,
   isFlagged BOOLEAN,
-  payload TEXT,
   jcreated INTEGER,
   jmodseq INTEGER,
   mtime DATE,
@@ -1423,6 +1463,34 @@ sub _initdb {
     };
     if ($@) { $dbh->rollback; die "user DB migration to v3 failed: $@" }
     $v = 3;
+  }
+
+  if ($v < 4) {
+    # Cached content columns moved to flat files — drop them from the DB.
+    $dbh->begin_work;
+    eval {
+      eval { $dbh->do("ALTER TABLE jrawmessage DROP COLUMN parsed") };
+      eval { $dbh->do("ALTER TABLE jfiles DROP COLUMN content") };
+      eval { $dbh->do("ALTER TABLE ievents DROP COLUMN content") };
+      eval { $dbh->do("ALTER TABLE icards DROP COLUMN content") };
+      $dbh->do('PRAGMA user_version = 4');
+      $dbh->commit;
+    };
+    if ($@) { $dbh->rollback; die "user DB migration to v4 failed: $@" }
+    $v = 4;
+  }
+
+  if ($v < 5) {
+    # JMAP payload columns moved to flat files (jevents/, jcontacts/).
+    $dbh->begin_work;
+    eval {
+      eval { $dbh->do("ALTER TABLE jevents DROP COLUMN payload") };
+      eval { $dbh->do("ALTER TABLE jcontacts DROP COLUMN payload") };
+      $dbh->do('PRAGMA user_version = 5');
+      $dbh->commit;
+    };
+    if ($@) { $dbh->rollback; die "user DB migration to v5 failed: $@" }
+    $v = 5;
   }
 }
 

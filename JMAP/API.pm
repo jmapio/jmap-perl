@@ -2928,7 +2928,12 @@ sub _event_match {
   # We only filter events that have start in payload (non-recurring check).
   # Recurring events always pass — expansion is the client's job per spec.
   if ($condition->{after} || $condition->{before}) {
-    my $payload = $item->{payload} ? decode_json($item->{payload}) : {};
+    my $path = $Self->{db}->_jevent_payload_path($item->{eventuid});
+    my $payload = {};
+    if (-f $path) {
+      open my $fh, '<:raw', $path or die "Cannot read event payload $path: $!";
+      local $/; $payload = decode_json(<$fh>); close $fh;
+    }
     my $start = $payload->{start} // '';
     my $duration = $payload->{duration} // 'PT0S';
     my $is_recurring = $payload->{recurrenceRules} || $payload->{recurrenceRule};
@@ -2974,7 +2979,7 @@ sub api_CalendarEvent_query {
   return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['position']}])
     if $start < 0;
 
-  my $data = $Self->{db}->dget('jevents', { active => 1 }, 'eventuid,jcalendarid,payload');
+  my $data = $Self->{db}->dget('jevents', { active => 1 }, 'eventuid,jcalendarid');
 
   $data = $Self->_event_filter($data, $args->{filter}, {}) if $args->{filter};
 
@@ -3023,13 +3028,21 @@ sub api_CalendarEvent_get {
     next if $seenids{$eventuid};
     $seenids{$eventuid} = 1;
 
-    my $data = $Self->{db}->dgetone('jevents', { eventuid => $eventuid }, 'jcalendarid,payload');
+    my $data = $Self->{db}->dgetone('jevents', { eventuid => $eventuid }, 'jcalendarid');
     unless ($data) {
       $missingids{$eventuid} = 1;
       next;
     }
 
-    my $item = decode_json($data->{payload});
+    my $path = $Self->{db}->_jevent_payload_path($eventuid);
+    unless (-f $path) {
+      $missingids{$eventuid} = 1;
+      next;
+    }
+    open my $fh, '<:raw', $path or die "Cannot read event payload $path: $!";
+    local $/;
+    my $item = decode_json(<$fh>);
+    close $fh;
 
     foreach my $key (keys %$item) {
       delete $item->{$key} unless _prop_wanted($args, $key);
@@ -3624,7 +3637,7 @@ sub api_Contact_get {
 
   #properties: String[] A list of properties to fetch for each message.
 
-  my $data = $Self->{db}->dgetby('jcontacts', 'contactuid', { active => 1 });
+  my $data = $Self->{db}->dgetby('jcontacts', 'contactuid', { active => 1 }, 'contactuid,jaddressbookid');
 
   my %want;
   if ($args->{ids}) {
@@ -3639,7 +3652,12 @@ sub api_Contact_get {
     next unless $data->{$id};
     delete $want{$id};
 
-    my $item = decode_json($data->{$id}{payload});
+    my $path = $Self->{db}->_jcontact_payload_path($id);
+    next unless -f $path;
+    open my $fh, '<:raw', $path or die "Cannot read contact payload $path: $!";
+    local $/;
+    my $item = decode_json(<$fh>);
+    close $fh;
 
     foreach my $key (keys %$item) {
       delete $item->{$key} unless _prop_wanted($args, $key);
