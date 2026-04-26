@@ -946,23 +946,14 @@ sub api_Email_changes {
 
   my $newState = "$user->{jstateEmail}";
 
-  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceState']}])
-    if not $args->{sinceState};
-  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
-    if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
+  my @e = $Self->_check_since_state($args, $user, $newState);
+  return @e if @e;
 
   my $data = $Self->{db}->dget('jmessages', { jmodseq => ['>', $args->{sinceState}] }, 'msgid,active,jcreated,jmodseq');
 
-  my $partial = 0;
-  if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
-    $data = [ sort { $a->{jmodseq} <=> $b->{jmodseq} } @$data ];
-    my $next = $data->[$args->{maxChanges}];
-    pop @$data while (@$data and $data->[-1]{jmodseq} == $next->{jmodseq});
-    # couldn't find a set of changes that would work!
-    return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]) unless @$data;
-    $newState = "$data->[-1]{jmodseq}";
-    $partial = 1;
-  }
+  my $partial;
+  ($data, $partial) = $Self->_limit_changes($data, $args, \$newState);
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]) unless defined $data;
 
   $Self->commit();
 

@@ -103,11 +103,9 @@ sub api_Calendar_changes {
 
   my $newState = "$user->{jstateCalendar}";
 
+  my @e = $Self->_check_since_state($args, $user, $newState);
+  return @e if @e;
   my $sinceState = $args->{sinceState};
-  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['position']}])
-    if not $args->{sinceState};
-  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
-    if ($user->{jdeletedmodseq} and $sinceState <= $user->{jdeletedmodseq});
 
   my $data = $Self->{db}->dget('jcalendars', {}, 'jcalendarid,jmodseq,active,jcreated');
 
@@ -337,10 +335,8 @@ sub api_CalendarEvent_changes {
 
   my $newState = "$user->{jstateCalendarEvent}";
 
-  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceState']}])
-    if not $args->{sinceState};
-  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
-    if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
+  my @e = $Self->_check_since_state($args, $user, $newState);
+  return @e if @e;
 
   my $data = $Self->{db}->dget('jevents', { jmodseq => ['>', $args->{sinceState}] }, 'eventuid,active,jcreated');
 

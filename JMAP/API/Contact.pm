@@ -134,10 +134,8 @@ sub api_Contact_changes {
 
   my $newState = "$user->{jstateContact}";
 
-  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceState']}])
-    if not $args->{sinceState};
-  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
-    if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
+  my @e = $Self->_check_since_state($args, $user, $newState);
+  return @e if @e;
 
   my $data = $Self->{db}->dget('jcontacts', { jmodseq => ['>', $args->{sinceState}] }, 'contactuid,active,jcreated');
 
@@ -280,12 +278,8 @@ sub api_ContactGroup_changes {
 
   my $newState = "$user->{jstateContactGroup}";
 
-  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceState']}])
-    if not $args->{sinceState};
-  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
-    if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
-
-  my $sql = "SELECT groupuid,active FROM jcontactgroups WHERE jmodseq > ?";
+  my @e = $Self->_check_since_state($args, $user, $newState);
+  return @e if @e;
 
   my $data = $Self->{db}->dget('jcontactgroups', { jmodseq => ['>', $args->{sinceState}] }, 'groupuid,active,jcreated');
 
@@ -434,11 +428,9 @@ sub api_Addressbook_changes {
   # we have no datatype for you yet
   my $newState = "$user->{jhighestmodseq}";
 
+  my @e = $Self->_check_since_state($args, $user, $newState);
+  return @e if @e;
   my $sinceState = $args->{sinceState};
-  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceState']}])
-    if not $args->{sinceState};
-  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
-    if ($user->{jdeletedmodseq} and $sinceState <= $user->{jdeletedmodseq});
 
   my $data = $Self->{db}->dget('jaddressbooks', {}, 'jaddressbookid,jmodseq,active,jcreated');
 

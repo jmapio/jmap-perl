@@ -439,6 +439,26 @@ sub _classify_changes {
   return (\@created, \@updated, \@destroyed);
 }
 
+sub _check_since_state {
+  my ($Self, $args, $user, $newState) = @_;
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceState']}])
+    unless $args->{sinceState};
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
+    if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
+  return ();
+}
+
+sub _limit_changes {
+  my ($Self, $data, $args, $newState_ref) = @_;
+  return ($data, 0) unless $args->{maxChanges} and @$data > $args->{maxChanges};
+  $data = [ sort { $a->{jmodseq} <=> $b->{jmodseq} } @$data ];
+  my $next = $data->[$args->{maxChanges}];
+  pop @$data while (@$data and $data->[-1]{jmodseq} == $next->{jmodseq});
+  return (undef, 0) unless @$data;
+  $$newState_ref = "$data->[-1]{jmodseq}";
+  return ($data, 1);
+}
+
 sub begin {
   my $Self = shift;
   $Self->{db}->begin();

@@ -253,11 +253,9 @@ sub api_EmailSubmission_changes {
 
   my $newState = "$user->{jstateEmailSubmission}";
 
+  my @e = $Self->_check_since_state($args, $user, $newState);
+  return @e if @e;
   my $sinceState = $args->{sinceState};
-  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceState']}])
-    if not $args->{sinceState};
-  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
-    if ($user->{jdeletedmodseq} and $sinceState <= $user->{jdeletedmodseq});
 
   my $data = $Self->get_submission_changes($sinceState);
 
