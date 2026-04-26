@@ -544,9 +544,7 @@ sub do_calendars {
 
       if ($change) {
         my $uid = $change->[2]{uid};
-        my $path = $Self->_event_content_path($uid);
-        open my $fh, '>:raw', $path or die "Cannot write event content $path: $!";
-        print $fh encode_utf8($change->[1]); close $fh;
+        $Self->write_event_ical($uid, encode_utf8($change->[1]));
 
         my $item = {
           icalendarid => $id,
@@ -565,7 +563,7 @@ sub do_calendars {
         $Self->set_event($jcalendarid, $change->[2]);
       }
       elsif ($existing) {
-        unlink $Self->_event_content_path($existing->{uid});
+        $Self->unlink_event_ical($existing->{uid});
         $Self->ddelete('ievents', {ieventid => $existing->{ieventid}});
         $Self->delete_event($jcalendarid, $existing->{uid});
       }
@@ -976,9 +974,7 @@ sub do_addressbooks {
 
       if ($change) {
         my $uid = $change->[2]{uid};
-        my $path = $Self->_card_content_path($uid);
-        open my $fh, '>:raw', $path or die "Cannot write card content $path: $!";
-        print $fh encode_utf8($change->[1]); close $fh;
+        $Self->write_card_vcf($uid, encode_utf8($change->[1]));
 
         my $item = {
           iaddressbookid => $id,
@@ -998,7 +994,7 @@ sub do_addressbooks {
         $Self->set_card($jaddressbookid, $change->[2]);
       }
       elsif ($existing) {
-        unlink $Self->_card_content_path($existing->{uid});
+        $Self->unlink_card_vcf($existing->{uid});
         $Self->ddelete('icards', {icardid => $existing->{icardid}});
         $Self->delete_card($jaddressbookid, $existing->{uid}, $existing->{kind});
       }
@@ -1395,9 +1391,7 @@ sub import_message {
   # save us having to download it again - drop out of transaction so we don't wait on the parse
   my $message = Data::JSEmail::parse($rfc822, $msgdata->{msgid});
 
-  my $path = $Self->_parsed_path($msgdata->{msgid});
-  open my $fh, '>:raw', $path or die "Cannot write parsed cache $path: $!";
-  print $fh $json->encode($message); close $fh;
+  $Self->write_parsed_msg($msgdata->{msgid}, $message);
 
   $Self->begin();
   $Self->dinsert('jrawmessage', {
@@ -1726,11 +1720,9 @@ sub fill_messages {
   my %result;
   my @need;
   for my $msgid (@ids) {
-    my $path = $Self->_parsed_path($msgid);
-    if (-f $path) {
-      open my $fh, '<:raw', $path or die "Cannot read parsed cache $path: $!";
-      local $/; my $json_bytes = <$fh>; close $fh;
-      $result{$msgid} = decode_json($json_bytes);
+    my $msg = $Self->read_parsed_msg($msgid);
+    if ($msg) {
+      $result{$msgid} = $msg;
     } else {
       push @need, $msgid;
     }
@@ -1782,10 +1774,7 @@ sub fill_messages {
   }
 
   foreach my $msgid (sort keys %parsed) {
-    my $message = $parsed{$msgid};
-    my $path = $Self->_parsed_path($msgid);
-    open my $fh, '>:raw', $path or die "Cannot write parsed cache $path: $!";
-    print $fh $json->encode($message); close $fh;
+    $Self->write_parsed_msg($msgid, $parsed{$msgid});
   }
 
   $Self->begin();
@@ -2438,7 +2427,7 @@ sub update_contact_groups {
       $notchanged{$carduid} = {type => 'notFound', description => "No such card on server"};
       next;
     }
-    my $raw_vcf = do { my $p = $Self->_card_content_path($carduid); open my $fh, '<:raw', $p or ''; local $/; <$fh> };
+    my $raw_vcf = $Self->read_card_vcf($carduid) // '';
     my $card = vcard_to_jscontact($raw_vcf);
     unless ($card) {
       $notchanged{$carduid} = {type => 'parseError', description => "Could not parse existing card"};
@@ -2656,7 +2645,7 @@ sub update_contacts {
       $notchanged{$carduid} = {type => 'notFound', description => "No such card on server"};
       next;
     }
-    my $raw_vcf = do { my $p = $Self->_card_content_path($carduid); open my $fh, '<:raw', $p or ''; local $/; <$fh> };
+    my $raw_vcf = $Self->read_card_vcf($carduid) // '';
     my $card = vcard_to_jscontact($raw_vcf);
     unless ($card) {
       $notchanged{$carduid} = {type => 'parseError', description => "Could not parse existing card"};
@@ -2763,7 +2752,7 @@ sub update_contacts_jscontact {
     }
 
     # Parse existing vCard to JSContact, apply patch fields, write back
-    my $raw_vcf = do { my $p = $Self->_card_content_path($carduid); open my $fh, '<:raw', $p or ''; local $/; <$fh> };
+    my $raw_vcf = $Self->read_card_vcf($carduid) // '';
     my $card = vcard_to_jscontact($raw_vcf);
     unless ($card) {
       $notchanged{$carduid} = { type => 'serverFail', description => 'Could not parse existing card' };

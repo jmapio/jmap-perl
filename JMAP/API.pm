@@ -2928,12 +2928,7 @@ sub _event_match {
   # We only filter events that have start in payload (non-recurring check).
   # Recurring events always pass — expansion is the client's job per spec.
   if ($condition->{after} || $condition->{before}) {
-    my $path = $Self->{db}->_jevent_payload_path($item->{eventuid});
-    my $payload = {};
-    if (-f $path) {
-      open my $fh, '<:raw', $path or die "Cannot read event payload $path: $!";
-      local $/; $payload = decode_json(<$fh>); close $fh;
-    }
+    my $payload = $Self->{db}->read_jevent_payload($item->{eventuid}) // {};
     my $start = $payload->{start} // '';
     my $duration = $payload->{duration} // 'PT0S';
     my $is_recurring = $payload->{recurrenceRules} || $payload->{recurrenceRule};
@@ -3034,15 +3029,11 @@ sub api_CalendarEvent_get {
       next;
     }
 
-    my $path = $Self->{db}->_jevent_payload_path($eventuid);
-    unless (-f $path) {
+    my $item = $Self->{db}->read_jevent_payload($eventuid);
+    unless ($item) {
       $missingids{$eventuid} = 1;
       next;
     }
-    open my $fh, '<:raw', $path or die "Cannot read event payload $path: $!";
-    local $/;
-    my $item = decode_json(<$fh>);
-    close $fh;
 
     foreach my $key (keys %$item) {
       delete $item->{$key} unless _prop_wanted($args, $key);
@@ -3652,12 +3643,8 @@ sub api_Contact_get {
     next unless $data->{$id};
     delete $want{$id};
 
-    my $path = $Self->{db}->_jcontact_payload_path($id);
-    next unless -f $path;
-    open my $fh, '<:raw', $path or die "Cannot read contact payload $path: $!";
-    local $/;
-    my $item = decode_json(<$fh>);
-    close $fh;
+    my $item = $Self->{db}->read_jcontact_payload($id);
+    next unless $item;
 
     foreach my $key (keys %$item) {
       delete $item->{$key} unless _prop_wanted($args, $key);

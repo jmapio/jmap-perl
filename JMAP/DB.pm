@@ -77,12 +77,48 @@ sub _subdir_path {
   return "$dir/$key";
 }
 
-sub _parsed_path          { $_[0]->_subdir_path('parsed',   "$_[1].json") }
-sub _files_path           { $_[0]->_subdir_path('files',    $_[1])        }
-sub _event_content_path   { $_[0]->_subdir_path('events',   "$_[1].ics")  }
-sub _card_content_path    { $_[0]->_subdir_path('cards',    "$_[1].vcf")  }
-sub _jevent_payload_path  { $_[0]->_subdir_path('jevents',  "$_[1].json") }
-sub _jcontact_payload_path{ $_[0]->_subdir_path('jcontacts',"$_[1].json") }
+sub read_subdir {
+  my ($Self, $subdir, $key) = @_;
+  my $path = $Self->_subdir_path($subdir, $key);
+  return undef unless -f $path;
+  open my $fh, '<:raw', $path or die "Cannot read $path: $!";
+  local $/; my $data = <$fh>; close $fh;
+  return $data;
+}
+
+sub write_subdir {
+  my ($Self, $subdir, $key, $data) = @_;
+  my $path = $Self->_subdir_path($subdir, $key);
+  open my $fh, '>:raw', $path or die "Cannot write $path: $!";
+  print $fh $data; close $fh;
+}
+
+sub unlink_subdir {
+  my ($Self, $subdir, $key) = @_;
+  unlink $Self->_subdir_path($subdir, $key);
+}
+
+sub read_parsed_msg     { my $b = $_[0]->read_subdir('parsed',   "$_[1].json"); defined $b ? decode_json($b) : undef }
+sub write_parsed_msg    { $_[0]->write_subdir('parsed',   "$_[1].json", $json->encode($_[2])) }
+
+sub read_upload_blob    { $_[0]->read_subdir('files',    $_[1]) }
+sub write_upload_blob   { $_[0]->write_subdir('files',   $_[1], $_[2]) }
+
+sub read_event_ical     { $_[0]->read_subdir('events',   "$_[1].ics") }
+sub write_event_ical    { $_[0]->write_subdir('events',  "$_[1].ics", $_[2]) }
+sub unlink_event_ical   { $_[0]->unlink_subdir('events', "$_[1].ics") }
+
+sub read_card_vcf       { $_[0]->read_subdir('cards',    "$_[1].vcf") }
+sub write_card_vcf      { $_[0]->write_subdir('cards',   "$_[1].vcf", $_[2]) }
+sub unlink_card_vcf     { $_[0]->unlink_subdir('cards',  "$_[1].vcf") }
+
+sub read_jevent_payload    { my $b = $_[0]->read_subdir('jevents',   "$_[1].json"); defined $b ? decode_json($b) : undef }
+sub write_jevent_payload   { $_[0]->write_subdir('jevents',   "$_[1].json", $json->encode($_[2])) }
+sub unlink_jevent_payload  { $_[0]->unlink_subdir('jevents',  "$_[1].json") }
+
+sub read_jcontact_payload  { my $b = $_[0]->read_subdir('jcontacts', "$_[1].json"); defined $b ? decode_json($b) : undef }
+sub write_jcontact_payload { $_[0]->write_subdir('jcontacts', "$_[1].json", $json->encode($_[2])) }
+sub unlink_jcontact_payload{ $_[0]->unlink_subdir('jcontacts',"$_[1].json") }
 
 sub delete {
   my $Self = shift;
@@ -770,10 +806,7 @@ sub set_event {
   my $jcalendarid = shift;
   my $event = shift;
   my $eventuid = delete $event->{uid};
-  my $path = $Self->_jevent_payload_path($eventuid);
-  open my $fh, '>:raw', $path or die "Cannot write event payload $path: $!";
-  print $fh $json->encode($event);
-  close $fh;
+  $Self->write_jevent_payload($eventuid, $event);
   $Self->dmake('jevents', {
     eventuid    => $eventuid,
     jcalendarid => $jcalendarid,
@@ -784,7 +817,7 @@ sub delete_event {
   my $Self = shift;
   my $jcalendarid = shift; # doesn't matter
   my $eventuid = shift;
-  unlink $Self->_jevent_payload_path($eventuid);
+  $Self->unlink_jevent_payload($eventuid);
   return $Self->dmaybedirty('jevents', {active => 0}, {eventuid => $eventuid});
 }
 
@@ -807,10 +840,7 @@ sub set_card {
   $carduid =~ s/^urn:uuid://;
   my $kind = $card->{kind} // 'individual';
   if ($kind ne 'group') {
-    my $path = $Self->_jcontact_payload_path($carduid);
-    open my $fh, '>:raw', $path or die "Cannot write contact payload $path: $!";
-    print $fh $json->encode($card);
-    close $fh;
+    $Self->write_jcontact_payload($carduid, $card);
     $Self->dmake('jcontacts', {
       contactuid     => $carduid,
       jaddressbookid => $jaddressbookid,
@@ -841,7 +871,7 @@ sub delete_card {
   my $carduid = shift;
   my $kind = shift;
   if ($kind eq 'contact') {
-    unlink $Self->_jcontact_payload_path($carduid);
+    $Self->unlink_jcontact_payload($carduid);
     $Self->dmaybedirty('jcontacts', {active => 0}, {contactuid => $carduid, jaddressbookid => $jaddressbookid});
   }
   else {
@@ -877,10 +907,7 @@ sub put_file {
   my $id = $Self->dbh->last_insert_id(undef, undef, undef, undef);
   $Self->commit();
 
-  my $path = $Self->_files_path($id);
-  open my $fh, '>:raw', $path or die "Cannot write upload file $path: $!";
-  print $fh $content;
-  close $fh;
+  $Self->write_upload_blob($id, $content);
 
   return {
     accountId => "$accountid",
@@ -901,13 +928,8 @@ sub get_file {
 
   return unless $data;
 
-  my $path = $Self->_files_path($id);
-  return unless -f $path;
-
-  open my $fh, '<:raw', $path or die "Cannot read upload file $path: $!";
-  local $/;
-  my $content = <$fh>;
-  close $fh;
+  my $content = $Self->read_upload_blob($id);
+  return unless defined $content;
   return ($data->{type}, $content);
 }
 
