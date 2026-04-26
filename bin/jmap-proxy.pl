@@ -101,6 +101,16 @@ sub PushEvent {
 }
 my $start_time = time();
 
+# Prometheus-style counters — incremented in-process, read by /metrics.
+my %stat = (
+  http_requests        => 0,
+  mgmt_requests        => 0,
+  jmap_method_calls    => 0,
+  backend_errors       => 0,
+  auth_cache_hits      => 0,
+  auth_cache_misses    => 0,
+);
+
 # OAuth2 state: token => { email, auth_aid, provider, code_verifier, token_url,
 #   userinfo_url, client_id, client_secret, account_type, imap, expires }
 # Populated when user starts OAuth flow, consumed by /cb/oauth callback.
@@ -134,6 +144,7 @@ sub mk_json {
     }
     elsif ($waiting{$accountid}{$res->[2]}) {
       if ($res->[0] eq 'error') {
+        $stat{backend_errors}++;
         $waiting{$accountid}{$res->[2]}[1]->($res->[1]);
         warn "Backend error on $accountid: $res->[1]\n";
         delete $backend{$accountid};
@@ -1204,6 +1215,7 @@ sub do_jmap {
 sub _do_jmap_request {
   my ($req, $accountid, $data) = @_;
   my @methods = map { $_->[0] } @{$data->{methodCalls} || []};
+  $stat{jmap_method_calls} += scalar @methods;
   warn "JMAP REQUEST ($accountid): " . join(', ', @methods) . "\n";
   warn "JMAP REQUEST BODY: " . $json->encode($data) . "\n" if $ENV{JMAP_DEBUG};
   send_backend_request($accountid, 'jmap', $data, sub {
@@ -1364,10 +1376,12 @@ sub _check_cache {
   my ($key) = @_;
   if (my $cached = $auth_cache{$key}) {
     if ($cached->[1] > time()) {
+      $stat{auth_cache_hits}++;
       return $cached->[0];
     }
     delete $auth_cache{$key};
   }
+  $stat{auth_cache_misses}++;
   return undef;
 }
 
@@ -2664,6 +2678,8 @@ sub do_oidc_userinfo {
 my $port = $ENV{JMAP_PORT} || 9000;
 my $httpd = AnyEvent::HTTPD->new(port => $port);
 
+$httpd->reg_cb(request => sub { $stat{http_requests}++ });
+
 $httpd->reg_cb(
   '/.well-known'      => \&do_wellknown,
   '/session'          => \&do_session,
@@ -3029,8 +3045,55 @@ sub mgmt_healthz {
     })]);
 }
 
+sub mgmt_metrics {
+  my ($httpd, $req) = @_;
+
+  my $now    = time();
+  my $uptime = $now - $start_time;
+
+  my $workers = grep { $_ ne '__accounts__' } keys %backend;
+  my $queue   = 0; $queue += scalar(keys %$_) for values %waiting;
+  my $sse     = 0; for my $m (values %PushMap) { $sse += scalar keys %$m }
+  my $bf      = scalar keys %backfilling;
+
+  my $total_backend_cmds = 0;
+  $total_backend_cmds += $_->[1] for values %backend;
+
+  my @out;
+  my $g = sub {  # gauge
+    my ($name, $help, $val) = @_;
+    push @out, "# HELP $name $help", "# TYPE $name gauge", "$name $val";
+  };
+  my $c = sub {  # counter
+    my ($name, $help, $val) = @_;
+    push @out, "# HELP $name $help", "# TYPE $name counter", "${name}_total $val";
+  };
+
+  $g->('jmap_uptime_seconds',          'Seconds since proxy process started',            $uptime);
+  $g->('jmap_backend_workers_active',  'Active per-account backend worker processes',    $workers);
+  $g->('jmap_backend_queue_depth',     'Total pending backend requests across all workers', $queue);
+  $g->('jmap_sse_connections_active',  'Open Server-Sent Events connections',            $sse);
+  $g->('jmap_backfilling_accounts',    'Accounts currently running a backfill loop',     $bf);
+  $g->('jmap_auth_cache_entries',      'Entries currently in the auth token cache',      scalar(keys %auth_cache));
+
+  $c->('jmap_http_requests',           'HTTP requests received on the JMAP port',        $stat{http_requests});
+  $c->('jmap_mgmt_requests',           'HTTP requests received on the management port',  $stat{mgmt_requests});
+  $c->('jmap_method_calls',            'Individual JMAP method calls dispatched',        $stat{jmap_method_calls});
+  $c->('jmap_backend_requests',        'Backend worker requests sent (all workers)',      $total_backend_cmds);
+  $c->('jmap_backend_errors',          'Backend worker error responses received',        $stat{backend_errors});
+  $c->('jmap_auth_cache_hits',         'Auth cache lookups that returned a cached result', $stat{auth_cache_hits});
+  $c->('jmap_auth_cache_misses',       'Auth cache lookups that required a backend call',  $stat{auth_cache_misses});
+
+  $req->respond([200, 'ok',
+    { 'Content-Type' => 'text/plain; version=0.0.4; charset=utf-8' },
+    join("\n", @out) . "\n"]);
+}
+
+$mgmt->reg_cb(request => sub { $stat{mgmt_requests}++ });
+
 $mgmt->reg_cb(
   '/healthz' => \&mgmt_healthz,
+  '/metrics' => \&mgmt_metrics,
   '/api'     => \&mgmt_api_accounts,
   '/'        => \&mgmt_dashboard,
 );
