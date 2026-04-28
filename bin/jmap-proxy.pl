@@ -1304,18 +1304,18 @@ sub do_static {
   my ($httpd, $req) = @_;
   my $path = $req->url->path;
   $path =~ s{^/}{};
-  # Only serve known safe extensions
-  return not_found($req) unless $path =~ /\.(css|js|html|png|ico)$/;
-  my $file = "$jmaphome/htdocs/$path";
+  return not_found($req) unless $path =~ /\.(css|js|html|png|ico|svg)$/;
+  my $file = $path =~ m{^assets/} ? "$jmaphome/$path" : "$jmaphome/htdocs/$path";
   return not_found($req) unless -f $file;
   my %types = (css => 'text/css', js => 'text/javascript', html => 'text/html',
-               png => 'image/png', ico => 'image/x-icon');
+               png => 'image/png', ico => 'image/x-icon', svg => 'image/svg+xml');
   my ($ext) = $path =~ /\.(\w+)$/;
   open my $fh, '<', $file or return not_found($req);
   local $/;
   my $content = <$fh>;
   close $fh;
-  $req->respond([200, 'ok', { 'Content-Type' => $types{$ext} || 'application/octet-stream' }, $content]);
+  $req->respond([200, 'ok', { 'Content-Type' => $types{$ext} || 'application/octet-stream',
+                              'Cache-Control' => 'max-age=86400' }, $content]);
 }
 
 sub _generate_token {
@@ -2582,6 +2582,7 @@ $httpd->reg_cb(
   '/accounts'         => \&do_accounts,
   '/logout'           => \&do_logout,
   '/main.css'         => \&do_static,
+  '/assets'           => \&do_static,
   '/oauth/authorize'  => sub {
     my ($httpd, $req) = @_;
     lc($req->method) eq 'post'

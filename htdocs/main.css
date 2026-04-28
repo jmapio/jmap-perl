@@ -157,21 +157,25 @@ sup {
         color: #fff;
     }
     #logo {
-        padding: 0 30px;
-        font-size: 32px;
-        font-weight: 600;
+        padding: 0 18px;
+        display: inline-flex;
+        align-items: center;
+        height: 49px;
     }
     #logo a {
-        color: #fff;
+        display: flex;
+        align-items: center;
         text-decoration: none;
     }
-    #logo a:hover {
-        color: #e0eaf0;
+    #logo img {
+        height: 28px;
+        width: auto;
+        display: block;
     }
     #nav {
         position: absolute;
         top: 0;
-        left: 230px;
+        left: 140px;
         right: 0;
         margin: 0;
         padding: 0;
