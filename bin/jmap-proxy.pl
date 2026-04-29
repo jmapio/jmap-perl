@@ -125,7 +125,7 @@ sub mk_json {
   return sub {
     my ($hdl, $res) = @_;
     if ($res->[0] eq 'push') {
-      PushEvent($accountid, 'state', { changed => { $accountid => $res->[1] } });
+      PushEvent($accountid, 'state', { '@type' => 'StateChange', changed => { $accountid => $res->[1] } });
     }
     elsif ($res->[0] eq 'synced') {
       $sync_times{$accountid} = $res->[1];
@@ -2404,7 +2404,7 @@ sub do_eventsource {
       $ping_timer = AnyEvent->timer(
         after    => $ping_interval,
         interval => $ping_interval,
-        cb       => sub { $write_sse->('ping', { servertimestamp => time() + 0 }) },
+        cb       => sub { $write_sse->('ping', { interval => $ping_interval + 0 }) },
       );
 
       warn "SSE $conn_id opened ($auth_aid, pool: @aids, ping: ${ping_interval}s)\n";

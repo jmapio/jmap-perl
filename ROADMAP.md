@@ -203,8 +203,8 @@ All referenced specs are in `specs/`.
 - [x] **`accountNotFound`**: already correctly implemented in all API methods (false alarm in review)
 - [ ] **Quota capability**: `urn:ietf:params:jmap:quota` advertised in Session but `Quota/get`
       not implemented — remove capability or implement stub
-- [ ] **SSE ping event**: sends `{servertimestamp:...}` instead of required `{interval:N}`
-- [ ] **StateChange `@type`**: push object missing required `"@type":"StateChange"` field
+- [x] **SSE ping event**: sends `{servertimestamp:...}` instead of required `{interval:N}`
+- [x] **StateChange `@type`**: push object missing required `"@type":"StateChange"` field
 - [ ] **`anchor`/`anchorOffset`**: not implemented in any `/query` method; `anchorNotFound`
       error never returned
 
