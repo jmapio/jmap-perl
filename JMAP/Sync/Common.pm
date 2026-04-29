@@ -959,4 +959,31 @@ sub delete_mailbox {
   return ['delete', @res];
 }
 
+sub get_quota {
+  my $Self = shift;
+
+  my $imap = $Self->connect_imap() or return [];
+  my $result = $imap->getquotaroot('INBOX');
+  return [] unless ref $result eq 'HASH';
+
+  my @roots = @{$result->{quotaroot} || []};
+  shift @roots;  # first element is the folder name, not a quota root
+
+  my @quotas;
+  for my $root (@roots) {
+    my $data = $result->{$root} or next;
+    my @items = @$data;
+    while (@items >= 3) {
+      my ($resource, $used, $limit) = splice(@items, 0, 3);
+      push @quotas, {
+        root     => $root,
+        resource => uc($resource),
+        used     => $used + 0,
+        limit    => $limit + 0,
+      };
+    }
+  }
+  return \@quotas;
+}
+
 1;

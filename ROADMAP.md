@@ -201,8 +201,8 @@ All referenced specs are in `specs/`.
 - [x] **`invalidResultReference`**: `resolve_args` (API.pm) emits type `'resultReference'`
       instead of `'invalidResultReference'`
 - [x] **`accountNotFound`**: already correctly implemented in all API methods (false alarm in review)
-- [ ] **Quota capability**: `urn:ietf:params:jmap:quota` advertised in Session but `Quota/get`
-      not implemented — remove capability or implement stub
+- [x] **Quota capability**: implement `Quota/get`, `/query` (live from IMAP `GETQUOTAROOT`);
+      `/changes` and `/queryChanges` return `cannotCalculateChanges`
 - [x] **SSE ping event**: sends `{servertimestamp:...}` instead of required `{interval:N}`
 - [x] **StateChange `@type`**: push object missing required `"@type":"StateChange"` field
 - [ ] **`anchor`/`anchorOffset`**: not implemented in any `/query` method; `anchorNotFound`
