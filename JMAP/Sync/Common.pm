@@ -271,6 +271,31 @@ sub update_event {
   $talk->UpdateEvent($resource, $event);
 }
 
+sub update_event_occurrence {
+  my ($Self, $href, $recurrenceId, $patch) = @_;
+  my $talk = $Self->connect_calendars();
+  return unless $talk;
+
+  my $event = $talk->GetEvent($href)
+    or die "Could not fetch event for occurrence update: $href\n";
+
+  # Both field-name variants appear in the wild
+  my %overrides = %{$event->{recurrenceOverrides} || $event->{exceptions} || {}};
+
+  if (defined $patch) {
+    my %override = %{$overrides{$recurrenceId} || {}};
+    for my $key (keys %$patch) {
+      if (defined $patch->{$key}) { $override{$key} = $patch->{$key} }
+      else                        { delete $override{$key}             }
+    }
+    $overrides{$recurrenceId} = \%override;
+  } else {
+    $overrides{$recurrenceId} = undef;  # exclude this occurrence (iCal EXDATE)
+  }
+
+  $talk->UpdateEvent($href, { recurrenceOverrides => \%overrides });
+}
+
 sub delete_event {
   my $Self = shift;
   my $resource = shift;

@@ -2301,10 +2301,26 @@ sub update_calendar_events {
   $Self->begin();
 
   my %todo;
+  my %todo_occurrence;  # href => [[recurrenceId, patch], ...]
   my %changed;
   my %notchanged;
   foreach my $uid (keys %$update) {
     my $calendar = $update->{$uid};
+
+    if ($uid =~ m{^([^/]+)/(.+)$}) {
+      my ($master_uid, $recurrence_id) = ($1, $2);
+      my $href = $Self->dgetfield('ievents', { uid => $master_uid }, 'href');
+      unless ($href) {
+        $notchanged{$uid} = {type => 'notFound', description => "No such calendar event"};
+        next;
+      }
+      my %patch = %$calendar;
+      delete @patch{qw(calendarIds calendarId)};
+      push @{$todo_occurrence{$href}}, [$recurrence_id, \%patch];
+      $changed{$uid} = undef;
+      next;
+    }
+
     my $href = $Self->dgetfield('ievents', { uid => $uid }, 'href');
     unless ($href) {
       $notchanged{$uid} = {type => 'notFound', description => "No such event on server"};
@@ -2324,6 +2340,11 @@ sub update_calendar_events {
   foreach my $href (sort keys %todo) {
     $Self->backend_cmd('update_event', $href, $todo{$href});
   }
+  foreach my $href (sort keys %todo_occurrence) {
+    for my $pair (@{$todo_occurrence{$href}}) {
+      $Self->backend_cmd('update_event_occurrence', $href, $pair->[0], $pair->[1]);
+    }
+  }
 
   return (\%changed, \%notchanged);
 }
@@ -2337,9 +2358,22 @@ sub destroy_calendar_events {
   $Self->begin();
 
   my %todo;
+  my %todo_occurrence;  # href => [recurrenceId, ...]
   my @destroyed;
   my %notdestroyed;
   foreach my $uid (@$destroy) {
+    if ($uid =~ m{^([^/]+)/(.+)$}) {
+      my ($master_uid, $recurrence_id) = ($1, $2);
+      my $href = $Self->dgetfield('ievents', { uid => $master_uid }, 'href');
+      unless ($href) {
+        $notdestroyed{$uid} = {type => 'notFound', description => "No such calendar event"};
+        next;
+      }
+      push @{$todo_occurrence{$href}}, $recurrence_id;
+      push @destroyed, $uid;
+      next;
+    }
+
     my $href = $Self->dgetfield('ievents', { uid => $uid }, 'href');
     unless ($href) {
       $notdestroyed{$uid} = {type => 'notFound', description => "No such event on server"};
@@ -2347,7 +2381,6 @@ sub destroy_calendar_events {
     }
 
     $todo{$href} = 1;
-
     push @destroyed, $uid;
   }
 
@@ -2355,6 +2388,11 @@ sub destroy_calendar_events {
 
   foreach my $href (sort keys %todo) {
     $Self->backend_cmd('delete_event', $href);
+  }
+  foreach my $href (sort keys %todo_occurrence) {
+    for my $recurrence_id (@{$todo_occurrence{$href}}) {
+      $Self->backend_cmd('update_event_occurrence', $href, $recurrence_id, undef);
+    }
   }
 
   return (\@destroyed, \%notdestroyed);

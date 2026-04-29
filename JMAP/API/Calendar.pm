@@ -274,6 +274,28 @@ sub api_CalendarEvent_query {
   return @res;
 }
 
+sub _expand_occurrence {
+  my ($master, $recurrence_id) = @_;
+
+  my $overrides = $master->{recurrenceOverrides} || {};
+
+  # Explicitly excluded occurrence
+  return undef if exists $overrides->{$recurrence_id} && !defined $overrides->{$recurrence_id};
+
+  my %item  = %$master;
+  my $patch = $overrides->{$recurrence_id} || {};
+  $item{$_} = $patch->{$_} for keys %$patch;
+
+  # start: override's value if it was moved, otherwise the scheduled recurrenceId
+  $item{start}       = exists $patch->{start} ? $patch->{start} : $recurrence_id;
+  $item{recurrenceId} = $recurrence_id;
+
+  # master-only properties are not valid on expanded occurrences (RFC 8984 §4.3)
+  delete $item{$_} for qw(recurrenceRules recurrenceOverrides excludedRecurrenceRules);
+
+  return \%item;
+}
+
 sub api_CalendarEvent_get {
   my $Self = shift;
   my $args = shift;
@@ -285,7 +307,6 @@ sub api_CalendarEvent_get {
 
   return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['ids']}])
     unless $args->{ids};
-  #properties: String[] A list of properties to fetch for each message.
 
   my %seenids;
   my %missingids;
@@ -294,6 +315,38 @@ sub api_CalendarEvent_get {
     next if $seenids{$eventuid};
     $seenids{$eventuid} = 1;
 
+    # Occurrence ID: masterUid/recurrenceId
+    if ($eventuid =~ m{^([^/]+)/(.+)$}) {
+      my ($master_uid, $recurrence_id) = ($1, $2);
+
+      my $data = $Self->{db}->dgetone('jevents', { eventuid => $master_uid }, 'jcalendarid');
+      unless ($data) {
+        $missingids{$eventuid} = 1;
+        next;
+      }
+
+      my $master = $Self->{db}->read_jevent_payload($master_uid);
+      unless ($master) {
+        $missingids{$eventuid} = 1;
+        next;
+      }
+
+      my $item = _expand_occurrence($master, $recurrence_id);
+      unless ($item) {
+        $missingids{$eventuid} = 1;  # excluded occurrence
+        next;
+      }
+
+      foreach my $key (keys %$item) {
+        delete $item->{$key} unless _prop_wanted($args, $key);
+      }
+      $item->{id}          = $eventuid;
+      $item->{calendarIds} = { "$data->{jcalendarid}" => JSON::true } if _prop_wanted($args, 'calendarIds');
+      push @list, $item;
+      next;
+    }
+
+    # Master event
     my $data = $Self->{db}->dgetone('jevents', { eventuid => $eventuid }, 'jcalendarid');
     unless ($data) {
       $missingids{$eventuid} = 1;
@@ -310,7 +363,7 @@ sub api_CalendarEvent_get {
       delete $item->{$key} unless _prop_wanted($args, $key);
     }
 
-    $item->{id} = $eventuid;
+    $item->{id}          = $eventuid;
     $item->{calendarIds} = { "$data->{jcalendarid}" => JSON::true } if _prop_wanted($args, "calendarIds");
 
     push @list, $item;
