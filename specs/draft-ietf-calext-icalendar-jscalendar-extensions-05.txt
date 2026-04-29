@@ -1,0 +1,560 @@
+
+
+
+
+calext                                                       R. Stepanek
+Internet-Draft                                                  Fastmail
+Updates: 5545, 7986, 9073 (if approved)                  19 January 2026
+Intended status: Standards Track                                        
+Expires: 23 July 2026
+
+
+               iCalendar Format Extensions for JSCalendar
+          draft-ietf-calext-icalendar-jscalendar-extensions-05
+
+Abstract
+
+   This document defines a set of new elements for iCalendar and extends
+   the use of existing ones.  Their main purpose is to extend the
+   semantics of iCalendar with elements defined in JSCalendar, but the
+   new definitions also aim to be useful within just the iCalendar
+   format.  This document updates RFC 5545 ("iCalendar") and its
+   extension documents RFC 7986 and RFC 9073.
+
+Status of This Memo
+
+   This Internet-Draft is submitted in full conformance with the
+   provisions of BCP 78 and BCP 79.
+
+   Internet-Drafts are working documents of the Internet Engineering
+   Task Force (IETF).  Note that other groups may also distribute
+   working documents as Internet-Drafts.  The list of current Internet-
+   Drafts is at https://datatracker.ietf.org/drafts/current/.
+
+   Internet-Drafts are draft documents valid for a maximum of six months
+   and may be updated, replaced, or obsoleted by other documents at any
+   time.  It is inappropriate to use Internet-Drafts as reference
+   material or to cite them other than as "work in progress."
+
+   This Internet-Draft will expire on 23 July 2026.
+
+Copyright Notice
+
+   Copyright (c) 2026 IETF Trust and the persons identified as the
+   document authors.  All rights reserved.
+
+
+
+
+
+
+
+
+
+
+
+Stepanek                  Expires 23 July 2026                  [Page 1]
+
+Internet-Draft       iCalendar JSCalendar Extensions        January 2026
+
+
+   This document is subject to BCP 78 and the IETF Trust's Legal
+   Provisions Relating to IETF Documents (https://trustee.ietf.org/
+   license-info) in effect on the date of publication of this document.
+   Please review these documents carefully, as they describe your rights
+   and restrictions with respect to this document.  Code Components
+   extracted from this document must include Revised BSD License text as
+   described in Section 4.e of the Trust Legal Provisions and are
+   provided without warranty as described in the Revised BSD License.
+
+Table of Contents
+
+   1.  Introduction  . . . . . . . . . . . . . . . . . . . . . . . .   2
+     1.1.  Notational Conventions  . . . . . . . . . . . . . . . . .   3
+     1.2.  ABNF Notations  . . . . . . . . . . . . . . . . . . . . .   3
+   2.  Updated Properties  . . . . . . . . . . . . . . . . . . . . .   3
+     2.1.  GEO Property  . . . . . . . . . . . . . . . . . . . . . .   3
+     2.2.  COLOR Property  . . . . . . . . . . . . . . . . . . . . .   4
+   3.  Updated Components  . . . . . . . . . . . . . . . . . . . . .   5
+     3.1.  VLOCATION component . . . . . . . . . . . . . . . . . . .   5
+   4.  New Properties  . . . . . . . . . . . . . . . . . . . . . . .   5
+     4.1.  COORDINATES Property  . . . . . . . . . . . . . . . . . .   5
+     4.2.  SHOW-WITHOUT-TIME Property  . . . . . . . . . . . . . . .   6
+   5.  New Values  . . . . . . . . . . . . . . . . . . . . . . . . .   8
+     5.1.  OWNER Participation Role  . . . . . . . . . . . . . . . .   8
+   6.  Security Considerations . . . . . . . . . . . . . . . . . . .   8
+   7.  IANA Considerations . . . . . . . . . . . . . . . . . . . . .   8
+     7.1.  Changes to the "Components" registry  . . . . . . . . . .   8
+     7.2.  Changes to the "Properties" registry  . . . . . . . . . .   8
+     7.3.  Changes to the "Participation Roles" registry . . . . . .   9
+   8.  References  . . . . . . . . . . . . . . . . . . . . . . . . .   9
+     8.1.  Normative References  . . . . . . . . . . . . . . . . . .   9
+   9.  Informative References  . . . . . . . . . . . . . . . . . . .  10
+   Author's Address  . . . . . . . . . . . . . . . . . . . . . . . .  10
+
+1.  Introduction
+
+   The JSCalendar [I-D.stepanek-jscalendarbis] format aims to be an
+   alternative to the iCalendar [RFC5545] format for representation of
+   calendaring data.  It introduces new semantics that are not covered
+   in the current definition of iCalendar and its various extensions.
+   Converting calendaring data between the two formats is defined in
+   [I-D.ietf-calext-jscalendar-icalendar] with the goal of not losing
+   any semantics during conversion.  To achieve this, this document
+   defines new elements iCalendar and extends existing definitions.  To
+   do so, it follows the recommendations for introducing new iCalendar
+   elements as specified in Section 3 of [RFC7986].  This document
+   updates the definitions of the GEO property [RFC5545]
+   (Section 3.8.1.6), the COLOR property [RFC7986] (Section 5.9) and the
+
+
+
+Stepanek                  Expires 23 July 2026                  [Page 2]
+
+Internet-Draft       iCalendar JSCalendar Extensions        January 2026
+
+
+   VLOCATION component [RFC9073] (Section 7.2).
+
+1.1.  Notational Conventions
+
+   The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT",
+   "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and
+   "OPTIONAL" in this document are to be interpreted as described in BCP
+   14 [RFC2119] [RFC8174] when, and only when, they appear in all
+   capitals, as shown here.
+
+1.2.  ABNF Notations
+
+   The ABNF definitions in this document use the notations of [RFC5234].
+   ABNF rules not defined in this document are defined in either
+   [RFC5234] (such as the ABNF for CRLF, WSP, DQUOTE, VCHAR, ALPHA, and
+   DIGIT) or [RFC5545].
+
+2.  Updated Properties
+
+2.1.  GEO Property
+
+   This specification deprecates the "GEO" property and introduces the
+   "COORDINATES" (Section 4.1) property to replace it.  Implementations
+   SHOULD NOT use the "GEO" property to represent spatial coordinates.
+   Instead, they SHOULD specify the "COORDINATES" property in a
+   "VLOCATION" component [RFC9073] (Section 7.2).  They MAY additionally
+   specify a "GEO" property in a "VEVENT" or "VTODO" component, in which
+   case its "DERIVED" parameter [RFC9073] (Section 5.3) MUST have value
+   "TRUE".
+
+   The remainder of this section documents the rationale for deprecating
+   the "GEO" property:
+
+   The "GEO" property definition dates back to 1998, a time at which
+   multiple internet protocols and data formats incorporated spatial
+   coordinates in slightly different formats, making interoperability
+   difficult.  This got addressed in 2010 in [RFC5870], which introduced
+   a Uniform Resource Identifier (URI) for geographic locations.  The
+   'geo' URI scheme not only improves interoperability but also allows
+   for richer information than the "GEO" property value, e.g. it
+   supports specifying the location altitude and the spatial uncertainty
+   of the coordinates.
+
+   Alternatively to deprecating, this specification could have updated
+   the "GEO" property to allow its property value type to be URI.  This
+   turned out to not interoperate, as implementations tended to reject
+   such iCalendar data as invalid.  This was regardless if the "GEO"
+   property was specified in a "VEVENT" component, or if it was
+
+
+
+Stepanek                  Expires 23 July 2026                  [Page 3]
+
+Internet-Draft       iCalendar JSCalendar Extensions        January 2026
+
+
+   specified in iCalendar components that were unsupported by the
+   implementation (e.g. an implementation that was unaware of the
+   "VLOCATION" component still rejected the "GEO" property with value
+   type URI in that component as invalid).  Introducing a new property
+   turned out to better interoperate with such systems.
+
+2.2.  COLOR Property
+
+   This specification modifies the definition of the "COLOR" property,
+   it allows its value to be a named color or a numeric color.  The
+   following definitions replace the definitions of the "COLOR"
+   property, originally specified in Section 5.9 of [RFC7986] from which
+   the definitions for "Description", "Format Definition" and "Example"
+   differ.
+
+   Property Name:  COLOR
+
+   Purpose:  This property specifies a color used for displaying the
+      calendar, event, todo, or journal data.
+
+   Value Type:  TEXT
+
+   Property Parameters:  IANA and non-standard property parameters can
+      be specified on this property.
+
+   Conformance:  This property can be specified once in an iCalendar
+      object or in "VEVENT", "VTODO", or "VJOURNAL" calendar components.
+
+   Description:  This property specifies a color that clients MAY use
+      when presenting the relevant data to a user.  Typically, this
+      would appear as the "background" color of events or tasks.  The
+      value is a color name taken from the set of names defined in
+      Section 4.3 of [CSS3] or an RGB value in six-digit hexadecimal
+      notation, as defined in Section 4.2.1 of [CSS3].  Values are case-
+      insensitive.
+
+   Format Definition:  This property is defined by the following
+      notation:
+
+      color       = "COLOR" colorparam ":" text CRLF
+                    ; Value is CSS3 color name or CSS3 six-digit RGB hex value.
+
+      colorparam     = *(";" other-param)
+
+   Example:  The following are examples of this property:
+
+      COLOR:turquoise
+
+
+
+
+Stepanek                  Expires 23 July 2026                  [Page 4]
+
+Internet-Draft       iCalendar JSCalendar Extensions        January 2026
+
+
+      COLOR:#40E0D0
+
+      COLOR:#ffd755
+
+3.  Updated Components
+
+3.1.  VLOCATION component
+
+   This document updates the definition of the "VLOCATION" component.
+   It allows to specify the newly defined "COORDINATES" property
+   (Section 4.1) at most once in a "VLOCATION" component.  It appends
+   the following to the "Format Definition" of the "VLOCATION"
+   component, defined in Section 7.2 of [RFC9073]:
+
+   locprop /= *(
+               ;
+               ; The following is OPTIONAL
+               ; but MUST NOT occur more than once.
+               ;
+               coord
+               ;
+               )
+
+   The "coord" ABNF is defined in Section 4.1.
+
+4.  New Properties
+
+4.1.  COORDINATES Property
+
+   Property Name:  COORDINATES
+
+   Purpose:  To represent a geographic location using the protocol-
+      independent, extensible "geo" URI scheme.
+
+   Value Type:  URI -- no default
+
+   Property Parameters:  IANA and non-standard parameters MAY be
+      specified on this property.
+
+   Conformance:  This property can be specified in a "VLOCATION"
+      calendar component.
+
+   Description:  This property represents spatial (geographic)
+      coordinates.  In contrast to the the "GEO" property, this property
+      allows to represent not only latitude and longitude but also
+      altitude of a location.  In addition, it supports to indicate the
+      uncertainty of the coordinates, is interoperable with other
+      internet standards making use of spatial information, and is
+
+
+
+Stepanek                  Expires 23 July 2026                  [Page 5]
+
+Internet-Draft       iCalendar JSCalendar Extensions        January 2026
+
+
+      extensible, such as for use with other coordinate reference
+      systems.  The property value MUST a URI in the "geo" URI scheme,
+      as defined in [RFC5870] and updates.
+
+   Format Definition:
+      coord       = "COORDINATES" coordparam ":" uri CRLF
+
+      coordparam  = *(
+                     ;
+                     ; The following is REQUIRED,
+                     ; but MUST NOT occur more than once.
+                     ;
+                     (";" "VALUE" "=" "URI") /
+                     ;
+                     ; The following is OPTIONAL,
+                     ; and MAY occur more than once.
+                     ;
+                     (";" other-param)
+                     ;
+                     )
+
+   Example:  The following is an example of this property:
+
+      COORDINATES;VALUE=URI:geo:48.198634,16.371648;crs=wgs84;u=40
+
+4.2.  SHOW-WITHOUT-TIME Property
+
+   Property Name:  SHOW-WITHOUT-TIME
+
+   Purpose:  To indicate that the exact time span is not important when
+      displaying this calendar object.
+
+   Value Type:  BOOLEAN -- no default
+
+   Property Parameters:  IANA and non-standard parameters can be
+      specified on this property.
+
+   Conformance:  This property can be specified in a "VEVENT" or "VTODO"
+      calendar component.
+
+   Description:  This indicates that the exact time span is not
+
+
+
+
+
+
+
+
+
+
+Stepanek                  Expires 23 July 2026                  [Page 6]
+
+Internet-Draft       iCalendar JSCalendar Extensions        January 2026
+
+
+      important to display when rendering this calendar object.  An
+      example of this is an event that occurs over a full or almost full
+      day, but in contrast to a DATE value is limited to a specific time
+      zone or business hours.  While the time component is important for
+      free-busy calculations and checking for scheduling clashes,
+      calendars may choose to display it as an all-day event, or display
+      the object separately to other objects to enhance the user's view
+      of their schedule.
+
+      This property only is for presentation purposes, it does not have
+      any impact on the temporal span or value type of a calendar
+      object.
+
+      This property MAY be specified on VEVENT components where the
+      DTSTART property is of type DATE-TIME, or in VTODO components
+      where either the DTSTART or DUE property is specified and has type
+      DATE-TIME.  In all other cases it MUST NOT be set.  If this
+      property is set, its property value MUST be "TRUE", e.g. it MUST
+      be omitted rather than having value "FALSE".
+
+      Implementations that are unaware of the "SHOW-WITHOUT-TIME"
+      property might inadvertently preserve this property when changing
+      a calendar object's temporal type from DATE-TIME to DATE.
+      Implementations SHOULD therefore ignore rather than reject the
+      incorrectly specified SHOW-WITHOUT-TIME property.  They MUST NOT
+      preserve the ill-specified property in the calendaring data.
+
+   Format Definition:
+      showwt      = "SHOW-WITHOUT-TIME" showwtparam ":" "TRUE" CRLF
+
+      showwtparam = *(
+                     ;
+                     ; The following is REQUIRED,
+                     ; but MUST NOT occur more than once.
+                     ;
+                     (";" "VALUE" "=" "BOOLEAN") /
+                     ;
+                     ; The following is OPTIONAL,
+                     ; and MAY occur more than once.
+                     ;
+                     (";" other-param)
+                     ;
+                     )
+
+   Example:
+      SHOW-WITHOUT-TIME;VALUE=BOOLEAN:TRUE
+
+
+
+
+
+Stepanek                  Expires 23 July 2026                  [Page 7]
+
+Internet-Draft       iCalendar JSCalendar Extensions        January 2026
+
+
+5.  New Values
+
+5.1.  OWNER Participation Role
+
+   Value:  OWNER
+
+   Purpose:  This participation role indicates that the calendar user is
+      an owner of the calendar object.  This signifies they can make
+      changes that affect all calendar users participating in this
+      calendar object (for example, rescheduling the calendar object,
+      adding and removing attendees and roles).  The presence of this
+      role only is indicative, its semantics are subject to the
+      calendaring exchange protocol being used.  See [jmap-calendars]
+      for an example for making use of this role.
+
+   Conformance:  This value can be used with the "ROLE" parameter.
+
+   Example(s):
+      ATTENDEE;ROLE=OWNER;RSVP=TRUE:mailto:jsmith@example.com
+
+6.  Security Considerations
+
+   This specification extends [RFC5545].  The same security
+   considerations as outlined in Section 7 of [RFC5545] apply.
+
+7.  IANA Considerations
+
+   IANA will update the "iCalendar Element Registries" as follows.
+
+7.1.  Changes to the "Components" registry
+
+   IANA will update the entry of the "VLOCATION" component: it will add
+   Section 3.1 of this document to the References.
+
+7.2.  Changes to the "Properties" registry
+
+   IANA will change the entry for the "GEO" property: it will set the
+   Status from "Current" to "Deprecated" and add Section 2.1 of this
+   document to the References.
+
+   IANA will change the entry for the "COLOR" property: tt will add
+   Section 2.2 of this document to the References.
+
+   IANA will add the following entries:
+
+   Property  COORDINATES
+   Status  Current
+   Reference  Section 4.1
+
+
+
+Stepanek                  Expires 23 July 2026                  [Page 8]
+
+Internet-Draft       iCalendar JSCalendar Extensions        January 2026
+
+
+   Property  SHOW-WITHOUT-TIME
+   Status  Current
+   Reference  Section 4.2
+
+7.3.  Changes to the "Participation Roles" registry
+
+   IANA will add the following entry:
+
+   Role Type  OWNER
+   Status  Current
+   Reference  Section 5.1
+
+8.  References
+
+8.1.  Normative References
+
+   [CSS3]     Çelik, T., Lilley, C., and L. Baron, "CSS Color Module
+              Level 3", W3C Recommendation, January 2022,
+              <https://www.w3.org/TR/css-color-3/>.
+
+   [RFC2119]  Bradner, S., "Key words for use in RFCs to Indicate
+              Requirement Levels", BCP 14, RFC 2119,
+              DOI 10.17487/RFC2119, March 1997,
+              <https://www.rfc-editor.org/info/rfc2119>.
+
+   [RFC5234]  Crocker, D., Ed. and P. Overell, "Augmented BNF for Syntax
+              Specifications: ABNF", STD 68, RFC 5234,
+              DOI 10.17487/RFC5234, January 2008,
+              <https://www.rfc-editor.org/info/rfc5234>.
+
+   [RFC5545]  Desruisseaux, B., Ed., "Internet Calendaring and
+              Scheduling Core Object Specification (iCalendar)",
+              RFC 5545, DOI 10.17487/RFC5545, September 2009,
+              <https://www.rfc-editor.org/info/rfc5545>.
+
+   [RFC5870]  Mayrhofer, A. and C. Spanring, "A Uniform Resource
+              Identifier for Geographic Locations ('geo' URI)",
+              RFC 5870, DOI 10.17487/RFC5870, June 2010,
+              <https://www.rfc-editor.org/info/rfc5870>.
+
+   [RFC7986]  Daboo, C., "New Properties for iCalendar", RFC 7986,
+              DOI 10.17487/RFC7986, October 2016,
+              <https://www.rfc-editor.org/info/rfc7986>.
+
+   [RFC8174]  Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC
+              2119 Key Words", BCP 14, RFC 8174, DOI 10.17487/RFC8174,
+              May 2017, <https://www.rfc-editor.org/info/rfc8174>.
+
+
+
+
+Stepanek                  Expires 23 July 2026                  [Page 9]
+
+Internet-Draft       iCalendar JSCalendar Extensions        January 2026
+
+
+   [RFC9073]  Douglass, M., "Event Publishing Extensions to iCalendar",
+              RFC 9073, DOI 10.17487/RFC9073, August 2021,
+              <https://www.rfc-editor.org/info/rfc9073>.
+
+9.  Informative References
+
+   [I-D.ietf-calext-jscalendar-icalendar]
+              Stepanek, R., "JSCalendar: Converting from and to
+              iCalendar", Work in Progress, Internet-Draft, draft-ietf-
+              calext-jscalendar-icalendar, 16 October 2025,
+              <https://datatracker.ietf.org/doc/draft-ietf-calext-
+              jscalendar-icalendar/>.
+
+   [I-D.stepanek-jscalendarbis]
+              Jenkins, N.M. and R. Stepanek, "JSCalendar: A JSON
+              Representation of Calendar Data", Work in Progress,
+              Internet-Draft, draft-stepanek-jscalendarbis, 16 October
+              2025, <https://datatracker.ietf.org/doc/draft-stepanek-
+              jscalendarbis/>.
+
+   [jmap-calendars]
+              Jenkins, N.M. and M. Douglass, "JMAP for Calendars", Work
+              in Progress, Internet-Draft, draft-ietf-jmap-calendars, 8
+              October 2025, <https://datatracker.ietf.org/doc/draft-
+              ietf-jmap-calendars/>.
+
+Author's Address
+
+   Robert Stepanek
+   Fastmail
+   PO Box 234
+   Collins St. West
+   Melbourne VIC 8007
+   Australia
+   Email: rsto@fastmailteam.com
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Stepanek                  Expires 23 July 2026                 [Page 10]

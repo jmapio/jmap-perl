@@ -183,6 +183,136 @@ Internal refactoring to improve maintainability; no user-visible changes.
 - [x] Shared `_check_since_state` helper (sinceState + jdeletedmodseq validation)
 - [x] Shared `_limit_changes` helper (maxChanges sort/truncate with partial-state update)
 
+## Phase 9: RFC Compliance
+
+Gap analysis (April 2026) against RFC 8620, RFC 8621, draft-ietf-jmap-calendars-26, and RFC 9610.
+All referenced specs are in `specs/`.
+
+### RFC 8620 — JMAP Core
+
+#### Blocking
+- [x] **Security**: `/upload` and `/raw` (download) endpoints accept any caller who knows an
+      `accountId` — no authentication check
+- [x] **`downloadUrl` template**: `{type}` variable missing from Session object template;
+      `Content-Disposition: attachment; filename="..."` header never set on download responses
+- [ ] **Request-level errors**: `notJSON`/`notRequest` return plain text, not RFC 7807 JSON
+      (`{"type":"urn:ietf:params:jmap:error:notJSON","status":400,...}`)
+- [ ] **`unknownCapability`**: `using` array not validated — unsupported capabilities silently accepted
+- [ ] **`invalidResultReference`**: `resolve_args` (API.pm) emits type `'resultReference'`
+      instead of `'invalidResultReference'`
+- [ ] **`accountNotFound` / `accountNotSupportedByMethod`**: `_api_init` returns no error when
+      accountId is wrong or doesn't support the method
+- [ ] **Quota capability**: `urn:ietf:params:jmap:quota` advertised in Session but `Quota/get`
+      not implemented — remove capability or implement stub
+- [ ] **SSE ping event**: sends `{servertimestamp:...}` instead of required `{interval:N}`
+- [ ] **StateChange `@type`**: push object missing required `"@type":"StateChange"` field
+- [ ] **`anchor`/`anchorOffset`**: not implemented in any `/query` method; `anchorNotFound`
+      error never returned
+
+#### Moderate / Nice-to-have
+- [ ] `primaryAccounts` missing `calendars` and `contacts` entries
+- [ ] `Cache-Control` header missing from `/session` response
+- [ ] `maxCallsInRequest` / `maxSizeRequest` limits not enforced
+- [ ] `PushSubscription/get|set` not implemented (SSE works for web clients)
+- [ ] `Blob/copy` not implemented
+- [ ] Unknown sort → `serverError` instead of `unsupportedSort`
+- [ ] Unknown filter → `serverError` instead of `unsupportedFilter`
+
+---
+
+### RFC 8621 — JMAP Mail
+
+#### Blocking
+- [ ] **`jmap:mail` accountCapabilities**: returns `{}` — missing 6 required fields:
+      `maxMailboxesPerEmail`, `maxMailboxDepth`, `maxSizeMailboxName`,
+      `maxSizeAttachmentsPerEmail`, `emailQuerySortOptions`, `mayCreateTopLevelMailbox`
+- [ ] **`onDestroyRemoveEmails`**: PARAM_SCHEMA uses `onDestroyRemoveMessages` (wrong name)
+- [ ] **`ifInState`**: not enforced in `Mailbox/set`, `Email/set`, or `Email/import`
+- [ ] **Email keyword sort comparators**: non-spec `"keyword:$kw"` format used instead of
+      `{"property":"hasKeyword","keyword":"$kw"}` Comparator object
+- [ ] **`EmailSubmission/changes` `hasMoreChanges`**: duplicate hash key — always `false`
+- [ ] **`EmailSubmission/query` sort**: non-spec string format instead of Comparator object
+- [ ] **`VacationResponse/get` typo**: returns method name `'VacationReponse/get'` (missing 't')
+- [ ] **Identity `replyTo`**: returns a plain string instead of `EmailAddress[]`
+- [ ] **`Mailbox/queryChanges`**: not implemented
+- [ ] **`Email/parse`**: not implemented
+- [ ] **`Identity/changes`** and **`Identity/set`**: not implemented
+- [ ] **`VacationResponse/set`**: not implemented
+
+#### Moderate / Nice-to-have
+- [ ] `Mailbox/query`: `sortAsTree`, `filterAsTree`, `name`/`role` filter conditions missing
+- [ ] `Email/copy` returns `notImplemented` stub
+- [ ] `SearchSnippet/get`: subject/preview should be `null` when no text filter match
+- [ ] `subParts` included in Email body parts even when not in `bodyProperties`
+- [ ] `Thread/get` with `ids:null` will crash (array deref on undef)
+- [ ] `EmailSubmission/query` filter missing `identityIds` condition
+- [ ] `%ROLE_MAP` duplicate `'junk'` key — second mapping silently wins
+
+---
+
+### draft-ietf-jmap-calendars-26 — JMAP Calendars
+
+#### Blocking
+- [ ] **`ParticipantIdentity/get`**: always returns empty list — should return the user's own
+      email as a scheduling address
+- [ ] **`Calendar/set` `onDestroyRemoveEvents`**: not checked — CalDAV collection deleted
+      unconditionally (data loss possible); `calendarHasEvent` SetError never returned
+- [ ] **`CalendarEvent` `isOrigin`**: MUST-include property never returned
+- [ ] **`CalendarEvent/query` `expandRecurrences`**: not implemented — primary way clients
+      find events in a date range
+- [ ] **`CalendarEvent/set` error handling**: create errors not caught — client gets false
+      success when CalDAV PUT fails; occurrence update/destroy similarly unguarded
+
+#### Moderate
+- [ ] Calendar missing `defaultAlertsWithTime`/`defaultAlertsWithoutTime`, `timeZone`,
+      `description` properties (not in DB schema)
+- [ ] `CalendarEvent/get` missing `isDraft`, `baseEventId`; `utcStart`/`utcEnd` not computed
+- [ ] `CalendarEvent/set` does not auto-set `uid`, `created`, `updated`; no `sequence` increment
+- [ ] `CalendarEvent/set` `sendSchedulingMessages` silently ignored (no iTIP)
+- [ ] `CalendarEvent/query` filter conditions missing (text/title/description/location/
+      owner/attendee/uid); date-range uses `start` not `end`; recurring events always pass
+- [ ] `CalendarEvent/query` sort not implemented
+- [ ] `CalendarEvent/queryChanges` filter not applied
+- [ ] `ParticipantIdentity/set` error type wrong (`notImplemented` instead of `forbidden`)
+- [ ] Top-level `capabilities` entry for calendars should be `{}` not the account caps object
+- [ ] Calendar `myRights` missing `mayShare`; `mayWriteOwn` incorrectly set to `mayWriteAll`
+
+#### Nice-to-have
+- [ ] `CalendarEvent/parse`, `CalendarEvent/copy`
+- [ ] `Principal/getAvailability` (free/busy)
+- [ ] `CalendarEventNotification` (all methods — requires sharing/Principal model)
+
+---
+
+### RFC 9610 — JMAP Contacts
+
+#### Blocking
+- [ ] **`AddressBook` `myRights`**: wrong structure — flat properties with wrong names
+      (`mayReadItems` etc.) instead of nested `{mayRead, mayWrite, mayShare, mayDelete}`
+- [ ] **`AddressBook` `isDefault`**: property missing from schema and all responses
+- [ ] **`AddressBook/set` `onSuccessSetIsDefault`**: not implemented
+- [ ] **`AddressBook/set` `onDestroyRemoveContacts`**: not checked;
+      `addressBookHasContents` SetError never returned
+- [ ] **`ContactCard/query`**: calls `_event_filter` (calendar code) instead of
+      `_contact_filter` — completely wrong filter; all 13+ spec filter conditions missing
+- [ ] **`ContactCard/queryChanges`**: same `_event_filter` bug
+- [ ] **`ContactCard/copy`**: method entirely absent — returns `unknownMethod`
+
+#### Moderate
+- [ ] `AddressBook` missing `isSubscribed` (has non-spec `isVisible`), `description`,
+      `sortOrder`, `shareWith` (should at least be `null`)
+- [ ] `AddressBook/set` `ifInState` not checked
+- [ ] `AddressBook/set` update only handles `name` — `sortOrder`, `description`,
+      `isSubscribed` silently dropped
+- [ ] `ContactCard/set` `ifInState` not checked
+- [ ] `ContactCard/set` `addressBookIds` on create ignored; moves between books not handled
+- [ ] `ContactCard/set` `destroy_contacts` not wrapped in eval — CardDAV error kills worker
+- [ ] `ContactCard/query` sort comparators (`created`, `updated`, `name/*`) not implemented
+- [ ] `ContactCard/query` `anchor`/`anchorOffset` not implemented
+- [ ] Single addressbook per card (structural limit in `jcontacts` schema)
+
+---
+
 ## Phase 8: Documentation & Developer Experience
 
 - [x] Landing page (proxy.jmap.io/): describes what the proxy is, signup form

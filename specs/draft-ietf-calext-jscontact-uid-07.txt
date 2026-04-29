@@ -1,0 +1,392 @@
+
+
+
+
+calext                                                       R. Stepanek
+Internet-Draft                                                  Fastmail
+Updates: 9555 (if approved)                             19 November 2025
+Intended status: Standards Track                                        
+Expires: 23 May 2026
+
+
+      JSContact Version 2.0: A JSON Representation of Contact Data
+                   draft-ietf-calext-jscontact-uid-07
+
+Abstract
+
+   This document defines version "2.0" of JSContact.  It defines the uid
+   property of a Card object to be optional, rather than mandatory as
+   defined in previous version "1.0".  All other definitions of
+   JSContact version "1.0" remain as defined in RFC 9553.  This document
+   updates RFC 9555 by redefining how to convert the now optional uid
+   property from and to vCard.  It also registers the vCard JSCOMPS
+   parameter at IANA, which was defined but not registered in RFC 9555.
+
+Status of This Memo
+
+   This Internet-Draft is submitted in full conformance with the
+   provisions of BCP 78 and BCP 79.
+
+   Internet-Drafts are working documents of the Internet Engineering
+   Task Force (IETF).  Note that other groups may also distribute
+   working documents as Internet-Drafts.  The list of current Internet-
+   Drafts is at https://datatracker.ietf.org/drafts/current/.
+
+   Internet-Drafts are draft documents valid for a maximum of six months
+   and may be updated, replaced, or obsoleted by other documents at any
+   time.  It is inappropriate to use Internet-Drafts as reference
+   material or to cite them other than as "work in progress."
+
+   This Internet-Draft will expire on 23 May 2026.
+
+Copyright Notice
+
+   Copyright (c) 2025 IETF Trust and the persons identified as the
+   document authors.  All rights reserved.
+
+
+
+
+
+
+
+
+
+
+Stepanek                   Expires 23 May 2026                  [Page 1]
+
+RFC draft-ietf-calext-jscoJSContact-Version 2.0            November 2025
+
+
+   This document is subject to BCP 78 and the IETF Trust's Legal
+   Provisions Relating to IETF Documents (https://trustee.ietf.org/
+   license-info) in effect on the date of publication of this document.
+   Please review these documents carefully, as they describe your rights
+   and restrictions with respect to this document.  Code Components
+   extracted from this document must include Revised BSD License text as
+   described in Section 4.e of the Trust Legal Provisions and are
+   provided without warranty as described in the Revised BSD License.
+
+Table of Contents
+
+   1.  Notational Conventions  . . . . . . . . . . . . . . . . . . .   2
+   2.  Introduction  . . . . . . . . . . . . . . . . . . . . . . . .   2
+   3.  JSContact Version 2.0 . . . . . . . . . . . . . . . . . . . .   3
+   4.  Redefined uid Property  . . . . . . . . . . . . . . . . . . .   4
+   5.  Redefined Conversion Rule for the uid Property  . . . . . . .   4
+   6.  Other Changes . . . . . . . . . . . . . . . . . . . . . . . .   5
+   7.  IANA Considerations . . . . . . . . . . . . . . . . . . . . .   5
+     7.1.  Update to the JSContact Version Registry  . . . . . . . .   5
+     7.2.  Update to the JSContact Properties Registry . . . . . . .   5
+     7.3.  Update to the vCard Parameters Registry . . . . . . . . .   5
+   8.  Security Considerations . . . . . . . . . . . . . . . . . . .   5
+   9.  References  . . . . . . . . . . . . . . . . . . . . . . . . .   5
+     9.1.  Normative References  . . . . . . . . . . . . . . . . . .   6
+     9.2.  Informative References  . . . . . . . . . . . . . . . . .   6
+   Author's Address  . . . . . . . . . . . . . . . . . . . . . . . .   6
+
+1.  Notational Conventions
+
+   The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT",
+   "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and
+   "OPTIONAL" in this document are to be interpreted as described in BCP
+   14 [RFC2119] [RFC8174] when, and only when, they appear in all
+   capitals, as shown here.
+
+   The ABNF definitions in this document use the notations of [RFC5234].
+   ABNF rules not defined in this document are defined in either
+   [RFC5234] (such as the ABNF for CRLF, WSP, DQUOTE, VCHAR, ALPHA, and
+   DIGIT) or [RFC6350].
+
+2.  Introduction
+
+   JSContact [RFC9553] defines the Card object uid property, a mandatory
+   property which contains a unique identifier for the entity
+   represented by that contact card.  For the same purpose, the vCard
+   [RFC6350] contact format defines the UID property, an optional
+   property of a vCard instance.  Throughout the rest of this document,
+   the term uid (all lowercase) denotes the JSContact uid property, the
+
+
+
+Stepanek                   Expires 23 May 2026                  [Page 2]
+
+RFC draft-ietf-calext-jscoJSContact-Version 2.0            November 2025
+
+
+   term UID (all uppercase) denotes the vCard UID property.
+
+   That the uid property was defined to be mandatory in JSContact has
+   shown to be applicable for some use cases, but turned out to be an
+   issue in other contexts:
+
+   For example, the CardDAV protocol [RFC6352] requires the UID property
+   of a vCard object [RFC6350] to be set.  Accordingly, an internet
+   server that implements both CardDAV and JMAP for Contacts [RFC9610]
+   requires the uid property of a JSContact Card to be set.  In
+   contrast, protocols such as RDAP [RFC9083] have no use for the uid
+   property, either because they use different identifiers, or they
+   prefer to not include any unique identifier in the contact data at
+   all.  JSContact should not require them to generate unique
+   identifiers that are irrelevant to their use case.
+
+   Also, one of the stated goals of JSContact is to be compatible with
+   the semantics of the vCard data format (Section 1 of [RFC9553]).  But
+   [RFC6350] defines the UID property of a vCard to be optional, and
+   consequently the semantics of JSContact and vCard differ for such a
+   crucial common element.
+
+   In case of vCards without a UID property [RFC6350] (Section 6.7.6)
+   being converted to JSContact, requiring unique identifiers is
+   especially problematic: the Card uid property is mandatory and
+   accordingly Section 2.1.1 of [RFC9555] requires implementations to
+   generate some unique identifier for it during conversion, but it does
+   not guarantee it to be the same across implementations or even one
+   implementation converting the same Card multiple times.  A recipient
+   being unaware that the uid property value of such a Card object is
+   ephemeral might refer to it in the members property or relatedTo
+   property of another Card object, introducing invalid relations
+   between contact cards.
+
+3.  JSContact Version 2.0
+
+   This document redefines the uid property of a Card object to become
+   optional.  Other than that, the property definition is left
+   unchanged.  This change requires the major version of JSContact to
+   change, so this document defines the JSContact version to become
+   "2.0".  For further information about versioning JSContact data, see
+   Section 1.9 of [RFC9553].
+
+   Implementations MUST create JSContact data that complies with the
+   definitions of version "2.0" (or some later registered version) and
+   MUST set the version property of the JSContact Card object to that
+   version.  They MUST NOT reject a Card object without the uid property
+   as invalid unless specified differently in another document, or
+
+
+
+Stepanek                   Expires 23 May 2026                  [Page 3]
+
+RFC draft-ietf-calext-jscoJSContact-Version 2.0            November 2025
+
+
+   unless the Card version property has value "1.0".  As any valid
+   version "1.0" JSContact Card also is valid according to version
+   "2.0", there is no need to migrate existing JSContact data.
+
+   Setting the uid property is use-case specific.  If an implementation
+   is able to consistently generate the exact same unique identifier for
+   a JSContact Card representing the same entity and no protocol-
+   specific concerns prevail, it is recommended to set the uid property.
+
+   This document does not redefine the vCard UID property.
+
+4.  Redefined uid Property
+
+   This document redefines the type signature of the uid property,
+   originally defined in Section 2.1.9 of [RFC9553].  The new type
+   signature is:
+
+   *uid: String (optional).*
+
+   The remaining property definition is left unchanged, with the
+   following additional paragraph:
+
+   |  A Card without an uid property can not be referred to as group
+   |  member in the members property [RFC9553] (Section 2.1.6), or put
+   |  in relation to another Card object in the relatedTo property
+   |  [RFC9553] (Section 2.1.8).
+
+5.  Redefined Conversion Rule for the uid Property
+
+   This document redefines how to convert the Card uid property from
+   vCard, originally defined in Section 2.1.1 of [RFC9555].  The new
+   conversion rule is:
+
+   Implementations that convert a vCard without a UID property [RFC6350]
+   (Section 6.7.6) to a Card of version "2.0" or higher MUST NOT
+   generate a unique identifier as value for the uid property [RFC9553]
+   (Section 2.1.9).
+
+   When converting a vCard without UID property to JSContact version
+   "1.0", implementations MUST generate a value for the uid property.
+   Generating unique identifiers is implementation-specific.  An
+   implementation SHOULD generate the same value when generating the
+   same Card multiple times.  Section 2 describes why this is
+   problematic.  Consequently, implementations SHOULD NOT convert to
+   version "1.0" Card objects.
+
+
+
+
+
+
+Stepanek                   Expires 23 May 2026                  [Page 4]
+
+RFC draft-ietf-calext-jscoJSContact-Version 2.0            November 2025
+
+
+6.  Other Changes
+
+   This document also registers the JSCOMPS parameter in the IANA "vCard
+   Parameters" registry.  The parameter was defined in Section 3.3.1 of
+   [RFC9555] but mistakenly not registered at IANA.
+
+7.  IANA Considerations
+
+7.1.  Update to the JSContact Version Registry
+
+   IANA will update the "JSContact Version" registry, originally created
+   in Section 3.4 of [RFC9553].  It will add the following record:
+
+         +===============+=======================+===============+
+         | Major Version | Highest Minor Version | Reference     |
+         +===============+=======================+===============+
+         | 2             | 0                     | This document |
+         +---------------+-----------------------+---------------+
+
+                    Table 1: JSContact Version Registry
+
+7.2.  Update to the JSContact Properties Registry
+
+   IANA will update the "JSContact Properties" registry, originally
+   created in Section 3.5 of [RFC9553]: In the "Reference/Description"
+   column of the uid property, it will add a reference to Section 4 of
+   this document.
+
+7.3.  Update to the vCard Parameters Registry
+
+   IANA will update the "vCard Parameters" registry within the "vCard
+   Elements" registry.  It will add the following entry:
+
+          +===========+===========+============================+
+          | Namespace | Parameter | Reference                  |
+          +===========+===========+============================+
+          |           | JSCOMPS   | Section 3.3.1 of [RFC9555] |
+          +-----------+-----------+----------------------------+
+
+                    Table 2: vCard Parameters Registry
+
+8.  Security Considerations
+
+   This document does not provide new security considerations.  The
+   security considerations of Section 4 of [RFC9553] apply.
+
+9.  References
+
+
+
+
+Stepanek                   Expires 23 May 2026                  [Page 5]
+
+RFC draft-ietf-calext-jscoJSContact-Version 2.0            November 2025
+
+
+9.1.  Normative References
+
+   [RFC2119]  Bradner, S., "Key words for use in RFCs to Indicate
+              Requirement Levels", BCP 14, RFC 2119,
+              DOI 10.17487/RFC2119, March 1997,
+              <https://www.rfc-editor.org/info/rfc2119>.
+
+   [RFC5234]  Crocker, D., Ed. and P. Overell, "Augmented BNF for Syntax
+              Specifications: ABNF", STD 68, RFC 5234,
+              DOI 10.17487/RFC5234, January 2008,
+              <https://www.rfc-editor.org/info/rfc5234>.
+
+   [RFC6350]  Perreault, S., "vCard Format Specification", RFC 6350,
+              DOI 10.17487/RFC6350, August 2011,
+              <https://www.rfc-editor.org/info/rfc6350>.
+
+   [RFC8174]  Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC
+              2119 Key Words", BCP 14, RFC 8174, DOI 10.17487/RFC8174,
+              May 2017, <https://www.rfc-editor.org/info/rfc8174>.
+
+   [RFC9553]  Stepanek, R. and M. Loffredo, "JSContact: A JSON
+              Representation of Contact Data", RFC 9553,
+              DOI 10.17487/RFC9553, May 2024,
+              <https://www.rfc-editor.org/info/rfc9553>.
+
+   [RFC9555]  Loffredo, M. and R. Stepanek, "JSContact: Converting from
+              and to vCard", RFC 9555, DOI 10.17487/RFC9555, May 2024,
+              <https://www.rfc-editor.org/info/rfc9555>.
+
+9.2.  Informative References
+
+   [RFC6352]  Daboo, C., "CardDAV: vCard Extensions to Web Distributed
+              Authoring and Versioning (WebDAV)", RFC 6352,
+              DOI 10.17487/RFC6352, August 2011,
+              <https://www.rfc-editor.org/info/rfc6352>.
+
+   [RFC9083]  Hollenbeck, S. and A. Newton, "JSON Responses for the
+              Registration Data Access Protocol (RDAP)", STD 95,
+              RFC 9083, DOI 10.17487/RFC9083, June 2021,
+              <https://www.rfc-editor.org/info/rfc9083>.
+
+   [RFC9610]  Jenkins, N., Ed., "JSON Meta Application Protocol (JMAP)
+              for Contacts", RFC 9610, DOI 10.17487/RFC9610, December
+              2024, <https://www.rfc-editor.org/info/rfc9610>.
+
+Author's Address
+
+
+
+
+
+Stepanek                   Expires 23 May 2026                  [Page 6]
+
+RFC draft-ietf-calext-jscoJSContact-Version 2.0            November 2025
+
+
+   Robert Stepanek
+   Fastmail
+   PO Box 234
+   Collins St. West
+   Melbourne VIC 8007
+   Australia
+   Email: rsto@fastmailteam.com
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Stepanek                   Expires 23 May 2026                  [Page 7]

@@ -1153,7 +1153,7 @@ sub do_session {
         },
         username => ($pool->{accounts} && $pool->{accounts}[0] ? $pool->{accounts}[0]{email} : ''),
         apiUrl => "$BASEURL/jmap",
-        downloadUrl => "$BASEURL/raw/{accountId}/{blobId}/{name}",
+        downloadUrl => "$BASEURL/raw/{accountId}/{blobId}/{name}?type={type}",
         uploadUrl => "$BASEURL/upload/{accountId}",
         eventSourceUrl => "$BASEURL/eventsource?types={types}&closeafter={closeafter}&ping={ping}",
         state => sha1_hex(join(',', sort map { $_->{accountid} } @{$pool->{accounts} || []})),
@@ -1232,15 +1232,12 @@ sub _do_jmap_request {
 sub do_upload {
   my ($httpd, $req) = @_;
 
-  my $uri = $req->url();
-  my $path = $uri->path();
-
+  my $path = $req->url->path;
   return invalid_request($req) unless $path =~ m{^/upload/([^/]+)/?$};
   my $accountid = $1;
-
   return invalid_request($req) unless lc $req->method eq 'post';
 
-  my $type = $req->headers->{'content-type'} || 'application/octet-stream';
+  my $type    = $req->headers->{'content-type'} || 'application/octet-stream';
   my $content = $req->content;
 
   # Write upload content to tempfile to avoid passing binary through JSON socketpair
@@ -1250,38 +1247,55 @@ sub do_upload {
   my $tmpfile = $tmp->filename;
 
   $httpd->stop_request();
-
-  send_backend_request($accountid, 'upload', { accountId => $accountid, type => $type, file => $tmpfile }, sub {
-    my $result = shift;
-    $req->respond({
-      content => ['application/json', $json->encode($result)],
+  _authenticate($req, $httpd, sub {
+    my ($auth_aid) = @_;
+    _check_account_access($auth_aid, $accountid, sub {
+      send_backend_request($accountid, 'upload', { accountId => $accountid, type => $type, file => $tmpfile }, sub {
+        my $result = shift;
+        $req->respond({ content => ['application/json', $json->encode($result)] });
+      }, sub {
+        unlink $tmpfile;
+        $req->respond([500, 'error', {}, 'upload failed']);
+      });
+    }, sub {
+      unlink $tmpfile;
+      $req->respond([403, 'forbidden', {}, 'Forbidden']);
     });
   }, sub {
-    my $error = shift;
     unlink $tmpfile;
-    $req->respond([500, 'error', {}, "upload failed: $error"]);
+    _require_auth($req);
   });
 }
 
 sub do_raw {
   my ($httpd, $req) = @_;
 
-  my $uri = $req->url();
-  my $path = $uri->path();
-
+  my $path = $req->url->path;
   return invalid_request($req) unless $path =~ m{^/raw/([^/]+)/([^/]+)/(.+)$};
   my ($accountid, $blobid, $name) = ($1, $2, $3);
   my $type = $req->url->query_param('type') // '';
 
   $httpd->stop_request();
-
-  send_backend_request($accountid, 'download', { blobId => $blobid, name => $name, type => $type }, sub {
-    my $result = shift;
-    my $type = $result->[0] || 'application/octet-stream';
-    $req->respond([200, 'ok', { 'Content-Type' => $type }, $result->[1]]);
+  _authenticate($req, $httpd, sub {
+    my ($auth_aid) = @_;
+    _check_account_access($auth_aid, $accountid, sub {
+      send_backend_request($accountid, 'download', { blobId => $blobid, name => $name, type => $type }, sub {
+        my $result = shift;
+        my $ct = $result->[0] || 'application/octet-stream';
+        (my $enc_name = $name) =~ s/([^\w.\-])/sprintf('%%%02X', ord($1))/ge;
+        $req->respond([200, 'ok', {
+          'Content-Type'        => $ct,
+          'Content-Disposition' => "attachment; filename*=UTF-8''$enc_name",
+          'Cache-Control'       => 'private, immutable, max-age=31536000',
+        }, $result->[1]]);
+      }, sub {
+        $req->respond([404, 'not found', {}, 'not found']);
+      });
+    }, sub {
+      $req->respond([403, 'forbidden', {}, 'Forbidden']);
+    });
   }, sub {
-    my $error = shift;
-    $req->respond([404, 'not found', {}, "not found"]);
+    _require_auth($req);
   });
 }
 
@@ -1350,6 +1364,17 @@ sub _get_auth_accountid {
 # Cache auth results: key => [accountid, expire_time]
 my %auth_cache;
 my $AUTH_CACHE_TTL = 300;  # 5 minutes
+
+# Checks that $auth_aid has pool access to $accountid, then calls $ok_cb or $fail_cb.
+sub _check_account_access {
+  my ($auth_aid, $accountid, $ok_cb, $fail_cb) = @_;
+  if ($auth_aid eq $accountid) { $ok_cb->(); return; }
+  send_backend_request('__accounts__', 'get_pool', { accountid => $auth_aid }, sub {
+    my $pool = shift;
+    grep { $_->{accountid} eq $accountid } @{$pool->{accounts} || []}
+      ? $ok_cb->() : $fail_cb->();
+  }, sub { $fail_cb->() });
+}
 
 # Like _authenticate but cookie-only, never errors — calls $cb->(undef) if not logged in.
 sub _try_authenticate {
