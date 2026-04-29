@@ -90,14 +90,14 @@
     <td>[% human_time(t.last_used) %]</td>
     <td>[% t.last_ip || '-' %]</td>
     <td>
+      [% IF is_current %]
       <form method="post" action="/accounts/tokens/delete">
         <input type="hidden" name="token" value="[% t.token %]">
-        [% IF is_current %]
         <button class="logout" type="submit">Log out</button>
-        [% ELSE %]
-        <button class="delete" type="submit" onclick="return confirm('Revoke this session?')">Revoke</button>
-        [% END %]
       </form>
+      [% ELSE %]
+      <button class="delete" onclick="revokeToken(this, '[% t.token %]')">Revoke</button>
+      [% END %]
     </td>
   </tr>
 [% END %]
@@ -133,5 +133,27 @@
 </div>
 
 </article>
+<script>
+function revokeToken(btn, token) {
+  if (!confirm('Revoke this session?')) return;
+  btn.disabled = true;
+  btn.textContent = '…';
+  fetch('/accounts/tokens/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
+    body: 'token=' + encodeURIComponent(token),
+  }).then(function(r) { return r.json(); }).then(function(data) {
+    if (data.logout) { location.href = '/'; return; }
+    var row = btn.closest('tr');
+    row.style.transition = 'opacity 0.3s';
+    row.style.opacity = '0';
+    setTimeout(function() { row.remove(); }, 300);
+  }).catch(function() {
+    btn.disabled = false;
+    btn.textContent = 'Revoke';
+    alert('Failed to revoke session. Please try again.');
+  });
+}
+</script>
 </body>
 </html>

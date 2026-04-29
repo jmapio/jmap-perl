@@ -2166,14 +2166,24 @@ sub _do_accounts_authed {
     delete $auth_cache{"bearer:$token"};
     delete $token_touch{$token};
 
+    my $is_fetch = ($req->headers->{accept} || '') =~ m{application/json};
     send_backend_request('__accounts__', 'delete_token', { token => $token }, sub {
       # If the user deleted their own session token, log them out
       if ($my_token && $token eq $my_token) {
         my $cookie = bake_cookie("jmap_proxy", { value => '', path => '/', expires => '-1d' });
-        $req->respond([301, 'redirected',
-          { 'Set-Cookie' => $cookie, Location => "$BASEURL/" }, "Redirected"]);
+        if ($is_fetch) {
+          $req->respond([200, 'ok', { 'Set-Cookie' => $cookie,
+            'Content-Type' => 'application/json' }, '{"ok":1,"logout":true}']);
+        } else {
+          $req->respond([301, 'redirected',
+            { 'Set-Cookie' => $cookie, Location => "$BASEURL/" }, "Redirected"]);
+        }
       } else {
-        $req->respond([301, 'redirected', { Location => "$BASEURL/accounts" }, "Redirected"]);
+        if ($is_fetch) {
+          $req->respond([200, 'ok', { 'Content-Type' => 'application/json' }, '{"ok":1}']);
+        } else {
+          $req->respond([301, 'redirected', { Location => "$BASEURL/accounts" }, "Redirected"]);
+        }
       }
     }, sub {
       my $err = shift;
