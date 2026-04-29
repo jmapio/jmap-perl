@@ -1093,7 +1093,17 @@ sub do_session {
           isPersonal => JSON::true,
           isReadOnly => JSON::false,
           accountCapabilities => {
-            'urn:ietf:params:jmap:mail' => {},
+            'urn:ietf:params:jmap:mail' => {
+              maxMailboxesPerEmail         => undef,
+              maxMailboxDepth              => undef,
+              maxSizeMailboxName           => 490,
+              maxSizeAttachmentsPerEmail   => 50_000_000,
+              emailQuerySortOptions        => [qw(
+                receivedAt sentAt size subject from to id
+                hasKeyword allInThreadHaveKeyword someInThreadHaveKeyword
+              )],
+              mayCreateTopLevelMailbox     => JSON::true,
+            },
             'urn:ietf:params:jmap:submission' => {
               maxDelayedSend => 0,
             },

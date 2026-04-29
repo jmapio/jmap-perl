@@ -223,16 +223,18 @@ All referenced specs are in `specs/`.
 ### RFC 8621 — JMAP Mail
 
 #### Blocking
-- [ ] **`jmap:mail` accountCapabilities**: returns `{}` — missing 6 required fields:
-      `maxMailboxesPerEmail`, `maxMailboxDepth`, `maxSizeMailboxName`,
-      `maxSizeAttachmentsPerEmail`, `emailQuerySortOptions`, `mayCreateTopLevelMailbox`
-- [ ] **`onDestroyRemoveEmails`**: PARAM_SCHEMA uses `onDestroyRemoveMessages` (wrong name)
+- [x] **`jmap:mail` accountCapabilities**: now returns all 6 required fields
+      (`maxMailboxesPerEmail`, `maxMailboxDepth`, `maxSizeMailboxName`,
+      `maxSizeAttachmentsPerEmail`, `emailQuerySortOptions`, `mayCreateTopLevelMailbox`)
+- [x] **`onDestroyRemoveEmails`**: renamed from `onDestroyRemoveMessages` in PARAM_SCHEMA
+      and Mailbox/set handler
 - [ ] **`ifInState`**: not enforced in `Mailbox/set`, `Email/set`, or `Email/import`
 - [ ] **Email keyword sort comparators**: non-spec `"keyword:$kw"` format used instead of
       `{"property":"hasKeyword","keyword":"$kw"}` Comparator object
-- [ ] **`EmailSubmission/changes` `hasMoreChanges`**: duplicate hash key — always `false`
+- [x] **`EmailSubmission/changes` `hasMoreChanges`**: removed duplicate hash key — was
+      always `false` due to Perl last-wins overwrite
 - [ ] **`EmailSubmission/query` sort**: non-spec string format instead of Comparator object
-- [ ] **`VacationResponse/get` typo**: returns method name `'VacationReponse/get'` (missing 't')
+- [x] **`VacationResponse/get` typo**: fixed `'VacationReponse/get'` → `'VacationResponse/get'`
 - [ ] **Identity `replyTo`**: returns a plain string instead of `EmailAddress[]`
 - [ ] **`Mailbox/queryChanges`**: not implemented
 - [ ] **`Email/parse`**: not implemented

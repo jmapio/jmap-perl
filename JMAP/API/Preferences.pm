@@ -440,7 +440,7 @@ sub api_VacationResponse_get {
   my $accountid = $Self->{db}->accountid();
   $Self->commit();
 
-  return ['VacationReponse/get', {
+  return ['VacationResponse/get', {
     accountId => $accountid,
     state => 'dummy',
     list => [{

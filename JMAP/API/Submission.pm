@@ -298,7 +298,6 @@ sub api_EmailSubmission_changes {
     created => \@created,
     updated => \@updated,
     destroyed => \@destroyed,
-    hasMoreChanges => JSON::false,
   }];
 
   return @res;

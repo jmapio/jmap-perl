@@ -73,7 +73,7 @@ my %PARAM_SCHEMA = (
     create             => '{object}?',
     update             => '{object}?',
     destroy            => '[string]?',
-    onDestroyRemoveMessages => 'bool?',
+    onDestroyRemoveEmails => 'bool?',
   },
   'Mailbox/query' => {
     accountId          => 'string?',
