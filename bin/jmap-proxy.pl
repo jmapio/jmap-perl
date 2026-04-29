@@ -1163,7 +1163,7 @@ sub do_session {
         },
         username => ($pool->{accounts} && $pool->{accounts}[0] ? $pool->{accounts}[0]{email} : ''),
         apiUrl => "$BASEURL/jmap",
-        downloadUrl => "$BASEURL/raw/{accountId}/{blobId}/{name}?type={type}",
+        downloadUrl => "$BASEURL/raw/{accountId}/{blobId}/{name}",
         uploadUrl => "$BASEURL/upload/{accountId}",
         eventSourceUrl => "$BASEURL/eventsource?types={types}&closeafter={closeafter}&ping={ping}",
         state => sha1_hex(join(',', sort map { $_->{accountid} } @{$pool->{accounts} || []})),
@@ -1222,15 +1222,6 @@ sub do_jmap {
     }
   }
 
-  # Legacy: /jmap/{accountid} — accountid in URL is the credential
-  if ($path =~ m{^/jmap/([^/]+)/?$}) {
-    my $accountid = $1;
-    $httpd->stop_request();
-    _do_jmap_request($req, $accountid, $data);
-    return;
-  }
-
-  # Standard: POST /jmap with auth header/cookie
   if ($path eq '/jmap' || $path eq '/jmap/') {
     $httpd->stop_request();
     _authenticate($req, $httpd, sub {

@@ -42,21 +42,21 @@ sub _post_sort {
           $res = $a->{$map->[0]} cmp $b->{$map->[0]};
         }
       }
-      elsif ($field =~ m/^keyword:(.*)/) {
-        my $keyword = $1;
+      elsif ($field eq 'hasKeyword') {
+        my $keyword = $arg->{keyword} // '';
         my $av = $a->{keywords}{$keyword} ? 1 : 0;
         my $bv = $b->{keywords}{$keyword} ? 1 : 0;
         $res = $av <=> $bv;
       }
-      elsif ($field =~ m/^allInThreadHaveKeyword:(.*)/) {
-        my $keyword = $1;
+      elsif ($field eq 'allInThreadHaveKeyword') {
+        my $keyword = $arg->{keyword} // '';
         $storage->{hasthreadkeyword} ||= _hasthreadkeyword($storage->{data});
         my $av = ($storage->{hasthreadkeyword}{$a->{thrid}}{$keyword} || 0) == 2 ? 1 : 0;
         my $bv = ($storage->{hasthreadkeyword}{$b->{thrid}}{$keyword} || 0) == 2 ? 1 : 0;
         $res = $av <=> $bv;
       }
-      elsif ($field =~ m/^someInThreadHaveKeyword:(.*)/) {
-        my $keyword = $1;
+      elsif ($field eq 'someInThreadHaveKeyword') {
+        my $keyword = $arg->{keyword} // '';
         $storage->{hasthreadkeyword} ||= _hasthreadkeyword($storage->{data});
         my $av = ($storage->{hasthreadkeyword}{$a->{thrid}}{$keyword} || 0) ? 1 : 0;
         my $bv = ($storage->{hasthreadkeyword}{$b->{thrid}}{$keyword} || 0) ? 1 : 0;
@@ -1002,6 +1002,9 @@ sub api_Email_set {
   $Self->commit();
   $oldState = "$user->{jstateEmail}";
 
+  return $Self->_transError(['error', {type => 'stateMismatch', oldState => $oldState, newState => $oldState}])
+    if defined $args->{ifInState} and $args->{ifInState} ne $oldState;
+
   ($created, $notCreated) = $Self->{db}->create_messages($create, sub { $Self->idmap(shift) });
   $Self->setid($_, $created->{$_}{id}) for keys %$created;
   $Self->_resolve_patch($update, 'api_Email_get');
@@ -1062,6 +1065,9 @@ sub api_Email_import {
 
   $Self->commit();
   $oldState = "$user->{jstateEmail}";
+
+  return $Self->_transError(['error', {type => 'stateMismatch', oldState => $oldState, newState => $oldState}])
+    if defined $args->{ifInState} and $args->{ifInState} ne $oldState;
 
   my %todo;
   foreach my $id (keys %{$args->{emails}}) {

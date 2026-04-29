@@ -420,6 +420,9 @@ sub api_Mailbox_set {
   $Self->commit();
   $oldState = "$user->{jstateMailbox}";
 
+  return $Self->_transError(['error', {type => 'stateMismatch', oldState => $oldState, newState => $oldState}])
+    if defined $args->{ifInState} and $args->{ifInState} ne $oldState;
+
   ($created, $notCreated) = $Self->{db}->create_mailboxes($create, sub { $Self->idmap(shift) });
   $Self->setid($_, $created->{$_}{id}) for keys %$created;
   $Self->_resolve_patch($update, 'api_Mailbox_get');

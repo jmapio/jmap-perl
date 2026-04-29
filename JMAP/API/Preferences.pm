@@ -523,7 +523,7 @@ sub api_Identity_get {
     name => $user->{displayname} || $user->{email},
     textSignature => "-- \ntext sig",
     htmlSignature => "-- <br><b>html sig</b>",
-    replyTo => $user->{email},
+    replyTo => $user->{email} ? [{email => $user->{email}}] : undef,
     autoBcc => "",
     addBccOnSMTP => $JSON::false,
     saveSentTo => undef,

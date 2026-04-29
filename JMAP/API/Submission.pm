@@ -14,11 +14,9 @@ sub _mk_submission_sort {
   return undef unless ref($items) eq 'ARRAY';
   my @res;
   foreach my $item (@$items) {
-    return undef unless defined $item;
-    my ($field, $order) = split / /, $item;
-
-    # invalid order
-    return undef unless ($order eq 'asc' or $order eq 'desc');
+    return undef unless ref($item) eq 'HASH';
+    my $field = $item->{property} // return undef;
+    my $order = (defined $item->{isAscending} && !$item->{isAscending}) ? 'desc' : 'asc';
 
     if ($field eq 'emailId') {
       push @res, "msgid $order";

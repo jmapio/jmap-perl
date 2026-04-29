@@ -228,14 +228,15 @@ All referenced specs are in `specs/`.
       `maxSizeAttachmentsPerEmail`, `emailQuerySortOptions`, `mayCreateTopLevelMailbox`)
 - [x] **`onDestroyRemoveEmails`**: renamed from `onDestroyRemoveMessages` in PARAM_SCHEMA
       and Mailbox/set handler
-- [ ] **`ifInState`**: not enforced in `Mailbox/set`, `Email/set`, or `Email/import`
-- [ ] **Email keyword sort comparators**: non-spec `"keyword:$kw"` format used instead of
-      `{"property":"hasKeyword","keyword":"$kw"}` Comparator object
+- [x] **`ifInState`**: enforced in `Mailbox/set`, `Email/set`, and `Email/import`
+- [x] **Email keyword sort comparators**: changed from non-spec `"keyword:$kw"` format to
+      `{"property":"hasKeyword","keyword":"$kw"}` Comparator object (`hasKeyword`,
+      `allInThreadHaveKeyword`, `someInThreadHaveKeyword`)
 - [x] **`EmailSubmission/changes` `hasMoreChanges`**: removed duplicate hash key — was
       always `false` due to Perl last-wins overwrite
-- [ ] **`EmailSubmission/query` sort**: non-spec string format instead of Comparator object
+- [x] **`EmailSubmission/query` sort**: changed from non-spec string format to Comparator object
 - [x] **`VacationResponse/get` typo**: fixed `'VacationReponse/get'` → `'VacationResponse/get'`
-- [ ] **Identity `replyTo`**: returns a plain string instead of `EmailAddress[]`
+- [x] **Identity `replyTo`**: now returns `EmailAddress[]` (or `undef`) instead of plain string
 - [ ] **`Mailbox/queryChanges`**: not implemented
 - [ ] **`Email/parse`**: not implemented
 - [ ] **`Identity/changes`** and **`Identity/set`**: not implemented
