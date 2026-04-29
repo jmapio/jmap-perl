@@ -79,9 +79,8 @@ sub api_EmailSubmission_query {
 
   my $newQueryState = "$user->{jstateEmailSubmission}";
 
-  my $start = $args->{position} || 0;
   return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['position']}])
-    if $start < 0;
+    if ($args->{position} // 0) < 0;
 
   my $sort = _mk_submission_sort($args->{sort});
   return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sort']}])
@@ -92,8 +91,8 @@ sub api_EmailSubmission_query {
   $data = $Self->_submission_filter($data, $args->{filter}, {}) if $args->{filter};
   my $total = scalar(@$data);
 
-  my $end = $args->{limit} ? $start + $args->{limit} - 1 : $#$data;
-  $end = $#$data if $end > $#$data;
+  my ($start, $end) = $Self->_apply_window($data, $args, sub { $_[0][0] });
+  return $Self->_transError(['error', {type => 'anchorNotFound'}]) unless defined $start;
 
   my @list = map { $data->[$_] } $start..$end;
 

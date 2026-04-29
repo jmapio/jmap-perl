@@ -245,16 +245,15 @@ sub api_CalendarEvent_query {
 
   my $newQueryState = "$user->{jstateCalendarEvent}";
 
-  my $start = $args->{position} || 0;
-  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['position']}])
-    if $start < 0;
-
   my $data = $Self->{db}->dget('jevents', { active => 1 }, 'eventuid,jcalendarid');
 
   $data = $Self->_event_filter($data, $args->{filter}, {}) if $args->{filter};
 
-  my $end = $args->{limit} ? $start + $args->{limit} - 1 : $#$data;
-  $end = $#$data if $end > $#$data;
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['position']}])
+    if ($args->{position} // 0) < 0;
+
+  my ($start, $end) = $Self->_apply_window($data, $args, sub { $_[0]{eventuid} });
+  return $Self->_transError(['error', {type => 'anchorNotFound'}]) unless defined $start;
 
   my @result = map { $data->[$_]{eventuid} } $start..$end;
 

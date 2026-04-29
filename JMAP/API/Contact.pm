@@ -45,16 +45,15 @@ sub api_Contact_query {
 
   my $newQueryState = "$user->{jstateContact}";
 
-  my $start = $args->{position} || 0;
-  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['position']}])
-    if $start < 0;
-
   my $data = $Self->{db}->dget('jcontacts', { active => 1 }, 'contactuid,jaddressbookid');
 
   $data = $Self->_event_filter($data, $args->{filter}, {}) if $args->{filter};
 
-  my $end = $args->{limit} ? $start + $args->{limit} - 1 : $#$data;
-  $end = $#$data if $end > $#$data;
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['position']}])
+    if ($args->{position} // 0) < 0;
+
+  my ($start, $end) = $Self->_apply_window($data, $args, sub { $_[0]{contactuid} });
+  return $Self->_transError(['error', {type => 'anchorNotFound'}]) unless defined $start;
 
   my @result = map { $data->[$_]{contactuid} } $start..$end;
 

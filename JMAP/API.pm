@@ -448,6 +448,29 @@ sub _check_since_state {
   return ();
 }
 
+# Resolve anchor/anchorOffset or plain position into ($start, $end) indices into $data.
+# $id_cb->($item) must return the JMAP id string for a data item.
+# Returns (undef, undef) when anchor is given but not found — caller should return anchorNotFound.
+sub _apply_window {
+  my ($Self, $data, $args, $id_cb) = @_;
+  my $start = $args->{position} // 0;
+  if (defined $args->{anchor}) {
+    my $found;
+    for my $i (0 .. $#$data) {
+      if ($id_cb->($data->[$i]) eq $args->{anchor}) {
+        $start = $i + ($args->{anchorOffset} // 0);
+        $start = 0 if $start < 0;
+        $found = 1;
+        last;
+      }
+    }
+    return (undef, undef) unless $found;
+  }
+  my $end = defined $args->{limit} ? $start + $args->{limit} - 1 : $#$data;
+  $end = $#$data if $end > $#$data;
+  return ($start, $end);
+}
+
 sub _limit_changes {
   my ($Self, $data, $args, $newState_ref) = @_;
   return ($data, 0) unless $args->{maxChanges} and @$data > $args->{maxChanges};

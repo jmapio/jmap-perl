@@ -2,6 +2,7 @@ package JMAP::API;
 use strict;
 use warnings;
 use Digest::SHA qw(sha1_hex);
+use JSON;
 
 # IMAP resource → JMAP mapping
 my %RESOURCE_MAP = (
@@ -96,18 +97,21 @@ sub api_Quota_query {
     (!defined $filter->{type}         || grep { $_ eq $filter->{type} } @{$q->{types}});
   } @all;
 
-  my $total    = scalar @filtered;
-  my $position = $args->{position} || 0;
-  my $limit    = defined $args->{limit} ? $args->{limit} : $total;
-  my @ids      = map { $_->{id} } @filtered[$position .. $position + $limit - 1];
+  return ['error', {type => 'invalidArguments', arguments => ['position']}]
+    if ($args->{position} // 0) < 0;
+
+  my ($start, $end) = $Self->_apply_window(\@filtered, $args, sub { $_[0]{id} });
+  return ['error', {type => 'anchorNotFound'}] unless defined $start;
+
+  my @ids = map { $filtered[$_]{id} } $start .. $end;
 
   return ['Quota/query', {
     accountId           => $accountid,
     queryState          => _quota_state(\@all),
     canCalculateChanges => JSON::false,
-    position            => $position + 0,
-    total               => $total + 0,
-    ids                 => [grep { defined } @ids],
+    position            => $start + 0,
+    total               => scalar(@filtered) + 0,
+    ids                 => \@ids,
   }];
 }
 

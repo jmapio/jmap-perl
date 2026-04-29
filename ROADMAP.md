@@ -205,8 +205,9 @@ All referenced specs are in `specs/`.
       `/changes` and `/queryChanges` return `cannotCalculateChanges`
 - [x] **SSE ping event**: sends `{servertimestamp:...}` instead of required `{interval:N}`
 - [x] **StateChange `@type`**: push object missing required `"@type":"StateChange"` field
-- [ ] **`anchor`/`anchorOffset`**: not implemented in any `/query` method; `anchorNotFound`
-      error never returned
+- [x] **`anchor`/`anchorOffset`**: added `_apply_window` helper in API.pm; all query
+      methods now support anchor/anchorOffset/anchorNotFound (Email and Mailbox already
+      had it; CalendarEvent, Contact/ContactCard, EmailSubmission, Quota added)
 
 #### Moderate / Nice-to-have
 - [ ] `primaryAccounts` missing `calendars` and `contacts` entries
@@ -307,7 +308,7 @@ All referenced specs are in `specs/`.
 - [ ] `ContactCard/set` `addressBookIds` on create ignored; moves between books not handled
 - [ ] `ContactCard/set` `destroy_contacts` not wrapped in eval — CardDAV error kills worker
 - [ ] `ContactCard/query` sort comparators (`created`, `updated`, `name/*`) not implemented
-- [ ] `ContactCard/query` `anchor`/`anchorOffset` not implemented
+- [x] `ContactCard/query` `anchor`/`anchorOffset` not implemented
 - [ ] Single addressbook per card (structural limit in `jcontacts` schema)
 
 ---
