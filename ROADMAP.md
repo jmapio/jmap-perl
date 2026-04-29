@@ -298,9 +298,10 @@ All referenced specs are in `specs/`.
 - [ ] **`AddressBook/set` `onSuccessSetIsDefault`**: not implemented
 - [ ] **`AddressBook/set` `onDestroyRemoveContacts`**: not checked;
       `addressBookHasContents` SetError never returned
-- [ ] **`ContactCard/query`**: calls `_event_filter` (calendar code) instead of
-      `_contact_filter` — completely wrong filter; all 13+ spec filter conditions missing
-- [ ] **`ContactCard/queryChanges`**: same `_event_filter` bug
+- [x] **`ContactCard/query`**: fixed `_event_filter` → `_contact_filter`; implemented all
+      RFC 9610 §3.3 filter conditions (`inAddressBook`, `uid`, `text`, `name`, `name/given`,
+      `name/surname`, `name/surname2`, `nickname`, `organization`, `email`, `phone`, `address`)
+- [x] **`ContactCard/queryChanges`**: same `_event_filter` bug fixed
 - [ ] **`ContactCard/copy`**: method entirely absent — returns `unknownMethod`
 
 #### Moderate
