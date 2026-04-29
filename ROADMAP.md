@@ -195,13 +195,12 @@ All referenced specs are in `specs/`.
       `accountId` — no authentication check
 - [x] **`downloadUrl` template**: `{type}` variable missing from Session object template;
       `Content-Disposition: attachment; filename="..."` header never set on download responses
-- [ ] **Request-level errors**: `notJSON`/`notRequest` return plain text, not RFC 7807 JSON
+- [x] **Request-level errors**: `notJSON`/`notRequest` return plain text, not RFC 7807 JSON
       (`{"type":"urn:ietf:params:jmap:error:notJSON","status":400,...}`)
-- [ ] **`unknownCapability`**: `using` array not validated — unsupported capabilities silently accepted
-- [ ] **`invalidResultReference`**: `resolve_args` (API.pm) emits type `'resultReference'`
+- [x] **`unknownCapability`**: `using` array not validated — unsupported capabilities silently accepted
+- [x] **`invalidResultReference`**: `resolve_args` (API.pm) emits type `'resultReference'`
       instead of `'invalidResultReference'`
-- [ ] **`accountNotFound` / `accountNotSupportedByMethod`**: `_api_init` returns no error when
-      accountId is wrong or doesn't support the method
+- [x] **`accountNotFound`**: already correctly implemented in all API methods (false alarm in review)
 - [ ] **Quota capability**: `urn:ietf:params:jmap:quota` advertised in Session but `Quota/get`
       not implemented — remove capability or implement stub
 - [ ] **SSE ping event**: sends `{servertimestamp:...}` instead of required `{interval:N}`

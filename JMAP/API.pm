@@ -286,7 +286,7 @@ sub resolve_args {
       my $outkey = $1;
       my $res = eval { $Self->resolve_backref($args->{$key}{resultOf}, $args->{$key}{path}) };
       if ($@) {
-        return (undef, { type => 'resultReference', message => $@ });
+        return (undef, { type => 'invalidResultReference', message => $@ });
       }
       $res{$outkey} = $res;
     }

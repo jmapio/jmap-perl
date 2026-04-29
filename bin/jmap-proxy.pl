@@ -1172,17 +1172,45 @@ sub do_session {
   });
 }
 
+my %KNOWN_CAPABILITIES = map { $_ => 1 } qw(
+  urn:ietf:params:jmap:core
+  urn:ietf:params:jmap:mail
+  urn:ietf:params:jmap:submission
+  urn:ietf:params:jmap:mdn
+  urn:ietf:params:jmap:quota
+  urn:ietf:params:jmap:calendars
+  urn:ietf:params:jmap:contacts
+);
+
+sub _jmap_request_error {
+  my ($req, $type, $detail) = @_;
+  $req->respond([400, 'bad request', {'Content-Type' => 'application/json'},
+    $json->encode({ type => "urn:ietf:params:jmap:error:$type", status => 400, detail => $detail })]);
+}
+
 sub do_jmap {
   my ($httpd, $req) = @_;
 
-  my $uri = $req->url();
-  my $path = $uri->path();
+  my $path = $req->url->path;
 
-  return invalid_request($req) unless lc $req->method eq 'post';
+  unless (lc $req->method eq 'post') {
+    return _jmap_request_error($req, 'notRequest', 'JMAP endpoint requires POST.');
+  }
 
   my $content = $req->content;
   my $data = eval { decode_json($content) };
-  return invalid_request($req) unless $data;
+  if ($@) {
+    return _jmap_request_error($req, 'notJSON', 'The content of the request is not valid JSON.');
+  }
+  unless (ref $data eq 'HASH' && ref $data->{methodCalls} eq 'ARRAY' && ref $data->{using} eq 'ARRAY') {
+    return _jmap_request_error($req, 'notRequest', 'The content of the request is not a valid JMAP Request object.');
+  }
+
+  for my $cap (@{$data->{using}}) {
+    unless ($KNOWN_CAPABILITIES{$cap}) {
+      return _jmap_request_error($req, 'unknownCapability', "The capability $cap is not supported.");
+    }
+  }
 
   # Legacy: /jmap/{accountid} — accountid in URL is the credential
   if ($path =~ m{^/jmap/([^/]+)/?$}) {
