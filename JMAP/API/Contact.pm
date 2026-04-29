@@ -7,19 +7,88 @@ use JSON;
 
 my $json = JSON::XS->new->utf8->canonical();
 
+sub _contact_name_component {
+  my ($card, $kind) = @_;
+  my $comps = $card->{name}{components} // [];
+  return join(' ', map { $_->{value} // '' }
+                   grep { ($_->{kind} // '') eq $kind } @$comps);
+}
+
+sub _contact_text_blob {
+  my ($card) = @_;
+  my @parts;
+  push @parts, $card->{name}{full} if $card->{name}{full};
+  push @parts, map { $_->{name}    // () } values %{$card->{nicknames}     // {}};
+  push @parts, map { $_->{name}    // () } values %{$card->{organizations} // {}};
+  push @parts, map { $_->{address} // () } values %{$card->{emails}        // {}};
+  push @parts, map { $_->{number}  // () } values %{$card->{phones}        // {}};
+  push @parts, map { ($_->{full} // (),
+                      map { $_->{value} // () } @{$_->{components} // []}) }
+                   values %{$card->{addresses} // {}};
+  return join(' ', @parts);
+}
+
 sub _contact_match {
   my $Self = shift;
   my ($item, $condition, $storage) = @_;
 
-  # XXX - condition handling code
-  my $inab = $condition->{inAddressBook} // $condition->{inAddressbooks};
-  if ($inab) {
-    my $match = 0;
-    foreach my $id (@$inab) {
-      next unless $item->{jaddressbookid} eq $id;
-      $match = 1;
+  if (defined $condition->{inAddressBook}) {
+    return 0 unless "$item->{jaddressbookid}" eq "$condition->{inAddressBook}";
+  }
+
+  if (defined $condition->{uid}) {
+    return 0 unless $item->{contactuid} eq $condition->{uid};
+  }
+
+  my @text_keys = qw(text name name/given name/surname name/surname2
+                     nickname organization email phone address);
+  if (grep { defined $condition->{$_} } @text_keys) {
+    my $card = $storage->{payloads}{$item->{contactuid}}
+      //= ($Self->{db}->read_jcontact_payload($item->{contactuid}) // {});
+
+    if (defined $condition->{text}) {
+      return 0 unless index(lc _contact_text_blob($card), lc $condition->{text}) >= 0;
     }
-    return 0 unless $match;
+    if (defined $condition->{name}) {
+      return 0 unless index(lc($card->{name}{full} // ''), lc $condition->{name}) >= 0;
+    }
+    if (defined $condition->{'name/given'}) {
+      return 0 unless index(lc _contact_name_component($card, 'given'), lc $condition->{'name/given'}) >= 0;
+    }
+    if (defined $condition->{'name/surname'}) {
+      return 0 unless index(lc _contact_name_component($card, 'surname'), lc $condition->{'name/surname'}) >= 0;
+    }
+    if (defined $condition->{'name/surname2'}) {
+      return 0 unless index(lc _contact_name_component($card, 'surname2'), lc $condition->{'name/surname2'}) >= 0;
+    }
+    if (defined $condition->{nickname}) {
+      my $needle = lc $condition->{nickname};
+      return 0 unless grep { index(lc($_->{name} // ''), $needle) >= 0 }
+                           values %{$card->{nicknames} // {}};
+    }
+    if (defined $condition->{organization}) {
+      my $needle = lc $condition->{organization};
+      return 0 unless grep { index(lc($_->{name} // ''), $needle) >= 0 }
+                           values %{$card->{organizations} // {}};
+    }
+    if (defined $condition->{email}) {
+      my $needle = lc $condition->{email};
+      return 0 unless grep { index(lc($_->{address} // ''), $needle) >= 0 }
+                           values %{$card->{emails} // {}};
+    }
+    if (defined $condition->{phone}) {
+      my $needle = lc $condition->{phone};
+      return 0 unless grep { index(lc($_->{number} // ''), $needle) >= 0 }
+                           values %{$card->{phones} // {}};
+    }
+    if (defined $condition->{address}) {
+      my $needle = lc $condition->{address};
+      return 0 unless grep {
+        index(lc(join(' ', $_->{full} // '',
+                      map { $_->{value} // '' } @{$_->{components} // []})),
+              $needle) >= 0
+      } values %{$card->{addresses} // {}};
+    }
   }
 
   return 1;
@@ -47,7 +116,7 @@ sub api_Contact_query {
 
   my $data = $Self->{db}->dget('jcontacts', { active => 1 }, 'contactuid,jaddressbookid');
 
-  $data = $Self->_event_filter($data, $args->{filter}, {}) if $args->{filter};
+  $data = $Self->_contact_filter($data, $args->{filter}, {}) if $args->{filter};
 
   return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['position']}])
     if ($args->{position} // 0) < 0;
@@ -605,7 +674,7 @@ sub api_ContactCard_queryChanges {
     if ($user->{jdeletedmodseq} and $sinceQueryState <= $user->{jdeletedmodseq});
 
   my $data = $Self->{db}->dget('jcontacts', { active => 1 }, 'contactuid,jaddressbookid,jmodseq');
-  $data = $Self->_event_filter($data, $args->{filter}, {}) if $args->{filter};
+  $data = $Self->_contact_filter($data, $args->{filter}, {}) if $args->{filter};
   my $total = scalar @$data;
 
   my %idx;
