@@ -675,6 +675,11 @@ sub api_ContactCard_set {
   }];
 }
 
+sub api_ContactCard_copy {
+  my $Self = shift;
+  return $Self->_transError(['error', {type => 'notImplemented'}]);
+}
+
 sub api_ContactCard_queryChanges {
   my $Self = shift;
   my $args = shift;

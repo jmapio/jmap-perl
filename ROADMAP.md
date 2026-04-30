@@ -222,6 +222,34 @@ All referenced specs are in `specs/`.
 
 ---
 
+### Cross-account `/copy` methods
+
+RFC 8620/8621, draft-ietf-jmap-calendars, and RFC 9610 all define `/copy`
+methods that move objects between accounts:
+
+| Method | Status | Notes |
+|--------|--------|-------|
+| `Blob/copy` | absent | no stub at all |
+| `Email/copy` | `notImplemented` stub | |
+| `CalendarEvent/copy` | `notImplemented` stub | |
+| `ContactCard/copy` | `notImplemented` stub | was `unknownMethod`; stub added |
+
+**Architectural blocker**: all four require reading from `fromAccountId`'s
+worker and writing to `accountId`'s worker in a single method call.  Each
+account runs in its own forked child process with its own DB; there is no
+current mechanism for one worker to query another.
+
+To implement these properly, the parent process would need to orchestrate a
+two-phase request: fetch the source object via one worker, then create it via
+the destination worker, and stitch the response together before returning to
+the client.  This is a non-trivial architecture change that affects all four
+methods identically, so they should be implemented together.
+
+Until then, all return `notImplemented` (except `Blob/copy` which is absent —
+add a stub returning `notImplemented` when convenient).
+
+---
+
 ### RFC 8621 — JMAP Mail
 
 #### Blocking
@@ -253,7 +281,7 @@ All referenced specs are in `specs/`.
 - [ ] `Mailbox/query`: `sortAsTree`, `filterAsTree`, `name`/`role` filter conditions missing
 - [x] `Thread/get` with `ids:null` now returns all threads (RFC 8620 §5.1)
 - [x] `%ROLE_MAP` duplicate `'junk'` key removed (was silently mapping to `'spam'`)
-- [ ] `Email/copy` returns `notImplemented` stub
+- [ ] `Email/copy` returns `notImplemented` stub (see Cross-account /copy section)
 - [ ] `SearchSnippet/get`: subject/preview should be `null` when no text filter match
 - [ ] `subParts` included in Email body parts even when not in `bodyProperties`
 - [ ] `EmailSubmission/query` filter missing `identityIds` condition
@@ -291,7 +319,8 @@ All referenced specs are in `specs/`.
 - [ ] Calendar `myRights` missing `mayShare`; `mayWriteOwn` incorrectly set to `mayWriteAll`
 
 #### Nice-to-have
-- [ ] `CalendarEvent/parse`, `CalendarEvent/copy`
+- [ ] `CalendarEvent/parse`
+- [ ] `CalendarEvent/copy` — `notImplemented` stub (see Cross-account /copy section)
 - [ ] `Principal/getAvailability` (free/busy)
 - [ ] `CalendarEventNotification` (all methods — requires sharing/Principal model)
 
@@ -309,7 +338,7 @@ All referenced specs are in `specs/`.
       RFC 9610 §3.3 filter conditions (`inAddressBook`, `uid`, `text`, `name`, `name/given`,
       `name/surname`, `name/surname2`, `nickname`, `organization`, `email`, `phone`, `address`)
 - [x] **`ContactCard/queryChanges`**: same `_event_filter` bug fixed
-- [ ] **`ContactCard/copy`**: method entirely absent — returns `unknownMethod`
+- [ ] **`ContactCard/copy`**: `notImplemented` stub added (see Cross-account /copy section)
 
 #### Moderate
 - [ ] `AddressBook` missing `description`, `sortOrder`, `shareWith` (should at least be `null`);
