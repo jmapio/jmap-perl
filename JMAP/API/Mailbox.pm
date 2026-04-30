@@ -328,7 +328,7 @@ sub api_Mailbox_query {
     filter => $args->{filter},
     sort => $args->{sort},
     queryState => $newQueryState,
-    canCalculateChanges => $JSON::false,
+    canCalculateChanges => $JSON::true,
     position => $start,
     total => scalar(@$data),
     ids => [map { "$_" } @result],
@@ -394,6 +394,59 @@ sub api_Mailbox_changes {
   }]);
 
   return @res;
+}
+
+sub api_Mailbox_queryChanges {
+  my $Self = shift;
+  my $args = shift;
+
+  my ($user, $accountid) = $Self->_api_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
+
+  my $newQueryState = "$user->{jstateMailbox}";
+  my $sinceQueryState = $args->{sinceQueryState};
+
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceQueryState']}])
+    unless defined $sinceQueryState;
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newQueryState => $newQueryState}])
+    if ($user->{jdeletedmodseq} and $sinceQueryState <= $user->{jdeletedmodseq});
+
+  my %valid_sort = map { $_ => 1 } qw(name sortOrder parent/name);
+  for my $arg (@{$args->{sort} // []}) {
+    return $Self->_transError(['error', {type => 'unsupportedSort', sort => $arg}])
+      unless $valid_sort{$arg->{property} // ''};
+  }
+
+  my $data = $Self->{db}->dget('jmailboxes', { active => 1 });
+  my $storage = { data => $data };
+  $data = $Self->_mailbox_sort($data, $args->{sort}, $storage);
+  $data = $Self->_mailbox_filter($data, $args->{filter}, $storage) if $args->{filter};
+
+  my %idx;
+  my $i = 0;
+  $idx{$_->{jmailboxid}} = $i++ for @$data;
+
+  my $changed = $Self->{db}->dget('jmailboxes', { jmodseq => ['>', $sinceQueryState] });
+
+  $Self->commit();
+
+  my (@removed, @added);
+  for my $row (@$changed) {
+    push @removed, "$row->{jmailboxid}";
+    push @added, { id => "$row->{jmailboxid}", index => $idx{$row->{jmailboxid}} }
+      if exists $idx{$row->{jmailboxid}};
+  }
+
+  return ['Mailbox/queryChanges', {
+    accountId     => $accountid,
+    filter        => $args->{filter},
+    sort          => $args->{sort},
+    oldQueryState => "$sinceQueryState",
+    newQueryState => $newQueryState,
+    total         => scalar(@$data),
+    removed       => \@removed,
+    added         => \@added,
+  }];
 }
 
 sub api_Mailbox_set {

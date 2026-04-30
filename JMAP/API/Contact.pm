@@ -567,7 +567,22 @@ sub api_AddressBook_set {
   $Self->setid($_, $created->{$_}{id}) for keys %$created;
   $Self->_resolve_patch($update, 'api_AddressBook_get');
   ($updated, $notUpdated) = $Self->{db}->update_addressbooks($update);
-  ($destroyed, $notDestroyed) = $Self->{db}->destroy_addressbooks($destroy);
+
+  my (@safe_destroy, %pre_notDestroyed);
+  for my $id (@$destroy) {
+    my $has = $Self->{db}->dgetone('jcontacts', { jaddressbookid => $id, active => 1 }, 'contactuid');
+    if ($has && !$args->{onDestroyRemoveContacts}) {
+      $pre_notDestroyed{$id} = { type => 'addressBookHasContents' };
+    } else {
+      if ($has) {
+        my $contacts = $Self->{db}->dget('jcontacts', { jaddressbookid => $id, active => 1 }, 'contactuid');
+        $Self->{db}->destroy_contacts([ map { $_->{contactuid} } @$contacts ]);
+      }
+      push @safe_destroy, $id;
+    }
+  }
+  ($destroyed, $notDestroyed) = $Self->{db}->destroy_addressbooks(\@safe_destroy);
+  $notDestroyed->{$_} = $pre_notDestroyed{$_} for keys %pre_notDestroyed;
 
   $Self->{db}->sync_addressbooks();
 

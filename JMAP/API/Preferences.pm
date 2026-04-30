@@ -5,6 +5,7 @@ use warnings;
 use JSON::XS;
 use JSON;
 use Encode;
+use Digest::SHA qw(sha1_hex);
 
 my $json = JSON::XS->new->utf8->canonical();
 
@@ -431,28 +432,85 @@ sub api_CalendarPreferences_set {
   return @res;
 }
 
+sub _vacation_state {
+  my ($row) = @_;
+  return $row ? sha1_hex($row->{payload} // '') : 'empty';
+}
+
 sub api_VacationResponse_get {
   my $Self = shift;
   my $args = shift;
 
   $Self->begin();
-  my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
+  my $row = $Self->{db}->dgetone('juserprefs', { jprefid => 'vacationresponse', active => 1 });
   $Self->commit();
+
+  my $vr = ($row && $row->{payload}) ? $json->decode($row->{payload}) : {};
 
   return ['VacationResponse/get', {
     accountId => $accountid,
-    state => 'dummy',
+    state => _vacation_state($row),
     list => [{
-      id => 'singleton',
-      isEnabled => $JSON::false,
-      fromDate => undef,
-      toDate => undef,
-      subject => undef,
-      textBody => undef,
-      htmlBody => undef,
+      id        => 'singleton',
+      isEnabled => $vr->{isEnabled} ? $JSON::true : $JSON::false,
+      fromDate  => $vr->{fromDate},
+      toDate    => $vr->{toDate},
+      subject   => $vr->{subject},
+      textBody  => $vr->{textBody},
+      htmlBody  => $vr->{htmlBody},
     }],
     notFound => [],
+  }];
+}
+
+sub api_VacationResponse_set {
+  my $Self = shift;
+  my $args = shift;
+
+  $Self->begin();
+  my $accountid = $Self->{db}->accountid();
+  $Self->commit();
+
+  my $create  = $args->{create}  // {};
+  my $update  = $args->{update}  // {};
+  my $destroy = $args->{destroy} // [];
+
+  my %notCreated   = map { $_ => { type => 'forbidden' } } keys %$create;
+  my %notDestroyed = map { $_ => { type => 'forbidden' } } @$destroy;
+  my (%updated, %notUpdated);
+
+  if (my $patch = $update->{singleton}) {
+    my $scoped_lock = $Self->{db}->begin_superlock();
+    $Self->begin();
+    my $row = $Self->{db}->dgetone('juserprefs', { jprefid => 'vacationresponse', active => 1 });
+    my $vr  = ($row && $row->{payload}) ? $json->decode($row->{payload}) : {};
+    my %allowed = map { $_ => 1 } qw(isEnabled fromDate toDate subject textBody htmlBody);
+    for my $key (keys %$patch) {
+      $vr->{$key} = $patch->{$key} if $allowed{$key};
+    }
+    $Self->{db}->dmake('juserprefs', { jprefid => 'vacationresponse', payload => $json->encode($vr), active => 1 });
+    $Self->commit();
+    $updated{singleton} = {};
+  }
+  elsif (%$update) {
+    $notUpdated{$_} = { type => 'notFound' } for grep { $_ ne 'singleton' } keys %$update;
+  }
+
+  $Self->begin();
+  my $row = $Self->{db}->dgetone('juserprefs', { jprefid => 'vacationresponse', active => 1 });
+  $Self->commit();
+
+  return ['VacationResponse/set', {
+    accountId    => $accountid,
+    oldState     => undef,
+    newState     => _vacation_state($row),
+    created      => undef,
+    notCreated   => _nullempty(\%notCreated),
+    updated      => _nullempty(\%updated),
+    notUpdated   => _nullempty(\%notUpdated),
+    destroyed    => undef,
+    notDestroyed => _nullempty(\%notDestroyed),
   }];
 }
 
@@ -511,41 +569,117 @@ sub api_Identity_get {
   $Self->begin();
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
+  my $row = $Self->{db}->dgetone('juserprefs', { jprefid => 'identity/id1', active => 1 });
   $Self->commit();
 
+  my $prefs = ($row && $row->{payload}) ? $json->decode($row->{payload}) : {};
+
   my @list;
-  # XXX todo fix Identity
   push @list, {
-    id => "id1",
-    displayName => $user->{displayname} || $user->{email},
-    mayDelete => $JSON::false,
-    email => $user->{email},
-    name => $user->{displayname} || $user->{email},
-    textSignature => "-- \ntext sig",
-    htmlSignature => "-- <br><b>html sig</b>",
-    replyTo => $user->{email} ? [{email => $user->{email}}] : undef,
-    autoBcc => "",
-    addBccOnSMTP => $JSON::false,
-    saveSentTo => undef,
-    saveAttachments => $JSON::false,
-    saveOnSMTP => $JSON::false,
-    useForAutoReply => $JSON::false,
-    isAutoConfigured => $JSON::true,
+    id                 => "id1",
+    mayDelete          => $JSON::false,
+    email              => $user->{email},
+    name               => $prefs->{name}          // $user->{displayname} // $user->{email} // '',
+    textSignature      => $prefs->{textSignature}  // '',
+    htmlSignature      => $prefs->{htmlSignature}  // '',
+    replyTo            => $prefs->{replyTo}        // ($user->{email} ? [{email => $user->{email}}] : undef),
+    bcc                => $prefs->{bcc},
+    autoBcc            => '',
+    addBccOnSMTP       => $JSON::false,
+    saveSentTo         => undef,
+    saveAttachments    => $JSON::false,
+    saveOnSMTP         => $JSON::false,
+    useForAutoReply    => $JSON::false,
+    isAutoConfigured   => $JSON::true,
     enableExternalSMTP => $JSON::false,
-    smtpServer => "",
-    smtpPort => 465,
-    smtpSSL => "ssl",
-    smtpUser => "",
-    smtpPassword => "",
-    smtpRemoteService => undef,
-    popLinkId => undef,
+    smtpServer         => '',
+    smtpPort           => 465,
+    smtpSSL            => 'ssl',
+    smtpUser           => '',
+    smtpPassword       => '',
+    smtpRemoteService  => undef,
+    popLinkId          => undef,
   };
 
   return ['Identity/get', {
     accountId => $accountid,
-    state => 'dummy',
-    list => \@list,
-    notFound => [],
+    state     => 'dummy',
+    list      => \@list,
+    notFound  => [],
+  }];
+}
+
+sub api_Identity_changes {
+  my $Self = shift;
+  my $args = shift;
+
+  $Self->begin();
+  my $accountid = $Self->{db}->accountid();
+  $Self->commit();
+
+  # Identity state is always 'dummy' — identities are derived from account settings
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => 'dummy'}])
+    unless ($args->{sinceState} // '') eq 'dummy';
+
+  return ['Identity/changes', {
+    accountId      => $accountid,
+    oldState       => 'dummy',
+    newState       => 'dummy',
+    created        => [],
+    updated        => [],
+    destroyed      => [],
+    hasMoreChanges => JSON::false,
+  }];
+}
+
+sub api_Identity_set {
+  my $Self = shift;
+  my $args = shift;
+
+  $Self->begin();
+  my $accountid = $Self->{db}->accountid();
+  $Self->commit();
+
+  my $create  = $args->{create}  // {};
+  my $update  = $args->{update}  // {};
+  my $destroy = $args->{destroy} // [];
+
+  my %notCreated   = map { $_ => { type => 'forbiddenFrom' } } keys %$create;
+  my %notDestroyed = map { $_ => { type => 'forbidden'     } } @$destroy;
+  my (%updated, %notUpdated);
+
+  for my $id (keys %$update) {
+    if ($id ne 'id1') {
+      $notUpdated{$id} = { type => 'notFound' };
+      next;
+    }
+    my $patch = $update->{$id};
+    my %allowed = map { $_ => 1 } qw(name textSignature htmlSignature replyTo bcc);
+    my @bad = grep { !$allowed{$_} } keys %$patch;
+    if (@bad) {
+      $notUpdated{$id} = { type => 'invalidProperties', properties => \@bad };
+      next;
+    }
+    my $scoped_lock = $Self->{db}->begin_superlock();
+    $Self->begin();
+    my $row   = $Self->{db}->dgetone('juserprefs', { jprefid => 'identity/id1', active => 1 });
+    my $prefs = ($row && $row->{payload}) ? $json->decode($row->{payload}) : {};
+    $prefs->{$_} = $patch->{$_} for keys %$patch;
+    $Self->{db}->dmake('juserprefs', { jprefid => 'identity/id1', payload => $json->encode($prefs), active => 1 });
+    $Self->commit();
+    $updated{$id} = {};
+  }
+
+  return ['Identity/set', {
+    accountId    => $accountid,
+    oldState     => 'dummy',
+    newState     => 'dummy',
+    created      => undef,
+    notCreated   => _nullempty(\%notCreated),
+    updated      => _nullempty(\%updated),
+    notUpdated   => _nullempty(\%notUpdated),
+    destroyed    => undef,
+    notDestroyed => _nullempty(\%notDestroyed),
   }];
 }
 
