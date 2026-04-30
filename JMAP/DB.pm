@@ -1168,7 +1168,7 @@ sub get_submission_changes {
     {}, $since_modseq);
 }
 
-my $USER_SCHEMA_VERSION = 5;
+my $USER_SCHEMA_VERSION = 6;
 
 sub _create_user_tables {
   my ($Self, $dbh) = @_;
@@ -1348,6 +1348,7 @@ CREATE TABLE IF NOT EXISTS jaddressbooks (
   mayRemoveItems BOOLEAN,
   mayDelete BOOLEAN,
   mayRename BOOLEAN,
+  isDefault BOOLEAN DEFAULT 0,
   jcreated INTEGER,
   jmodseq INTEGER,
   mtime DATE,
@@ -1513,6 +1514,18 @@ sub _initdb {
     };
     if ($@) { $dbh->rollback; die "user DB migration to v5 failed: $@" }
     $v = 5;
+  }
+
+  if ($v < 6) {
+    # jaddressbooks.isDefault: tracks the default address book per RFC 9610.
+    $dbh->begin_work;
+    eval {
+      eval { $dbh->do("ALTER TABLE jaddressbooks ADD COLUMN isDefault BOOLEAN DEFAULT 0") };
+      $dbh->do('PRAGMA user_version = 6');
+      $dbh->commit;
+    };
+    if ($@) { $dbh->rollback; die "user DB migration to v6 failed: $@" }
+    $v = 6;
   }
 }
 

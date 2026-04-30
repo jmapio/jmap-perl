@@ -458,7 +458,7 @@ sub api_Addressbook_get {
     my %rec = (
       id           => "$item->{jaddressbookid}",
       name         => "$item->{name}",
-      isDefault    => $JSON::false,
+      isDefault    => $item->{isDefault} ? $JSON::true : $JSON::false,
       isSubscribed => $item->{isVisible} ? $JSON::true : $JSON::false,
       myRights     => {
         mayRead   => $item->{mayReadItems}                                          ? $JSON::true : $JSON::false,
@@ -585,6 +585,17 @@ sub api_AddressBook_set {
   $notDestroyed->{$_} = $pre_notDestroyed{$_} for keys %pre_notDestroyed;
 
   $Self->{db}->sync_addressbooks();
+
+  if (my $osis = $args->{onSuccessSetIsDefault}) {
+    for my $id (keys %$osis) {
+      my $real_id = $Self->idmap($id) // $id;
+      if ($osis->{$id}) {
+        $Self->{db}->set_default_addressbook($real_id);
+      } else {
+        $Self->{db}->unset_default_addressbook($real_id);
+      }
+    }
+  }
 
   $Self->begin();
   $user = $Self->{db}->get_user();

@@ -337,7 +337,10 @@ add a stub returning `notImplemented` when convenient).
 #### Blocking
 - [x] **`AddressBook` `myRights`**: restructured to nested `{mayRead, mayWrite, mayShare, mayDelete}`
 - [x] **`AddressBook` `isDefault`**: now returned (`false` for all until DB tracks it); `isSubscribed` added
-- [ ] **`AddressBook/set` `onSuccessSetIsDefault`**: not implemented
+- [x] **`AddressBook/set` `onSuccessSetIsDefault`**: implemented; `isDefault BOOLEAN`
+      column added to `jaddressbooks` (schema v6 migration); `AddressBook/get` reads
+      it; setting `true` for an ID clears all others and marks that one default;
+      `false` just clears that one
 - [x] **`AddressBook/set` `onDestroyRemoveContacts`**: enforced; `addressBookHasContents` SetError
       returned when book has contacts and flag is false; contacts destroyed first when flag is true
 - [x] **`ContactCard/query`**: fixed `_event_filter` → `_contact_filter`; implemented all
