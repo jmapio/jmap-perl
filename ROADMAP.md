@@ -212,12 +212,12 @@ All referenced specs are in `specs/`.
       had it; CalendarEvent, Contact/ContactCard, EmailSubmission, Quota added)
 
 #### Moderate / Nice-to-have
-- [ ] `primaryAccounts` missing `calendars` and `contacts` entries
+- [x] `primaryAccounts` now includes `calendars` and `contacts` entries when account has CalDAV/CardDAV
+- [x] Unknown sort → `unsupportedSort` error (Email/query, Mailbox/query)
 - [ ] `Cache-Control` header missing from `/session` response
 - [ ] `maxCallsInRequest` / `maxSizeRequest` limits not enforced
 - [ ] `PushSubscription/get|set` not implemented (SSE works for web clients)
 - [ ] `Blob/copy` not implemented
-- [ ] Unknown sort → `serverError` instead of `unsupportedSort`
 - [ ] Unknown filter → `serverError` instead of `unsupportedFilter`
 
 ---
@@ -246,12 +246,12 @@ All referenced specs are in `specs/`.
 
 #### Moderate / Nice-to-have
 - [ ] `Mailbox/query`: `sortAsTree`, `filterAsTree`, `name`/`role` filter conditions missing
+- [x] `Thread/get` with `ids:null` now returns all threads (RFC 8620 §5.1)
+- [x] `%ROLE_MAP` duplicate `'junk'` key removed (was silently mapping to `'spam'`)
 - [ ] `Email/copy` returns `notImplemented` stub
 - [ ] `SearchSnippet/get`: subject/preview should be `null` when no text filter match
 - [ ] `subParts` included in Email body parts even when not in `bodyProperties`
-- [ ] `Thread/get` with `ids:null` will crash (array deref on undef)
 - [ ] `EmailSubmission/query` filter missing `identityIds` condition
-- [ ] `%ROLE_MAP` duplicate `'junk'` key — second mapping silently wins
 
 ---
 
@@ -262,7 +262,7 @@ All referenced specs are in `specs/`.
       email as a scheduling address
 - [ ] **`Calendar/set` `onDestroyRemoveEvents`**: not checked — CalDAV collection deleted
       unconditionally (data loss possible); `calendarHasEvent` SetError never returned
-- [ ] **`CalendarEvent` `isOrigin`**: MUST-include property never returned
+- [x] **`CalendarEvent` `isOrigin`**: now returned as `true` for all proxy-owned events
 - [ ] **`CalendarEvent/query` `expandRecurrences`**: not implemented — primary way clients
       find events in a date range
 - [ ] **`CalendarEvent/set` error handling**: create errors not caught — client gets false
@@ -292,9 +292,8 @@ All referenced specs are in `specs/`.
 ### RFC 9610 — JMAP Contacts
 
 #### Blocking
-- [ ] **`AddressBook` `myRights`**: wrong structure — flat properties with wrong names
-      (`mayReadItems` etc.) instead of nested `{mayRead, mayWrite, mayShare, mayDelete}`
-- [ ] **`AddressBook` `isDefault`**: property missing from schema and all responses
+- [x] **`AddressBook` `myRights`**: restructured to nested `{mayRead, mayWrite, mayShare, mayDelete}`
+- [x] **`AddressBook` `isDefault`**: now returned (`false` for all until DB tracks it); `isSubscribed` added
 - [ ] **`AddressBook/set` `onSuccessSetIsDefault`**: not implemented
 - [ ] **`AddressBook/set` `onDestroyRemoveContacts`**: not checked;
       `addressBookHasContents` SetError never returned
@@ -305,8 +304,8 @@ All referenced specs are in `specs/`.
 - [ ] **`ContactCard/copy`**: method entirely absent — returns `unknownMethod`
 
 #### Moderate
-- [ ] `AddressBook` missing `isSubscribed` (has non-spec `isVisible`), `description`,
-      `sortOrder`, `shareWith` (should at least be `null`)
+- [ ] `AddressBook` missing `description`, `sortOrder`, `shareWith` (should at least be `null`);
+      `isDefault` always `false` until DB schema tracks it
 - [ ] `AddressBook/set` `ifInState` not checked
 - [ ] `AddressBook/set` update only handles `name` — `sortOrder`, `description`,
       `isSubscribed` silently dropped
