@@ -7,6 +7,13 @@ use JSON;
 
 my $json = JSON::XS->new->utf8->canonical();
 
+sub _is_origin {
+  my ($organizer, $user_email) = @_;
+  return JSON::true unless defined $organizer;
+  my $org_email = lc($organizer =~ s{^mailto:}{}ri);
+  return (lc($user_email // '') eq $org_email) ? JSON::true : JSON::false;
+}
+
 sub getCalendarPreferences {
   return ['calendarPreferences', {
     autoAddCalendarId         => '',
@@ -336,12 +343,13 @@ sub api_CalendarEvent_get {
         next;
       }
 
+      my $organizer = $item->{organizerCalendarAddress};
       foreach my $key (keys %$item) {
         delete $item->{$key} unless _prop_wanted($args, $key);
       }
       $item->{id}          = $eventuid;
       $item->{calendarIds} = { "$data->{jcalendarid}" => JSON::true } if _prop_wanted($args, 'calendarIds');
-      $item->{isOrigin}    = JSON::true                               if _prop_wanted($args, 'isOrigin');
+      $item->{isOrigin}    = _is_origin($organizer, $user->{email})   if _prop_wanted($args, 'isOrigin');
       push @list, $item;
       next;
     }
@@ -359,13 +367,14 @@ sub api_CalendarEvent_get {
       next;
     }
 
+    my $organizer = $item->{organizerCalendarAddress};
     foreach my $key (keys %$item) {
       delete $item->{$key} unless _prop_wanted($args, $key);
     }
 
     $item->{id}          = $eventuid;
     $item->{calendarIds} = { "$data->{jcalendarid}" => JSON::true } if _prop_wanted($args, "calendarIds");
-    $item->{isOrigin}    = JSON::true                               if _prop_wanted($args, 'isOrigin');
+    $item->{isOrigin}    = _is_origin($organizer, $user->{email})   if _prop_wanted($args, 'isOrigin');
 
     push @list, $item;
   }
