@@ -170,7 +170,28 @@ sub api_Calendar_set {
   $Self->setid($_, $created->{$_}{id}) for keys %$created;
   $Self->_resolve_patch($update, 'api_Calendar_get');
   ($updated, $notUpdated) = $Self->{db}->update_calendars($update, sub { $Self->idmap(shift) });
-  ($destroyed, $notDestroyed) = $Self->{db}->destroy_calendars($destroy);
+
+  my $onDestroyRemoveEvents = $args->{onDestroyRemoveEvents} ? 1 : 0;
+  my (@safe_destroy, %notDestroyed_pre);
+  for my $jcalendarid (@$destroy) {
+    $Self->begin();
+    my $has_events = $Self->{db}->dcount('jevents', { jcalendarid => $jcalendarid, active => 1 });
+    my $event_uids = $has_events
+      ? $Self->{db}->dgetcol('jevents', { jcalendarid => $jcalendarid, active => 1 }, 'eventuid')
+      : [];
+    $Self->commit();
+    if ($has_events && !$onDestroyRemoveEvents) {
+      $notDestroyed_pre{$jcalendarid} = { type => 'calendarHasEvent' };
+    } else {
+      $Self->{db}->destroy_calendar_events($event_uids) if @$event_uids;
+      push @safe_destroy, $jcalendarid;
+    }
+  }
+
+  ($destroyed, $notDestroyed) = $Self->{db}->destroy_calendars(\@safe_destroy);
+  for my $id (keys %notDestroyed_pre) {
+    $notDestroyed->{$id} = $notDestroyed_pre{$id};
+  }
 
   # XXX - cheap dumb racy version
   $Self->{db}->sync_calendars();
@@ -550,11 +571,28 @@ sub api_ParticipantIdentity_get {
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
   $Self->commit();
+
+  my $email = $user->{email} // '';
+  my @identities;
+  my @notFound;
+
+  if ($args->{ids}) {
+    for my $id (@{$args->{ids}}) {
+      if ($email && $id eq 'id1') {
+        push @identities, { id => 'id1', name => '', sendTo => { imip => "mailto:$email" } };
+      } else {
+        push @notFound, "$id";
+      }
+    }
+  } elsif ($email) {
+    push @identities, { id => 'id1', name => '', sendTo => { imip => "mailto:$email" } };
+  }
+
   return ['ParticipantIdentity/get', {
     accountId => $accountid,
     state     => "$user->{jhighestmodseq}",
-    list      => [],
-    notFound  => $args->{ids} ? [map { "$_" } @{$args->{ids}}] : [],
+    list      => \@identities,
+    notFound  => \@notFound,
   }];
 }
 

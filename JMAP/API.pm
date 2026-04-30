@@ -57,6 +57,16 @@ my %PARAM_SCHEMA = (
     ifInState          => 'string?',
     emails             => '{object}',
   },
+  'Email/parse' => {
+    accountId            => 'string?',
+    blobIds              => '[string]',
+    properties           => '[string]?',
+    bodyProperties       => '[string]?',
+    fetchTextBodyValues  => 'bool?',
+    fetchHTMLBodyValues  => 'bool?',
+    fetchAllBodyValues   => 'bool?',
+    maxBodyValueBytes    => 'posint!',
+  },
   'Email/changes' => {
     accountId          => 'string?',
     sinceState         => 'string',

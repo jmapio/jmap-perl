@@ -1174,4 +1174,186 @@ sub api_Email_copy {
   return $Self->_transError(['error', {type => 'notImplemented'}]);
 }
 
+sub api_Email_parse {
+  my $Self = shift;
+  my $args = shift;
+
+  my ($user, $accountid) = $Self->_api_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
+
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['blobIds']}])
+    unless $args->{blobIds} && ref($args->{blobIds}) eq 'ARRAY';
+
+  # RFC 8621 §4.9 default properties for Email/parse
+  my @PARSE_DEFAULT_PROPERTIES = qw(
+    messageId inReplyTo references sender from to cc bcc replyTo
+    subject sentAt hasAttachment preview bodyValues textBody htmlBody attachments
+  );
+  $args->{properties} //= \@PARSE_DEFAULT_PROPERTIES;
+
+  my $bodyProperties = $args->{bodyProperties} || [qw(partId blobId size name type charset disposition cid language location)];
+
+  # get_blob calls begin() internally; commit the _api_init transaction first
+  $Self->commit();
+
+  my %parsed;
+  my @notParsable;
+  my @notFound;
+
+  for my $blobId (@{$args->{blobIds}}) {
+    my ($type, $content) = $Self->{db}->get_blob($blobId);
+    unless (defined $content && length $content) {
+      push @notFound, $blobId;
+      next;
+    }
+
+    my $data = eval { Data::JSEmail::parse($content, $blobId) };
+    if ($@ || !$data) {
+      push @notParsable, $blobId;
+      next;
+    }
+
+    my %item;
+
+    # These fields are always null for parsed (not stored) emails
+    $item{id}         = undef if _prop_wanted($args, 'id');
+    $item{blobId}     = $blobId if _prop_wanted($args, 'blobId');
+    $item{threadId}   = undef if _prop_wanted($args, 'threadId');
+    $item{mailboxIds} = undef if _prop_wanted($args, 'mailboxIds');
+    $item{keywords}   = undef if _prop_wanted($args, 'keywords');
+    $item{receivedAt} = undef if _prop_wanted($args, 'receivedAt');
+    $item{size}       = undef if _prop_wanted($args, 'size');
+
+    if (_prop_wanted($args, 'messageId')) {
+      $item{messageId} = $data->{messageId};
+    }
+    if (_prop_wanted($args, 'inReplyTo')) {
+      $item{inReplyTo} = $data->{inReplyTo};
+    }
+    if (_prop_wanted($args, 'references')) {
+      $item{references} = $data->{references};
+    }
+    if (_prop_wanted($args, 'subject')) {
+      $item{subject} = $data->{subject};
+    }
+    if (_prop_wanted($args, 'sentAt')) {
+      $item{sentAt} = $data->{sentAt};
+    }
+    if (_prop_wanted($args, 'hasAttachment')) {
+      $item{hasAttachment} = $data->{hasAttachment} ? $JSON::true : $JSON::false;
+    }
+    if (_prop_wanted($args, 'preview')) {
+      $item{preview} = $data->{preview};
+    }
+    for my $addr (qw(from to cc bcc replyTo sender)) {
+      if (_prop_wanted($args, $addr)) {
+        $item{$addr} = $data->{$addr};
+      }
+    }
+    if (_prop_wanted($args, 'headers')) {
+      $item{headers} = $data->{headers};
+    }
+    elsif ($args->{properties}) {
+      for my $prop (@{$args->{properties}}) {
+        next unless $prop =~ m/^header:([^:]+)(.*)/;
+        my $headername = lc $1;
+        my $rest = $2;
+
+        if ($rest ne '' && $rest !~ /^(:(asText|asAddresses|asGroupedAddresses|asMessageIds|asDate|asURLs|asRaw))?(:(all))?$/) {
+          return $Self->_transError(['error', { type => 'invalidArguments', arguments => [$prop] }]);
+        }
+
+        my @values = map { $_->{value} // $_->{Value} } grep { lc($_->{name} // $_->{Name} // '') eq $headername } @{$data->{headers}||[]};
+        unless (@values) {
+          $item{$prop} = ($rest =~ /:all/) ? [] : undef;
+          next;
+        }
+        if ($rest =~ s/:all$//) {
+          if ($rest eq ':asText') { $item{$prop} = [map { Data::JSEmail::asText($_) } @values] }
+          elsif ($rest eq ':asAddresses') { $item{$prop} = [map { Data::JSEmail::asAddresses($_) } @values] }
+          elsif ($rest eq ':asGroupedAddresses') { $item{$prop} = [map { Data::JSEmail::asGroupedAddresses($_) } @values] }
+          elsif ($rest eq ':asMessageIds') { $item{$prop} = [map { Data::JSEmail::asMessageIds($_) } @values] }
+          elsif ($rest eq ':asDate') { $item{$prop} = [map { Data::JSEmail::asDate($_) } @values] }
+          elsif ($rest eq ':asURLs') { $item{$prop} = [map { Data::JSEmail::asURLs($_) } @values] }
+          else { $item{$prop} = \@values }
+        }
+        else {
+          if ($rest eq ':asText') { $item{$prop} = Data::JSEmail::asText($values[-1]) }
+          elsif ($rest eq ':asAddresses') { $item{$prop} = Data::JSEmail::asAddresses($values[-1]) }
+          elsif ($rest eq ':asGroupedAddresses') { $item{$prop} = Data::JSEmail::asGroupedAddresses($values[-1]) }
+          elsif ($rest eq ':asMessageIds') { $item{$prop} = Data::JSEmail::asMessageIds($values[-1]) }
+          elsif ($rest eq ':asDate') { $item{$prop} = Data::JSEmail::asDate($values[-1]) }
+          elsif ($rest eq ':asURLs') { $item{$prop} = Data::JSEmail::asURLs($values[-1]) }
+          else { $item{$prop} = $values[-1] }
+        }
+      }
+    }
+    if (_prop_wanted($args, 'textBody')) {
+      $item{textBody} = _filterBodyParts($data->{textBody}, $bodyProperties);
+    }
+    if (_prop_wanted($args, 'htmlBody')) {
+      $item{htmlBody} = _filterBodyParts($data->{htmlBody}, $bodyProperties);
+    }
+    if (_prop_wanted($args, 'attachments')) {
+      $item{attachments} = _filterBodyParts($data->{attachments}, $bodyProperties);
+    }
+    if (_prop_wanted($args, 'bodyStructure')) {
+      $item{bodyStructure} = _filterBodyPart($data->{bodyStructure}, $bodyProperties);
+    }
+    if (_prop_wanted($args, 'bodyValues')) {
+      if ($args->{fetchAllBodyValues} || $args->{fetchTextBodyValues} || $args->{fetchHTMLBodyValues}) {
+        my %wantParts;
+        if ($args->{fetchAllBodyValues}) {
+          for my $part (@{$data->{textBody} || []}, @{$data->{htmlBody} || []}) {
+            $wantParts{$part->{partId}} = 1 if $part->{partId};
+          }
+        }
+        else {
+          if ($args->{fetchTextBodyValues}) {
+            $wantParts{$_->{partId}} = 1 for grep { $_->{partId} } @{$data->{textBody} || []};
+          }
+          if ($args->{fetchHTMLBodyValues}) {
+            $wantParts{$_->{partId}} = 1 for grep { $_->{partId} } @{$data->{htmlBody} || []};
+          }
+        }
+        my %bodyValues;
+        my $maxBytes = $args->{maxBodyValueBytes};
+        for my $partId (keys %wantParts) {
+          my $bv = $data->{bodyValues}{$partId};
+          next unless $bv;
+          my %val = %$bv;
+          if ($maxBytes && $maxBytes > 0 && defined $val{value}) {
+            my $val_bytes = Encode::encode_utf8($val{value});
+            if (length($val_bytes) > $maxBytes) {
+              my $truncated = substr($val_bytes, 0, $maxBytes);
+              while (length($truncated) && (ord(substr($truncated, -1)) & 0xC0) == 0x80) {
+                chop $truncated;
+              }
+              if (length($truncated) && ord(substr($truncated, -1)) >= 0xC0) {
+                chop $truncated;
+              }
+              $val{value} = Encode::decode_utf8($truncated);
+              $val{isTruncated} = $JSON::true;
+            }
+          }
+          $bodyValues{$partId} = \%val;
+        }
+        $item{bodyValues} = \%bodyValues;
+      }
+      else {
+        $item{bodyValues} = {};
+      }
+    }
+
+    $parsed{$blobId} = \%item;
+  }
+
+  return ['Email/parse', {
+    accountId  => $accountid,
+    parsed     => \%parsed,
+    notParsable => \@notParsable,
+    notFound   => \@notFound,
+  }];
+}
+
 1;

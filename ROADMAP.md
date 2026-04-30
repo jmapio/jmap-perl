@@ -240,7 +240,9 @@ All referenced specs are in `specs/`.
 - [x] **`VacationResponse/get` typo**: fixed `'VacationReponse/get'` → `'VacationResponse/get'`
 - [x] **Identity `replyTo`**: now returns `EmailAddress[]` (or `undef`) instead of plain string
 - [x] **`Mailbox/queryChanges`**: implemented; `canCalculateChanges` now `true` in Mailbox/query
-- [ ] **`Email/parse`**: not implemented
+- [x] **`Email/parse`**: implemented; fetches blob via `get_blob`, parses with `Data::JSEmail::parse`,
+      applies property filtering; JMAP-only fields (`id`, `mailboxIds`, `keywords`, `receivedAt`,
+      `threadId`) set to `null`; `notFound`/`notParsable` correctly populated
 - [x] **`Identity/changes`**: returns empty changes (state always `'dummy'`; `cannotCalculateChanges` otherwise)
 - [x] **`Identity/set`**: creates return `forbiddenFrom`; destroys return `forbidden`; updates persist
       `name`/`textSignature`/`htmlSignature`/`replyTo`/`bcc` in `juserprefs`; `Identity/get` reads them back
@@ -261,10 +263,11 @@ All referenced specs are in `specs/`.
 ### draft-ietf-jmap-calendars-26 — JMAP Calendars
 
 #### Blocking
-- [ ] **`ParticipantIdentity/get`**: always returns empty list — should return the user's own
-      email as a scheduling address
-- [ ] **`Calendar/set` `onDestroyRemoveEvents`**: not checked — CalDAV collection deleted
-      unconditionally (data loss possible); `calendarHasEvent` SetError never returned
+- [x] **`ParticipantIdentity/get`**: now returns the user's own email as a scheduling address
+      (`id1`, `sendTo: {imip: "mailto:user@..."}`) using `account.email`
+- [x] **`Calendar/set` `onDestroyRemoveEvents`**: enforced; when false (default) and calendar
+      has active events → `calendarHasEvent` SetError; when true → events destroyed first via
+      `destroy_calendar_events`, then calendar deleted
 - [x] **`CalendarEvent` `isOrigin`**: computed from `organizerCalendarAddress` vs account email;
       `true` if no organizer or organizer matches account; `false` for invited events
 - [ ] **`CalendarEvent/query` `expandRecurrences`**: not implemented — primary way clients
