@@ -17,12 +17,17 @@ sub api_Thread_get {
 
   my $newState = "$user->{jstateThread}";
 
-  # XXX - error if no IDs
-
   my @list;
   my %seenids;
   my %missingids;
-  foreach my $thrid (map { $Self->idmap($_) } @{$args->{ids}}) {
+  my @thrids;
+  if (defined $args->{ids}) {
+    @thrids = map { $Self->idmap($_) } @{$args->{ids}};
+  }
+  else {
+    @thrids = map { $_->{thrid} } @{$Self->{db}->dget('jthreads', { active => 1 }, 'thrid')};
+  }
+  foreach my $thrid (@thrids) {
     next if $seenids{$thrid};
     $seenids{$thrid} = 1;
     my $data = $Self->{db}->dgetfield('jthreads', { thrid => $thrid, active => 1 }, 'data');

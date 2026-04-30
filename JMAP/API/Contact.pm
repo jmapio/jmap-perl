@@ -456,15 +456,16 @@ sub api_Addressbook_get {
     next unless delete $want{$item->{jaddressbookid}};
 
     my %rec = (
-      id => "$item->{jaddressbookid}",
-      name => "$item->{name}",
-      isVisible => $item->{isVisible} ? $JSON::true : $JSON::false,
-      mayReadItems => $item->{mayReadItems} ? $JSON::true : $JSON::false,
-      mayAddItems => $item->{mayAddItems} ? $JSON::true : $JSON::false,
-      mayModifyItems => $item->{mayModifyItems} ? $JSON::true : $JSON::false,
-      mayRemoveItems => $item->{mayRemoveItems} ? $JSON::true : $JSON::false,
-      mayDelete => $item->{mayDelete} ? $JSON::true : $JSON::false,
-      mayRename => $item->{mayRename} ? $JSON::true : $JSON::false,
+      id           => "$item->{jaddressbookid}",
+      name         => "$item->{name}",
+      isDefault    => $JSON::false,
+      isSubscribed => $item->{isVisible} ? $JSON::true : $JSON::false,
+      myRights     => {
+        mayRead   => $item->{mayReadItems}                                          ? $JSON::true : $JSON::false,
+        mayWrite  => ($item->{mayAddItems} || $item->{mayModifyItems} || $item->{mayRemoveItems}) ? $JSON::true : $JSON::false,
+        mayShare  => $JSON::false,
+        mayDelete => $item->{mayDelete}                                             ? $JSON::true : $JSON::false,
+      },
     );
 
     foreach my $key (keys %rec) {

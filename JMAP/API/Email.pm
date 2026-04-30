@@ -377,6 +377,15 @@ sub api_Email_query {
   my $start = $args->{position} || 0;
   return $Self->_transError(['error', {type => 'invalidArguments',  arguments => ['position']}]) if $start < 0;
 
+  my %valid_sort = map { $_ => 1 } qw(
+    id receivedAt sentAt size subject from to
+    hasKeyword allInThreadHaveKeyword someInThreadHaveKeyword
+  );
+  for my $arg (@{$args->{sort} // []}) {
+    return $Self->_transError(['error', {type => 'unsupportedSort', sort => $arg}])
+      unless $valid_sort{$arg->{property} // ''};
+  }
+
   my $data = $Self->{db}->dget('jmessages', { active => 1 });
 
   # commit before applying the filter, because it might call out for searches

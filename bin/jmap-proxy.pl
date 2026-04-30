@@ -1086,7 +1086,7 @@ sub do_session {
     send_backend_request('__accounts__', 'get_pool', { accountid => $auth_aid }, sub {
       my $pool = shift;
       my $accounts = {};
-      my $primary_aid;
+      my ($primary_aid, $primary_cal_aid, $primary_contact_aid);
       for my $a (@{$pool->{accounts} || []}) {
         $accounts->{$a->{accountid}} = {
           name => $a->{email} || $a->{accountid},
@@ -1123,7 +1123,9 @@ sub do_session {
             }) : ()),
           },
         };
-        $primary_aid //= $a->{accountid};
+        $primary_aid         //= $a->{accountid};
+        $primary_cal_aid     //= $a->{accountid} if $a->{caldavURL};
+        $primary_contact_aid //= $a->{accountid} if $a->{carddavURL};
       }
       $primary_aid //= $auth_aid;
 
@@ -1158,8 +1160,10 @@ sub do_session {
         },
         accounts => $accounts,
         primaryAccounts => {
-          'urn:ietf:params:jmap:mail' => $primary_aid,
+          'urn:ietf:params:jmap:mail'       => $primary_aid,
           'urn:ietf:params:jmap:submission' => $primary_aid,
+          ($primary_cal_aid     ? ('urn:ietf:params:jmap:calendars' => $primary_cal_aid)     : ()),
+          ($primary_contact_aid ? ('urn:ietf:params:jmap:contacts'  => $primary_contact_aid) : ()),
         },
         username => ($pool->{accounts} && $pool->{accounts}[0] ? $pool->{accounts}[0]{email} : ''),
         apiUrl => "$BASEURL/jmap",

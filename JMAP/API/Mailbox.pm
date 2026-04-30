@@ -260,6 +260,12 @@ sub api_Mailbox_query {
 
   my $newQueryState = "$user->{jstateMailbox}";
 
+  my %valid_sort = map { $_ => 1 } qw(name sortOrder parent/name);
+  for my $arg (@{$args->{sort} // []}) {
+    return $Self->_transError(['error', {type => 'unsupportedSort', sort => $arg}])
+      unless $valid_sort{$arg->{property} // ''};
+  }
+
   my $data = $Self->{db}->dget('jmailboxes', { active => 1 });
 
   $Self->commit();

@@ -341,6 +341,7 @@ sub api_CalendarEvent_get {
       }
       $item->{id}          = $eventuid;
       $item->{calendarIds} = { "$data->{jcalendarid}" => JSON::true } if _prop_wanted($args, 'calendarIds');
+      $item->{isOrigin}    = JSON::true                               if _prop_wanted($args, 'isOrigin');
       push @list, $item;
       next;
     }
@@ -364,6 +365,7 @@ sub api_CalendarEvent_get {
 
     $item->{id}          = $eventuid;
     $item->{calendarIds} = { "$data->{jcalendarid}" => JSON::true } if _prop_wanted($args, "calendarIds");
+    $item->{isOrigin}    = JSON::true                               if _prop_wanted($args, 'isOrigin');
 
     push @list, $item;
   }
