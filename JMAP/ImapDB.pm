@@ -2283,8 +2283,11 @@ sub create_calendar_events {
   $Self->commit();
 
   foreach my $cid (sort keys %todo) {
-    # XXX - on error?  Should remove $createmap{$cid} and set $notcreated{$cid}
-    $Self->backend_cmd('new_event', @{$todo{$cid}});
+    eval { $Self->backend_cmd('new_event', @{$todo{$cid}}) };
+    if ($@) {
+      delete $createmap{$cid};
+      $notcreated{$cid} = { type => 'serverFail', description => "$@" };
+    }
   }
 
   return (\%createmap, \%notcreated);
@@ -2299,8 +2302,8 @@ sub update_calendar_events {
 
   $Self->begin();
 
-  my %todo;
-  my %todo_occurrence;  # href => [[recurrenceId, patch], ...]
+  my %todo;         # href => [uid, event_data]
+  my %todo_occurrence;  # href => [[recurrenceId, uid_key, patch], ...]
   my %changed;
   my %notchanged;
   foreach my $uid (keys %$update) {
@@ -2315,7 +2318,7 @@ sub update_calendar_events {
       }
       my %patch = %$calendar;
       delete @patch{qw(calendarIds calendarId)};
-      push @{$todo_occurrence{$href}}, [$recurrence_id, \%patch];
+      push @{$todo_occurrence{$href}}, [$recurrence_id, $uid, \%patch];
       $changed{$uid} = undef;
       next;
     }
@@ -2329,7 +2332,7 @@ sub update_calendar_events {
     my %ev = %$calendar;
     delete $ev{calendarIds};
     delete $ev{calendarId};
-    $todo{$href} = \%ev;
+    $todo{$href} = [$uid, \%ev];
 
     $changed{$uid} = undef;
   }
@@ -2337,11 +2340,21 @@ sub update_calendar_events {
   $Self->commit();
 
   foreach my $href (sort keys %todo) {
-    $Self->backend_cmd('update_event', $href, $todo{$href});
+    my ($uid, $ev) = @{$todo{$href}};
+    eval { $Self->backend_cmd('update_event', $href, $ev) };
+    if ($@) {
+      $notchanged{$uid} = { type => 'serverFail', description => "$@" };
+      delete $changed{$uid};
+    }
   }
   foreach my $href (sort keys %todo_occurrence) {
-    for my $pair (@{$todo_occurrence{$href}}) {
-      $Self->backend_cmd('update_event_occurrence', $href, $pair->[0], $pair->[1]);
+    for my $triple (@{$todo_occurrence{$href}}) {
+      my ($recurrence_id, $uid_key, $patch) = @$triple;
+      eval { $Self->backend_cmd('update_event_occurrence', $href, $recurrence_id, $patch) };
+      if ($@) {
+        $notchanged{$uid_key} = { type => 'serverFail', description => "$@" };
+        delete $changed{$uid_key};
+      }
     }
   }
 

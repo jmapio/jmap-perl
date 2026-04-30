@@ -272,8 +272,9 @@ All referenced specs are in `specs/`.
       `true` if no organizer or organizer matches account; `false` for invited events
 - [ ] **`CalendarEvent/query` `expandRecurrences`**: not implemented — primary way clients
       find events in a date range
-- [ ] **`CalendarEvent/set` error handling**: create errors not caught — client gets false
-      success when CalDAV PUT fails; occurrence update/destroy similarly unguarded
+- [x] **`CalendarEvent/set` error handling**: create/update/occurrence-update wrapped in
+      `eval`; CalDAV failures now return `serverFail` in `notCreated`/`notUpdated` instead
+      of crashing the worker
 
 #### Moderate
 - [ ] Calendar missing `defaultAlertsWithTime`/`defaultAlertsWithoutTime`, `timeZone`,
