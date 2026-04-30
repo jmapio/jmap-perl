@@ -298,8 +298,14 @@ add a stub returning `notImplemented` when convenient).
       `destroy_calendar_events`, then calendar deleted
 - [x] **`CalendarEvent` `isOrigin`**: computed from `organizerCalendarAddress` vs account email;
       `true` if no organizer or organizer matches account; `false` for invited events
-- [ ] **`CalendarEvent/query` `expandRecurrences`**: not implemented — primary way clients
-      find events in a date range
+- [x] **`CalendarEvent/query` `expandRecurrences`**: implemented — recurring events are
+      expanded per `recurrenceRules`/`recurrenceRule` using `DateTime::Event::ICal`;
+      occurrences returned as `uid/recurrenceId` IDs, sorted by actual start; moved
+      overrides included; non-recurring events filtered by start; `inCalendars` filter
+      applied; `canCalculateChanges: false` set in response.
+      Also fixed: `create_calendar_events`/`update_calendar_events` now normalize
+      RFC 8984 `recurrenceRules` (plural array) → `recurrenceRule` (singular) for
+      `Net::CalDAVTalk` / `Text::JSCalendar` compatibility before CalDAV PUT.
 - [x] **`CalendarEvent/set` error handling**: create/update/occurrence-update wrapped in
       `eval`; CalDAV failures now return `serverFail` in `notCreated`/`notUpdated` instead
       of crashing the worker
