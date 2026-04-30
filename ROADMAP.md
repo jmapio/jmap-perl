@@ -239,10 +239,13 @@ All referenced specs are in `specs/`.
 - [x] **`EmailSubmission/query` sort**: changed from non-spec string format to Comparator object
 - [x] **`VacationResponse/get` typo**: fixed `'VacationReponse/get'` → `'VacationResponse/get'`
 - [x] **Identity `replyTo`**: now returns `EmailAddress[]` (or `undef`) instead of plain string
-- [ ] **`Mailbox/queryChanges`**: not implemented
+- [x] **`Mailbox/queryChanges`**: implemented; `canCalculateChanges` now `true` in Mailbox/query
 - [ ] **`Email/parse`**: not implemented
-- [ ] **`Identity/changes`** and **`Identity/set`**: not implemented
-- [ ] **`VacationResponse/set`**: not implemented
+- [x] **`Identity/changes`**: returns empty changes (state always `'dummy'`; `cannotCalculateChanges` otherwise)
+- [x] **`Identity/set`**: creates return `forbiddenFrom`; destroys return `forbidden`; updates persist
+      `name`/`textSignature`/`htmlSignature`/`replyTo`/`bcc` in `juserprefs`; `Identity/get` reads them back
+- [x] **`VacationResponse/set`**: stores `isEnabled`/`fromDate`/`toDate`/`subject`/`textBody`/`htmlBody`
+      in `juserprefs`; `VacationResponse/get` reads back; state is SHA1 of stored payload
 
 #### Moderate / Nice-to-have
 - [ ] `Mailbox/query`: `sortAsTree`, `filterAsTree`, `name`/`role` filter conditions missing
@@ -262,7 +265,8 @@ All referenced specs are in `specs/`.
       email as a scheduling address
 - [ ] **`Calendar/set` `onDestroyRemoveEvents`**: not checked — CalDAV collection deleted
       unconditionally (data loss possible); `calendarHasEvent` SetError never returned
-- [x] **`CalendarEvent` `isOrigin`**: now returned as `true` for all proxy-owned events
+- [x] **`CalendarEvent` `isOrigin`**: computed from `organizerCalendarAddress` vs account email;
+      `true` if no organizer or organizer matches account; `false` for invited events
 - [ ] **`CalendarEvent/query` `expandRecurrences`**: not implemented — primary way clients
       find events in a date range
 - [ ] **`CalendarEvent/set` error handling**: create errors not caught — client gets false
@@ -295,8 +299,8 @@ All referenced specs are in `specs/`.
 - [x] **`AddressBook` `myRights`**: restructured to nested `{mayRead, mayWrite, mayShare, mayDelete}`
 - [x] **`AddressBook` `isDefault`**: now returned (`false` for all until DB tracks it); `isSubscribed` added
 - [ ] **`AddressBook/set` `onSuccessSetIsDefault`**: not implemented
-- [ ] **`AddressBook/set` `onDestroyRemoveContacts`**: not checked;
-      `addressBookHasContents` SetError never returned
+- [x] **`AddressBook/set` `onDestroyRemoveContacts`**: enforced; `addressBookHasContents` SetError
+      returned when book has contacts and flag is false; contacts destroyed first when flag is true
 - [x] **`ContactCard/query`**: fixed `_event_filter` → `_contact_filter`; implemented all
       RFC 9610 §3.3 filter conditions (`inAddressBook`, `uid`, `text`, `name`, `name/given`,
       `name/surname`, `name/surname2`, `nickname`, `organization`, `email`, `phone`, `address`)
