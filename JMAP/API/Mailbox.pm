@@ -155,6 +155,8 @@ sub _patchitem {
       return _patchitem($target->[$token], $key, $value);
     }
     Carp::confess "missing patch target for '$token'" unless ref($target) eq 'HASH';
+    # Auto-vivify missing intermediate hash (RFC 8620 JSON Pointer semantics)
+    $target->{$token} = {} unless ref($target->{$token});
     return _patchitem($target->{$token}, $key, $value);
   }
 
