@@ -6,7 +6,7 @@ The JMAP proxy syncs email, calendars, and contacts from IMAP/CalDAV/CardDAV
 backends and exposes them over the JMAP protocol (RFCs 8620/8621).  It also
 supports direct JMAP-to-JMAP passthrough for backends that already speak JMAP.
 
-- **87/87 JMAP TestSuite tests passing** against Cyrus IMAP
+- **102/102 JMAP TestSuite tests passing** against Cyrus IMAP (87 Email/Mailbox/Thread + 2 Calendar/get + 13 CalendarEvent/AddressBook/ContactCard)
 - Conversion logic extracted into standalone CPAN modules:
   Data::JSEmail (0.03), Text::JSCalendar (0.03), Text::JSContact (0.01)
 - Docker image with single-process architecture and management UI
@@ -91,7 +91,7 @@ passes requests through directly instead of syncing via IMAP.
 - [x] Blob upload/download proxying for JMAP passthrough accounts
 - [x] Upload: rewrite accountId in upload URL, proxy binary to upstream
 - [x] Download: proxy raw blob responses from upstream (downloadUrl URI template)
-- [x] **87/87 JMAP TestSuite tests passing in JMAP passthrough mode** (Cyrus backend)
+- [x] **102/102 JMAP TestSuite tests passing** (87 Email/Mailbox/Thread + 2 Calendar/get + 13 CalendarEvent/AddressBook/ContactCard)
 - [x] Normalise empty notCreated/notUpdated/notDestroyed to null (RFC 8620 §5.3) in passthrough
 - [x] JMAPProxy test adapter: cyrus_backend flag propagates Cyrus-specific TODO blocks
 
@@ -125,6 +125,7 @@ passes requests through directly instead of syncing via IMAP.
 - [x] Move raw SQL out of API.pm into DB layer (EmailSubmission query methods on DB)
 - [x] JMAP TestSuite adapter: session-based URL discovery (GET /session) instead of hardcoded URLs
 - [x] JMAP TestSuite: added ifInState tests for Mailbox/set and Email/set; keyword sort comparator test
+- [x] JMAP TestSuite: added CalendarEvent, AddressBook, ContactCard entity/comparator/test classes (13 new tests)
 
 ### Auth
 - [x] Email-first signup UX: email → auto-discovery → OAuth redirect or password form
