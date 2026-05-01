@@ -444,7 +444,7 @@ sub api_Addressbook_get {
 
   my %want;
   if ($args->{ids}) {
-    %want = map { $Self->($_) => 1 } @{$args->{ids}};
+    %want = map { $Self->idmap($_) => 1 } @{$args->{ids}};
   }
   else {
     %want = map { $_->{jaddressbookid} => 1 } @$data;
@@ -570,12 +570,17 @@ sub api_AddressBook_set {
 
   my (@safe_destroy, %pre_notDestroyed);
   for my $id (@$destroy) {
+    $Self->{db}->begin();
     my $has = $Self->{db}->dgetone('jcontacts', { jaddressbookid => $id, active => 1 }, 'contactuid');
+    my $contacts;
+    if ($has && $args->{onDestroyRemoveContacts}) {
+      $contacts = $Self->{db}->dget('jcontacts', { jaddressbookid => $id, active => 1 }, 'contactuid');
+    }
+    $Self->{db}->commit();
     if ($has && !$args->{onDestroyRemoveContacts}) {
       $pre_notDestroyed{$id} = { type => 'addressBookHasContents' };
     } else {
-      if ($has) {
-        my $contacts = $Self->{db}->dget('jcontacts', { jaddressbookid => $id, active => 1 }, 'contactuid');
+      if ($has && $contacts) {
         $Self->{db}->destroy_contacts([ map { $_->{contactuid} } @$contacts ]);
       }
       push @safe_destroy, $id;

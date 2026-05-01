@@ -2755,22 +2755,24 @@ sub destroy_contacts {
 
   return ([], {}) unless @$destroy;
 
-  $Self->begin();
-
   my %todo;
   my @destroyed;
   my %notdestroyed;
   foreach my $carduid (@$destroy) {
-    my $old = $Self->dgetone('icards', { uid => $carduid }, 'href');
+    $Self->begin();
+    my $old = $Self->dgetone('icards', { uid => $carduid }, 'href,iaddressbookid');
     unless ($old) {
+      $Self->commit();
       $notdestroyed{$carduid} = {type => 'notFound', description => "No such card on server"};
       next;
     }
+    my $jaddressbookid = $Self->dgetfield('iaddressbooks', { iaddressbookid => $old->{iaddressbookid} }, 'jaddressbookid');
+    $Self->unlink_jcontact_payload($carduid);
+    $Self->dmaybedirty('jcontacts', { active => 0 }, { contactuid => $carduid, jaddressbookid => $jaddressbookid });
+    $Self->commit();
     $todo{$old->{href}} = 1;
     push @destroyed, $carduid;
   }
-
-  $Self->commit();
 
   foreach my $href (sort keys %todo) {
     $Self->backend_cmd('delete_card', $href);
@@ -2786,14 +2788,25 @@ sub create_contacts_jscontact {
   return ({}, {}) unless keys %$new;
 
   $Self->begin();
-  my $abookhref = $Self->dgetfield('iaddressbooks', {}, 'href');
+  my $iaddressbooks = $Self->dget('iaddressbooks', {}, 'iaddressbookid,jaddressbookid,href');
   $Self->commit();
+
+  my %href_by_jab = map { $_->{jaddressbookid} => $_->{href} } @$iaddressbooks;
+  my $default_href = $iaddressbooks->[0]{href};
 
   my %createmap;
   my %notcreated;
 
   for my $cid (sort keys %$new) {
-    my $card = $new->{$cid};
+    my $card = { %{ $new->{$cid} } };  # shallow copy so we don't modify caller's data
+
+    # Resolve addressBookIds to a CardDAV href
+    my $abookhref = $default_href;
+    if (my $abids = delete $card->{addressBookIds}) {
+      my ($jab_id) = grep { $abids->{$_} } keys %$abids;
+      $abookhref = $href_by_jab{$jab_id} // $default_href if $jab_id;
+    }
+
     unless ($abookhref) {
       $notcreated{$cid} = { type => 'notFound', description => 'No addressbook on server' };
       next;
