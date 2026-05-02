@@ -105,6 +105,9 @@ sub _contact_filter {
   return \@res;
 }
 
+my %CONTACT_SORT_PROPS = map { $_ => 1 }
+  qw(created updated name name/given name/surname name/surname2);
+
 sub api_Contact_query {
   my $Self = shift;
   my $args = shift;
@@ -114,12 +117,47 @@ sub api_Contact_query {
 
   my $newQueryState = "$user->{jstateContact}";
 
-  my $data = $Self->{db}->dget('jcontacts', { active => 1 }, 'contactuid,jaddressbookid');
+  my $data = $Self->{db}->dget('jcontacts', { active => 1 }, 'contactuid,jaddressbookid,jcreated,jmodseq');
 
-  $data = $Self->_contact_filter($data, $args->{filter}, {}) if $args->{filter};
+  my %storage;
+  $data = $Self->_contact_filter($data, $args->{filter}, \%storage) if $args->{filter};
 
   return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['position']}])
     if ($args->{position} // 0) < 0;
+
+  if ($args->{sort}) {
+    for my $cmp (@{$args->{sort}}) {
+      return $Self->_transError(['error', {type => 'unsupportedSort', sort => $cmp}])
+        unless $CONTACT_SORT_PROPS{$cmp->{property} // ''};
+    }
+    $data = [sort {
+      my $res = 0;
+      for my $cmp (@{$args->{sort}}) {
+        my $prop = $cmp->{property};
+        if ($prop eq 'created') {
+          $res = ($a->{jcreated} // 0) <=> ($b->{jcreated} // 0);
+        } elsif ($prop eq 'updated') {
+          $res = ($a->{jmodseq} // 0) <=> ($b->{jmodseq} // 0);
+        } else {
+          # name/* sort: load payload
+          my $acard = $storage{payloads}{$a->{contactuid}}
+            //= ($Self->{db}->read_jcontact_payload($a->{contactuid}) // {});
+          my $bcard = $storage{payloads}{$b->{contactuid}}
+            //= ($Self->{db}->read_jcontact_payload($b->{contactuid}) // {});
+          if ($prop eq 'name') {
+            $res = lc($acard->{name}{full} // '') cmp lc($bcard->{name}{full} // '');
+          } else {
+            my $kind = ($prop =~ s{^name/}{}r);
+            $res = lc(_contact_name_component($acard, $kind))
+                   cmp lc(_contact_name_component($bcard, $kind));
+          }
+        }
+        $res = -$res if defined($cmp->{isAscending}) && !$cmp->{isAscending};
+        last if $res;
+      }
+      $res || ($a->{contactuid} cmp $b->{contactuid});
+    } @$data];
+  }
 
   my ($start, $end) = $Self->_apply_window($data, $args, sub { $_[0]{contactuid} });
   return $Self->_transError(['error', {type => 'anchorNotFound'}]) unless defined $start;
@@ -458,6 +496,9 @@ sub api_Addressbook_get {
     my %rec = (
       id           => "$item->{jaddressbookid}",
       name         => "$item->{name}",
+      description  => defined $item->{description} ? "$item->{description}" : $JSON::null,
+      sortOrder    => $item->{sortOrder} || 0,
+      shareWith    => $JSON::null,
       isDefault    => $item->{isDefault} ? $JSON::true : $JSON::false,
       isSubscribed => $item->{isVisible} ? $JSON::true : $JSON::false,
       myRights     => {

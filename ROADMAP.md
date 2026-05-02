@@ -352,15 +352,16 @@ add a stub returning `notImplemented` when convenient).
 - [ ] **`ContactCard/copy`**: `notImplemented` stub added (see Cross-account /copy section)
 
 #### Moderate
-- [ ] `AddressBook` missing `description`, `sortOrder`, `shareWith` (should at least be `null`);
-      `isDefault` always `false` until DB schema tracks it
+- [x] `AddressBook` `description`, `sortOrder` added to `jaddressbooks` (schema v7); returned in get;
+      `shareWith` returned as `null` (no sharing model yet)
 - [x] `AddressBook/set` `ifInState` not checked
-- [ ] `AddressBook/set` update only handles `name` — `sortOrder`, `description`,
-      `isSubscribed` silently dropped
+- [x] `AddressBook/set` update: `name` via CardDAV backend; `description`, `sortOrder` persisted
+      locally in DB; `isSubscribed` updates `jaddressbooks.isVisible`
 - [x] `ContactCard/set` `ifInState` not checked
 - [x] `ContactCard/set` `addressBookIds` on create: already resolved via `href_by_jab` lookup (was stale TODO)
 - [x] `ContactCard/set` `destroy_contacts` not wrapped in eval — CardDAV error kills worker
-- [ ] `ContactCard/query` sort comparators (`created`, `updated`, `name/*`) not implemented
+- [x] `ContactCard/query` sort: `created`, `updated`, `name`, `name/given`, `name/surname`,
+      `name/surname2`; `unsupportedSort` for unknown; stable tie-break by uid
 - [x] `ContactCard/query` `anchor`/`anchorOffset` not implemented
 - [ ] Single addressbook per card (structural limit in `jcontacts` schema)
 

@@ -1170,7 +1170,7 @@ sub get_submission_changes {
     {}, $since_modseq);
 }
 
-my $USER_SCHEMA_VERSION = 6;
+my $USER_SCHEMA_VERSION = 7;
 
 sub _create_user_tables {
   my ($Self, $dbh) = @_;
@@ -1343,6 +1343,8 @@ EOF
 CREATE TABLE IF NOT EXISTS jaddressbooks (
   jaddressbookid INTEGER PRIMARY KEY,
   name TEXT,
+  description TEXT,
+  sortOrder INTEGER DEFAULT 0,
   isVisible BOOLEAN,
   mayReadItems BOOLEAN,
   mayAddItems BOOLEAN,
@@ -1528,6 +1530,19 @@ sub _initdb {
     };
     if ($@) { $dbh->rollback; die "user DB migration to v6 failed: $@" }
     $v = 6;
+  }
+
+  if ($v < 7) {
+    # jaddressbooks: description and sortOrder for RFC 9610 §5.1.
+    $dbh->begin_work;
+    eval {
+      eval { $dbh->do("ALTER TABLE jaddressbooks ADD COLUMN description TEXT") };
+      eval { $dbh->do("ALTER TABLE jaddressbooks ADD COLUMN sortOrder INTEGER DEFAULT 0") };
+      $dbh->do('PRAGMA user_version = 7');
+      $dbh->commit;
+    };
+    if ($@) { $dbh->rollback; die "user DB migration to v7 failed: $@" }
+    $v = 7;
   }
 }
 

@@ -860,10 +860,23 @@ sub update_addressbooks {
     my %args = ( id => $ab_id );
     $args{name} = $patch->{name} if exists $patch->{name};
 
-    eval { $Self->backend_cmd('update_addressbook', \%args) };
-    if ($@) {
-      $notchanged{$jaddressbookid} = { type => 'serverFail', description => "$@" };
-      next;
+    if (exists $patch->{name}) {
+      eval { $Self->backend_cmd('update_addressbook', \%args) };
+      if ($@) {
+        $notchanged{$jaddressbookid} = { type => 'serverFail', description => "$@" };
+        next;
+      }
+    }
+
+    # Persist local-only fields directly to DB
+    my %local;
+    $local{description} = $patch->{description} if exists $patch->{description};
+    $local{sortOrder}   = $patch->{sortOrder}   if exists $patch->{sortOrder};
+    $local{isVisible}   = $patch->{isSubscribed} ? 1 : 0 if exists $patch->{isSubscribed};
+    if (%local) {
+      $Self->begin();
+      $Self->ddirty('jaddressbooks', \%local, { jaddressbookid => $jaddressbookid });
+      $Self->commit();
     }
 
     $changed{$jaddressbookid} = undef;
