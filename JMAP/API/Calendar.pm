@@ -489,12 +489,20 @@ sub _event_filter {
   return \@res;
 }
 
+my %CALENDAR_EVENT_FILTER_PROPS = map { $_ => 1 }
+  qw(inCalendar inCalendars uid after before text title description location owner attendee);
+
 sub api_CalendarEvent_query {
   my $Self = shift;
   my $args = shift;
 
   my ($user, $accountid) = $Self->_api_init($args);
   return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
+
+  if ($args->{filter}) {
+    my @e = $Self->_check_filter($args->{filter}, \%CALENDAR_EVENT_FILTER_PROPS);
+    return @e if @e;
+  }
 
   my $newQueryState = "$user->{jstateCalendarEvent}";
 
@@ -754,6 +762,11 @@ sub api_CalendarEvent_queryChanges {
   my ($user, $accountid) = $Self->_api_init($args);
   return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
 
+  if ($args->{filter}) {
+    my @e = $Self->_check_filter($args->{filter}, \%CALENDAR_EVENT_FILTER_PROPS);
+    return @e if @e;
+  }
+
   my $newQueryState = "$user->{jstateCalendarEvent}";
   my $sinceQueryState = $args->{sinceQueryState};
   return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceQueryState']}])
@@ -761,23 +774,31 @@ sub api_CalendarEvent_queryChanges {
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newQueryState => $newQueryState}])
     if ($user->{jdeletedmodseq} and $sinceQueryState <= $user->{jdeletedmodseq});
 
-  my $data = $Self->{db}->dget('jevents', { active => 1 }, 'eventuid,jmodseq');
+  my $data = $Self->{db}->dget('jevents', { active => 1 }, 'eventuid,jcalendarid,jmodseq');
+
+  my %storage;
+  $data = $Self->_event_filter($data, $args->{filter}, \%storage) if $args->{filter};
+
   my $total = scalar @$data;
 
   my %idx;
   my $i = 0;
   $idx{$_->{eventuid}} = $i++ for @$data;
 
-  my $changed = $Self->{db}->dget('jevents', { jmodseq => ['>', $sinceQueryState] }, 'eventuid,active');
+  my $changed = $Self->{db}->dget('jevents', { jmodseq => ['>', $sinceQueryState] }, 'eventuid,jcalendarid,active');
 
   $Self->commit();
 
   my @added;
-  my @destroyed;
+  my @removed;
   for my $row (@$changed) {
-    push @destroyed, "$row->{eventuid}";
-    if ($row->{active} && exists $idx{$row->{eventuid}}) {
-      push @added, { id => "$row->{eventuid}", index => $idx{$row->{eventuid}} };
+    push @removed, "$row->{eventuid}";
+    if ($row->{active}) {
+      # Re-check filter for the changed event
+      my $matches = !$args->{filter} || $Self->_event_match($row, $args->{filter}, \%storage);
+      if ($matches && exists $idx{$row->{eventuid}}) {
+        push @added, { id => "$row->{eventuid}", index => $idx{$row->{eventuid}} };
+      }
     }
   }
 
@@ -788,7 +809,7 @@ sub api_CalendarEvent_queryChanges {
     oldQueryState => "$sinceQueryState",
     newQueryState => $newQueryState,
     total         => $total,
-    removed       => \@destroyed,
+    removed       => \@removed,
     added         => \@added,
   }];
 }

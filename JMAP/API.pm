@@ -481,6 +481,28 @@ sub _apply_window {
   return ($start, $end);
 }
 
+sub _check_filter {
+  my ($Self, $filter, $known_props) = @_;
+  return () unless ref $filter eq 'HASH';
+  if (exists $filter->{operator}) {
+    my $op = $filter->{operator} // '';
+    return $Self->_transError(['error', {type => 'unsupportedFilter',
+      description => "Unknown operator: $op"}])
+      unless $op eq 'AND' || $op eq 'OR' || $op eq 'NOT';
+    for my $cond (@{$filter->{conditions} // []}) {
+      my @e = $Self->_check_filter($cond, $known_props);
+      return @e if @e;
+    }
+    return ();
+  }
+  for my $key (keys %$filter) {
+    return $Self->_transError(['error', {type => 'unsupportedFilter',
+      description => "Unknown filter condition: $key"}])
+      unless $known_props->{$key};
+  }
+  return ();
+}
+
 sub _limit_changes {
   my ($Self, $data, $args, $newState_ref) = @_;
   return ($data, 0) unless $args->{maxChanges} and @$data > $args->{maxChanges};

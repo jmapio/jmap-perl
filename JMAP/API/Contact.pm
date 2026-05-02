@@ -108,12 +108,21 @@ sub _contact_filter {
 my %CONTACT_SORT_PROPS = map { $_ => 1 }
   qw(created updated name name/given name/surname name/surname2);
 
+my %CONTACT_FILTER_PROPS = map { $_ => 1 }
+  qw(inAddressBook uid text name name/given name/surname name/surname2
+     nickname organization email phone address);
+
 sub api_Contact_query {
   my $Self = shift;
   my $args = shift;
 
   my ($user, $accountid) = $Self->_api_init($args);
   return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
+
+  if ($args->{filter}) {
+    my @e = $Self->_check_filter($args->{filter}, \%CONTACT_FILTER_PROPS);
+    return @e if @e;
+  }
 
   my $newQueryState = "$user->{jstateContact}";
 

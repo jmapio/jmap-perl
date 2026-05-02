@@ -1164,8 +1164,10 @@ sub do_session {
       };
 
       warn "SESSION " . JSON::XS::encode_json($session) . "\n";
-      $req->respond([200, 'ok', { 'Content-Type' => 'application/json' },
-        JSON::XS::encode_json($session)]);
+      $req->respond([200, 'ok', {
+        'Content-Type'  => 'application/json',
+        'Cache-Control' => 'no-cache, no-store',
+      }, JSON::XS::encode_json($session)]);
     }, sub {
       my $err = shift;
       $req->respond([500, 'error', { 'Content-Type' => 'application/json' },

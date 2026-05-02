@@ -218,11 +218,13 @@ All referenced specs are in `specs/`.
 #### Moderate / Nice-to-have
 - [x] `primaryAccounts` now includes `calendars` and `contacts` entries when account has CalDAV/CardDAV
 - [x] Unknown sort → `unsupportedSort` error (Email/query, Mailbox/query)
-- [ ] `Cache-Control` header missing from `/session` response
+- [x] `Cache-Control: no-cache, no-store` added to `/session` response (RFC 8620 §2)
 - [ ] `maxCallsInRequest` / `maxSizeRequest` limits not enforced
 - [ ] `PushSubscription/get|set` not implemented (SSE works for web clients)
 - [ ] `Blob/copy` not implemented
-- [ ] Unknown filter → `serverError` instead of `unsupportedFilter`
+- [x] Unknown filter → `unsupportedFilter` error; shared `_check_filter` helper in API.pm
+      validates condition properties and operator values recursively;
+      applied to CalendarEvent/query, CalendarEvent/queryChanges, ContactCard/query
 
 ---
 
@@ -324,7 +326,8 @@ add a stub returning `notImplemented` when convenient).
       `location`, `owner`, `attendee`; proper date-range overlap (start < before AND end > after);
       recurring masters filtered before expansion; `expandRecurrences` path also applies all filters
 - [x] `CalendarEvent/query` sort: `start` (loads payload via cache) and `uid`; `unsupportedSort` for unknown
-- [ ] `CalendarEvent/queryChanges` filter not applied
+- [x] `CalendarEvent/queryChanges` filter applied; filter validation added; `jcalendarid`
+      fetched so `_event_match` can apply `inCalendar`/payload filters on changed rows
 - [x] `ParticipantIdentity/set` error type wrong (`notImplemented` instead of `forbidden`); updates/destroys now also return `forbidden`
 - [x] Top-level `capabilities` entry for calendars and contacts now `{}` (per-account caps carry the details)
 - [x] Calendar `myRights`: added `mayShare: false`; `mayWriteOwn` now `mayAddItems || mayModifyItems`;
