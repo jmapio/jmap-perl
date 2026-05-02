@@ -1145,18 +1145,8 @@ sub do_session {
           'urn:ietf:params:jmap:submission' => {},
           'urn:ietf:params:jmap:mdn'   => {},
           'urn:ietf:params:jmap:quota' => {},
-          'urn:ietf:params:jmap:calendars' => {
-            maxCalendarsPerEvent     => undef,
-            minDateTime              => '1970-01-01T00:00:00Z',
-            maxDateTime              => '2099-12-31T23:59:59Z',
-            maxExpandedQueryDuration => 'P2Y',
-            maxParticipantsPerEvent  => undef,
-            mayCreateCalendar        => JSON::true,
-          },
-          'urn:ietf:params:jmap:contacts' => {
-            maxAddressBooksPerCard => undef,
-            mayCreateAddressBook   => JSON::true,
-          },
+          'urn:ietf:params:jmap:calendars' => {},
+          'urn:ietf:params:jmap:contacts'  => {},
         },
         accounts => $accounts,
         primaryAccounts => {

@@ -165,9 +165,12 @@ them via the JMAP Calendars (JSCalendar) and Contacts (JSContact) extensions.
 - [x] Fastmail CalDAV/CardDAV via OAuth Bearer token
 - [x] Gmail CalDAV/CardDAV via OAuth Bearer token
 
+### Done (cont.)
+- [x] CalendarEvent/set destroy: CalDAV DELETE + immediate `delete_event` to mark active=0
+- [x] Recurrence expansion: CalendarEvent/get handles `uid/recurrenceId` IDs; `_expand_occurrence`
+      merges override patches and strips master-only properties
+
 ### Still TODO
-- [ ] CalendarEvent/set destroy
-- [ ] Recurrence expansion (CalendarEvent/get with recurrenceOverrides)
 - [ ] Free/busy queries
 
 ## Phase 7: Code Architecture ✅
@@ -323,8 +326,9 @@ add a stub returning `notImplemented` when convenient).
 - [x] `CalendarEvent/query` sort: `start` (loads payload via cache) and `uid`; `unsupportedSort` for unknown
 - [ ] `CalendarEvent/queryChanges` filter not applied
 - [x] `ParticipantIdentity/set` error type wrong (`notImplemented` instead of `forbidden`); updates/destroys now also return `forbidden`
-- [ ] Top-level `capabilities` entry for calendars should be `{}` not the account caps object
-- [ ] Calendar `myRights` missing `mayShare`; `mayWriteOwn` incorrectly set to `mayWriteAll`
+- [x] Top-level `capabilities` entry for calendars and contacts now `{}` (per-account caps carry the details)
+- [x] Calendar `myRights`: added `mayShare: false`; `mayWriteOwn` now `mayAddItems || mayModifyItems`;
+      `isSubscribed` uses `isVisible` (was hardcoded `true`)
 
 #### Nice-to-have
 - [ ] `CalendarEvent/parse`
@@ -349,7 +353,7 @@ add a stub returning `notImplemented` when convenient).
       RFC 9610 §3.3 filter conditions (`inAddressBook`, `uid`, `text`, `name`, `name/given`,
       `name/surname`, `name/surname2`, `nickname`, `organization`, `email`, `phone`, `address`)
 - [x] **`ContactCard/queryChanges`**: same `_event_filter` bug fixed
-- [ ] **`ContactCard/copy`**: `notImplemented` stub added (see Cross-account /copy section)
+- [x] **`ContactCard/copy`**: `notImplemented` stub added (see Cross-account /copy section)
 
 #### Moderate
 - [x] `AddressBook` `description`, `sortOrder` added to `jaddressbooks` (schema v7); returned in get;
