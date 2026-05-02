@@ -807,10 +807,11 @@ sub set_event {
   my $event = shift;
   my $eventuid = delete $event->{uid};
   $Self->write_jevent_payload($eventuid, $event);
-  $Self->dmake('jevents', {
-    eventuid    => $eventuid,
-    jcalendarid => $jcalendarid,
-  });
+  if ($Self->dgetfield('jevents', { eventuid => $eventuid }, 'eventuid')) {
+    $Self->ddirty('jevents', { active => 1, jcalendarid => $jcalendarid }, { eventuid => $eventuid });
+  } else {
+    $Self->dmake('jevents', { eventuid => $eventuid, jcalendarid => $jcalendarid });
+  }
 }
 
 sub delete_event {
@@ -841,18 +842,19 @@ sub set_card {
   my $kind = $card->{kind} // 'individual';
   if ($kind ne 'group') {
     $Self->write_jcontact_payload($carduid, $card);
-    $Self->dmake('jcontacts', {
-      contactuid     => $carduid,
-      jaddressbookid => $jaddressbookid,
-    });
+    if ($Self->dgetfield('jcontacts', { contactuid => $carduid }, 'contactuid')) {
+      $Self->ddirty('jcontacts', { active => 1, jaddressbookid => $jaddressbookid }, { contactuid => $carduid });
+    } else {
+      $Self->dmake('jcontacts', { contactuid => $carduid, jaddressbookid => $jaddressbookid });
+    }
   }
   else {
     my $name = $card->{name}{full} // '';
-    $Self->dmake('jcontactgroups', {
-      groupuid => $carduid,
-      jaddressbookid => $jaddressbookid,
-      name => $name,
-    });
+    if ($Self->dgetfield('jcontactgroups', { groupuid => $carduid }, 'groupuid')) {
+      $Self->ddirty('jcontactgroups', { active => 1, jaddressbookid => $jaddressbookid, name => $name }, { groupuid => $carduid });
+    } else {
+      $Self->dmake('jcontactgroups', { groupuid => $carduid, jaddressbookid => $jaddressbookid, name => $name });
+    }
     $Self->ddelete('jcontactgroupmap', {groupuid => $carduid});
     foreach my $memberuid (keys %{$card->{members} || {}}) {
       my $uid = $memberuid;

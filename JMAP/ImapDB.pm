@@ -2424,7 +2424,7 @@ sub destroy_calendar_events {
       next;
     }
 
-    $todo{$href} = 1;
+    $todo{$href} = $uid;
     push @destroyed, $uid;
   }
 
@@ -2433,6 +2433,15 @@ sub destroy_calendar_events {
   foreach my $href (sort keys %todo) {
     $Self->backend_cmd('delete_event', $href);
   }
+
+  if (%todo) {
+    $Self->begin();
+    for my $href (sort keys %todo) {
+      $Self->delete_event(undef, $todo{$href});
+    }
+    $Self->commit();
+  }
+
   foreach my $href (sort keys %todo_occurrence) {
     for my $recurrence_id (@{$todo_occurrence{$href}}) {
       $Self->backend_cmd('update_event_occurrence', $href, $recurrence_id, undef);

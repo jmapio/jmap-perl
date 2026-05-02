@@ -530,7 +530,7 @@ sub api_CalendarEvent_get {
     if ($eventuid =~ m{^([^/]+)/(.+)$}) {
       my ($master_uid, $recurrence_id) = ($1, $2);
 
-      my $data = $Self->{db}->dgetone('jevents', { eventuid => $master_uid }, 'jcalendarid');
+      my $data = $Self->{db}->dgetone('jevents', { eventuid => $master_uid, active => 1 }, 'jcalendarid');
       unless ($data) {
         $missingids{$eventuid} = 1;
         next;
@@ -560,7 +560,7 @@ sub api_CalendarEvent_get {
     }
 
     # Master event
-    my $data = $Self->{db}->dgetone('jevents', { eventuid => $eventuid }, 'jcalendarid');
+    my $data = $Self->{db}->dgetone('jevents', { eventuid => $eventuid, active => 1 }, 'jcalendarid');
     unless ($data) {
       $missingids{$eventuid} = 1;
       next;
