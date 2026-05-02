@@ -325,7 +325,10 @@ add a stub returning `notImplemented` when convenient).
 - [x] `CalendarEvent/set` update: auto-sets `updated` to current UTC time if not in patch;
       sequence increment handled by CalDAVTalk `_updateEvent`
 - [x] `ContactCard/set` create: honors client-provided `uid` (falls back to new UUID)
-- [ ] `CalendarEvent/set` `sendSchedulingMessages` silently ignored (no iTIP)
+- [x] `CalendarEvent/set` `sendSchedulingMessages=false`: passes `Schedule-Reply: false`
+      HTTP header (RFC 6638 §8.1) and sets `scheduleAgent=client` on all participants
+      (RFC 6638 §7.1 `SCHEDULE-AGENT=CLIENT` on ATTENDEE properties); vendored CalDAVTalk
+      NewEvent/UpdateEvent accept `_no_schedule` flag; occurrence updates forwarded too
 - [x] `CalendarEvent/query` filter conditions: `uid`, `text`, `title`, `description`,
       `location`, `owner`, `attendee`; proper date-range overlap (start < before AND end > after);
       recurring masters filtered before expansion; `expandRecurrences` path also applies all filters

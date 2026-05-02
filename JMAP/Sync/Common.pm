@@ -276,6 +276,8 @@ sub update_event_occurrence {
   my $talk = $Self->connect_calendars();
   return unless $talk;
 
+  my $no_schedule = $patch ? delete $patch->{_no_schedule} : 0;
+
   my $event = $talk->GetEvent($href)
     or die "Could not fetch event for occurrence update: $href\n";
 
@@ -293,7 +295,9 @@ sub update_event_occurrence {
     $overrides{$recurrenceId} = undef;  # exclude this occurrence (iCal EXDATE)
   }
 
-  $talk->UpdateEvent($href, { recurrenceOverrides => \%overrides });
+  my %args = (recurrenceOverrides => \%overrides);
+  $args{_no_schedule} = 1 if $no_schedule;
+  $talk->UpdateEvent($href, \%args);
 }
 
 sub delete_event {

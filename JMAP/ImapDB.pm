@@ -2299,6 +2299,15 @@ sub _utcnow {
     $t[5]+1900, $t[4]+1, $t[3], $t[2], $t[1], $t[0]);
 }
 
+# Set scheduleAgent=client on all participants (including organizer via replyTo)
+# so the CalDAV server knows the client is handling scheduling, not the server.
+sub _set_schedule_agent_client {
+  my ($ev) = @_;
+  for my $p (values %{$ev->{participants} // {}}) {
+    $p->{scheduleAgent} //= 'client';
+  }
+}
+
 sub create_calendar_events {
   my $Self = shift;
   my $new = shift;
@@ -2327,6 +2336,12 @@ sub create_calendar_events {
     delete $ev{calendarId};
     $ev{created} //= $now;
     $ev{updated} //= $now;
+    my $no_sched = defined $ev{sendSchedulingMessages} ? !$ev{sendSchedulingMessages} : 0;
+    delete $ev{sendSchedulingMessages};
+    if ($no_sched) {
+      $ev{_no_schedule} = 1;
+      _set_schedule_agent_client(\%ev);
+    }
     _normalize_recurrence(\%ev);
     $todo{$cid} = [$href, \%ev];
 
@@ -2372,6 +2387,9 @@ sub update_calendar_events {
       my %patch = %$calendar;
       delete @patch{qw(calendarIds calendarId)};
       $patch{updated} //= _utcnow();
+      my $no_sched_occ = defined $patch{sendSchedulingMessages} ? !$patch{sendSchedulingMessages} : 0;
+      delete $patch{sendSchedulingMessages};
+      $patch{_no_schedule} = 1 if $no_sched_occ;
       push @{$todo_occurrence{$href}}, [$recurrence_id, $uid, \%patch];
       $changed{$uid} = undef;
       next;
@@ -2387,6 +2405,12 @@ sub update_calendar_events {
     delete $ev{calendarIds};
     delete $ev{calendarId};
     $ev{updated} //= _utcnow();
+    my $no_sched = defined $ev{sendSchedulingMessages} ? !$ev{sendSchedulingMessages} : 0;
+    delete $ev{sendSchedulingMessages};
+    if ($no_sched) {
+      $ev{_no_schedule} = 1;
+      _set_schedule_agent_client(\%ev);
+    }
     _normalize_recurrence(\%ev);
     $todo{$href} = [$uid, \%ev];
 

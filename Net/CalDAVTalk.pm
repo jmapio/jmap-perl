@@ -1278,7 +1278,9 @@ sub NewEvent {
 
   confess "invalid event" unless ref($Args) eq 'HASH';
 
-  my $UseEvent = delete $Args->{_put_event_json};
+  my $UseEvent   = delete $Args->{_put_event_json};
+  my $no_schedule = delete $Args->{_no_schedule};
+  my @sched_header = $no_schedule ? ('Schedule-Reply' => 'false') : ();
 
   # calculate updated sequence numbers
   unless (exists $Args->{sequence}) {
@@ -1307,6 +1309,7 @@ sub NewEvent {
       $href,
       encode_json($Args),
       'Content-Type'  => 'application/event+json',
+      @sched_header,
     );
   }
   else {
@@ -1316,6 +1319,7 @@ sub NewEvent {
       $href,
       $VCalendar->as_string(),
       'Content-Type'  => 'text/calendar',
+      @sched_header,
     );
   }
 
@@ -1332,7 +1336,9 @@ and it takes the full href to the card instead of the containing calendar.
 sub UpdateEvent {
   my ($Self, $href, $Args) = @_;
 
-  my $UseEvent = delete $Args->{_put_event_json};
+  my $UseEvent    = delete $Args->{_put_event_json};
+  my $no_schedule = delete $Args->{_no_schedule};
+  my @sched_header = $no_schedule ? ('Schedule-Reply' => 'false') : ();
 
   my ($OldEvent, $NewEvent) = $Self->_updateEvent($href, $Args);
 
@@ -1342,6 +1348,7 @@ sub UpdateEvent {
       $href,
       encode_json($NewEvent),
       'Content-Type'  => 'application/event+json',
+      @sched_header,
     );
   }
   else {
@@ -1351,6 +1358,7 @@ sub UpdateEvent {
       $href,
       $VCalendar->as_string(),
       'Content-Type'  => 'text/calendar',
+      @sched_header,
     );
   }
 
