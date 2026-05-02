@@ -807,7 +807,9 @@ sub api_ParticipantIdentity_set {
   my $accountid = $Self->{db}->accountid();
   $Self->commit();
   my $state = "$user->{jhighestmodseq}";
-  my %notCreated = map { $_ => { type => 'notImplemented' } } keys %{$args->{create} || {}};
+  my %notCreated  = map { $_ => { type => 'forbidden' } } keys %{$args->{create}  || {}};
+  my %notUpdated  = map { $_ => { type => 'forbidden' } } keys %{$args->{update}  || {}};
+  my %notDestroyed = map { $_ => { type => 'forbidden' } } @{$args->{destroy} || []};
   return ['ParticipantIdentity/set', {
     accountId    => $accountid,
     oldState     => $state,
@@ -815,9 +817,9 @@ sub api_ParticipantIdentity_set {
     created      => undef,
     notCreated   => _nullempty(\%notCreated),
     updated      => undef,
-    notUpdated   => undef,
+    notUpdated   => _nullempty(\%notUpdated),
     destroyed    => undef,
-    notDestroyed => undef,
+    notDestroyed => _nullempty(\%notDestroyed),
   }];
 }
 

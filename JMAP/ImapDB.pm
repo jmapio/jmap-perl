@@ -2784,7 +2784,7 @@ sub destroy_contacts {
   }
 
   foreach my $href (sort keys %todo) {
-    $Self->backend_cmd('delete_card', $href);
+    eval { $Self->backend_cmd('delete_card', $href) };
   }
 
   return (\@destroyed, \%notdestroyed);

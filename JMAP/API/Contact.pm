@@ -551,6 +551,8 @@ sub api_AddressBook_set {
 
   my $user = $Self->{db}->get_user();
   my $oldState = "$user->{jstateContact}";
+  return $Self->_transError(['error', {type => 'stateMismatch', oldState => $oldState, newState => $oldState}])
+    if defined $args->{ifInState} and $args->{ifInState} ne $oldState;
   $Self->commit();
 
   my $create  = $args->{create}  || {};
@@ -661,6 +663,8 @@ sub api_ContactCard_set {
   $Self->begin();
   my $user = $Self->{db}->get_user();
   my $oldState = "$user->{jstateContact}";
+  return $Self->_transError(['error', {type => 'stateMismatch', oldState => $oldState, newState => $oldState}])
+    if defined $args->{ifInState} and $args->{ifInState} ne $oldState;
   $Self->commit();
 
   # Resolve JSON Pointer patches against ContactCard/get (JSContact format)

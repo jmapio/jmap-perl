@@ -321,7 +321,7 @@ add a stub returning `notImplemented` when convenient).
       owner/attendee/uid); date-range uses `start` not `end`; recurring events always pass
 - [ ] `CalendarEvent/query` sort not implemented
 - [ ] `CalendarEvent/queryChanges` filter not applied
-- [ ] `ParticipantIdentity/set` error type wrong (`notImplemented` instead of `forbidden`)
+- [x] `ParticipantIdentity/set` error type wrong (`notImplemented` instead of `forbidden`); updates/destroys now also return `forbidden`
 - [ ] Top-level `capabilities` entry for calendars should be `{}` not the account caps object
 - [ ] Calendar `myRights` missing `mayShare`; `mayWriteOwn` incorrectly set to `mayWriteAll`
 
@@ -353,12 +353,12 @@ add a stub returning `notImplemented` when convenient).
 #### Moderate
 - [ ] `AddressBook` missing `description`, `sortOrder`, `shareWith` (should at least be `null`);
       `isDefault` always `false` until DB schema tracks it
-- [ ] `AddressBook/set` `ifInState` not checked
+- [x] `AddressBook/set` `ifInState` not checked
 - [ ] `AddressBook/set` update only handles `name` — `sortOrder`, `description`,
       `isSubscribed` silently dropped
-- [ ] `ContactCard/set` `ifInState` not checked
-- [ ] `ContactCard/set` `addressBookIds` on create ignored; moves between books not handled
-- [ ] `ContactCard/set` `destroy_contacts` not wrapped in eval — CardDAV error kills worker
+- [x] `ContactCard/set` `ifInState` not checked
+- [x] `ContactCard/set` `addressBookIds` on create: already resolved via `href_by_jab` lookup (was stale TODO)
+- [x] `ContactCard/set` `destroy_contacts` not wrapped in eval — CardDAV error kills worker
 - [ ] `ContactCard/query` sort comparators (`created`, `updated`, `name/*`) not implemented
 - [x] `ContactCard/query` `anchor`/`anchorOffset` not implemented
 - [ ] Single addressbook per card (structural limit in `jcontacts` schema)
