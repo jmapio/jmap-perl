@@ -317,9 +317,10 @@ add a stub returning `notImplemented` when convenient).
 - [ ] `CalendarEvent/get` missing `isDraft`, `baseEventId`; `utcStart`/`utcEnd` not computed
 - [ ] `CalendarEvent/set` does not auto-set `uid`, `created`, `updated`; no `sequence` increment
 - [ ] `CalendarEvent/set` `sendSchedulingMessages` silently ignored (no iTIP)
-- [ ] `CalendarEvent/query` filter conditions missing (text/title/description/location/
-      owner/attendee/uid); date-range uses `start` not `end`; recurring events always pass
-- [ ] `CalendarEvent/query` sort not implemented
+- [x] `CalendarEvent/query` filter conditions: `uid`, `text`, `title`, `description`,
+      `location`, `owner`, `attendee`; proper date-range overlap (start < before AND end > after);
+      recurring masters filtered before expansion; `expandRecurrences` path also applies all filters
+- [x] `CalendarEvent/query` sort: `start` (loads payload via cache) and `uid`; `unsupportedSort` for unknown
 - [ ] `CalendarEvent/queryChanges` filter not applied
 - [x] `ParticipantIdentity/set` error type wrong (`notImplemented` instead of `forbidden`); updates/destroys now also return `forbidden`
 - [ ] Top-level `capabilities` entry for calendars should be `{}` not the account caps object

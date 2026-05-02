@@ -345,39 +345,132 @@ sub api_Calendar_set {
   return @res;
 }
 
+# Parse an ISO 8601 duration string into seconds (approximate for Y/M).
+sub _iso_duration_to_seconds {
+  my ($dur) = @_;
+  return 0 unless defined $dur && $dur =~ /^P/;
+  my $s = 0;
+  $s += $1 * 365 * 86400 if $dur =~ /(\d+)Y/;
+  $s += $1 *  30 * 86400 if $dur =~ /(\d+)M(?=[^T]*$)/;  # months (before T)
+  $s += $1*   7 * 86400  if $dur =~ /(\d+)W/;
+  $s += $1 *     86400   if $dur =~ /(\d+)D/;
+  $s += $1 *      3600   if $dur =~ /T.*?(\d+)H/;
+  $s += $1 *        60   if $dur =~ /T.*?(\d+)M/;
+  $s += $1               if $dur =~ /T.*?(\d+)S/;
+  return int($s);
+}
+
+# Return a floating ISO datetime string for start + duration, or undef on parse failure.
+sub _event_end_dt {
+  my ($start, $duration) = @_;
+  my $dt = _parse_jscal_dt($start, 'floating');
+  return undef unless $dt;
+  $dt->add(seconds => _iso_duration_to_seconds($duration // 'PT0S'));
+  return $dt->strftime('%Y-%m-%dT%H:%M:%S');
+}
+
 sub _event_match {
   my $Self = shift;
   my ($item, $condition, $storage) = @_;
 
-  # XXX - condition handling code
   if ($condition->{inCalendar}) {
     return 0 unless $item->{jcalendarid} eq $condition->{inCalendar};
   }
   if ($condition->{inCalendars}) {
-    my $match = 0;
-    foreach my $id (@{$condition->{inCalendars}}) {
-      next unless $item->{jcalendarid} eq $id;
-      $match = 1;
-    }
-    return 0 unless $match;
+    my %cal_set = map { $_ => 1 } @{$condition->{inCalendars}};
+    return 0 unless $cal_set{$item->{jcalendarid}};
   }
 
-  # Date-range filter: events must overlap [after, before).
-  # We only filter events that have start in payload (non-recurring check).
-  # Recurring events always pass — expansion is the client's job per spec.
-  if ($condition->{after} || $condition->{before}) {
-    my $payload = $Self->{db}->read_jevent_payload($item->{eventuid}) // {};
-    my $start = $payload->{start} // '';
-    my $duration = $payload->{duration} // 'PT0S';
-    my $is_recurring = $payload->{recurrenceRules} || $payload->{recurrenceRule};
-    unless ($is_recurring) {
-      if ($condition->{after} && $start lt $condition->{after}) {
-        # simple string compare works for ISO 8601 datetimes
-        return 0;
+  if (defined $condition->{uid}) {
+    return 0 unless $item->{eventuid} eq $condition->{uid};
+  }
+
+  my $needs_payload = grep { defined $condition->{$_} }
+      qw(after before text title description location owner attendee);
+
+  if ($needs_payload) {
+    my $uid     = $item->{eventuid};
+    my $payload = $storage->{$uid} //= $Self->{db}->read_jevent_payload($uid) // {};
+
+    if ($condition->{after} || $condition->{before}) {
+      my $start      = $payload->{start} // '';
+      my $is_recur   = $payload->{recurrenceRules} || $payload->{recurrenceRule};
+      unless ($is_recur) {
+        (my $before_cmp = $condition->{before} // '') =~ s/Z$//;
+        (my $after_cmp  = $condition->{after}  // '') =~ s/Z$//;
+        return 0 if $before_cmp && $start ge $before_cmp;
+        if ($after_cmp) {
+          my $end = _event_end_dt($start, $payload->{duration}) // $start;
+          return 0 if $end le $after_cmp;
+        }
       }
-      if ($condition->{before} && $start ge $condition->{before}) {
-        return 0;
+    }
+
+    if (defined $condition->{title}) {
+      return 0 unless index(lc($payload->{title} // ''), lc($condition->{title})) >= 0;
+    }
+
+    if (defined $condition->{description}) {
+      return 0 unless index(lc($payload->{description} // ''), lc($condition->{description})) >= 0;
+    }
+
+    if (defined $condition->{location}) {
+      my $needle = lc($condition->{location});
+      my $found  = 0;
+      for my $loc (values %{$payload->{locations} || {}}) {
+        if (index(lc($loc->{name} // ''), $needle) >= 0) { $found = 1; last }
       }
+      return 0 unless $found;
+    }
+
+    if (defined $condition->{owner}) {
+      my $needle = lc($condition->{owner});
+      my $found  = 0;
+      for my $addr (values %{$payload->{replyTo} || {}}) {
+        (my $e = $addr) =~ s/^mailto://i;
+        if (index(lc($e), $needle) >= 0) { $found = 1; last }
+      }
+      unless ($found) {
+        for my $p (values %{$payload->{participants} || {}}) {
+          next unless ($p->{roles} || {})->{owner};
+          for my $addr (values %{$p->{sendTo} || {}}) {
+            (my $e = $addr) =~ s/^mailto://i;
+            if (index(lc($p->{name} // ''), $needle) >= 0 ||
+                index(lc($e), $needle) >= 0) { $found = 1; last }
+          }
+          last if $found;
+        }
+      }
+      return 0 unless $found;
+    }
+
+    if (defined $condition->{attendee}) {
+      my $needle = lc($condition->{attendee});
+      my $found  = 0;
+      for my $p (values %{$payload->{participants} || {}}) {
+        for my $addr (values %{$p->{sendTo} || {}}) {
+          (my $e = $addr) =~ s/^mailto://i;
+          if (index(lc($p->{name} // ''), $needle) >= 0 ||
+              index(lc($e), $needle) >= 0) { $found = 1; last }
+        }
+        last if $found;
+      }
+      return 0 unless $found;
+    }
+
+    if (defined $condition->{text}) {
+      my $needle   = lc($condition->{text});
+      my @hayparts = (
+        $payload->{title}       // '',
+        $payload->{description} // '',
+        map { $_->{name} // '' } values %{$payload->{locations}    || {}},
+        map {
+          my $p = $_;
+          ($p->{name} // ''),
+          map { (my $e = $_) =~ s/^mailto://i; $e } values %{$p->{sendTo} || {}}
+        } values %{$payload->{participants} || {}},
+      );
+      return 0 unless index(lc(join(' ', @hayparts)), $needle) >= 0;
     }
   }
 
@@ -410,11 +503,12 @@ sub api_CalendarEvent_query {
     if ($args->{position} // 0) < 0;
 
   if ($args->{expandRecurrences}) {
-    my $filter = $args->{filter} // {};
-    my $after  = $filter->{after};
-    my $before = $filter->{before};
+    my $filter  = $args->{filter} // {};
+    my $after   = $filter->{after};
+    my $before  = $filter->{before};
+    my %storage;
 
-    # inCalendar / inCalendars filter applied up front
+    # inCalendar / inCalendars pre-filter (avoids loading payloads for wrong calendars)
     if ($filter->{inCalendar}) {
       $data = [ grep { $_->{jcalendarid} eq $filter->{inCalendar} } @$data ];
     }
@@ -428,17 +522,15 @@ sub api_CalendarEvent_query {
       my $master = $Self->{db}->read_jevent_payload($row->{eventuid});
       next unless $master;
 
+      $storage{ $row->{eventuid} } = $master;
+      next unless $Self->_event_match($row, $filter, \%storage);
+
       my $is_recurring = ($master->{recurrenceRules} && @{$master->{recurrenceRules}})
                       || $master->{recurrenceRule};
       if ($is_recurring) {
         push @expanded, $Self->_expand_event_occurrences($row, $master, $after, $before);
       } else {
-        my $start = $master->{start} // '';
-        (my $after_cmp  = $after  // '') =~ s/Z$//;
-        (my $before_cmp = $before // '') =~ s/Z$//;
-        next if $after_cmp  && $start lt $after_cmp;
-        next if $before_cmp && $start ge $before_cmp;
-        push @expanded, { id => $row->{eventuid}, start => $start };
+        push @expanded, { id => $row->{eventuid}, start => $master->{start} // '' };
       }
     }
 
@@ -464,7 +556,31 @@ sub api_CalendarEvent_query {
     }];
   }
 
-  $data = $Self->_event_filter($data, $args->{filter}, {}) if $args->{filter};
+  my %storage;
+  $data = $Self->_event_filter($data, $args->{filter}, \%storage) if $args->{filter};
+
+  if ($args->{sort}) {
+    my %valid = map { $_ => 1 } qw(start uid);
+    for my $cmp (@{$args->{sort}}) {
+      return $Self->_transError(['error', {type => 'unsupportedSort', sort => $cmp}])
+        unless $valid{$cmp->{property} // ''};
+    }
+    $data = [sort {
+      my $res = 0;
+      for my $cmp (@{$args->{sort}}) {
+        if ($cmp->{property} eq 'start') {
+          $storage{$a->{eventuid}} //= $Self->{db}->read_jevent_payload($a->{eventuid}) // {};
+          $storage{$b->{eventuid}} //= $Self->{db}->read_jevent_payload($b->{eventuid}) // {};
+          $res = ($storage{$a->{eventuid}}{start} // '') cmp ($storage{$b->{eventuid}}{start} // '');
+        } elsif ($cmp->{property} eq 'uid') {
+          $res = $a->{eventuid} cmp $b->{eventuid};
+        }
+        $res = -$res if defined($cmp->{isAscending}) && !$cmp->{isAscending};
+        last if $res;
+      }
+      $res || ($a->{eventuid} cmp $b->{eventuid});
+    } @$data];
+  }
 
   my ($start, $end) = $Self->_apply_window($data, $args, sub { $_[0]{eventuid} });
   return $Self->_transError(['error', {type => 'anchorNotFound'}]) unless defined $start;
