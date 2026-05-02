@@ -320,7 +320,11 @@ add a stub returning `notImplemented` when convenient).
 - [ ] Calendar missing `defaultAlertsWithTime`/`defaultAlertsWithoutTime`, `timeZone`,
       `description` properties (not in DB schema)
 - [ ] `CalendarEvent/get` missing `isDraft`, `baseEventId`; `utcStart`/`utcEnd` not computed
-- [ ] `CalendarEvent/set` does not auto-set `uid`, `created`, `updated`; no `sequence` increment
+- [x] `CalendarEvent/set` create: auto-sets `created`/`updated` to current UTC time if absent;
+      honors client-provided `uid` (falls back to new UUID); sequence handled by CalDAVTalk
+- [x] `CalendarEvent/set` update: auto-sets `updated` to current UTC time if not in patch;
+      sequence increment handled by CalDAVTalk `_updateEvent`
+- [x] `ContactCard/set` create: honors client-provided `uid` (falls back to new UUID)
 - [ ] `CalendarEvent/set` `sendSchedulingMessages` silently ignored (no iTIP)
 - [x] `CalendarEvent/query` filter conditions: `uid`, `text`, `title`, `description`,
       `location`, `owner`, `attendee`; proper date-range overlap (start < before AND end > after);

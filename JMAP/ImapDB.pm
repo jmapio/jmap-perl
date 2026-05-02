@@ -2293,6 +2293,12 @@ sub _normalize_recurrence {
   }
 }
 
+sub _utcnow {
+  my @t = gmtime();
+  return sprintf('%04d-%02d-%02dT%02d:%02d:%02dZ',
+    $t[5]+1900, $t[4]+1, $t[3], $t[2], $t[1], $t[0]);
+}
+
 sub create_calendar_events {
   my $Self = shift;
   my $new = shift;
@@ -2313,11 +2319,14 @@ sub create_calendar_events {
       $notcreated{$cid} = {type => 'notFound', description => "No such calendar on server"};
       next;
     }
-    my $uid = new_uuid_string();
+    my $uid = $calendar->{uid} // new_uuid_string();
 
+    my $now = _utcnow();
     my %ev = (%$calendar, uid => $uid);
     delete $ev{calendarIds};
     delete $ev{calendarId};
+    $ev{created} //= $now;
+    $ev{updated} //= $now;
     _normalize_recurrence(\%ev);
     $todo{$cid} = [$href, \%ev];
 
@@ -2362,6 +2371,7 @@ sub update_calendar_events {
       }
       my %patch = %$calendar;
       delete @patch{qw(calendarIds calendarId)};
+      $patch{updated} //= _utcnow();
       push @{$todo_occurrence{$href}}, [$recurrence_id, $uid, \%patch];
       $changed{$uid} = undef;
       next;
@@ -2376,6 +2386,7 @@ sub update_calendar_events {
     my %ev = %$calendar;
     delete $ev{calendarIds};
     delete $ev{calendarId};
+    $ev{updated} //= _utcnow();
     _normalize_recurrence(\%ev);
     $todo{$href} = [$uid, \%ev];
 
@@ -2834,7 +2845,7 @@ sub create_contacts_jscontact {
       next;
     }
     $card->{'@type'} //= 'Card';
-    my $uid = new_uuid_string();
+    my $uid = $card->{uid} // new_uuid_string();
     $card->{uid} = $uid;
     eval { $Self->backend_cmd('new_card', $abookhref, $card) };
     if ($@) {
