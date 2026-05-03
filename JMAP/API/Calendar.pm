@@ -7,6 +7,7 @@ use JSON;
 use DateTime;
 use DateTime::TimeZone;
 use DateTime::Event::ICal;
+use Text::JSCalendar;
 
 my $json = JSON::XS->new->utf8->canonical();
 
@@ -824,7 +825,47 @@ sub api_CalendarEvent_copy {
 sub api_CalendarEvent_parse {
   my $Self = shift;
   my $args = shift;
-  return ['error', { type => 'notImplemented' }];
+
+  my ($user, $accountid) = $Self->_api_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
+
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['blobIds']}])
+    unless $args->{blobIds} && ref($args->{blobIds}) eq 'ARRAY';
+
+  $Self->commit();
+
+  my %parsed;
+  my @notParsable;
+  my @notFound;
+
+  my $jscal = Text::JSCalendar->new();
+
+  for my $blobId (@{$args->{blobIds}}) {
+    my ($type, $content) = $Self->{db}->get_blob($blobId);
+    unless (defined $content && length $content) {
+      push @notFound, $blobId;
+      next;
+    }
+
+    my @events = eval { $jscal->vcalendarToEvents($content) };
+    if ($@ || !@events) {
+      push @notParsable, $blobId;
+      next;
+    }
+
+    for my $event (@events) {
+      delete $event->{calendarIds};
+    }
+
+    $parsed{$blobId} = \@events;
+  }
+
+  return ['CalendarEvent/parse', {
+    accountId  => $accountid,
+    parsed     => \%parsed,
+    notFound   => \@notFound,
+    notParsable => \@notParsable,
+  }];
 }
 
 sub api_CalendarEvent_set {

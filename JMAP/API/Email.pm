@@ -339,18 +339,25 @@ sub api_SearchSnippet_get {
   foreach my $item (@{$messages->[1]{list}}) {
     $item->{emailId} = delete $item->{id};
     my $text = delete $item->{textBody};
-    $item->{subject} = escape_html($item->{subject});
-    $item->{preview} = escape_html($item->{preview});
-    next unless @terms;
-    $item->{subject} =~ s{\b($str)\b}{<$tag>$1</$tag>}gsi;
+    unless (@terms) {
+      $item->{subject} = undef;
+      $item->{preview} = undef;
+      $item->{body} = undef;
+      next;
+    }
+    my $subj = escape_html($item->{subject} // '');
+    (my $subj_marked = $subj) =~ s{\b($str)\b}{<$tag>$1</$tag>}gsi;
+    $item->{subject} = ($subj_marked ne $subj) ? $subj_marked : undef;
+    $item->{preview} = undef;
     if ($text =~ m{(.{0,20}\b(?:$str)\b.*)}gsi) {
-      $item->{preview} = substr($1, 0, 200);
-      $item->{preview} =~ s{^\s+}{}gs;
-      $item->{preview} =~ s{\s+$}{}gs;
-      $item->{preview} =~ s{[\r\n]+}{ -- }gs;
-      $item->{preview} =~ s{\s+}{ }gs;
-      $item->{preview} = escape_html($item->{preview});
-      $item->{preview} =~ s{\b($str)\b}{<$tag>$1</$tag>}gsi;
+      my $p = substr($1, 0, 200);
+      $p =~ s{^\s+}{}gs;
+      $p =~ s{\s+$}{}gs;
+      $p =~ s{[\r\n]+}{ -- }gs;
+      $p =~ s{\s+}{ }gs;
+      $p = escape_html($p);
+      $p =~ s{\b($str)\b}{<$tag>$1</$tag>}gsi;
+      $item->{preview} = $p;
     }
     $item->{body} = $item->{preview}; # work around client bug
   }

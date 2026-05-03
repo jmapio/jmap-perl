@@ -72,6 +72,11 @@ my %PARAM_SCHEMA = (
     sinceState         => 'string',
     maxChanges         => 'uint?',
   },
+  'CalendarEvent/parse' => {
+    accountId          => 'string?',
+    blobIds            => '[string]',
+    properties         => '[string]?',
+  },
   'Mailbox/get' => {
     accountId          => 'string?',
     ids                => '[string]?',

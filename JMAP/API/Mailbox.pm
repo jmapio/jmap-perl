@@ -131,6 +131,21 @@ sub _mailbox_match {
     }
   }
 
+  if (exists $filter->{name}) {
+    return 0 unless defined $item->{name};
+    return 0 unless lc($item->{name}) eq lc($filter->{name});
+  }
+
+  if (exists $filter->{role}) {
+    if (defined $filter->{role}) {
+      return 0 unless defined $item->{role};
+      return 0 unless $item->{role} eq $filter->{role};
+    }
+    else {
+      return 0 if defined $item->{role};
+    }
+  }
+
   return 1;
 }
 
