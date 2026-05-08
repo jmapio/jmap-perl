@@ -292,7 +292,8 @@ add a stub returning `notImplemented` when convenient).
 - [ ] `Email/copy` returns `notImplemented` stub (see Cross-account /copy section)
 - [x] `SearchSnippet/get`: subject/preview now `null` when no text search terms match
 - [x] `subParts`: structural recursion preserved for `bodyStructure`; leaf parts return `[]` when explicitly requested
-- [ ] `EmailSubmission/query` filter missing `identityIds` condition (requires schema change to store identityId)
+- [x] `EmailSubmission/query` filter `identityIds`: schema v9 adds `identity` column to
+      `jsubmission`; saved on create; `_submission_match` predicate fixed (was broken latent bug)
 
 ---
 
