@@ -25,6 +25,59 @@ sub _parse_jscal_dt {
   return undef;
 }
 
+# Compute utcStart string from a JSCalendar start + timeZone.
+# Returns undef for all-day events (no T in start).
+sub _utc_start {
+  my ($start, $tz) = @_;
+  return undef unless defined $start && $start =~ /T/;
+  my $dt = _parse_jscal_dt($start, $tz // 'UTC');
+  return undef unless $dt;
+  $dt->set_time_zone('UTC');
+  return $dt->strftime('%Y-%m-%dT%H:%M:%SZ');
+}
+
+# Add an ISO 8601 duration string (PnDTnHnMnS / PnW) to a DateTime, return new DateTime.
+sub _dt_add_duration {
+  my ($dt, $dur) = @_;
+  return undef unless $dur && $dur =~ /^P/;
+  my ($w,$d,$h,$m,$s) = (0,0,0,0,0);
+  (my $rest = $dur) =~ s/^P//;
+  $rest =~ s/^(\d+)W// and $w = $1;
+  $rest =~ s/^(\d+)D// and $d = $1;
+  $rest =~ s/^T//;
+  $rest =~ s/^(\d+)H// and $h = $1;
+  $rest =~ s/^(\d+)M// and $m = $1;
+  $rest =~ s/^(\d+(?:\.\d+)?)S// and $s = int($1);
+  return eval { $dt->clone->add(weeks=>$w, days=>$d, hours=>$h, minutes=>$m, seconds=>$s) };
+}
+
+# Returns true only when the property is explicitly listed in $args->{properties}.
+# Unlike _prop_wanted, does NOT return true when properties is omitted (i.e. "all").
+# Used for computed properties like utcStart/utcEnd that are never returned by default.
+sub _prop_explicitly_wanted {
+  my ($args, $prop) = @_;
+  return 0 unless $args->{properties};
+  return grep { $_ eq $prop } @{$args->{properties}};
+}
+
+# Set server-computed properties on a calendar event item hash.
+sub _add_calendar_event_computed_props {
+  my ($item, $args) = @_;
+  if (_prop_explicitly_wanted($args, 'utcStart')) {
+    $item->{utcStart} = _utc_start($item->{start}, $item->{timeZone});
+  }
+  if (_prop_explicitly_wanted($args, 'utcEnd')) {
+    my $us = _utc_start($item->{start}, $item->{timeZone});
+    if ($us && $item->{duration}) {
+      my $dt = _parse_jscal_dt(substr($us, 0, 19), 'UTC');
+      my $end = $dt ? _dt_add_duration($dt, $item->{duration}) : undef;
+      $item->{utcEnd} = $end ? $end->strftime('%Y-%m-%dT%H:%M:%SZ') : undef;
+    } else {
+      $item->{utcEnd} = undef;
+    }
+  }
+}
+
 # Format a DateTime as a JSCalendar recurrence-ID string (floating local time).
 sub _dt_to_rid {
   my ($dt, $is_allday) = @_;
@@ -681,6 +734,9 @@ sub api_CalendarEvent_get {
       $item->{id}          = $eventuid;
       $item->{calendarIds} = { "$data->{jcalendarid}" => JSON::true } if _prop_wanted($args, 'calendarIds');
       $item->{isOrigin}    = _is_origin($organizer, $user->{email})   if _prop_wanted($args, 'isOrigin');
+      $item->{isDraft}     = $JSON::false if _prop_wanted($args, 'isDraft');
+      $item->{baseEventId} = undef        if _prop_wanted($args, 'baseEventId');
+      _add_calendar_event_computed_props($item, $args);
       push @list, $item;
       next;
     }
@@ -704,8 +760,11 @@ sub api_CalendarEvent_get {
     }
 
     $item->{id}          = $eventuid;
-    $item->{calendarIds} = { "$data->{jcalendarid}" => JSON::true } if _prop_wanted($args, "calendarIds");
+    $item->{calendarIds} = { "$data->{jcalendarid}" => JSON::true } if _prop_wanted($args, 'calendarIds');
     $item->{isOrigin}    = _is_origin($organizer, $user->{email})   if _prop_wanted($args, 'isOrigin');
+    $item->{isDraft}     = $JSON::false if _prop_wanted($args, 'isDraft');
+    $item->{baseEventId} = undef        if _prop_wanted($args, 'baseEventId');
+    _add_calendar_event_computed_props($item, $args);
 
     push @list, $item;
   }

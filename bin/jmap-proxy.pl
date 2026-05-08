@@ -95,6 +95,7 @@ my %stat = (
   http_requests        => 0,
   mgmt_requests        => 0,
   jmap_method_calls    => 0,
+  jmap_method_errors   => 0,
   backend_errors       => 0,
   auth_cache_hits      => 0,
   auth_cache_misses    => 0,
@@ -1204,12 +1205,18 @@ sub do_jmap {
   }
 
   my $content = $req->content;
+  if (length($content) > 10_000_000) {
+    return _jmap_request_error($req, 'requestTooLarge', 'The request is larger than the server is willing to process.');
+  }
   my $data = eval { decode_json($content) };
   if ($@) {
     return _jmap_request_error($req, 'notJSON', 'The content of the request is not valid JSON.');
   }
   unless (ref $data eq 'HASH' && ref $data->{methodCalls} eq 'ARRAY' && ref $data->{using} eq 'ARRAY') {
     return _jmap_request_error($req, 'notRequest', 'The content of the request is not a valid JMAP Request object.');
+  }
+  if (@{$data->{methodCalls}} > 16) {
+    return _jmap_request_error($req, 'requestTooLarge', 'The request contains more method calls than the server allows.');
   }
 
   for my $cap (@{$data->{using}}) {
@@ -1240,6 +1247,9 @@ sub _do_jmap_request {
   warn "JMAP REQUEST BODY: " . $json->encode($data) . "\n" if $ENV{JMAP_DEBUG};
   send_backend_request($accountid, 'jmap', $data, sub {
     my $result = shift;
+    if (ref $result->{methodResponses} eq 'ARRAY') {
+      $stat{jmap_method_errors} += grep { $_->[0] eq 'error' } @{$result->{methodResponses}};
+    }
     my $body = $json->encode($result);
     warn "JMAP RESPONSE: " . length($body) . " bytes\n";
     warn "JMAP RESPONSE BODY: $body\n" if $ENV{JMAP_DEBUG};
@@ -3028,6 +3038,7 @@ sub mgmt_metrics {
   $c->('jmap_http_requests',           'HTTP requests received on the JMAP port',        $stat{http_requests});
   $c->('jmap_mgmt_requests',           'HTTP requests received on the management port',  $stat{mgmt_requests});
   $c->('jmap_method_calls',            'Individual JMAP method calls dispatched',        $stat{jmap_method_calls});
+  $c->('jmap_method_errors',           'JMAP method calls that returned an error response', $stat{jmap_method_errors});
   $c->('jmap_backend_requests',        'Backend worker requests sent (all workers)',      $total_backend_cmds);
   $c->('jmap_backend_errors',          'Backend worker error responses received',        $stat{backend_errors});
   $c->('jmap_auth_cache_hits',         'Auth cache lookups that returned a cached result', $stat{auth_cache_hits});
