@@ -284,13 +284,14 @@ add a stub returning `notImplemented` when convenient).
       in `juserprefs`; `VacationResponse/get` reads back; state is SHA1 of stored payload
 
 #### Moderate / Nice-to-have
-- [ ] `Mailbox/query`: `sortAsTree`, `filterAsTree`, `name`/`role` filter conditions missing
+- [ ] `Mailbox/query`: `sortAsTree`, `filterAsTree` missing; `name`/`role` filter added
+- [x] `Mailbox/query`: `name` (case-insensitive exact) and `role` filter conditions added
 - [x] `Thread/get` with `ids:null` now returns all threads (RFC 8620 §5.1)
 - [x] `%ROLE_MAP` duplicate `'junk'` key removed (was silently mapping to `'spam'`)
 - [ ] `Email/copy` returns `notImplemented` stub (see Cross-account /copy section)
-- [ ] `SearchSnippet/get`: subject/preview should be `null` when no text filter match
-- [ ] `subParts` included in Email body parts even when not in `bodyProperties`
-- [ ] `EmailSubmission/query` filter missing `identityIds` condition
+- [x] `SearchSnippet/get`: subject/preview now `null` when no text search terms match
+- [x] `subParts`: structural recursion preserved for `bodyStructure`; leaf parts return `[]` when explicitly requested
+- [ ] `EmailSubmission/query` filter missing `identityIds` condition (requires schema change to store identityId)
 
 ---
 
@@ -327,8 +328,8 @@ add a stub returning `notImplemented` when convenient).
 - [x] `ContactCard/set` create: honors client-provided `uid` (falls back to new UUID)
 - [x] `CalendarEvent/set` `sendSchedulingMessages=false`: passes `Schedule-Reply: false`
       HTTP header (RFC 6638 §8.1) and sets `scheduleAgent=client` on all participants
-      (RFC 6638 §7.1 `SCHEDULE-AGENT=CLIENT` on ATTENDEE properties); vendored CalDAVTalk
-      NewEvent/UpdateEvent accept `_no_schedule` flag; occurrence updates forwarded too
+      (RFC 6638 §7.1 `SCHEDULE-AGENT=CLIENT` on ATTENDEE properties); `_no_schedule` flag
+      upstreamed to `Net::CalDAVTalk` 0.16 (no longer vendored); occurrence updates forwarded too
 - [x] `CalendarEvent/query` filter conditions: `uid`, `text`, `title`, `description`,
       `location`, `owner`, `attendee`; proper date-range overlap (start < before AND end > after);
       recurring masters filtered before expansion; `expandRecurrences` path also applies all filters
@@ -341,7 +342,7 @@ add a stub returning `notImplemented` when convenient).
       `isSubscribed` uses `isVisible` (was hardcoded `true`)
 
 #### Nice-to-have
-- [ ] `CalendarEvent/parse`
+- [x] `CalendarEvent/parse`: implemented via `Text::JSCalendar::vcalendarToEvents`
 - [ ] `CalendarEvent/copy` — `notImplemented` stub (see Cross-account /copy section)
 - [ ] `Principal/getAvailability` (free/busy)
 - [ ] `CalendarEventNotification` (all methods — requires sharing/Principal model)
