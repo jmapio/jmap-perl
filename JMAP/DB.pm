@@ -1149,17 +1149,19 @@ sub dgetcol {
 # $sort is a pre-validated SQL ORDER BY clause (built by API layer from JMAP sort spec).
 
 # Active submissions for EmailSubmission/query.
+# Columns: [0]=jsubid [1]=thrid [2]=msgid [3]=sendat [4]=identity
 sub get_submissions {
   my ($Self, $sort) = @_;
   return $Self->dbh->selectall_arrayref(
-    "SELECT jsubid,thrid,msgid,sendat FROM jsubmission WHERE active = 1 ORDER BY $sort");
+    "SELECT jsubid,thrid,msgid,sendat,identity FROM jsubmission WHERE active = 1 ORDER BY $sort");
 }
 
 # All submissions (including inactive) for EmailSubmission/queryChanges.
+# Columns: [0]=jsubid [1]=thrid [2]=msgid [3]=sendat [4]=identity [5]=jmodseq [6]=active
 sub get_all_submissions {
   my ($Self, $sort) = @_;
   return $Self->dbh->selectall_arrayref(
-    "SELECT jsubid,thrid,msgid,sendat,jmodseq,active FROM jsubmission ORDER BY $sort");
+    "SELECT jsubid,thrid,msgid,sendat,identity,jmodseq,active FROM jsubmission ORDER BY $sort");
 }
 
 # Changed submissions since $since_modseq for EmailSubmission/changes.
@@ -1170,7 +1172,7 @@ sub get_submission_changes {
     {}, $since_modseq);
 }
 
-my $USER_SCHEMA_VERSION = 8;
+my $USER_SCHEMA_VERSION = 9;
 
 sub _create_user_tables {
   my ($Self, $dbh) = @_;
@@ -1410,6 +1412,7 @@ CREATE TABLE IF NOT EXISTS jsubmission (
   thrid TEXT,
   envelope TEXT,
   sendAt INTEGER,
+  identity TEXT,
   jcreated INTEGER,
   jmodseq INTEGER,
   mtime DATE,
@@ -1563,6 +1566,19 @@ sub _initdb {
     };
     if ($@) { $dbh->rollback; die "user DB migration to v8 failed: $@" }
     $v = 8;
+  }
+
+  if ($v < 9) {
+    # jsubmission.identity: stores the identityId used for the submission,
+    # enabling EmailSubmission/query filter by identityIds.
+    $dbh->begin_work;
+    eval {
+      eval { $dbh->do("ALTER TABLE jsubmission ADD COLUMN identity TEXT") };
+      $dbh->do('PRAGMA user_version = 9');
+      $dbh->commit;
+    };
+    if ($@) { $dbh->rollback; die "user DB migration to v9 failed: $@" }
+    $v = 9;
   }
 }
 

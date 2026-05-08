@@ -35,32 +35,38 @@ sub _mk_submission_sort {
   return join(', ', @res);
 }
 
-sub _submission_filter {
-  my $Self = shift;
-  my $data = shift;
-  my $filter = shift;
-  my $storage = shift;
+# Per-row predicate: returns 1 if row matches filter, 0 otherwise.
+# Row layout: [0]=jsubid [1]=thrid [2]=msgid [3]=sendat [4]=identity
+sub _submission_match {
+  my ($Self, $row, $filter) = @_;
 
   if ($filter->{emailIds}) {
-    return 0 unless grep { $_ eq $data->[2] } @{$filter->{emailIds}};
+    return 0 unless grep { $_ eq $row->[2] } @{$filter->{emailIds}};
   }
   if ($filter->{threadIds}) {
-    return 0 unless grep { $_ eq $data->[1] } @{$filter->{threadIds}};
+    return 0 unless grep { $_ eq $row->[1] } @{$filter->{threadIds}};
+  }
+  if ($filter->{identityIds}) {
+    return 0 unless defined $row->[4];
+    return 0 unless grep { $_ eq $row->[4] } @{$filter->{identityIds}};
   }
   if ($filter->{undoStatus}) {
     return 0 unless $filter->{undoStatus} eq 'final';
   }
   if ($filter->{before}) {
     my $time = str2time($filter->{before});
-    return 0 unless $data->[3] < $time;
+    return 0 unless $row->[3] < $time;
   }
   if ($filter->{after}) {
     my $time = str2time($filter->{after});
-    return 0 unless $data->[3] >= $time;
+    return 0 unless $row->[3] >= $time;
   }
-
-  # true if submitted
   return 1;
+}
+
+sub _submission_filter {
+  my ($Self, $data, $filter) = @_;
+  return [ grep { $Self->_submission_match($_, $filter) } @$data ];
 }
 
 sub api_EmailSubmission_query {
@@ -86,7 +92,7 @@ sub api_EmailSubmission_query {
 
   my $data = $Self->get_submissions($sort);
 
-  $data = $Self->_submission_filter($data, $args->{filter}, {}) if $args->{filter};
+  $data = $Self->_submission_filter($data, $args->{filter}) if $args->{filter};
   my $total = scalar(@$data);
 
   my ($start, $end) = $Self->_apply_window($data, $args, sub { $_[0][0] });
@@ -141,7 +147,7 @@ sub api_EmailSubmission_queryChanges {
 
   my $data = $Self->get_all_submissions($sort);
 
-  $data = $Self->_submission_filter($data, $args->{filter}, {}) if $args->{filter};
+  $data = $Self->_submission_filter($data, $args->{filter}) if $args->{filter};
   my $total = scalar(@$data);
 
   $Self->commit();
@@ -151,13 +157,13 @@ sub api_EmailSubmission_queryChanges {
 
   my $index = 0;
   foreach my $item (@$data) {
-    if ($item->[4] <= $sinceQueryState) {
-      $index++ if $item->[5];
+    if ($item->[5] <= $sinceQueryState) {    # [5]=jmodseq
+      $index++ if $item->[6];               # [6]=active
       next;
     }
     # changed
     push @destroyed, "$item->[0]";
-    next unless $item->[5];
+    next unless $item->[6];                 # [6]=active
     push @added, { id => "$item->[0]", index => $index };
     $index++;
   }

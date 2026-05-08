@@ -3000,10 +3000,11 @@ sub create_submissions {
     }
 
     my $id = $Self->dmake('jsubmission', {
-      sendat => $sub->{sendAt} ? str2time($sub->{sendAt}) : time(),
-      msgid => $msgid,
-      thrid => $thrid,
+      sendat   => $sub->{sendAt} ? str2time($sub->{sendAt}) : time(),
+      msgid    => $msgid,
+      thrid    => $thrid,
       envelope => $sub->{envelope} ? $json->encode($sub->{envelope}) : undef,
+      identity => $sub->{identityId},
     });
 
     $createmap{$cid} = { id => $id };
