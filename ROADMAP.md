@@ -220,8 +220,8 @@ All referenced specs are in `specs/`.
 - [x] Unknown sort → `unsupportedSort` error (Email/query, Mailbox/query)
 - [x] `Cache-Control: no-cache, no-store` added to `/session` response (RFC 8620 §2)
 - [x] `maxCallsInRequest` (16) / `maxSizeRequest` (10MB) limits enforced in `do_jmap`
-- [ ] `PushSubscription/get|set` not implemented (SSE works for web clients)
-- [ ] `Blob/copy` not implemented
+- [x] `PushSubscription/get|set|changes`: `notImplemented` stubs (SSE covers web clients)
+- [x] `Blob/copy`: `notImplemented` stub (cross-account copy requires two-worker orchestration)
 - [x] Unknown filter → `unsupportedFilter` error; shared `_check_filter` helper in API.pm
       validates condition properties and operator values recursively;
       applied to CalendarEvent/query, CalendarEvent/queryChanges, ContactCard/query
@@ -284,7 +284,8 @@ add a stub returning `notImplemented` when convenient).
       in `juserprefs`; `VacationResponse/get` reads back; state is SHA1 of stored payload
 
 #### Moderate / Nice-to-have
-- [ ] `Mailbox/query`: `sortAsTree`, `filterAsTree` missing; `name`/`role` filter added
+- [x] `Mailbox/query`: `sortAsTree` (depth-first pre-order, siblings in sort order) and
+      `filterAsTree` (add ancestors of matched mailboxes) implemented
 - [x] `Mailbox/query`: `name` (case-insensitive exact) and `role` filter conditions added
 - [x] `Thread/get` with `ids:null` now returns all threads (RFC 8620 §5.1)
 - [x] `%ROLE_MAP` duplicate `'junk'` key removed (was silently mapping to `'spam'`)
