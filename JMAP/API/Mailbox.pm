@@ -150,11 +150,47 @@ sub _mailbox_match {
 }
 
 sub _mailbox_filter {
-  my $Self = shift;
-  my $data = shift;
-  my $filter = shift;
+  my ($Self, $data, $filter, $filter_as_tree) = @_;
 
-  return [ grep { $Self->_mailbox_match($_, $filter) } @$data ];
+  my @matched = grep { $Self->_mailbox_match($_, $filter) } @$data;
+  return \@matched unless $filter_as_tree;
+
+  # Include all ancestors of matched mailboxes
+  my %idmap  = map { $_->{jmailboxid} => $_ } @$data;
+  my %wanted = map { $_->{jmailboxid} => 1 } @matched;
+  for my $item (@matched) {
+    my $pid = $item->{parentId};
+    while ($pid && !$wanted{$pid} && $idmap{$pid}) {
+      $wanted{$pid} = 1;
+      $pid = $idmap{$pid}{parentId};
+    }
+  }
+  return [ grep { $wanted{$_->{jmailboxid}} } @$data ];
+}
+
+# Re-order a flat sorted list so each parent appears immediately before its children
+# (depth-first pre-order traversal, siblings in their existing sort order).
+sub _sort_as_tree {
+  my ($data) = @_;
+  my %idmap    = map { $_->{jmailboxid} => $_ } @$data;
+  my %children;
+  my @roots;
+  for my $item (@$data) {
+    my $pid = $item->{parentId} // '';
+    if ($pid && $idmap{$pid}) {
+      push @{$children{$pid}}, $item;
+    } else {
+      push @roots, $item;
+    }
+  }
+  my @result;
+  my @stack = @roots;
+  while (@stack) {
+    my $item = shift @stack;
+    push @result, $item;
+    unshift @stack, @{$children{$item->{jmailboxid}} // []};
+  }
+  return \@result;
 }
 
 sub _patchitem {
@@ -289,7 +325,8 @@ sub api_Mailbox_query {
 
   my $storage = { data => $data };
   $data = $Self->_mailbox_sort($data, $args->{sort}, $storage);
-  $data = $Self->_mailbox_filter($data, $args->{filter}, $storage) if $args->{filter};
+  $data = $Self->_mailbox_filter($data, $args->{filter}, $args->{filterAsTree}) if $args->{filter};
+  $data = _sort_as_tree($data) if $args->{sortAsTree};
 
   my $total = scalar @$data;
 
@@ -437,7 +474,8 @@ sub api_Mailbox_queryChanges {
   my $data = $Self->{db}->dget('jmailboxes', { active => 1 });
   my $storage = { data => $data };
   $data = $Self->_mailbox_sort($data, $args->{sort}, $storage);
-  $data = $Self->_mailbox_filter($data, $args->{filter}, $storage) if $args->{filter};
+  $data = $Self->_mailbox_filter($data, $args->{filter}, $args->{filterAsTree}) if $args->{filter};
+  $data = _sort_as_tree($data) if $args->{sortAsTree};
 
   my %idx;
   my $i = 0;

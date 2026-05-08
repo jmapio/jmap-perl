@@ -95,8 +95,12 @@ my %PARAM_SCHEMA = (
     filter             => 'object?',
     sort               => '[object]?',
     position           => 'int?',
+    anchor             => 'string?',
+    anchorOffset       => 'int?',
     limit              => 'uint?',
     calculateTotal     => 'bool?',
+    sortAsTree         => 'bool?',
+    filterAsTree       => 'bool?',
   },
   'Mailbox/changes' => {
     accountId          => 'string?',
@@ -541,6 +545,14 @@ sub _transError {
   }
   return @_;
 }
+
+# Cross-account copy methods require two-worker orchestration (not yet implemented).
+sub api_Blob_copy        { return $_[0]->_transError(['error', {type => 'notImplemented'}]) }
+
+# PushSubscription (RFC 8620 §7.2 webhook push) — SSE covers web clients for now.
+sub api_PushSubscription_get     { return $_[0]->_transError(['error', {type => 'notImplemented'}]) }
+sub api_PushSubscription_set     { return $_[0]->_transError(['error', {type => 'notImplemented'}]) }
+sub api_PushSubscription_changes { return $_[0]->_transError(['error', {type => 'notImplemented'}]) }
 
 # Domain methods are loaded from separate files below.
 # All files use package JMAP::API; so all cross-domain calls work unchanged.
