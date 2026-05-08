@@ -610,7 +610,27 @@ sub create_calendars {
     $Self->commit();
 
     if ($found && $found->{jcalendarid}) {
-      $createmap{$cid} = { id => "$found->{jcalendarid}" };
+      my $new_id = $found->{jcalendarid};
+      # Persist locally-managed properties that CalDAV sync doesn't carry.
+      my %local;
+      $local{description} = $cal->{description} if exists $cal->{description};
+      $local{timeZone}    = $cal->{timeZone}     if exists $cal->{timeZone};
+      if (exists $cal->{defaultAlertsWithTime}) {
+        require JSON::XS;
+        $local{defaultAlertsWithTime} = defined $cal->{defaultAlertsWithTime}
+          ? JSON::XS->new->utf8->encode($cal->{defaultAlertsWithTime}) : undef;
+      }
+      if (exists $cal->{defaultAlertsWithoutTime}) {
+        require JSON::XS;
+        $local{defaultAlertsWithoutTime} = defined $cal->{defaultAlertsWithoutTime}
+          ? JSON::XS->new->utf8->encode($cal->{defaultAlertsWithoutTime}) : undef;
+      }
+      if (%local) {
+        $Self->begin();
+        $Self->dupdate('jcalendars', \%local, { jcalendarid => $new_id });
+        $Self->commit();
+      }
+      $createmap{$cid} = { id => "$new_id" };
     } else {
       $notcreated{$cid} = { type => 'serverFail', description => 'calendar created but not found after sync' };
     }
@@ -652,6 +672,26 @@ sub update_calendars {
     if ($@) {
       $notchanged{$jcalendarid} = { type => 'serverFail', description => "$@" };
       next;
+    }
+
+    # Persist locally-managed properties (not synced via CalDAV).
+    my %local;
+    $local{description} = $patch->{description} if exists $patch->{description};
+    $local{timeZone}    = $patch->{timeZone}     if exists $patch->{timeZone};
+    if (exists $patch->{defaultAlertsWithTime}) {
+      require JSON::XS;
+      $local{defaultAlertsWithTime} = defined $patch->{defaultAlertsWithTime}
+        ? JSON::XS->new->utf8->encode($patch->{defaultAlertsWithTime}) : undef;
+    }
+    if (exists $patch->{defaultAlertsWithoutTime}) {
+      require JSON::XS;
+      $local{defaultAlertsWithoutTime} = defined $patch->{defaultAlertsWithoutTime}
+        ? JSON::XS->new->utf8->encode($patch->{defaultAlertsWithoutTime}) : undef;
+    }
+    if (%local) {
+      $Self->begin();
+      $Self->dupdate('jcalendars', \%local, { jcalendarid => $jcalendarid });
+      $Self->commit();
     }
 
     $changed{$jcalendarid} = undef;

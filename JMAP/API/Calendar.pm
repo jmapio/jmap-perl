@@ -252,6 +252,12 @@ sub api_Calendar_get {
       isSubscribed           => $item->{isVisible} ? $JSON::true : $JSON::false,
       includeInAvailability  => $item->{includeInAvailability} || 'all',
       isVisible              => $item->{isVisible}  ? $JSON::true : $JSON::false,
+      description            => $item->{description} // JSON::null,
+      timeZone               => $item->{timeZone}    // JSON::null,
+      defaultAlertsWithTime    => $item->{defaultAlertsWithTime}
+                                  ? $json->decode($item->{defaultAlertsWithTime}) : JSON::null,
+      defaultAlertsWithoutTime => $item->{defaultAlertsWithoutTime}
+                                  ? $json->decode($item->{defaultAlertsWithoutTime}) : JSON::null,
       myRights => {
         mayReadFreeBusy  => $item->{mayReadFreeBusy}  ? $JSON::true : $JSON::false,
         mayReadItems     => $item->{mayReadItems}     ? $JSON::true : $JSON::false,

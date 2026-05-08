@@ -1170,7 +1170,7 @@ sub get_submission_changes {
     {}, $since_modseq);
 }
 
-my $USER_SCHEMA_VERSION = 7;
+my $USER_SCHEMA_VERSION = 8;
 
 sub _create_user_tables {
   my ($Self, $dbh) = @_;
@@ -1320,7 +1320,11 @@ CREATE TABLE IF NOT EXISTS jcalendars (
   jcreated INTEGER,
   jmodseq INTEGER,
   mtime DATE,
-  active BOOLEAN
+  active BOOLEAN,
+  description TEXT,
+  timeZone TEXT,
+  defaultAlertsWithTime TEXT,
+  defaultAlertsWithoutTime TEXT
 );
 EOF
 
@@ -1543,6 +1547,22 @@ sub _initdb {
     };
     if ($@) { $dbh->rollback; die "user DB migration to v7 failed: $@" }
     $v = 7;
+  }
+
+  if ($v < 8) {
+    # jcalendars: description, timeZone, defaultAlertsWithTime, defaultAlertsWithoutTime
+    # for JMAP Calendars spec. Locally stored; not overwritten by CalDAV sync.
+    $dbh->begin_work;
+    eval {
+      eval { $dbh->do("ALTER TABLE jcalendars ADD COLUMN description TEXT") };
+      eval { $dbh->do("ALTER TABLE jcalendars ADD COLUMN timeZone TEXT") };
+      eval { $dbh->do("ALTER TABLE jcalendars ADD COLUMN defaultAlertsWithTime TEXT") };
+      eval { $dbh->do("ALTER TABLE jcalendars ADD COLUMN defaultAlertsWithoutTime TEXT") };
+      $dbh->do('PRAGMA user_version = 8');
+      $dbh->commit;
+    };
+    if ($@) { $dbh->rollback; die "user DB migration to v8 failed: $@" }
+    $v = 8;
   }
 }
 
