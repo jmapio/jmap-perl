@@ -141,7 +141,7 @@ passes requests through directly instead of syncing via IMAP.
 ### Monitoring
 - [x] Prometheus metrics endpoint (`GET /metrics` on management port)
 - [x] Sync lag per account in metrics
-- [ ] Error rate tracking
+- [x] Error rate tracking: `jmap_method_errors` counter in Prometheus metrics
 
 ### Still TODO
 - [ ] queryChanges: currently sends spurious removals (spec-compliant but suboptimal)
@@ -219,7 +219,7 @@ All referenced specs are in `specs/`.
 - [x] `primaryAccounts` now includes `calendars` and `contacts` entries when account has CalDAV/CardDAV
 - [x] Unknown sort → `unsupportedSort` error (Email/query, Mailbox/query)
 - [x] `Cache-Control: no-cache, no-store` added to `/session` response (RFC 8620 §2)
-- [ ] `maxCallsInRequest` / `maxSizeRequest` limits not enforced
+- [x] `maxCallsInRequest` (16) / `maxSizeRequest` (10MB) limits enforced in `do_jmap`
 - [ ] `PushSubscription/get|set` not implemented (SSE works for web clients)
 - [ ] `Blob/copy` not implemented
 - [x] Unknown filter → `unsupportedFilter` error; shared `_check_filter` helper in API.pm
@@ -320,7 +320,8 @@ add a stub returning `notImplemented` when convenient).
 #### Moderate
 - [ ] Calendar missing `defaultAlertsWithTime`/`defaultAlertsWithoutTime`, `timeZone`,
       `description` properties (not in DB schema)
-- [ ] `CalendarEvent/get` missing `isDraft`, `baseEventId`; `utcStart`/`utcEnd` not computed
+- [x] `CalendarEvent/get`: `isDraft` (false) and `baseEventId` (null) in default response;
+      `utcStart`/`utcEnd` computed when explicitly requested (per spec, not in default set)
 - [x] `CalendarEvent/set` create: auto-sets `created`/`updated` to current UTC time if absent;
       honors client-provided `uid` (falls back to new UUID); sequence handled by CalDAVTalk
 - [x] `CalendarEvent/set` update: auto-sets `updated` to current UTC time if not in patch;
