@@ -319,8 +319,8 @@ add a stub returning `notImplemented` when convenient).
       of crashing the worker
 
 #### Moderate
-- [ ] Calendar missing `defaultAlertsWithTime`/`defaultAlertsWithoutTime`, `timeZone`,
-      `description` properties (not in DB schema)
+- [x] Calendar: `description`, `timeZone`, `defaultAlertsWithTime`, `defaultAlertsWithoutTime`
+      added to `jcalendars` (schema v8); returned in get; persisted via set create/update
 - [x] `CalendarEvent/get`: `isDraft` (false) and `baseEventId` (null) in default response;
       `utcStart`/`utcEnd` computed when explicitly requested (per spec, not in default set)
 - [x] `CalendarEvent/set` create: auto-sets `created`/`updated` to current UTC time if absent;
