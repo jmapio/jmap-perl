@@ -375,7 +375,7 @@ Tests in JMAP-TestSuite cover all four methods with pool_account_pair support.
       `name/surname2`; `unsupportedSort` for unknown; stable tie-break by uid
 - [x] `ContactCard/query` `anchor`/`anchorOffset` not implemented
 - [x] `ContactCard/set` update `addressBookIds`: now issues CardDAV MOVE to the new collection and updates `icards.iaddressbookid` + `jcontacts.jaddressbookid`
-- [ ] Multiple address books per card (`addressBookIds` with >1 entry): would require junction table + CardDAV COPY; currently only one AB per card is supported (first entry wins)
+- [ ] Multiple address books per card / multiple calendars per event: both `jcontacts.jaddressbookid` and `jevents.jcalendarid` are single INTEGER columns, mirroring the pre-jmessagemap email model. Supporting `addressBookIds`/`calendarIds` with >1 entry would require junction tables (`jcontact_addressbooks`, `jevent_calendars`), schema migration, COPY-on-create into each collection, diff-based add/remove on update, and changes to sync. The DAV side is awkward too — CardDAV and CalDAV don't have native multi-collection membership; the server gets independent copies that can diverge.
 
 ---
 
