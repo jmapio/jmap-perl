@@ -374,7 +374,8 @@ Tests in JMAP-TestSuite cover all four methods with pool_account_pair support.
 - [x] `ContactCard/query` sort: `created`, `updated`, `name`, `name/given`, `name/surname`,
       `name/surname2`; `unsupportedSort` for unknown; stable tie-break by uid
 - [x] `ContactCard/query` `anchor`/`anchorOffset` not implemented
-- [x] Single addressbook per card: `ContactCard/set` update now handles `addressBookIds` change via CardDAV MOVE + `jcontacts.jaddressbookid` update
+- [x] `ContactCard/set` update `addressBookIds`: now issues CardDAV MOVE to the new collection and updates `icards.iaddressbookid` + `jcontacts.jaddressbookid`
+- [ ] Multiple address books per card (`addressBookIds` with >1 entry): would require junction table + CardDAV COPY; currently only one AB per card is supported (first entry wins)
 
 ---
 
