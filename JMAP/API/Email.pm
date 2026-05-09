@@ -404,6 +404,12 @@ sub api_Email_query {
   $data = $Self->_messages_filter($data, $args->{filter}, $storage) if $args->{filter};
   $data = $Self->_collapse_messages($data) if $args->{collapseThreads};
 
+  $Self->{db}->save_query('Email', {
+    filter          => $args->{filter},
+    sort            => $args->{sort},
+    collapseThreads => $args->{collapseThreads} ? 1 : 0,
+  }, $newQueryState, [map { $_->{msgid} } @$data]);
+
   if ($args->{anchor}) {
     # need to calculate the position
     for (0..$#$data) {
@@ -447,151 +453,60 @@ sub api_Email_queryChanges {
 
   my $newQueryState = "$user->{jstateEmail}";
 
-  return $Self->_transError(['error', {type => 'invalidArguments',  arguments => ['sinceQueryState']}])
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceQueryState']}])
     if not $args->{sinceQueryState};
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newQueryState => $newQueryState}])
     if ($user->{jdeletedmodseq} and $args->{sinceQueryState} <= $user->{jdeletedmodseq});
 
-  my $start = $args->{position} || 0;
-  return $Self->_transError(['error', {type => 'invalidArguments',  arguments => ['position']}])
-    if $start < 0;
-
-  my $data = $Self->{db}->dget('jmessages', {});
+  my $data = $Self->{db}->dget('jmessages', { active => 1 });
 
   $Self->commit();
 
+  my $qparams = {
+    filter          => $args->{filter},
+    sort            => $args->{sort},
+    collapseThreads => $args->{collapseThreads} ? 1 : 0,
+  };
+  my $old_ids = $Self->{db}->load_query('Email', $qparams, $args->{sinceQueryState});
+
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newQueryState => $newQueryState}])
+    unless defined $old_ids;
+
   map { $_->{keywords} = decode_json($_->{keywords} || {}) } @$data;
-  my $storage = {data => $data};
+  my $storage = { data => $data };
   $data = $Self->_post_sort($data, $args->{sort}, $storage);
+  $data = $Self->_messages_filter($data, $args->{filter}, $storage) if $args->{filter};
+  $data = $Self->_collapse_messages($data) if $args->{collapseThreads};
 
-  # now we have the same sorted data set.  What we DON'T have is knowing that a message used to be in the filter,
-  # but no longer is (aka isUnread).  There's no good way to do this :(  So we have to assume that every message
-  # which is changed and NOT in the dataset used to be...
+  my @new_ids = map { $_->{msgid} } @$data;
+  my %new_idx;
+  $new_idx{$new_ids[$_]} = $_ for 0..$#new_ids;
 
-  # we also have to assume that it MIGHT have been the exemplar...
-
-  my $tell = 1;
-  my $total = 0;
-  my $changes = 0;
+  my @removed = grep { !exists $new_idx{$_} } @$old_ids;
+  my %old_set  = map { $_ => 1 } @$old_ids;
   my @added;
-  my @destroyed;
-  # just do two entire logic paths, it's different enough to make it easier to write twice
-  if ($args->{collapseThreads}) {
-    # exemplar - only these messages are in the result set we're building
-    my %exemplar;
-    # finished - we've told about both the exemplar, and guaranteed to have told about all
-    # the messages that could possibly have been the previous exemplar (at least one
-    # non-deleted, unchanged message)
-    my %finished;
-    foreach my $item (@$data) {
-      # we don't have to tell anything about finished threads, not even check them for membership in the search
-      next if $finished{$item->{thrid}};
-
-      # deleted is the same as not in filter for our purposes
-      my $isin = $item->{active} ? ($args->{filter} ? $Self->_match($item, $args->{filter}, $storage) : 1) : 0;
-
-      # only exemplars count for the total - we need to know total even if not telling any more
-      if ($isin and not $exemplar{$item->{thrid}}) {
-        $total++;
-        $exemplar{$item->{thrid}} = $item->{msgid};
-      }
-      next unless $tell;
-
-      # jmodseq greater than sinceQueryState is a change
-      my $changed = ($item->{jmodseq} > $args->{sinceQueryState});
-      my $isnew = ($item->{jcreated} > $args->{sinceQueryState});
-
-      if ($changed) {
-        # if it's in AND it's the exemplar, it's been added
-        if ($isin and $exemplar{$item->{thrid}} eq $item->{msgid}) {
-          push @added, {id => "$item->{msgid}", index => $total-1};
-          push @destroyed, "$item->{msgid}";
-          $changes++;
-        }
-        # otherwise it's destroyed
-        else {
-          push @destroyed, "$item->{msgid}";
-          $changes++;
-        }
-      }
-      # unchanged and isin, final candidate for old exemplar!
-      elsif ($isin) {
-        # remove it unless it's also the current exemplar
-        if ($exemplar{$item->{thrid}} ne $item->{msgid}) {
-          push @destroyed, "$item->{msgid}";
-          $changes++;
-        }
-        # and we're done
-        $finished{$item->{thrid}} = 1;
-      }
-
-      if ($args->{maxChanges} and $changes > $args->{maxChanges}) {
-        return $Self->_transError(['error', {type => 'cannotCalculateChanges', newQueryState => $newQueryState}]);
-      }
-
-      if ($args->{upToEmailId} and $args->{upToEmailId} eq $item->{msgid}) {
-        # stop mentioning changes
-        $tell = 0;
-      }
-    }
+  for my $i (0..$#new_ids) {
+    push @added, { id => "$new_ids[$i]", index => $i }
+      unless exists $old_set{$new_ids[$i]};
   }
 
-  # non-collapsed case
-  else {
-    foreach my $item (@$data) {
-      # deleted is the same as not in filter for our purposes
-      my $isin = $item->{active} ? ($args->{filter} ? $Self->_match($item, $args->{filter}, $storage) : 1) : 0;
-
-      # all active messages count for the total
-      $total++ if $isin;
-      next unless $tell;
-
-      # jmodseq greater than sinceQueryState is a change
-      my $changed = ($item->{jmodseq} > $args->{sinceQueryState});
-      my $isnew = ($item->{jcreated} > $args->{sinceQueryState});
-
-      if ($changed) {
-        if ($isin) {
-          push @added, {id => "$item->{msgid}", index => $total-1};
-          # also mark as removed so the client replaces rather than duplicates
-          push @destroyed, "$item->{msgid}" unless $isnew;
-          $changes++;
-        }
-        elsif (!$isnew) {
-          # Changed but not matching now — may have been in old results.
-          # Without query result caching we can't know for sure, so
-          # report as removed.  RFC 8620 §5.6 allows extra IDs in removed.
-          push @destroyed, "$item->{msgid}";
-          $changes++;
-        }
-        # New messages that don't match: not in old results, nothing to report
-      }
-
-      if ($args->{maxChanges} and $changes > $args->{maxChanges}) {
-        return $Self->_transError(['error', {type => 'cannotCalculateChanges', newQueryState => $newQueryState}]);
-      }
-
-      if ($args->{upToEmailId} and $args->{upToEmailId} eq $item->{msgid}) {
-        # stop mentioning changes
-        $tell = 0;
-      }
-    }
+  if ($args->{maxChanges} and (@removed + @added) > $args->{maxChanges}) {
+    return $Self->_transError(['error', {type => 'cannotCalculateChanges', newQueryState => $newQueryState}]);
   }
 
-  my @res;
-  push @res, ['Email/queryChanges', {
-    accountId => $accountid,
-    filter => $args->{filter},
-    sort => $args->{sort},
+  $Self->{db}->save_query('Email', $qparams, $newQueryState, \@new_ids);
+
+  return ['Email/queryChanges', {
+    accountId       => $accountid,
+    filter          => $args->{filter},
+    sort            => $args->{sort},
     collapseThreads => $args->{collapseThreads},
-    oldQueryState => "$args->{sinceQueryState}",
-    newQueryState => $newQueryState,
-    removed => \@destroyed,
-    added => \@added,
-    total => $total,
+    oldQueryState   => "$args->{sinceQueryState}",
+    newQueryState   => $newQueryState,
+    removed         => [map { "$_" } @removed],
+    added           => \@added,
+    total           => scalar(@new_ids),
   }];
-
-  return @res;
 }
 
 sub api_Email_get {

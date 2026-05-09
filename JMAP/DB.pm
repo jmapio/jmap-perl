@@ -13,7 +13,8 @@ use Carp qw(confess);
 use Sys::Hostname;
 use Data::UUID::LibUUID;
 use IO::LockedFile;
-use JSON::XS qw(decode_json);
+use JSON::XS qw(decode_json encode_json);
+use Digest::SHA qw(sha1_hex);
 use Email::MIME;
 # seriously, it's parsable, get over it
 $Email::MIME::ContentType::STRICT_PARAMS = 0;
@@ -1172,7 +1173,35 @@ sub get_submission_changes {
     {}, $since_modseq);
 }
 
-my $USER_SCHEMA_VERSION = 9;
+my $USER_SCHEMA_VERSION = 10;
+
+sub save_query {
+  my ($Self, $type, $params, $state, $ids) = @_;
+  my $key = sha1_hex($json->encode({ p => $params, q => $state, t => $type }));
+  my $now = time();
+  $Self->begin();
+  eval {
+    $Self->dbh->do(
+      "INSERT OR REPLACE INTO jqueries (querykey, ids, mtime) VALUES (?, ?, ?)",
+      {}, $key, encode_json($ids), $now,
+    );
+    $Self->dbh->do("DELETE FROM jqueries WHERE mtime < ?", {}, $now - 3600);
+    $Self->commit();
+  };
+  $Self->reset() if $@;
+}
+
+sub load_query {
+  my ($Self, $type, $params, $state) = @_;
+  my $key = sha1_hex($json->encode({ p => $params, q => $state, t => $type }));
+  $Self->begin();
+  my ($ids_json) = $Self->dbh->selectrow_array(
+    "SELECT ids FROM jqueries WHERE querykey = ?", {}, $key,
+  );
+  $Self->commit();
+  return undef unless defined $ids_json;
+  return decode_json($ids_json);
+}
 
 sub _create_user_tables {
   my ($Self, $dbh) = @_;
@@ -1453,6 +1482,14 @@ CREATE TABLE IF NOT EXISTS jcalendarprefs (
 );
 EOF
 
+  $dbh->do(<<EOF);
+CREATE TABLE IF NOT EXISTS jqueries (
+  querykey TEXT PRIMARY KEY,
+  ids TEXT,
+  mtime INTEGER
+);
+EOF
+
 }
 
 sub _initdb {
@@ -1579,6 +1616,18 @@ sub _initdb {
     };
     if ($@) { $dbh->rollback; die "user DB migration to v9 failed: $@" }
     $v = 9;
+  }
+
+  if ($v < 10) {
+    # jqueries: query result snapshots for precise queryChanges diffs.
+    $dbh->begin_work;
+    eval {
+      $dbh->do("CREATE TABLE IF NOT EXISTS jqueries (querykey TEXT PRIMARY KEY, ids TEXT, mtime INTEGER)");
+      $dbh->do('PRAGMA user_version = 10');
+      $dbh->commit;
+    };
+    if ($@) { $dbh->rollback; die "user DB migration to v10 failed: $@" }
+    $v = 10;
   }
 }
 

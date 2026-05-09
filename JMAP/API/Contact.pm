@@ -175,15 +175,21 @@ sub api_Contact_query {
 
   $Self->commit();
 
+  $Self->{db}->save_query('ContactCard', {
+    filter => $args->{filter},
+    sort   => $args->{sort},
+  }, $newQueryState, [map { $_->{contactuid} } @$data]);
+
   my @res;
   push @res, ['Contact/query', {
-    accountId => $accountid,
-    filter => $args->{filter},
-    sort => $args->{sort},
-    queryState => $newQueryState,
-    position => $start,
-    total => scalar(@$data),
-    ids => [map { "$_" } @result],
+    accountId           => $accountid,
+    filter              => $args->{filter},
+    sort                => $args->{sort},
+    queryState          => $newQueryState,
+    canCalculateChanges => JSON::true,
+    position            => $start,
+    total               => scalar(@$data),
+    ids                 => [map { "$_" } @result],
   }];
 
   return @res;
@@ -764,26 +770,61 @@ sub api_ContactCard_queryChanges {
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newQueryState => $newQueryState}])
     if ($user->{jdeletedmodseq} and $sinceQueryState <= $user->{jdeletedmodseq});
 
-  my $data = $Self->{db}->dget('jcontacts', { active => 1 }, 'contactuid,jaddressbookid,jmodseq');
-  $data = $Self->_contact_filter($data, $args->{filter}, {}) if $args->{filter};
-  my $total = scalar @$data;
-
-  my %idx;
-  my $i = 0;
-  $idx{$_->{contactuid}} = $i++ for @$data;
-
-  my $changed = $Self->{db}->dget('jcontacts', { jmodseq => ['>', $sinceQueryState] }, 'contactuid,active');
+  my $data = $Self->{db}->dget('jcontacts', { active => 1 }, 'contactuid,jaddressbookid,jcreated,jmodseq');
 
   $Self->commit();
 
-  my @added;
-  my @destroyed;
-  for my $row (@$changed) {
-    push @destroyed, "$row->{contactuid}";
-    if ($row->{active} && exists $idx{$row->{contactuid}}) {
-      push @added, { id => "$row->{contactuid}", index => $idx{$row->{contactuid}} };
-    }
+  my $qparams = { filter => $args->{filter}, sort => $args->{sort} };
+  my $old_ids = $Self->{db}->load_query('ContactCard', $qparams, $sinceQueryState);
+
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newQueryState => $newQueryState}])
+    unless defined $old_ids;
+
+  my %storage;
+  $data = $Self->_contact_filter($data, $args->{filter}, \%storage) if $args->{filter};
+
+  if ($args->{sort}) {
+    $data = [sort {
+      my $res = 0;
+      for my $cmp (@{$args->{sort}}) {
+        my $prop = $cmp->{property};
+        if ($prop eq 'created') {
+          $res = ($a->{jcreated} // 0) <=> ($b->{jcreated} // 0);
+        } elsif ($prop eq 'updated') {
+          $res = ($a->{jmodseq} // 0) <=> ($b->{jmodseq} // 0);
+        } else {
+          my $acard = $storage{payloads}{$a->{contactuid}}
+            //= ($Self->{db}->read_jcontact_payload($a->{contactuid}) // {});
+          my $bcard = $storage{payloads}{$b->{contactuid}}
+            //= ($Self->{db}->read_jcontact_payload($b->{contactuid}) // {});
+          if ($prop eq 'name') {
+            $res = lc($acard->{name}{full} // '') cmp lc($bcard->{name}{full} // '');
+          } else {
+            my $kind = ($prop =~ s{^name/}{}r);
+            $res = lc(_contact_name_component($acard, $kind))
+                   cmp lc(_contact_name_component($bcard, $kind));
+          }
+        }
+        $res = -$res if defined($cmp->{isAscending}) && !$cmp->{isAscending};
+        last if $res;
+      }
+      $res || ($a->{contactuid} cmp $b->{contactuid});
+    } @$data];
   }
+
+  my @new_ids = map { $_->{contactuid} } @$data;
+  my %new_idx;
+  $new_idx{$new_ids[$_]} = $_ for 0..$#new_ids;
+
+  my @removed = grep { !exists $new_idx{$_} } @$old_ids;
+  my %old_set  = map { $_ => 1 } @$old_ids;
+  my @added;
+  for my $i (0..$#new_ids) {
+    push @added, { id => "$new_ids[$i]", index => $i }
+      unless exists $old_set{$new_ids[$i]};
+  }
+
+  $Self->{db}->save_query('ContactCard', $qparams, $newQueryState, \@new_ids);
 
   return ['ContactCard/queryChanges', {
     accountId     => $accountid,
@@ -791,8 +832,8 @@ sub api_ContactCard_queryChanges {
     sort          => $args->{sort},
     oldQueryState => "$sinceQueryState",
     newQueryState => $newQueryState,
-    total         => $total,
-    removed       => \@destroyed,
+    total         => scalar(@new_ids),
+    removed       => [map { "$_" } @removed],
     added         => \@added,
   }];
 }

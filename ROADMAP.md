@@ -144,8 +144,8 @@ passes requests through directly instead of syncing via IMAP.
 - [x] Error rate tracking: `jmap_method_errors` counter in Prometheus metrics
 
 ### Still TODO
-- [ ] queryChanges: currently sends spurious removals (spec-compliant but suboptimal)
-- [ ] Query result caching for proper queryChanges with filters
+- [x] queryChanges: currently sends spurious removals (spec-compliant but suboptimal) — fixed with jqueries snapshot caching
+- [x] Query result caching for proper queryChanges with filters — jqueries table (schema v10), save_query/load_query in DB.pm
 - [ ] Move parsed message cache out of SQLite into flat files
 
 ## Phase 6: CalDAV/CardDAV Sync ✅
@@ -374,7 +374,7 @@ Tests in JMAP-TestSuite cover all four methods with pool_account_pair support.
 - [x] `ContactCard/query` sort: `created`, `updated`, `name`, `name/given`, `name/surname`,
       `name/surname2`; `unsupportedSort` for unknown; stable tie-break by uid
 - [x] `ContactCard/query` `anchor`/`anchorOffset` not implemented
-- [ ] Single addressbook per card (structural limit in `jcontacts` schema)
+- [x] Single addressbook per card: `ContactCard/set` update now handles `addressBookIds` change via CardDAV MOVE + `jcontacts.jaddressbookid` update
 
 ---
 

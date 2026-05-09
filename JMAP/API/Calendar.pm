@@ -658,14 +658,20 @@ sub api_CalendarEvent_query {
 
   $Self->commit();
 
-  return ['CalendarEvent/query', {
-    accountId => $accountid,
+  $Self->{db}->save_query('CalendarEvent', {
     filter => $args->{filter},
-    sort => $args->{sort},
-    queryState => $newQueryState,
-    position => $start,
-    total => scalar(@$data),
-    ids => [map { "$_" } @result],
+    sort   => $args->{sort},
+  }, $newQueryState, [map { $_->{eventuid} } @$data]);
+
+  return ['CalendarEvent/query', {
+    accountId           => $accountid,
+    filter              => $args->{filter},
+    sort                => $args->{sort},
+    queryState          => $newQueryState,
+    canCalculateChanges => JSON::true,
+    position            => $start,
+    total               => scalar(@$data),
+    ids                 => [map { "$_" } @result],
   }];
 }
 
@@ -842,31 +848,49 @@ sub api_CalendarEvent_queryChanges {
 
   my $data = $Self->{db}->dget('jevents', { active => 1 }, 'eventuid,jcalendarid,jmodseq');
 
+  $Self->commit();
+
+  my $qparams = { filter => $args->{filter}, sort => $args->{sort} };
+  my $old_ids = $Self->{db}->load_query('CalendarEvent', $qparams, $sinceQueryState);
+
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newQueryState => $newQueryState}])
+    unless defined $old_ids;
+
   my %storage;
   $data = $Self->_event_filter($data, $args->{filter}, \%storage) if $args->{filter};
 
-  my $total = scalar @$data;
-
-  my %idx;
-  my $i = 0;
-  $idx{$_->{eventuid}} = $i++ for @$data;
-
-  my $changed = $Self->{db}->dget('jevents', { jmodseq => ['>', $sinceQueryState] }, 'eventuid,jcalendarid,active');
-
-  $Self->commit();
-
-  my @added;
-  my @removed;
-  for my $row (@$changed) {
-    push @removed, "$row->{eventuid}";
-    if ($row->{active}) {
-      # Re-check filter for the changed event
-      my $matches = !$args->{filter} || $Self->_event_match($row, $args->{filter}, \%storage);
-      if ($matches && exists $idx{$row->{eventuid}}) {
-        push @added, { id => "$row->{eventuid}", index => $idx{$row->{eventuid}} };
+  if ($args->{sort}) {
+    my %valid = map { $_ => 1 } qw(start uid);
+    $data = [sort {
+      my $res = 0;
+      for my $cmp (@{$args->{sort}}) {
+        if ($cmp->{property} eq 'start') {
+          $storage{$a->{eventuid}} //= $Self->{db}->read_jevent_payload($a->{eventuid}) // {};
+          $storage{$b->{eventuid}} //= $Self->{db}->read_jevent_payload($b->{eventuid}) // {};
+          $res = ($storage{$a->{eventuid}}{start} // '') cmp ($storage{$b->{eventuid}}{start} // '');
+        } elsif ($cmp->{property} eq 'uid') {
+          $res = $a->{eventuid} cmp $b->{eventuid};
+        }
+        $res = -$res if defined($cmp->{isAscending}) && !$cmp->{isAscending};
+        last if $res;
       }
-    }
+      $res || ($a->{eventuid} cmp $b->{eventuid});
+    } @$data];
   }
+
+  my @new_ids = map { $_->{eventuid} } @$data;
+  my %new_idx;
+  $new_idx{$new_ids[$_]} = $_ for 0..$#new_ids;
+
+  my @removed = grep { !exists $new_idx{$_} } @$old_ids;
+  my %old_set  = map { $_ => 1 } @$old_ids;
+  my @added;
+  for my $i (0..$#new_ids) {
+    push @added, { id => "$new_ids[$i]", index => $i }
+      unless exists $old_set{$new_ids[$i]};
+  }
+
+  $Self->{db}->save_query('CalendarEvent', $qparams, $newQueryState, \@new_ids);
 
   return ['CalendarEvent/queryChanges', {
     accountId     => $accountid,
@@ -874,8 +898,8 @@ sub api_CalendarEvent_queryChanges {
     sort          => $args->{sort},
     oldQueryState => "$sinceQueryState",
     newQueryState => $newQueryState,
-    total         => $total,
-    removed       => \@removed,
+    total         => scalar(@new_ids),
+    removed       => [map { "$_" } @removed],
     added         => \@added,
   }];
 }

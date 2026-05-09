@@ -2928,14 +2928,22 @@ sub update_contacts_jscontact {
 
   return ({}, {}) unless %$changes;
 
+  $Self->begin();
+  my $iaddressbooks = $Self->dget('iaddressbooks', {}, 'iaddressbookid,jaddressbookid,href');
+  $Self->commit();
+  my %href_by_jab = map { $_->{jaddressbookid} => $_->{href} } @$iaddressbooks;
+  my %jab_by_href = map { $_->{href} => $_->{jaddressbookid} } @$iaddressbooks;
+  my %iab_by_jab  = map { $_->{jaddressbookid} => $_->{iaddressbookid} } @$iaddressbooks;
+
   my %changed;
   my %notchanged;
 
   for my $carduid (sort keys %$changes) {
-    my $patch = $changes->{$carduid};
+    my $patch = { %{ $changes->{$carduid} } };  # shallow copy
 
     $Self->begin();
-    my $icard = $Self->dgetone('icards', { uid => $carduid }, 'href');
+    my $icard = $Self->dgetone('icards', { uid => $carduid }, 'href,iaddressbookid');
+    my $jcontact = $Self->dgetone('jcontacts', { contactuid => $carduid }, 'jaddressbookid');
     $Self->commit();
 
     unless ($icard) {
@@ -2943,28 +2951,64 @@ sub update_contacts_jscontact {
       next;
     }
 
-    # Parse existing vCard to JSContact, apply patch fields, write back
-    my $raw_vcf = $Self->read_card_vcf($carduid) // '';
-    my $card = vcard_to_jscontact($raw_vcf);
-    unless ($card) {
-      $notchanged{$carduid} = { type => 'serverFail', description => 'Could not parse existing card' };
-      next;
-    }
-
-    # Apply JSContact-format patch (shallow merge of top-level keys)
-    for my $key (keys %$patch) {
-      if (defined $patch->{$key}) {
-        $card->{$key} = $patch->{$key};
-      } else {
-        delete $card->{$key};
+    # Handle addressBookIds change: MOVE card to new collection
+    if (exists $patch->{addressBookIds}) {
+      my $abids = delete $patch->{addressBookIds};
+      my ($new_jab_id) = $abids ? grep { $abids->{$_} } keys %$abids : ();
+      my $new_href = $new_jab_id ? $href_by_jab{$new_jab_id} : undef;
+      unless ($new_href) {
+        $notchanged{$carduid} = { type => 'notFound', description => 'No such address book' };
+        next;
+      }
+      my $old_collection = $icard->{href};
+      $old_collection =~ s{/[^/]+$}{};
+      if ($old_collection ne $new_href) {
+        eval { $Self->backend_cmd('move_card', $icard->{href}, $new_href) };
+        if ($@) {
+          $notchanged{$carduid} = { type => 'serverFail', description => "$@" };
+          next;
+        }
+        # Derive new href: same filename, new collection
+        (my $filename = $icard->{href}) =~ s{.*/}{};
+        my $new_card_href = "$new_href/$filename";
+        $new_href =~ s{/$}{};
+        $Self->begin();
+        $Self->dmaybeupdate('icards',
+          { href => $new_card_href, iaddressbookid => $iab_by_jab{$new_jab_id} },
+          { href => $icard->{href} });
+        $Self->dmaybeupdate('jcontacts',
+          { jaddressbookid => $new_jab_id },
+          { contactuid => $carduid });
+        $Self->commit();
+        $icard->{href} = $new_card_href;
       }
     }
 
-    eval { $Self->backend_cmd('update_card', $icard->{href}, $card) };
-    if ($@) {
-      $notchanged{$carduid} = { type => 'serverFail', description => "$@" };
-      next;
+    if (%$patch) {
+      # Parse existing vCard to JSContact, apply remaining patch fields, write back
+      my $raw_vcf = $Self->read_card_vcf($carduid) // '';
+      my $card = vcard_to_jscontact($raw_vcf);
+      unless ($card) {
+        $notchanged{$carduid} = { type => 'serverFail', description => 'Could not parse existing card' };
+        next;
+      }
+
+      # Apply JSContact-format patch (shallow merge of top-level keys)
+      for my $key (keys %$patch) {
+        if (defined $patch->{$key}) {
+          $card->{$key} = $patch->{$key};
+        } else {
+          delete $card->{$key};
+        }
+      }
+
+      eval { $Self->backend_cmd('update_card', $icard->{href}, $card) };
+      if ($@) {
+        $notchanged{$carduid} = { type => 'serverFail', description => "$@" };
+        next;
+      }
     }
+
     $changed{$carduid} = undef;
   }
 

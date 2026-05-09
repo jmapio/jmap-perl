@@ -446,6 +446,18 @@ sub delete_card {
   $talk->DeleteContact($resource);
 }
 
+sub move_card {
+  my $Self = shift;
+  my ($old_href, $new_collection) = @_;
+
+  my $talk = $Self->connect_contacts();
+  return unless $talk;
+
+  $new_collection =~ s{/$}{};
+  (my $filename = $old_href) =~ s{.*/}{};
+  $talk->MoveContact($old_href, "$new_collection/$filename");
+}
+
 # read folder list from the server
 sub folders {
   my $Self = shift;

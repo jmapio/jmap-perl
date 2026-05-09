@@ -328,6 +328,13 @@ sub api_Mailbox_query {
   $data = $Self->_mailbox_filter($data, $args->{filter}, $args->{filterAsTree}) if $args->{filter};
   $data = _sort_as_tree($data) if $args->{sortAsTree};
 
+  $Self->{db}->save_query('Mailbox', {
+    filter       => $args->{filter},
+    filterAsTree => $args->{filterAsTree} ? 1 : 0,
+    sort         => $args->{sort},
+    sortAsTree   => $args->{sortAsTree}   ? 1 : 0,
+  }, $newQueryState, [map { $_->{jmailboxid} } @$data]);
+
   my $total = scalar @$data;
 
   if (defined $args->{limit} && $args->{limit} < 0) {
@@ -472,25 +479,38 @@ sub api_Mailbox_queryChanges {
   }
 
   my $data = $Self->{db}->dget('jmailboxes', { active => 1 });
+
+  $Self->commit();
+
+  my $qparams = {
+    filter       => $args->{filter},
+    filterAsTree => $args->{filterAsTree} ? 1 : 0,
+    sort         => $args->{sort},
+    sortAsTree   => $args->{sortAsTree}   ? 1 : 0,
+  };
+  my $old_ids = $Self->{db}->load_query('Mailbox', $qparams, $sinceQueryState);
+
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newQueryState => $newQueryState}])
+    unless defined $old_ids;
+
   my $storage = { data => $data };
   $data = $Self->_mailbox_sort($data, $args->{sort}, $storage);
   $data = $Self->_mailbox_filter($data, $args->{filter}, $args->{filterAsTree}) if $args->{filter};
   $data = _sort_as_tree($data) if $args->{sortAsTree};
 
-  my %idx;
-  my $i = 0;
-  $idx{$_->{jmailboxid}} = $i++ for @$data;
+  my @new_ids = map { $_->{jmailboxid} } @$data;
+  my %new_idx;
+  $new_idx{$new_ids[$_]} = $_ for 0..$#new_ids;
 
-  my $changed = $Self->{db}->dget('jmailboxes', { jmodseq => ['>', $sinceQueryState] });
-
-  $Self->commit();
-
-  my (@removed, @added);
-  for my $row (@$changed) {
-    push @removed, "$row->{jmailboxid}";
-    push @added, { id => "$row->{jmailboxid}", index => $idx{$row->{jmailboxid}} }
-      if exists $idx{$row->{jmailboxid}};
+  my @removed = grep { !exists $new_idx{$_} } @$old_ids;
+  my %old_set  = map { $_ => 1 } @$old_ids;
+  my @added;
+  for my $i (0..$#new_ids) {
+    push @added, { id => "$new_ids[$i]", index => $i }
+      unless exists $old_set{$new_ids[$i]};
   }
+
+  $Self->{db}->save_query('Mailbox', $qparams, $newQueryState, \@new_ids);
 
   return ['Mailbox/queryChanges', {
     accountId     => $accountid,
@@ -498,8 +518,8 @@ sub api_Mailbox_queryChanges {
     sort          => $args->{sort},
     oldQueryState => "$sinceQueryState",
     newQueryState => $newQueryState,
-    total         => scalar(@$data),
-    removed       => \@removed,
+    total         => scalar(@new_ids),
+    removed       => [map { "$_" } @removed],
     added         => \@added,
   }];
 }
