@@ -221,38 +221,31 @@ All referenced specs are in `specs/`.
 - [x] `Cache-Control: no-cache, no-store` added to `/session` response (RFC 8620 §2)
 - [x] `maxCallsInRequest` (16) / `maxSizeRequest` (10MB) limits enforced in `do_jmap`
 - [x] `PushSubscription/get|set|changes`: `notImplemented` stubs (SSE covers web clients)
-- [x] `Blob/copy`: `notImplemented` stub (cross-account copy requires two-worker orchestration)
+- [x] `Blob/copy`: implemented via parent orchestration (filesystem hardlinks)
 - [x] Unknown filter → `unsupportedFilter` error; shared `_check_filter` helper in API.pm
       validates condition properties and operator values recursively;
       applied to CalendarEvent/query, CalendarEvent/queryChanges, ContactCard/query
 
 ---
 
-### Cross-account `/copy` methods
+### Cross-account `/copy` methods — DONE
 
 RFC 8620/8621, draft-ietf-jmap-calendars, and RFC 9610 all define `/copy`
 methods that move objects between accounts:
 
 | Method | Status | Notes |
 |--------|--------|-------|
-| `Blob/copy` | absent | no stub at all |
-| `Email/copy` | `notImplemented` stub | |
-| `CalendarEvent/copy` | `notImplemented` stub | |
-| `ContactCard/copy` | `notImplemented` stub | was `unknownMethod`; stub added |
+| `Blob/copy` | **implemented** | parent-level orchestration via fetch_blobs/store_blob |
+| `Email/copy` | **implemented** | fetch_blobs + store_blob + Email/import |
+| `CalendarEvent/copy` | **implemented** | CalendarEvent/get + CalendarEvent/set |
+| `ContactCard/copy` | **implemented** | ContactCard/get + ContactCard/set |
 
-**Architectural blocker**: all four require reading from `fromAccountId`'s
-worker and writing to `accountId`'s worker in a single method call.  Each
-account runs in its own forked child process with its own DB; there is no
-current mechanism for one worker to query another.
-
-To implement these properly, the parent process would need to orchestrate a
-two-phase request: fetch the source object via one worker, then create it via
-the destination worker, and stitch the response together before returning to
-the client.  This is a non-trivial architecture change that affects all four
-methods identically, so they should be implemented together.
-
-Until then, all return `notImplemented` (except `Blob/copy` which is absent —
-add a stub returning `notImplemented` when convenient).
+All four are implemented via parent-level orchestration in `bin/jmap-proxy.pl`:
+the parent intercepts `/copy` method calls before routing to workers, then
+drives a multi-step async flow across the source and destination account workers.
+Blobs are transferred via filesystem hardlinks (O(1), no data through the socket).
+Pool accounts (same `poolid`) are required for cross-account access.
+Tests in JMAP-TestSuite cover all four methods with pool_account_pair support.
 
 ---
 
@@ -289,7 +282,7 @@ add a stub returning `notImplemented` when convenient).
 - [x] `Mailbox/query`: `name` (case-insensitive exact) and `role` filter conditions added
 - [x] `Thread/get` with `ids:null` now returns all threads (RFC 8620 §5.1)
 - [x] `%ROLE_MAP` duplicate `'junk'` key removed (was silently mapping to `'spam'`)
-- [ ] `Email/copy` returns `notImplemented` stub (see Cross-account /copy section)
+- [x] `Email/copy` — implemented via parent orchestration (see Cross-account /copy section)
 - [x] `SearchSnippet/get`: subject/preview now `null` when no text search terms match
 - [x] `subParts`: structural recursion preserved for `bodyStructure`; leaf parts return `[]` when explicitly requested
 - [x] `EmailSubmission/query` filter `identityIds`: schema v9 adds `identity` column to
@@ -346,7 +339,7 @@ add a stub returning `notImplemented` when convenient).
 
 #### Nice-to-have
 - [x] `CalendarEvent/parse`: implemented via `Text::JSCalendar::vcalendarToEvents`
-- [ ] `CalendarEvent/copy` — `notImplemented` stub (see Cross-account /copy section)
+- [x] `CalendarEvent/copy` — implemented via parent orchestration (see Cross-account /copy section)
 - [ ] `Principal/getAvailability` (free/busy)
 - [ ] `CalendarEventNotification` (all methods — requires sharing/Principal model)
 
@@ -367,7 +360,7 @@ add a stub returning `notImplemented` when convenient).
       RFC 9610 §3.3 filter conditions (`inAddressBook`, `uid`, `text`, `name`, `name/given`,
       `name/surname`, `name/surname2`, `nickname`, `organization`, `email`, `phone`, `address`)
 - [x] **`ContactCard/queryChanges`**: same `_event_filter` bug fixed
-- [x] **`ContactCard/copy`**: `notImplemented` stub added (see Cross-account /copy section)
+- [x] **`ContactCard/copy`**: implemented via parent orchestration (see Cross-account /copy section)
 
 #### Moderate
 - [x] `AddressBook` `description`, `sortOrder` added to `jaddressbooks` (schema v7); returned in get;

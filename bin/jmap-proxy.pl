@@ -618,6 +618,77 @@ sub run_backend_worker {
         my ($rtype, $content, $filename) = $api->getRawBlob($selector);
         return ['raw', [$rtype, $content, $filename]];
       }
+      if ($cmd eq 'fetch_blobs') {
+        my %result;
+        for my $blobid (@{$args->{ids} || []}) {
+          if ($blobid =~ /^f-(.+)$/) {
+            my $fileid = $1;
+            $db->begin();
+            my $row = $db->dgetone('jfiles', { jfileid => $fileid });
+            $db->commit();
+            if ($row) {
+              my $path = $db->_subdir_path('files', $fileid);
+              $result{$blobid} = -f $path
+                ? { type => $row->{type}, path => $path, is_temp => 0 }
+                : undef;
+            }
+            else {
+              $result{$blobid} = undef;
+            }
+          }
+          elsif ($blobid =~ /^m-(.+)$/) {
+            my $msgid = $1;
+            my ($type, $raw) = $db->get_raw_message($msgid);
+            if (defined $raw) {
+              my $fh = File::Temp->new(DIR => "$datadir/tmp", UNLINK => 0, SUFFIX => '.blob');
+              print $fh $raw;
+              close $fh;
+              $result{$blobid} = {
+                type    => $type || 'message/rfc822',
+                path    => $fh->filename,
+                is_temp => 1,
+              };
+            }
+            else {
+              $result{$blobid} = undef;
+            }
+          }
+          else {
+            $result{$blobid} = undef;
+          }
+        }
+        return ['fetch_blobs', \%result];
+      }
+      if ($cmd eq 'store_blob') {
+        my $src     = $args->{path}    or die "store_blob: no path\n";
+        my $type    = $args->{type}    || 'application/octet-stream';
+        my $is_temp = $args->{is_temp} || 0;
+        my $size    = (stat($src))[7]  // 0;
+        my $expires = time() + 7 * 86400;
+
+        $db->begin();
+        $db->dbh->do(
+          'INSERT OR REPLACE INTO jfiles (type, size, expires, mtime) VALUES (?, ?, ?, ?)',
+          {}, $type, $size, $expires, time());
+        my $id = $db->dbh->last_insert_id(undef, undef, undef, undef);
+        $db->commit();
+
+        my $dest = $db->_subdir_path('files', $id);
+        unless (link($src, $dest)) {
+          require File::Copy;
+          File::Copy::copy($src, $dest) or do {
+            eval {
+              $db->begin();
+              $db->dbh->do('DELETE FROM jfiles WHERE jfileid = ?', {}, $id);
+              $db->commit();
+            };
+            die "blob copy failed: $!\n";
+          };
+        }
+        unlink $src if $is_temp;
+
+        return ['store_blob', { blobId => "f-$id" }];
+      }
       if ($cmd eq 'jmap') {
         my $result;
         if ($db->can('handle_jmap')) {
@@ -1241,27 +1312,463 @@ sub do_jmap {
 
 sub _do_jmap_request {
   my ($req, $accountid, $data) = @_;
+
   my @methods = map { $_->[0] } @{$data->{methodCalls} || []};
   $stat{jmap_method_calls} += scalar @methods;
   warn "JMAP REQUEST ($accountid): " . join(', ', @methods) . "\n";
   warn "JMAP REQUEST BODY: " . $json->encode($data) . "\n" if $ENV{JMAP_DEBUG};
-  send_backend_request($accountid, 'jmap', $data, sub {
-    my $result = shift;
+
+  # Find positions of cross-account copy calls that need parent-level orchestration
+  my @copy_pos;
+  for my $i (0..$#{$data->{methodCalls} || []}) {
+    push @copy_pos, $i
+      if $data->{methodCalls}[$i][0] =~ m{^(Blob|Email|CalendarEvent|ContactCard)/copy$};
+  }
+
+  unless (@copy_pos) {
+    # Fast path: no copy methods, send entire request to one worker unchanged
+    send_backend_request($accountid, 'jmap', $data, sub {
+      my $result = shift;
+      if (ref $result->{methodResponses} eq 'ARRAY') {
+        $stat{jmap_method_errors} += grep { $_->[0] eq 'error' } @{$result->{methodResponses}};
+      }
+      my $body = $json->encode($result);
+      warn "JMAP RESPONSE: " . length($body) . " bytes\n";
+      warn "JMAP RESPONSE BODY: $body\n" if $ENV{JMAP_DEBUG};
+      $req->respond([200, 'ok', { 'Content-Type' => 'application/json' }, $body]);
+    }, sub {
+      my $error = shift;
+      $req->respond({
+        content => ['application/json', $json->encode({
+          methodResponses => [['error', { type => 'serverError', message => "$error" }, 'a']],
+        })],
+      });
+    });
+    return;
+  }
+
+  # Mixed or copy-only batch: handle copy calls in parent, rest in worker, then merge
+  my %copy_pos_set = map { $_ => 1 } @copy_pos;
+  my $n = scalar @{$data->{methodCalls}};
+  my @responses = (undef) x $n;
+  my $session_state = '';
+
+  my $remaining = 0;
+  my $check_done = sub {
+    return if --$remaining > 0;
+    $session_state ||= _compute_session_state($accountid);
+    my $result = {
+      methodResponses => \@responses,
+      sessionState    => $session_state,
+    };
     if (ref $result->{methodResponses} eq 'ARRAY') {
-      $stat{jmap_method_errors} += grep { $_->[0] eq 'error' } @{$result->{methodResponses}};
+      $stat{jmap_method_errors} += grep { defined $_ && $_->[0] eq 'error' }
+        @{$result->{methodResponses}};
     }
     my $body = $json->encode($result);
     warn "JMAP RESPONSE: " . length($body) . " bytes\n";
     warn "JMAP RESPONSE BODY: $body\n" if $ENV{JMAP_DEBUG};
     $req->respond([200, 'ok', { 'Content-Type' => 'application/json' }, $body]);
-  }, sub {
-    my $error = shift;
-    $req->respond({
-      content => ['application/json', $json->encode({
-        methodResponses => [['error', { type => 'serverError', message => "$error" }, 'a']],
-      })],
+  };
+
+  # Dispatch non-copy calls to the worker
+  my @other_calls;
+  my %tag_to_pos;
+  for my $i (0..$n-1) {
+    next if $copy_pos_set{$i};
+    my $call = $data->{methodCalls}[$i];
+    $tag_to_pos{$call->[2]} = $i;
+    push @other_calls, $call;
+  }
+
+  if (@other_calls) {
+    $remaining++;
+    my %other_data = (%$data, methodCalls => \@other_calls);
+    send_backend_request($accountid, 'jmap', \%other_data, sub {
+      my $r = shift;
+      $session_state ||= $r->{sessionState} // '';
+      for my $resp (@{$r->{methodResponses} || []}) {
+        my $pos = $tag_to_pos{$resp->[2]};
+        $responses[$pos] = $resp if defined $pos;
+      }
+      $check_done->();
+    }, sub {
+      my $err = shift;
+      for my $call (@other_calls) {
+        my $pos = $tag_to_pos{$call->[2]};
+        $responses[$pos] = ['error', { type => 'serverError', message => "$err" }, $call->[2]]
+          if defined $pos;
+      }
+      $check_done->();
     });
-  });
+  }
+
+  # Dispatch each copy call through parent-level orchestration
+  for my $i (@copy_pos) {
+    my $call = $data->{methodCalls}[$i];
+    $remaining++;
+    _do_copy_call($call->[0], $call->[1], $call->[2], $accountid, sub {
+      $responses[$i] = shift;
+      $check_done->();
+    }, sub {
+      $responses[$i] = ['error', { type => 'serverError', message => "$_[0]" }, $call->[2]];
+      $check_done->();
+    });
+  }
+}
+
+sub _compute_session_state {
+  my ($accountid) = @_;
+  my $dbh = DBI->connect("dbi:SQLite:dbname=$datadir/accounts.sqlite3",
+    undef, undef, { AutoCommit => 1, RaiseError => 0, PrintError => 0 });
+  return '' unless $dbh;
+  my ($poolid) = $dbh->selectrow_array(
+    "SELECT poolid FROM accounts WHERE accountid = ?", {}, $accountid);
+  $poolid //= $accountid;
+  my $aids = $dbh->selectcol_arrayref(
+    "SELECT accountid FROM accounts WHERE poolid = ? ORDER BY accountid", {}, $poolid);
+  return sha1_hex(join(',', @{$aids || []}));
+}
+
+# Get the current state string for a JMAP type from an account (async, via worker)
+sub _get_jmap_state {
+  my ($accountid, $type, $cb, $errcb) = @_;
+  my %caps = (
+    Email         => 'urn:ietf:params:jmap:mail',
+    CalendarEvent => 'urn:ietf:params:jmap:calendars',
+    ContactCard   => 'urn:ietf:params:jmap:contacts',
+  );
+  my $cap = $caps{$type} // "urn:ietf:params:jmap:${\lc $type}";
+  send_backend_request($accountid, 'jmap', {
+    methodCalls => [["$type/get", { ids => [] }, 'st']],
+    using       => ['urn:ietf:params:jmap:core', $cap],
+  }, sub {
+    my $r = shift;
+    my ($resp) = grep { $_->[2] eq 'st' } @{$r->{methodResponses} || []};
+    $cb->($resp && $resp->[0] ne 'error' ? ($resp->[1]{state} // '') : '');
+  }, $errcb);
+}
+
+sub _do_copy_call {
+  my ($method, $args, $tag, $auth_accountid, $cb, $errcb) = @_;
+
+  my $from_aid = $args->{fromAccountId} // $auth_accountid;
+  my $to_aid   = $args->{accountId}     // $auth_accountid;
+
+  if ($from_aid eq $to_aid) {
+    return $cb->(['error', {
+      type        => 'invalidArguments',
+      description => 'fromAccountId and accountId must differ',
+    }, $tag]);
+  }
+
+  if    ($method eq 'Blob/copy')         { _copy_blobs($args, $from_aid, $to_aid, $tag, $cb, $errcb) }
+  elsif ($method eq 'Email/copy')        { _copy_emails($args, $from_aid, $to_aid, $tag, $cb, $errcb) }
+  elsif ($method eq 'CalendarEvent/copy'){ _copy_objects('CalendarEvent', $args, $from_aid, $to_aid, $tag, $cb, $errcb) }
+  elsif ($method eq 'ContactCard/copy')  { _copy_objects('ContactCard',   $args, $from_aid, $to_aid, $tag, $cb, $errcb) }
+}
+
+sub _copy_blobs {
+  my ($args, $from_aid, $to_aid, $tag, $cb, $errcb) = @_;
+
+  my $ids = $args->{ids} // [];
+  unless (@$ids) {
+    return $cb->(['Blob/copy', {
+      fromAccountId => $from_aid,
+      accountId     => $to_aid,
+      copied        => undef,
+      notCopied     => undef,
+    }, $tag]);
+  }
+
+  send_backend_request($from_aid, 'fetch_blobs', { ids => $ids }, sub {
+    my $blob_map = shift;
+    my (%copied, %not_copied, @to_store);
+
+    for my $blobid (@$ids) {
+      if ($blob_map->{$blobid}) {
+        push @to_store, [$blobid, $blob_map->{$blobid}];
+      }
+      else {
+        $not_copied{$blobid} = { type => 'notFound' };
+      }
+    }
+
+    my $finish = sub {
+      $cb->(['Blob/copy', {
+        fromAccountId => $from_aid,
+        accountId     => $to_aid,
+        copied        => %copied     ? \%copied     : undef,
+        notCopied     => %not_copied ? \%not_copied : undef,
+      }, $tag]);
+    };
+
+    return $finish->() unless @to_store;
+
+    my $store_next;
+    $store_next = sub {
+      unless (@to_store) { return $finish->() }
+      my ($orig_id, $info) = @{ shift @to_store };
+      send_backend_request($to_aid, 'store_blob', $info, sub {
+        $copied{$orig_id} = { blobId => shift->{blobId} };
+        $store_next->();
+      }, sub {
+        unlink $info->{path} if $info->{is_temp};
+        $not_copied{$orig_id} = { type => 'serverFail' };
+        $store_next->();
+      });
+    };
+    $store_next->();
+  }, $errcb);
+}
+
+sub _copy_emails {
+  my ($args, $from_aid, $to_aid, $tag, $cb, $errcb) = @_;
+
+  my $create = $args->{create} // {};
+  unless (%$create) {
+    return $cb->(['Email/copy', {
+      fromAccountId => $from_aid,
+      accountId     => $to_aid,
+      oldState      => undef,
+      newState      => undef,
+      created       => undef,
+      notCreated    => undef,
+    }, $tag]);
+  }
+
+  my %cid_to_src = map { $_ => $create->{$_}{id} } keys %$create;
+
+  my $do_fetch = sub {
+    my @blob_ids = map { "m-$_" } values %cid_to_src;
+    send_backend_request($from_aid, 'fetch_blobs', { ids => \@blob_ids }, sub {
+      my $blob_map = shift;
+      my (%not_created, %cid_blob);
+
+      for my $cid (keys %cid_to_src) {
+        my $bid = "m-$cid_to_src{$cid}";
+        if ($blob_map->{$bid}) { $cid_blob{$cid} = $blob_map->{$bid} }
+        else                   { $not_created{$cid} = { type => 'notFound' } }
+      }
+
+      my @to_store = map { [$_, $cid_blob{$_}] } keys %cid_blob;
+      my %cid_blobid;
+
+      my $do_import = sub {
+        my %emails;
+        for my $cid (keys %cid_blobid) {
+          my $spec = $create->{$cid};
+          $emails{$cid} = {
+            blobId     => $cid_blobid{$cid},
+            mailboxIds => $spec->{mailboxIds},
+            defined $spec->{keywords}   ? (keywords   => $spec->{keywords})   : (),
+            defined $spec->{receivedAt} ? (receivedAt => $spec->{receivedAt}) : (),
+          };
+        }
+
+        unless (%emails) {
+          return $cb->(['Email/copy', {
+            fromAccountId => $from_aid,
+            accountId     => $to_aid,
+            oldState      => undef,
+            newState      => undef,
+            created       => undef,
+            notCreated    => %not_created ? \%not_created : undef,
+          }, $tag]);
+        }
+
+        my %import_args = (accountId => $to_aid, emails => \%emails);
+        $import_args{ifInState} = $args->{ifInState} if defined $args->{ifInState};
+
+        send_backend_request($to_aid, 'jmap', {
+          methodCalls => [['Email/import', \%import_args, 'i']],
+          using       => ['urn:ietf:params:jmap:core', 'urn:ietf:params:jmap:mail'],
+        }, sub {
+          my $r = shift;
+          my ($resp) = grep { $_->[2] eq 'i' } @{$r->{methodResponses} || []};
+          unless ($resp) { return $cb->(['error', { type => 'serverError' }, $tag]) }
+          if ($resp->[0] eq 'error') { return $cb->(['error', $resp->[1], $tag]) }
+
+          my $ir = $resp->[1];
+          my %created;
+          $created{$_} = $ir->{created}{$_}     for keys %{$ir->{created}    || {}};
+          $not_created{$_} = $ir->{notCreated}{$_} for keys %{$ir->{notCreated} || {}};
+
+          if ($args->{onSuccessDestroyOriginal} && %created) {
+            my @del = map { $cid_to_src{$_} } keys %created;
+            send_backend_request($from_aid, 'jmap', {
+              methodCalls => [['Email/set', { destroy => \@del }, 'd']],
+              using       => ['urn:ietf:params:jmap:core', 'urn:ietf:params:jmap:mail'],
+            }, sub {1}, sub {1});
+          }
+
+          $cb->(['Email/copy', {
+            fromAccountId => $from_aid,
+            accountId     => $to_aid,
+            oldState      => $ir->{oldState},
+            newState      => $ir->{newState},
+            created       => %created     ? \%created     : undef,
+            notCreated    => %not_created ? \%not_created : undef,
+          }, $tag]);
+        }, sub { $cb->(['error', { type => 'serverError', message => $_[0] }, $tag]) });
+      };
+
+      my $store_next;
+      $store_next = sub {
+        unless (@to_store) { return $do_import->() }
+        my ($cid, $info) = @{ shift @to_store };
+        send_backend_request($to_aid, 'store_blob', $info, sub {
+          $cid_blobid{$cid} = shift->{blobId};
+          $store_next->();
+        }, sub {
+          unlink $info->{path} if $info->{is_temp};
+          $not_created{$cid} = { type => 'serverFail' };
+          $store_next->();
+        });
+      };
+      $store_next->();
+    }, $errcb);
+  };
+
+  if (defined $args->{ifFromInState}) {
+    _get_jmap_state($from_aid, 'Email', sub {
+      return $cb->(['error', { type => 'stateMismatch' }, $tag])
+        if $_[0] ne $args->{ifFromInState};
+      $do_fetch->();
+    }, $errcb);
+  }
+  else { $do_fetch->() }
+}
+
+sub _copy_objects {
+  my ($type, $args, $from_aid, $to_aid, $tag, $cb, $errcb) = @_;
+
+  my $create = $args->{create} // {};
+  unless (%$create) {
+    return $cb->([$type . '/copy', {
+      fromAccountId => $from_aid,
+      accountId     => $to_aid,
+      oldState      => undef,
+      newState      => undef,
+      created       => undef,
+      notCreated    => undef,
+    }, $tag]);
+  }
+
+  my %caps = (
+    CalendarEvent => 'urn:ietf:params:jmap:calendars',
+    ContactCard   => 'urn:ietf:params:jmap:contacts',
+  );
+  my $cap = $caps{$type} // "urn:ietf:params:jmap:${\lc $type}";
+
+  # Server-managed fields that must not be copied verbatim
+  my %strip = map { $_ => 1 }
+    qw(id calendarIds addressBookIds isOrigin isDraft baseEventId);
+
+  my @src_ids = map { $create->{$_}{id} } keys %$create;
+
+  my $do_get = sub {
+    my ($old_state) = @_;
+    send_backend_request($from_aid, 'jmap', {
+      methodCalls => [["$type/get", { ids => \@src_ids }, 'g']],
+      using       => ['urn:ietf:params:jmap:core', $cap],
+    }, sub {
+      my $r = shift;
+      my ($resp) = grep { $_->[2] eq 'g' } @{$r->{methodResponses} || []};
+      unless ($resp && $resp->[0] eq "$type/get") {
+        return $cb->(['error', { type => 'serverError' }, $tag]);
+      }
+
+      my %src_obj   = map { $_->{id} => $_ } @{$resp->[1]{list}     || []};
+      my %not_found = map { $_ => 1 }         @{$resp->[1]{notFound} || []};
+
+      my (%not_created, %set_create, %cid_to_src_id);
+      for my $cid (keys %$create) {
+        my $src_id = $create->{$cid}{id};
+        if ($not_found{$src_id} || !$src_obj{$src_id}) {
+          $not_created{$cid} = { type => 'notFound' };
+          next;
+        }
+        my $obj = { %{$src_obj{$src_id}} };
+        delete $obj->{$_} for keys %strip;
+        for my $k (keys %{$create->{$cid}}) {
+          next if $k eq 'id';
+          $obj->{$k} = $create->{$cid}{$k};
+        }
+        $set_create{$cid} = $obj;
+        $cid_to_src_id{$cid} = $src_id;
+      }
+
+      unless (%set_create) {
+        return $cb->([$type . '/copy', {
+          fromAccountId => $from_aid,
+          accountId     => $to_aid,
+          oldState      => $old_state,
+          newState      => $old_state,
+          created       => undef,
+          notCreated    => %not_created ? \%not_created : undef,
+        }, $tag]);
+      }
+
+      my $do_set = sub {
+        my ($pre_set_state) = @_;
+        my %set_args = (accountId => $to_aid, create => \%set_create);
+        send_backend_request($to_aid, 'jmap', {
+          methodCalls => [["$type/set", \%set_args, 's']],
+          using       => ['urn:ietf:params:jmap:core', $cap],
+        }, sub {
+          my $r = shift;
+          my ($resp) = grep { $_->[2] eq 's' } @{$r->{methodResponses} || []};
+          unless ($resp) { return $cb->(['error', { type => 'serverError' }, $tag]) }
+          if ($resp->[0] eq 'error') { return $cb->(['error', $resp->[1], $tag]) }
+
+          my $sr = $resp->[1];
+          my %created;
+          $created{$_}    = $sr->{created}{$_}    for keys %{$sr->{created}    || {}};
+          $not_created{$_} = $sr->{notCreated}{$_} for keys %{$sr->{notCreated} || {}};
+
+          if ($args->{onSuccessDestroyOriginal} && %created) {
+            my @del = map { $cid_to_src_id{$_} } keys %created;
+            send_backend_request($from_aid, 'jmap', {
+              methodCalls => [["$type/set", { destroy => \@del }, 'd']],
+              using       => ['urn:ietf:params:jmap:core', $cap],
+            }, sub {1}, sub {1});
+          }
+
+          $cb->([$type . '/copy', {
+            fromAccountId => $from_aid,
+            accountId     => $to_aid,
+            oldState      => $pre_set_state // $old_state // $sr->{oldState},
+            newState      => $sr->{newState},
+            created       => %created     ? \%created     : undef,
+            notCreated    => %not_created ? \%not_created : undef,
+          }, $tag]);
+        }, sub { $cb->(['error', { type => 'serverError', message => $_[0] }, $tag]) });
+      };
+
+      # For ifInState: check toAccount state manually (CalendarEvent/set doesn't support it)
+      if (defined $args->{ifInState}) {
+        _get_jmap_state($to_aid, $type, sub {
+          my $cur = shift;
+          return $cb->(['error', { type => 'stateMismatch' }, $tag])
+            if $cur ne $args->{ifInState};
+          $do_set->($cur);
+        }, $errcb);
+      }
+      else {
+        _get_jmap_state($to_aid, $type, sub { $do_set->(shift) }, $errcb);
+      }
+    }, $errcb);
+  };
+
+  if (defined $args->{ifFromInState}) {
+    _get_jmap_state($from_aid, $type, sub {
+      return $cb->(['error', { type => 'stateMismatch' }, $tag])
+        if $_[0] ne $args->{ifFromInState};
+      $do_get->(undef);
+    }, $errcb);
+  }
+  else { $do_get->(undef) }
 }
 
 sub do_upload {
