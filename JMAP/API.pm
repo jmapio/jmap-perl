@@ -72,6 +72,19 @@ my %PARAM_SCHEMA = (
     sinceState         => 'string',
     maxChanges         => 'uint?',
   },
+  'Principal/get' => {
+    accountId  => 'string?',
+    ids        => '[string]?',
+    properties => '[string]?',
+  },
+  'Principal/getAvailability' => {
+    accountId      => 'string?',
+    id             => 'string',
+    utcStart       => 'string',
+    utcEnd         => 'string',
+    showDetails    => 'bool?',
+    eventProperties => '[string]?',
+  },
   'CalendarEvent/parse' => {
     accountId          => 'string?',
     blobIds            => '[string]',

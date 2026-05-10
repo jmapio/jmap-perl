@@ -1188,6 +1188,9 @@ sub do_session {
               maxExpandedQueryDuration => 'P2Y',
               maxParticipantsPerEvent  => undef,
               mayCreateCalendar        => JSON::true,
+            },
+            'urn:ietf:params:jmap:principals' => {
+              currentUserPrincipalId => 'me',
             }) : ()),
             ($a->{carddavURL} ? ('urn:ietf:params:jmap:contacts' => {
               maxAddressBooksPerCard => 1,
@@ -1258,6 +1261,7 @@ my %KNOWN_CAPABILITIES = map { $_ => 1 } qw(
   urn:ietf:params:jmap:quota
   urn:ietf:params:jmap:calendars
   urn:ietf:params:jmap:contacts
+  urn:ietf:params:jmap:principals
 );
 
 sub _jmap_request_error {

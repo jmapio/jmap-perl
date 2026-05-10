@@ -957,6 +957,161 @@ sub api_CalendarEvent_parse {
   }];
 }
 
+sub _busy_status_for_event {
+  my ($payload, $user_email) = @_;
+  my $status = $payload->{status} // 'confirmed';
+
+  if ($user_email && ref $payload->{participants} eq 'HASH') {
+    for my $p (values %{$payload->{participants}}) {
+      my $p_email = $p->{email};
+      if (!$p_email && ref $p->{sendTo} eq 'HASH') {
+        ($p_email) = map { s/^mailto://ir } grep { defined } values %{$p->{sendTo}};
+      }
+      next unless $p_email && lc($p_email) eq lc($user_email);
+      my $ps = $p->{participationStatus} // 'needs-action';
+      return 'confirmed' if $ps eq 'accepted' && $status eq 'confirmed';
+      return 'tentative'  if $ps eq 'tentative' || $status eq 'tentative';
+      return 'unavailable';
+    }
+  }
+
+  return 'confirmed'  if $status eq 'confirmed';
+  return 'tentative'  if $status eq 'tentative';
+  return 'unavailable';
+}
+
+sub api_Principal_get {
+  my ($Self, $args) = @_;
+
+  my ($user, $accountid) = $Self->_api_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
+  $Self->commit();
+
+  my $principal = {
+    id          => 'me',
+    type        => 'individual',
+    name        => $user->{email} // '',
+    description => JSON::null,
+    email       => $user->{email} // '',
+    timeZone    => JSON::null,
+    capabilities => {
+      'urn:ietf:params:jmap:calendars' => {
+        accountId          => $accountid,
+        mayGetAvailability => JSON::true,
+        mayActAs           => JSON::false,
+      },
+    },
+  };
+
+  my $ids = $args->{ids};
+  my (@list, @not_found);
+  if (!defined $ids) {
+    @list = ($principal);
+  } else {
+    for my $id (@$ids) {
+      if ($id eq 'me') { push @list,      $principal }
+      else              { push @not_found, $id        }
+    }
+  }
+
+  return ['Principal/get', {
+    accountId => $accountid,
+    state     => 'dummy',
+    list      => \@list,
+    notFound  => \@not_found,
+  }];
+}
+
+sub api_Principal_getAvailability {
+  my ($Self, $args) = @_;
+
+  my ($user, $accountid) = $Self->_api_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
+
+  return $Self->_transError(['error', {type => 'notFound'}])
+    unless ($args->{id} // '') eq 'me';
+
+  my $utc_start    = $args->{utcStart};
+  my $utc_end      = $args->{utcEnd};
+  my $show_details = $args->{showDetails} // 0;
+  my $event_props  = $args->{eventProperties};
+
+  (my $range_start = $utc_start) =~ s/Z$//;
+  (my $range_end   = $utc_end)   =~ s/Z$//;
+
+  my $user_email = $user->{email};
+  my $jevents    = $Self->{db}->dget('jevents', {active => 1}, 'eventuid,jcalendarid');
+  $Self->commit();
+
+  my @busy;
+
+  for my $row (@$jevents) {
+    my $payload = $Self->{db}->read_jevent_payload($row->{eventuid});
+    next unless $payload;
+
+    next if ($payload->{freeBusyStatus} // 'busy') eq 'free';
+    next if ($payload->{status}         // 'confirmed') eq 'cancelled';
+    next if ($payload->{privacy}        // 'public') eq 'secret';
+
+    my $is_recurring = ($payload->{recurrenceRules} && @{$payload->{recurrenceRules}})
+                    || $payload->{recurrenceRule};
+
+    my @candidates;  # each is {occ_payload, local_start}
+    if ($is_recurring) {
+      my @occurrences = $Self->_expand_event_occurrences($row, $payload, $range_start, $range_end);
+      for my $occ (@occurrences) {
+        my (undef, $rid) = split('/', $occ->{id}, 2);
+        my $op = $rid ? (_expand_occurrence($payload, $rid) // next) : $payload;
+        next if ($op->{freeBusyStatus} // $payload->{freeBusyStatus} // 'busy') eq 'free';
+        next if ($op->{status}         // $payload->{status} // 'confirmed') eq 'cancelled';
+        next if ($op->{privacy}        // $payload->{privacy} // 'public') eq 'secret';
+        push @candidates, {occ_payload => $op, local_start => $occ->{start}};
+      }
+    } else {
+      push @candidates, {occ_payload => $payload, local_start => $payload->{start}};
+    }
+
+    for my $c (@candidates) {
+      my ($op, $local_start) = @{$c}{qw(occ_payload local_start)};
+      my $tz  = $op->{timeZone} // $payload->{timeZone} // 'UTC';
+      my $dur = $op->{duration} // $payload->{duration} // 'P0D';
+
+      my $us = _utc_start($local_start, $tz);
+      next unless defined $us;  # skip all-day events
+      next if $us ge $utc_end;
+
+      my $dt_us = _parse_jscal_dt($local_start, $tz);
+      my $dt_ue = $dt_us ? _dt_add_duration($dt_us, $dur) : undef;
+      $dt_ue //= $dt_us;
+      my $ue = ($dt_ue ? do { $dt_ue->set_time_zone('UTC'); $dt_ue->strftime('%Y-%m-%dT%H:%M:%SZ') } : $us);
+      next if $ue le $utc_start;
+
+      my %bp = (
+        utcStart   => $us,
+        utcEnd     => $ue,
+        busyStatus => _busy_status_for_event($op, $user_email),
+        event      => JSON::null,
+        accountId  => JSON::null,
+      );
+      if ($show_details && ($op->{privacy} // 'public') ne 'private') {
+        my $ev = $event_props
+          ? { map { $_ => $op->{$_} } grep { exists $op->{$_} } @$event_props }
+          : $op;
+        $bp{event}     = $ev;
+        $bp{accountId} = $accountid;
+      }
+      push @busy, \%bp;
+    }
+  }
+
+  @busy = sort { $a->{utcStart} cmp $b->{utcStart} } @busy;
+
+  return ['Principal/getAvailability', {
+    accountId => $accountid,
+    list      => \@busy,
+  }];
+}
+
 sub api_CalendarEvent_set {
   my $Self = shift;
   my $args = shift;

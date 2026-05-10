@@ -342,7 +342,13 @@ Tests in JMAP-TestSuite cover all four methods with pool_account_pair support.
 #### Nice-to-have
 - [x] `CalendarEvent/parse`: implemented via `Text::JSCalendar::vcalendarToEvents`
 - [x] `CalendarEvent/copy` — implemented via parent orchestration (see Cross-account /copy section)
-- [ ] `Principal/getAvailability` (free/busy)
+- [x] `Principal/getAvailability` for self — `Principal/get` returns id "me"; `Principal/getAvailability`
+      computes BusyPeriod list from local CalendarEvents (freeBusyStatus, status, privacy filtering;
+      recurring expansion via existing `_expand_event_occurrences`; busyStatus from event.status
+      and participant.participationStatus); `currentUserPrincipalId: "me"` in session capabilities;
+      `urn:ietf:params:jmap:principals` added to known capabilities
+- [ ] `Principal/getAvailability` for others — CalDAV free/busy `REPORT` + stub Principal list (moderate effort)
+- [ ] Full `Principal` model — user directory, sharing, delegates (non-goal for proxy)
 - [ ] `CalendarEventNotification` (all methods — requires sharing/Principal model)
 
 ---
