@@ -2361,7 +2361,15 @@ sub create_calendar_events {
   my %notcreated;
   foreach my $cid (sort keys %$new) {
     my $calendar = $new->{$cid};
-    my ($jcalendarid) = keys %{$calendar->{calendarIds} || {}};
+    my @cal_ids = grep { ($calendar->{calendarIds} || {})->{$_} }
+                       keys %{$calendar->{calendarIds} || {}};
+    if (@cal_ids > 1) {
+      $notcreated{$cid} = { type => 'invalidProperties',
+        properties => ['calendarIds'],
+        description => 'Only one calendar per event is supported' };
+      next;
+    }
+    my ($jcalendarid) = @cal_ids;
     $jcalendarid //= $calendar->{calendarId};  # fallback for old clients
     my $href = $Self->dgetfield('icalendars', { jcalendarid => $jcalendarid }, 'href');
     unless ($href) {
@@ -2412,6 +2420,7 @@ sub update_calendar_events {
 
   my %todo;         # href => [uid, event_data]
   my %todo_occurrence;  # href => [[recurrenceId, uid_key, patch], ...]
+  my %todo_move;    # old_href => {new_cal_href, uid}
   my %changed;
   my %notchanged;
   foreach my $uid (keys %$update) {
@@ -2441,6 +2450,27 @@ sub update_calendar_events {
       next;
     }
 
+    if (my $cids = $calendar->{calendarIds}) {
+      my @active = grep { $cids->{$_} } keys %$cids;
+      if (@active > 1) {
+        $notchanged{$uid} = { type => 'invalidProperties',
+          properties => ['calendarIds'],
+          description => 'Only one calendar per event is supported' };
+        next;
+      }
+      if (@active == 1) {
+        my $new_jcal_id = $active[0];
+        my $new_ical = $Self->dgetone('icalendars', {jcalendarid => $new_jcal_id});
+        unless ($new_ical) {
+          $notchanged{$uid} = {type => 'notFound', description => 'Target calendar not found'};
+          next;
+        }
+        my $cur_icalid = $Self->dgetfield('ievents', {href => $href}, 'icalendarid');
+        if (defined $cur_icalid && $new_ical->{icalendarid} != $cur_icalid) {
+          $todo_move{$href} = {new_cal_href => $new_ical->{href}, uid => $uid};
+        }
+      }
+    }
     my %ev = %$calendar;
     delete $ev{calendarIds};
     delete $ev{calendarId};
@@ -2458,6 +2488,21 @@ sub update_calendar_events {
   }
 
   $Self->commit();
+
+  foreach my $href (sort keys %todo_move) {
+    my $info = $todo_move{$href};
+    my $uid  = $info->{uid};
+    my $new_href = eval { $Self->backend_cmd('move_event', $href, $info->{new_cal_href}) };
+    if ($@) {
+      $notchanged{$uid} = {type => 'serverFail', description => "$@"};
+      delete $changed{$uid};
+      delete $todo{$href};
+      next;
+    }
+    if ($new_href && $new_href ne $href && exists $todo{$href}) {
+      $todo{$new_href} = delete $todo{$href};
+    }
+  }
 
   foreach my $href (sort keys %todo) {
     my ($uid, $ev) = @{$todo{$href}};
@@ -2900,7 +2945,14 @@ sub create_contacts_jscontact {
     # Resolve addressBookIds to a CardDAV href
     my $abookhref = $default_href;
     if (my $abids = delete $card->{addressBookIds}) {
-      my ($jab_id) = grep { $abids->{$_} } keys %$abids;
+      my @active = grep { $abids->{$_} } keys %$abids;
+      if (@active > 1) {
+        $notcreated{$cid} = { type => 'invalidProperties',
+          properties => ['addressBookIds'],
+          description => 'Only one address book per card is supported' };
+        next;
+      }
+      my ($jab_id) = @active;
       $abookhref = $href_by_jab{$jab_id} // $default_href if $jab_id;
     }
 
@@ -2954,7 +3006,14 @@ sub update_contacts_jscontact {
     # Handle addressBookIds change: MOVE card to new collection
     if (exists $patch->{addressBookIds}) {
       my $abids = delete $patch->{addressBookIds};
-      my ($new_jab_id) = $abids ? grep { $abids->{$_} } keys %$abids : ();
+      my @active = $abids ? grep { $abids->{$_} } keys %$abids : ();
+      if (@active > 1) {
+        $notchanged{$carduid} = { type => 'invalidProperties',
+          properties => ['addressBookIds'],
+          description => 'Only one address book per card is supported' };
+        next;
+      }
+      my ($new_jab_id) = @active;
       my $new_href = $new_jab_id ? $href_by_jab{$new_jab_id} : undef;
       unless ($new_href) {
         $notchanged{$carduid} = { type => 'notFound', description => 'No such address book' };

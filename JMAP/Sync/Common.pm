@@ -310,6 +310,18 @@ sub delete_event {
   $talk->DeleteEvent($resource);  # XXX - we pass more properties for no good reason to this API
 }
 
+sub move_event {
+  my $Self = shift;
+  my ($old_href, $new_collection_href) = @_;
+
+  my $talk = $Self->connect_calendars();
+  return unless $talk;
+
+  $new_collection_href =~ s{/$}{};
+  (my $new_cal_id = $new_collection_href) =~ s{.*/}{};
+  return $talk->MoveEvent($old_href, $new_cal_id);
+}
+
 sub get_addressbooks {
   my $Self = shift;
   my $talk = $Self->connect_contacts();

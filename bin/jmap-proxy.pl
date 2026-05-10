@@ -1182,7 +1182,7 @@ sub do_session {
             'urn:ietf:params:jmap:mdn'   => {},
             'urn:ietf:params:jmap:quota' => {},
             ($a->{caldavURL}  ? ('urn:ietf:params:jmap:calendars' => {
-              maxCalendarsPerEvent     => undef,
+              maxCalendarsPerEvent     => 1,
               minDateTime              => '1970-01-01T00:00:00Z',
               maxDateTime              => '2099-12-31T23:59:59Z',
               maxExpandedQueryDuration => 'P2Y',
@@ -1190,7 +1190,7 @@ sub do_session {
               mayCreateCalendar        => JSON::true,
             }) : ()),
             ($a->{carddavURL} ? ('urn:ietf:params:jmap:contacts' => {
-              maxAddressBooksPerCard => undef,
+              maxAddressBooksPerCard => 1,
               mayCreateAddressBook   => JSON::true,
             }) : ()),
           },

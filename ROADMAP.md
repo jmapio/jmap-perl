@@ -6,7 +6,7 @@ The JMAP proxy syncs email, calendars, and contacts from IMAP/CalDAV/CardDAV
 backends and exposes them over the JMAP protocol (RFCs 8620/8621).  It also
 supports direct JMAP-to-JMAP passthrough for backends that already speak JMAP.
 
-- **112/112 JMAP TestSuite tests passing** against Cyrus IMAP (87 Email/Mailbox/Thread + 2 Calendar/get + 23 CalendarEvent/AddressBook/ContactCard including set/update, set/destroy, and /changes tests)
+- **115/115 JMAP TestSuite tests passing** against Cyrus IMAP (87 Email/Mailbox/Thread + 2 Calendar/get + 26 CalendarEvent/AddressBook/ContactCard including set/update, set/destroy, /changes, /queryChanges, and /copy tests)
 - Conversion logic extracted into standalone CPAN modules:
   Data::JSEmail (0.03), Text::JSCalendar (0.03), Text::JSContact (0.01)
 - Docker image with single-process architecture and management UI
@@ -321,6 +321,8 @@ Tests in JMAP-TestSuite cover all four methods with pool_account_pair support.
       honors client-provided `uid` (falls back to new UUID); sequence handled by CalDAVTalk
 - [x] `CalendarEvent/set` update: auto-sets `updated` to current UTC time if not in patch;
       sequence increment handled by CalDAVTalk `_updateEvent`
+- [x] `CalendarEvent/set` update `calendarIds`: now issues CalDAV MOVE to the new collection
+      (via `Net::CalDAVTalk::MoveEvent`) and follows up with content PUT if other fields also changed
 - [x] `ContactCard/set` create: honors client-provided `uid` (falls back to new UUID)
 - [x] `CalendarEvent/set` `sendSchedulingMessages=false`: passes `Schedule-Reply: false`
       HTTP header (RFC 6638 §8.1) and sets `scheduleAgent=client` on all participants
@@ -375,7 +377,7 @@ Tests in JMAP-TestSuite cover all four methods with pool_account_pair support.
       `name/surname2`; `unsupportedSort` for unknown; stable tie-break by uid
 - [x] `ContactCard/query` `anchor`/`anchorOffset` not implemented
 - [x] `ContactCard/set` update `addressBookIds`: now issues CardDAV MOVE to the new collection and updates `icards.iaddressbookid` + `jcontacts.jaddressbookid`
-- [ ] Multiple address books per card / multiple calendars per event: both `jcontacts.jaddressbookid` and `jevents.jcalendarid` are single INTEGER columns, mirroring the pre-jmessagemap email model. Supporting `addressBookIds`/`calendarIds` with >1 entry would require junction tables (`jcontact_addressbooks`, `jevent_calendars`), schema migration, COPY-on-create into each collection, diff-based add/remove on update, and changes to sync. The DAV side is awkward too — CardDAV and CalDAV don't have native multi-collection membership; the server gets independent copies that can diverge.
+- [x] Multiple address books per card / multiple calendars per event: both specs define `maxAddressBooksPerCard` / `maxCalendarsPerEvent` capability fields for exactly this. We now advertise `1` for both and return `invalidProperties` if a client sends >1 truthy entry. True multi-membership would require junction tables + DAV COPY semantics (copies diverge independently — unlike IMAP COPY which shares the blob).
 
 ---
 
