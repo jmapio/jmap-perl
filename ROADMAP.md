@@ -6,7 +6,7 @@ The JMAP proxy syncs email, calendars, and contacts from IMAP/CalDAV/CardDAV
 backends and exposes them over the JMAP protocol (RFCs 8620/8621).  It also
 supports direct JMAP-to-JMAP passthrough for backends that already speak JMAP.
 
-- **115/115 JMAP TestSuite tests passing** against Cyrus IMAP (87 Email/Mailbox/Thread + 2 Calendar/get + 26 CalendarEvent/AddressBook/ContactCard including set/update, set/destroy, /changes, /queryChanges, and /copy tests)
+- **132/132 JMAP TestSuite tests passing** against Cyrus IMAP (87 Email/Mailbox/Thread + 2 Calendar/get + 26 CalendarEvent/AddressBook/ContactCard + 17 Identity/VacationResponse/Quota/Principal/SearchSnippet/MDN/EmailSubmission)
 - Conversion logic extracted into standalone CPAN modules:
   Data::JSEmail (0.03), Text::JSCalendar (0.03), Text::JSContact (0.01)
 - Docker image with single-process architecture and management UI
@@ -390,8 +390,8 @@ Tests in JMAP-TestSuite cover all four methods with pool_account_pair support.
 ## Phase 8: Documentation & Developer Experience
 
 - [x] Landing page (proxy.jmap.io/): describes what the proxy is, signup form
-- [ ] Setup guide (Docker, reverse proxy, connecting backends)
-- [ ] API documentation for management endpoints
+- [x] Setup guide (Docker, reverse proxy, connecting backends) — see SETUP.md
+- [x] API documentation for management endpoints — see API.md
 
 ## Non-Goals
 
