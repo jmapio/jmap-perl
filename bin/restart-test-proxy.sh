@@ -87,7 +87,7 @@ if [ "$CLEAN" = "1" ]; then
     curl -sf -X DELETE "${CYRUS_MGMT_URL}/api/${CYRUS_USER}" >/dev/null 2>&1 || true
     curl -sf -X PUT "${CYRUS_MGMT_URL}/api/${CYRUS_USER}" \
         -H 'Content-Type: application/json' \
-        -d '{"mailboxes":[{"name":"INBOX","subscribed":true}]}' >/dev/null
+        -d '{"mailboxes":[{"name":"INBOX","subscribed":true}],"quota_kb":102400}' >/dev/null
 
     if [ "$BACKEND" = "jmap" ]; then
         # Register as JMAP passthrough account pointing at Cyrus's native JMAP
@@ -124,13 +124,6 @@ if [ "$CLEAN" = "1" ]; then
         echo "Initialized and synced (IMAP)"
     fi
 
-    # Set a storage quota on the test user so Quota/get returns data
-    perl -e '
-use Mail::IMAPTalk;
-my $imap = Mail::IMAPTalk->new(Server => "localhost", Port => $ENV{CYRUS_IMAP_PORT}, UseSSL => 0, Username => "admin", Password => "admin") or die;
-$imap->_imap_cmd("SETQUOTA", 0, "", "user/$ENV{CYRUS_USER}", ["STORAGE", 102400]);
-$imap->logout;
-' 2>/dev/null && echo "Quota set on $CYRUS_USER" || echo "Warning: could not set quota"
 fi
 
 # Write test config for JMAP-TestSuite (proxy mode)
