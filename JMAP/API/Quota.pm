@@ -12,7 +12,10 @@ my %RESOURCE_MAP = (
 
 sub _quota_state {
   my ($quotas) = @_;
-  return sha1_hex(join(',', map { "$_->{id}=$_->{used}/$_->{hardLimit}" }
+  # Use sprintf '%d' to avoid setting SvPOK on the numeric scalars (string
+  # interpolation would corrupt the JSON type, causing JSON::XS to encode
+  # used/hardLimit as strings instead of numbers).
+  return sha1_hex(join(',', map { sprintf('%s=%d/%d', $_->{id}, $_->{used}, $_->{hardLimit}) }
                               sort { $a->{id} cmp $b->{id} } @$quotas));
 }
 
@@ -25,8 +28,8 @@ sub _quota_to_jmap {
   return {
     id           => "$raw->{root}:$resource",
     resourceType => $info->{type},
-    used         => $raw->{used}  * $scale,
-    hardLimit    => $raw->{limit} * $scale,
+    used         => int($raw->{used}  * $scale),
+    hardLimit    => int($raw->{limit} * $scale),
     scope        => 'account',
     name         => $name || $raw->{root} || 'default',
     types        => $info->{types},
