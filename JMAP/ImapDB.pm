@@ -2318,20 +2318,6 @@ sub destroy_mailboxes {
   return (\@destroyed, \%notdestroyed);
 }
 
-# Normalize RFC 8984 recurrenceRules (plural array) to the recurrenceRule (singular
-# object) used by Net::CalDAVTalk / Text::JSCalendar.  Multiple rules are not
-# supported by iCalendar anyway, so we take the first one.
-sub _normalize_recurrence {
-  my ($ev) = @_;
-  if ($ev->{recurrenceRules} && ref($ev->{recurrenceRules}) eq 'ARRAY' && @{$ev->{recurrenceRules}}) {
-    $ev->{recurrenceRule} //= $ev->{recurrenceRules}[0];
-  }
-  delete $ev->{recurrenceRules};
-  if ($ev->{excludedRecurrenceRules}) {
-    # CalDAVTalk does not support excludedRecurrenceRules — drop silently.
-    delete $ev->{excludedRecurrenceRules};
-  }
-}
 
 sub _utcnow {
   my @t = gmtime();
@@ -2390,7 +2376,6 @@ sub create_calendar_events {
       $ev{_no_schedule} = 1;
       _set_schedule_agent_client(\%ev);
     }
-    _normalize_recurrence(\%ev);
     $todo{$cid} = [$href, \%ev];
 
     $createmap{$cid} = { id => $uid };
@@ -2481,7 +2466,6 @@ sub update_calendar_events {
       $ev{_no_schedule} = 1;
       _set_schedule_agent_client(\%ev);
     }
-    _normalize_recurrence(\%ev);
     $todo{$href} = [$uid, \%ev];
 
     $changed{$uid} = undef;

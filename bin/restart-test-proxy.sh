@@ -133,7 +133,7 @@ $imap->logout;
 ' 2>/dev/null && echo "Quota set on $CYRUS_USER" || echo "Warning: could not set quota"
 fi
 
-# Write test config for JMAP-TestSuite
+# Write test config for JMAP-TestSuite (proxy mode)
 cat > "$DATADIR/test-config.json" <<TESTCONFIG
 {
   "adapter"                    : "JMAPProxy",
@@ -150,6 +150,21 @@ cat > "$DATADIR/test-config.json" <<TESTCONFIG
   "cyrus_backend"              : true
 }
 TESTCONFIG
+
+# Write test config for direct Cyrus access (bypassing the proxy)
+cat > "$DATADIR/cyrus-direct-config.json" <<DIRECTCONFIG
+{
+  "adapter"          : "CyrusDirect",
+  "accountIds"       : [ "$CYRUS_USER" ],
+  "base_uri"         : "$CYRUS_URL/",
+  "mgmt_uri"         : "http://localhost:8001/",
+  "cyrus_host"       : "localhost",
+  "cyrus_port"       : $CYRUS_IMAP_PORT,
+  "cyrus_password"   : "$CYRUS_PASS",
+  "cyrus_admin_user" : "admin",
+  "cyrus_admin_pass" : "admin"
+}
+DIRECTCONFIG
 
 echo "JMAP proxy running: frontend=:$FRONTEND_PORT mgmt=:$JMAP_MGMT_PORT (backend=$BACKEND)"
 echo "  JMAP_DATADIR=$DATADIR"

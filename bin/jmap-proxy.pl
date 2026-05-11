@@ -1216,12 +1216,14 @@ sub do_session {
             maxObjectsInSet => 4096,
             collationAlgorithms => [],
           },
-          'urn:ietf:params:jmap:mail' => {},
-          'urn:ietf:params:jmap:submission' => {},
-          'urn:ietf:params:jmap:mdn'   => {},
-          'urn:ietf:params:jmap:quota' => {},
-          'urn:ietf:params:jmap:calendars' => {},
-          'urn:ietf:params:jmap:contacts'  => {},
+          'urn:ietf:params:jmap:mail'            => {},
+          'urn:ietf:params:jmap:submission'       => {},
+          'urn:ietf:params:jmap:vacationresponse' => {},
+          'urn:ietf:params:jmap:mdn'              => {},
+          'urn:ietf:params:jmap:quota'            => {},
+          'urn:ietf:params:jmap:principals'       => {},
+          'urn:ietf:params:jmap:calendars'        => {},
+          'urn:ietf:params:jmap:contacts'         => {},
         },
         accounts => $accounts,
         primaryAccounts => {
@@ -1257,6 +1259,7 @@ my %KNOWN_CAPABILITIES = map { $_ => 1 } qw(
   urn:ietf:params:jmap:core
   urn:ietf:params:jmap:mail
   urn:ietf:params:jmap:submission
+  urn:ietf:params:jmap:vacationresponse
   urn:ietf:params:jmap:mdn
   urn:ietf:params:jmap:quota
   urn:ietf:params:jmap:calendars
