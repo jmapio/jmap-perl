@@ -904,12 +904,6 @@ sub api_CalendarEvent_queryChanges {
   }];
 }
 
-sub api_CalendarEvent_copy {
-  my $Self = shift;
-  my $args = shift;
-  my $accountid = $Self->{db}->accountid();
-  return ['error', { type => 'notImplemented' }];
-}
 
 sub api_CalendarEvent_parse {
   my $Self = shift;

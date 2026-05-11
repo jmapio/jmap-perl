@@ -13,7 +13,7 @@ TESTSUITE="${JMAP_TESTSUITE:-/Users/brong/src/JMAP-TestSuite}"
 cd "$TESTSUITE"
 
 if [ $# -eq 0 ]; then
-  TESTS="t/Email/ t/Mailbox/ t/Thread/ t/Calendar/ t/CalendarEvent/ t/AddressBook/ t/ContactCard/"
+  TESTS="t/Email/ t/Mailbox/ t/Thread/ t/Calendar/ t/CalendarEvent/ t/AddressBook/ t/ContactCard/ t/Identity/ t/VacationResponse/ t/Quota/ t/Principal/ t/SearchSnippet/ t/MDN/ t/EmailSubmission/"
 else
   TESTS="$@"
 fi

@@ -574,8 +574,7 @@ sub api_Identity_get {
 
   my $prefs = ($row && $row->{payload}) ? $json->decode($row->{payload}) : {};
 
-  my @list;
-  push @list, {
+  my $id1 = {
     id                 => "id1",
     mayDelete          => $JSON::false,
     email              => $user->{email},
@@ -601,11 +600,21 @@ sub api_Identity_get {
     popLinkId          => undef,
   };
 
+  my %known = ('id1' => $id1);
+  my (@list, @not_found);
+  if (!defined $args->{ids}) {
+    @list = ($id1);
+  } else {
+    for my $id (@{$args->{ids}}) {
+      exists $known{$id} ? push(@list, $known{$id}) : push(@not_found, $id);
+    }
+  }
+
   return ['Identity/get', {
     accountId => $accountid,
     state     => 'dummy',
     list      => \@list,
-    notFound  => [],
+    notFound  => \@not_found,
   }];
 }
 

@@ -90,7 +90,7 @@ sub api_EmailSubmission_query {
   return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sort']}])
     unless $sort;
 
-  my $data = $Self->get_submissions($sort);
+  my $data = $Self->{db}->get_submissions($sort);
 
   $data = $Self->_submission_filter($data, $args->{filter}) if $args->{filter};
   my $total = scalar(@$data);
@@ -145,7 +145,7 @@ sub api_EmailSubmission_queryChanges {
   return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sort']}])
     unless $sort;
 
-  my $data = $Self->get_all_submissions($sort);
+  my $data = $Self->{db}->get_all_submissions($sort);
 
   $data = $Self->_submission_filter($data, $args->{filter}) if $args->{filter};
   my $total = scalar(@$data);
@@ -260,7 +260,7 @@ sub api_EmailSubmission_changes {
   return @e if @e;
   my $sinceState = $args->{sinceState};
 
-  my $data = $Self->get_submission_changes($sinceState);
+  my $data = $Self->{db}->get_submission_changes($sinceState);
 
   $Self->commit();
 

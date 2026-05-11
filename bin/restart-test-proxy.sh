@@ -123,6 +123,14 @@ if [ "$CLEAN" = "1" ]; then
             }" >/dev/null
         echo "Initialized and synced (IMAP)"
     fi
+
+    # Set a storage quota on the test user so Quota/get returns data
+    perl -e '
+use Mail::IMAPTalk;
+my $imap = Mail::IMAPTalk->new(Server => "localhost", Port => $ENV{CYRUS_IMAP_PORT}, UseSSL => 0, Username => "admin", Password => "admin") or die;
+$imap->_imap_cmd("SETQUOTA", 0, "", "user/$ENV{CYRUS_USER}", ["STORAGE", 102400]);
+$imap->logout;
+' 2>/dev/null && echo "Quota set on $CYRUS_USER" || echo "Warning: could not set quota"
 fi
 
 # Write test config for JMAP-TestSuite

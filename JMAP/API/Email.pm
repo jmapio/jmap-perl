@@ -324,7 +324,7 @@ sub api_SearchSnippet_get {
   my $messages = $Self->api_Email_get({
     accountId => $args->{accountId},
     ids => $args->{emailIds},
-    properties => ['subject', 'textBody', 'preview'],
+    properties => ['subject', 'preview'],
   });
 
   return $messages unless $messages->[0] eq 'Email/get';
@@ -338,7 +338,7 @@ sub api_SearchSnippet_get {
   my $tag = 'mark';
   foreach my $item (@{$messages->[1]{list}}) {
     $item->{emailId} = delete $item->{id};
-    my $text = delete $item->{textBody};
+    my $text = delete $item->{preview};
     unless (@terms) {
       $item->{subject} = undef;
       $item->{preview} = undef;
@@ -1091,10 +1091,6 @@ sub _good_keywords {
   return 1;
 }
 
-sub api_Email_copy {
-  my $Self = shift;
-  return $Self->_transError(['error', {type => 'notImplemented'}]);
-}
 
 sub api_Email_parse {
   my $Self = shift;

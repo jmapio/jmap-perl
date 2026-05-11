@@ -559,9 +559,6 @@ sub _transError {
   return @_;
 }
 
-# Cross-account copy methods require two-worker orchestration (not yet implemented).
-sub api_Blob_copy        { return $_[0]->_transError(['error', {type => 'notImplemented'}]) }
-
 # PushSubscription (RFC 8620 §7.2 webhook push) — SSE covers web clients for now.
 sub api_PushSubscription_get     { return $_[0]->_transError(['error', {type => 'notImplemented'}]) }
 sub api_PushSubscription_set     { return $_[0]->_transError(['error', {type => 'notImplemented'}]) }
