@@ -115,9 +115,7 @@ sub _expand_event_occurrences {
   my ($Self, $row, $master, $after_str, $before_str) = @_;
 
   my $start_str = $master->{start} // return ();
-  # Handle both RFC 8984 recurrenceRules (array) and older singular recurrenceRule
-  my $rules = $master->{recurrenceRules}
-           // ($master->{recurrenceRule} ? [$master->{recurrenceRule}] : []);
+  my $rules = $master->{recurrenceRule} ? [$master->{recurrenceRule}] : [];
   my $is_allday = ($start_str !~ /T/);
   my $tz_name   = $master->{timeZone} // 'UTC';
   my $tz        = eval { DateTime::TimeZone->new(name => $tz_name) }
@@ -133,9 +131,7 @@ sub _expand_event_occurrences {
   my $dt_after  = $after_cmp  ? _parse_jscal_dt($after_cmp,  $tz) : undef;
   my $dt_before = $before_cmp ? _parse_jscal_dt($before_cmp, $tz) : undef;
 
-  # Build excluded set: explicit excludedRecurrenceRules + null overrides.
   my %excluded;
-  $excluded{$_} = 1 for @{$master->{excludedRecurrenceRules} // []};
   my $overrides = $master->{recurrenceOverrides} // {};
   for my $rid (keys %$overrides) {
     $excluded{$rid} = 1 if !defined $overrides->{$rid} || $overrides->{$rid}{excluded};
@@ -455,7 +451,7 @@ sub _event_match {
 
     if ($condition->{after} || $condition->{before}) {
       my $start      = $payload->{start} // '';
-      my $is_recur   = $payload->{recurrenceRules} || $payload->{recurrenceRule};
+      my $is_recur   = $payload->{recurrenceRule};
       unless ($is_recur) {
         (my $before_cmp = $condition->{before} // '') =~ s/Z$//;
         (my $after_cmp  = $condition->{after}  // '') =~ s/Z$//;
@@ -487,19 +483,17 @@ sub _event_match {
     if (defined $condition->{owner}) {
       my $needle = lc($condition->{owner});
       my $found  = 0;
-      for my $addr (values %{$payload->{replyTo} || {}}) {
+      if (my $addr = $payload->{organizerCalendarAddress}) {
         (my $e = $addr) =~ s/^mailto://i;
-        if (index(lc($e), $needle) >= 0) { $found = 1; last }
+        $found = 1 if index(lc($e), $needle) >= 0;
       }
       unless ($found) {
         for my $p (values %{$payload->{participants} || {}}) {
           next unless ($p->{roles} || {})->{owner};
-          for my $addr (values %{$p->{sendTo} || {}}) {
-            (my $e = $addr) =~ s/^mailto://i;
-            if (index(lc($p->{name} // ''), $needle) >= 0 ||
-                index(lc($e), $needle) >= 0) { $found = 1; last }
-          }
-          last if $found;
+          my $addr = $p->{calendarAddress} // '';
+          (my $e = $addr) =~ s/^mailto://i;
+          if (index(lc($p->{name} // ''), $needle) >= 0 ||
+              index(lc($e), $needle) >= 0) { $found = 1; last }
         }
       }
       return 0 unless $found;
@@ -509,12 +503,10 @@ sub _event_match {
       my $needle = lc($condition->{attendee});
       my $found  = 0;
       for my $p (values %{$payload->{participants} || {}}) {
-        for my $addr (values %{$p->{sendTo} || {}}) {
-          (my $e = $addr) =~ s/^mailto://i;
-          if (index(lc($p->{name} // ''), $needle) >= 0 ||
-              index(lc($e), $needle) >= 0) { $found = 1; last }
-        }
-        last if $found;
+        my $addr = $p->{calendarAddress} // '';
+        (my $e = $addr) =~ s/^mailto://i;
+        if (index(lc($p->{name} // ''), $needle) >= 0 ||
+            index(lc($e), $needle) >= 0) { $found = 1; last }
       }
       return 0 unless $found;
     }
@@ -527,8 +519,9 @@ sub _event_match {
         map { $_->{name} // '' } values %{$payload->{locations}    || {}},
         map {
           my $p = $_;
-          ($p->{name} // ''),
-          map { (my $e = $_) =~ s/^mailto://i; $e } values %{$p->{sendTo} || {}}
+          my $addr = $p->{calendarAddress} // '';
+          (my $e = $addr) =~ s/^mailto://i;
+          ($p->{name} // ''), $e
         } values %{$payload->{participants} || {}},
       );
       return 0 unless index(lc(join(' ', @hayparts)), $needle) >= 0;
@@ -594,8 +587,7 @@ sub api_CalendarEvent_query {
       $storage{ $row->{eventuid} } = $master;
       next unless $Self->_event_match($row, $filter, \%storage);
 
-      my $is_recurring = ($master->{recurrenceRules} && @{$master->{recurrenceRules}})
-                      || $master->{recurrenceRule};
+      my $is_recurring = $master->{recurrenceRule};
       if ($is_recurring) {
         push @expanded, $Self->_expand_event_occurrences($row, $master, $after, $before);
       } else {
@@ -693,7 +685,7 @@ sub _expand_occurrence {
   $item{recurrenceId} = $recurrence_id;
 
   # master-only properties are not valid on expanded occurrences (RFC 8984 §4.3)
-  delete $item{$_} for qw(recurrenceRules recurrenceOverrides excludedRecurrenceRules);
+  delete $item{$_} for qw(recurrenceRule recurrenceOverrides);
 
   return \%item;
 }
@@ -958,8 +950,8 @@ sub _busy_status_for_event {
   if ($user_email && ref $payload->{participants} eq 'HASH') {
     for my $p (values %{$payload->{participants}}) {
       my $p_email = $p->{email};
-      if (!$p_email && ref $p->{sendTo} eq 'HASH') {
-        ($p_email) = map { s/^mailto://ir } grep { defined } values %{$p->{sendTo}};
+      if (!$p_email && $p->{calendarAddress}) {
+        ($p_email = $p->{calendarAddress}) =~ s/^mailto://i;
       }
       next unless $p_email && lc($p_email) eq lc($user_email);
       my $ps = $p->{participationStatus} // 'needs-action';
@@ -1047,8 +1039,7 @@ sub api_Principal_getAvailability {
     next if ($payload->{status}         // 'confirmed') eq 'cancelled';
     next if ($payload->{privacy}        // 'public') eq 'secret';
 
-    my $is_recurring = ($payload->{recurrenceRules} && @{$payload->{recurrenceRules}})
-                    || $payload->{recurrenceRule};
+    my $is_recurring = $payload->{recurrenceRule};
 
     my @candidates;  # each is {occ_payload, local_start}
     if ($is_recurring) {
