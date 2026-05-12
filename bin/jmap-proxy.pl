@@ -29,7 +29,9 @@ use Crypt::JWT qw(encode_jwt);
 use Crypt::PK::RSA;
 use MIME::Base64 qw(decode_base64 encode_base64);
 use MIME::Base64::URLSafe;
-use POSIX qw(:sys_wait_h);
+use IO::Compress::Zip     qw($ZipError);
+use IO::Uncompress::Unzip qw($UnzipError);
+use POSIX qw(:sys_wait_h strftime);
 use Socket;
 use Template;
 use URI;
@@ -1848,6 +1850,484 @@ sub do_raw {
   });
 }
 
+# ── PDPA (Personal Data Portability Archive) ─────────────────────────────────
+
+sub _pdpa_build_zip {
+  my (%files) = @_;
+  my @paths = sort keys %files;
+  return '' unless @paths;
+  my $zip_data = '';
+  my $first = shift @paths;
+  my $zip = IO::Compress::Zip->new(\$zip_data, Name => $first)
+    or die "Zip error: $ZipError\n";
+  $zip->print($files{$first});
+  for my $path (@paths) {
+    $zip->newStream(Name => $path) or die "Zip stream error: $ZipError\n";
+    $zip->print($files{$path});
+  }
+  $zip->close();
+  return $zip_data;
+}
+
+sub _pdpa_unzip {
+  my ($content) = @_;
+  my %files;
+  my $u = IO::Uncompress::Unzip->new(\$content)
+    or die "Cannot read zip: $UnzipError\n";
+  do {
+    my $hdr  = $u->getHeaderInfo;
+    my $name = $hdr->{Name} // '';
+    next if $name =~ m{/$};
+    local $/;
+    $files{$name} = <$u> // '';
+  } while $u->nextStream() > 0;
+  return %files;
+}
+
+sub _pdpa_mbox_path {
+  my ($mbox_id, $mbox_map) = @_;
+  my @parts;
+  my $cur = $mbox_map->{$mbox_id};
+  while ($cur) {
+    unshift @parts, $cur->{name};
+    $cur = $cur->{parentId} ? $mbox_map->{$cur->{parentId}} : undef;
+  }
+  return @parts ? join('/', @parts) : 'INBOX';
+}
+
+sub do_pdpa {
+  my ($httpd, $req) = @_;
+  $httpd->stop_request();
+  my $method = lc $req->method;
+
+  _authenticate($req, $httpd, sub {
+    my ($accountid) = @_;
+    if ($method eq 'get') {
+      _pdpa_export($accountid, $req);
+    } elsif ($method eq 'post') {
+      my $prefix = $req->url->query_param('prefix') // '';
+      _pdpa_import($accountid, $prefix, $req->content, $req);
+    } else {
+      $req->respond([405, 'method not allowed', { Allow => 'GET, POST' }, 'Method Not Allowed']);
+    }
+  }, sub { _require_auth($req) });
+}
+
+sub _pdpa_export {
+  my ($accountid, $req) = @_;
+
+  my %zip;
+  my $ts = strftime('%Y-%m-%dT%H:%M:%SZ', gmtime());
+  $zip{'archive.json'} = encode_json({
+    archive => {
+      id        => Data::UUID::LibUUID::new_uuid_string(),
+      name      => "Export for $accountid",
+      generator => 'jmap-proxy',
+      timestamp => $ts,
+      version   => '1',
+    },
+    dataset => { languagetag => 'en' },
+  });
+
+  send_backend_request($accountid, 'jmap', {
+    using => [qw(urn:ietf:params:jmap:core urn:ietf:params:jmap:mail)],
+    methodCalls => [
+      ['Mailbox/get',  {}, 'mx'],
+      ['Email/query',  { limit => 10000 }, 'eq'],
+    ],
+  }, sub {
+    my $r = shift;
+    my %res = map { $_->[2] => $_->[1] } @{$r->{methodResponses}};
+
+    my %mbox_map   = map { $_->{id} => $_ } @{$res{mx}{list} // []};
+    my @email_ids  = @{$res{eq}{ids} // []};
+
+    _pdpa_export_contacts($accountid, \%zip, sub {
+      _pdpa_export_calendars($accountid, \%zip, sub {
+        _pdpa_export_mail($accountid, \@email_ids, \%mbox_map, \%zip, sub {
+          my $zip_bytes = eval { _pdpa_build_zip(%zip) };
+          if ($@) {
+            return $req->respond([500, 'error', {}, "zip build failed: $@"]);
+          }
+          $req->respond([200, 'ok', {
+            'Content-Type'        => 'application/zip',
+            'Content-Disposition' => "attachment; filename=\"pdpa-$accountid.zip\"",
+          }, $zip_bytes]);
+        });
+      });
+    });
+
+  }, sub {
+    $req->respond([500, 'error', {}, 'export failed: ' . ($_[0] // 'unknown')]);
+  });
+}
+
+sub _pdpa_export_mail {
+  my ($accountid, $email_ids, $mbox_map, $zip, $cb) = @_;
+  return $cb->() unless @$email_ids;
+
+  send_backend_request($accountid, 'jmap', {
+    using => [qw(urn:ietf:params:jmap:core urn:ietf:params:jmap:mail)],
+    methodCalls => [['Email/get', {
+      ids        => $email_ids,
+      properties => [qw(id mailboxIds keywords receivedAt)],
+    }, 'eg']],
+  }, sub {
+    my $r = shift;
+    my @emails = @{$r->{methodResponses}[0][1]{list} // []};
+    return $cb->() unless @emails;
+
+    my @blob_ids = map { "m-$_->{id}" } @emails;
+    send_backend_request($accountid, 'fetch_blobs', { ids => \@blob_ids }, sub {
+      my $blobs = shift;
+
+      my %by_folder;
+      my %flag_to_kw = (
+        '$seen'     => '\Seen',   '$answered' => '\Answered',
+        '$flagged'  => '\Flagged', '$draft'   => '\Draft',
+      );
+
+      for my $email (@emails) {
+        my $blob = $blobs->{"m-$email->{id}"} or next;
+        my ($mbox_id) = keys %{$email->{mailboxIds} // {}};
+        my $folder = $mbox_id ? _pdpa_mbox_path($mbox_id, $mbox_map) : 'INBOX';
+
+        open(my $fh, '<', $blob->{path}) or next;
+        local $/; my $raw = <$fh>; close $fh;
+        unlink $blob->{path} if $blob->{is_temp};
+
+        my @flags = map { $flag_to_kw{lc $_} // "\$$_" } keys %{$email->{keywords} // {}};
+        push @{$by_folder{$folder}}, {
+          raw      => $raw,
+          flags    => \@flags,
+          received => $email->{receivedAt},
+        };
+      }
+
+      for my $folder (sort keys %by_folder) {
+        my @items;
+        my $seq = 1;
+        for my $m (@{$by_folder{$folder}}) {
+          my $filename = "$seq.eml";
+          $zip->{"mail/$folder/$filename"} = $m->{raw};
+          push @items, {
+            filename => $filename,
+            @{$m->{flags}} ? (flags => $m->{flags}) : (),
+            $m->{received} ? (receivedAt => $m->{received}) : (),
+          };
+          $seq++;
+        }
+        $zip->{"mail/$folder/folder.json"} = encode_json({
+          name  => (split('/', $folder))[-1],
+          items => \@items,
+        });
+      }
+      $cb->();
+    }, sub { $cb->() });
+  }, sub { $cb->() });
+}
+
+sub _pdpa_export_contacts {
+  my ($accountid, $zip, $cb) = @_;
+  send_backend_request($accountid, 'jmap', {
+    using => [qw(urn:ietf:params:jmap:core urn:ietf:params:jmap:contacts)],
+    methodCalls => [['AddressBook/get', {}, 'ax']],
+  }, sub {
+    my $r = shift;
+    my @abs = @{$r->{methodResponses}[0][1]{list} // []};
+    return $cb->() unless @abs;
+
+    my @remaining = @abs;
+    my $next_ab; $next_ab = sub {
+      return $cb->() unless @remaining;
+      my $ab  = shift @remaining;
+      my $dir = $ab->{name} // 'Personal';
+      send_backend_request($accountid, 'jmap', {
+        using => [qw(urn:ietf:params:jmap:core urn:ietf:params:jmap:contacts)],
+        methodCalls => [
+          ['ContactCard/query', { filter => { inAddressBook => $ab->{id} } }, 'cq'],
+          ['ContactCard/get', { '#ids' => { resultOf => 'cq', name => 'ContactCard/query', path => '/ids' } }, 'cg'],
+        ],
+      }, sub {
+        my $r2 = shift;
+        my %res = map { $_->[2] => $_->[1] } @{$r2->{methodResponses}};
+        my @cards = @{$res{cg}{list} // []};
+        my @items;
+        for my $card (@cards) {
+          my $uid = $card->{uid} // $card->{id};
+          $zip->{"contacts/$dir/$uid.json"} = encode_json($card);
+          push @items, { filename => "$uid.json", uid => $uid };
+        }
+        $zip->{"contacts/$dir/folder.json"} = encode_json({ name => $dir, items => \@items });
+        $next_ab->();
+      }, sub { $next_ab->() });
+    };
+    $next_ab->();
+  }, sub { $cb->() });
+}
+
+sub _pdpa_export_calendars {
+  my ($accountid, $zip, $cb) = @_;
+  send_backend_request($accountid, 'jmap', {
+    using => [qw(urn:ietf:params:jmap:core urn:ietf:params:jmap:calendars)],
+    methodCalls => [['Calendar/get', {}, 'cx']],
+  }, sub {
+    my $r = shift;
+    my @cals = @{$r->{methodResponses}[0][1]{list} // []};
+    return $cb->() unless @cals;
+
+    my @remaining = @cals;
+    my $next_cal; $next_cal = sub {
+      return $cb->() unless @remaining;
+      my $cal = shift @remaining;
+      my $dir = $cal->{name} // 'Calendar';
+      send_backend_request($accountid, 'jmap', {
+        using => [qw(urn:ietf:params:jmap:core urn:ietf:params:jmap:calendars)],
+        methodCalls => [
+          ['CalendarEvent/query', { filter => { inCalendar => $cal->{id} } }, 'evq'],
+          ['CalendarEvent/get', { '#ids' => { resultOf => 'evq', name => 'CalendarEvent/query', path => '/ids' } }, 'evg'],
+        ],
+      }, sub {
+        my $r2 = shift;
+        my %res = map { $_->[2] => $_->[1] } @{$r2->{methodResponses}};
+        my @events = @{$res{evg}{list} // []};
+        my @items;
+        for my $ev (@events) {
+          my $uid = $ev->{uid} // $ev->{id};
+          $zip->{"calendars/$dir/$uid.json"} = encode_json($ev);
+          push @items, { filename => "$uid.json", uid => $uid };
+        }
+        $zip->{"calendars/$dir/folder.json"} = encode_json({ name => $dir, items => \@items });
+        $next_cal->();
+      }, sub { $next_cal->() });
+    };
+    $next_cal->();
+  }, sub { $cb->() });
+}
+
+sub _pdpa_import {
+  my ($accountid, $prefix, $zip_bytes, $req) = @_;
+
+  my %files = eval { _pdpa_unzip($zip_bytes) };
+  if ($@) {
+    return $req->respond([400, 'bad request', {}, "Invalid zip: $@"]);
+  }
+
+  _pdpa_import_mail($accountid, $prefix, \%files, sub {
+    _pdpa_import_contacts($accountid, \%files, sub {
+      _pdpa_import_calendars($accountid, \%files, sub {
+        $req->respond([200, 'ok', { 'Content-Type' => 'application/json' },
+          $json->encode({ ok => \1 })]);
+      });
+    });
+  });
+}
+
+sub _pdpa_import_mail {
+  my ($accountid, $prefix, $files, $cb) = @_;
+
+  my %folders;
+  for my $path (keys %$files) {
+    next unless $path =~ m{^mail/(.+)/folder\.json$};
+    my $src  = $1;
+    my $meta = eval { decode_json($files->{$path}) } // {};
+    my $dest = $prefix ? "$prefix/$src" : $src;
+    $folders{$src} = { meta => $meta, dest => $dest };
+  }
+  return $cb->() unless %folders;
+
+  send_backend_request($accountid, 'jmap', {
+    using => [qw(urn:ietf:params:jmap:core urn:ietf:params:jmap:mail)],
+    methodCalls => [['Mailbox/get', {}, 'mx']],
+  }, sub {
+    my $r = shift;
+    my @existing = @{$r->{methodResponses}[0][1]{list} // []};
+
+    my %id_to_mbox = map { $_->{id} => $_ } @existing;
+    my %path_to_id;
+    for my $mbox (@existing) {
+      my @parts;
+      my $cur = $mbox;
+      while ($cur) {
+        unshift @parts, $cur->{name};
+        $cur = $cur->{parentId} ? $id_to_mbox{$cur->{parentId}} : undef;
+      }
+      $path_to_id{join('/', @parts)} = $mbox->{id};
+    }
+
+    # Collect unique dest paths, sorted parents-first
+    my %dest_paths;
+    for my $finfo (values %folders) {
+      my @parts = split '/', $finfo->{dest};
+      $dest_paths{join('/', @parts[0..$_])} = 1 for 0..$#parts;
+    }
+    my @to_create = sort { length($a) <=> length($b) || $a cmp $b }
+                    grep { !$path_to_id{$_} } keys %dest_paths;
+
+    my $do_import = sub {
+      _pdpa_import_mail_emails($accountid, $files, \%folders, \%path_to_id, $cb);
+    };
+
+    my $create_next; $create_next = sub {
+      return $do_import->() unless @to_create;
+      my $path    = shift @to_create;
+      my @parts   = split '/', $path;
+      my $name    = $parts[-1];
+      my $par_path = @parts > 1 ? join('/', @parts[0..$#parts-1]) : undef;
+      my $par_id   = $par_path ? $path_to_id{$par_path} : undef;
+      send_backend_request($accountid, 'jmap', {
+        using => [qw(urn:ietf:params:jmap:core urn:ietf:params:jmap:mail)],
+        methodCalls => [['Mailbox/set', {
+          create => { m => { name => $name, ($par_id ? (parentId => $par_id) : ()) } },
+        }, 'mc']],
+      }, sub {
+        my $r2 = shift;
+        my $created = $r2->{methodResponses}[0][1]{created}{m};
+        $path_to_id{$path} = $created->{id} if $created;
+        $create_next->();
+      }, sub { $create_next->() });
+    };
+    $create_next->();
+  }, sub { $cb->() });
+}
+
+sub _pdpa_import_mail_emails {
+  my ($accountid, $files, $folders, $path_to_id, $cb) = @_;
+
+  my %kw_map = (
+    '\Seen' => '$seen', '\Answered' => '$answered',
+    '\Flagged' => '$flagged', '\Draft' => '$draft',
+  );
+
+  my @queue;
+  for my $src (sort keys %$folders) {
+    my $finfo   = $folders->{$src};
+    my $mbox_id = $path_to_id->{$finfo->{dest}} or next;
+    for my $item (@{$finfo->{meta}{items} // []}) {
+      my $filename = $item->{filename} or next;
+      my $raw = $files->{"mail/$src/$filename"} or next;
+      my @flags = grep { !/^\\Recent$/i } @{$item->{flags} // []};
+      my %keywords = map { ($kw_map{$_} // lc(s/^\\//r)) => \1 } @flags;
+      push @queue, {
+        raw      => $raw,
+        mbox_id  => $mbox_id,
+        keywords => \%keywords,
+        received => $item->{receivedAt},
+      };
+    }
+  }
+  return $cb->() unless @queue;
+
+  my $import_next; $import_next = sub {
+    return $cb->() unless @queue;
+    my $item = shift @queue;
+
+    my $tmp = eval {
+      my $f = File::Temp->new(DIR => "$datadir/tmp", UNLINK => 0);
+      print $f $item->{raw};
+      close $f;
+      $f;
+    };
+    return $import_next->() unless $tmp;
+
+    send_backend_request($accountid, 'store_blob', {
+      path => $tmp->filename, type => 'message/rfc822', is_temp => 1,
+    }, sub {
+      my $blob_id = shift->{blobId} or return $import_next->();
+      send_backend_request($accountid, 'jmap', {
+        using => [qw(urn:ietf:params:jmap:core urn:ietf:params:jmap:mail)],
+        methodCalls => [['Email/import', { emails => { e => {
+          blobId     => $blob_id,
+          mailboxIds => { $item->{mbox_id} => \1 },
+          keywords   => $item->{keywords},
+          ($item->{received} ? (receivedAt => $item->{received}) : ()),
+        } } }, 'ei']],
+      }, sub { $import_next->() }, sub { $import_next->() });
+    }, sub { unlink $tmp->filename; $import_next->() });
+  };
+  $import_next->();
+}
+
+sub _pdpa_import_contacts {
+  my ($accountid, $files, $cb) = @_;
+
+  my %ab_dirs;
+  for my $path (keys %$files) {
+    next unless $path =~ m{^contacts/(.+)/folder\.json$};
+    $ab_dirs{$1} = eval { decode_json($files->{$path}) } // {};
+  }
+  return $cb->() unless %ab_dirs;
+
+  my @remaining = sort keys %ab_dirs;
+  my $next_ab; $next_ab = sub {
+    return $cb->() unless @remaining;
+    my $dir  = shift @remaining;
+    my $meta = $ab_dirs{$dir};
+    send_backend_request($accountid, 'jmap', {
+      using => [qw(urn:ietf:params:jmap:core urn:ietf:params:jmap:contacts)],
+      methodCalls => [['AddressBook/set', { create => { ab => { name => $meta->{name} // $dir } } }, 'as']],
+    }, sub {
+      my $r = shift;
+      my $ab_id = $r->{methodResponses}[0][1]{created}{ab}{id} or return $next_ab->();
+      my %create;
+      for my $item (@{$meta->{items} // []}) {
+        my $filename = $item->{filename} or next;
+        my $card = eval { decode_json($files->{"contacts/$dir/$filename"}) } or next;
+        delete @{$card}{qw(id addressBookIds)};
+        $card->{addressBookIds} = { $ab_id => \1 };
+        $create{$item->{uid} // $filename} = $card;
+      }
+      if (%create) {
+        send_backend_request($accountid, 'jmap', {
+          using => [qw(urn:ietf:params:jmap:core urn:ietf:params:jmap:contacts)],
+          methodCalls => [['ContactCard/set', { create => \%create }, 'cs']],
+        }, sub { $next_ab->() }, sub { $next_ab->() });
+      } else { $next_ab->() }
+    }, sub { $next_ab->() });
+  };
+  $next_ab->();
+}
+
+sub _pdpa_import_calendars {
+  my ($accountid, $files, $cb) = @_;
+
+  my %cal_dirs;
+  for my $path (keys %$files) {
+    next unless $path =~ m{^calendars/(.+)/folder\.json$};
+    $cal_dirs{$1} = eval { decode_json($files->{$path}) } // {};
+  }
+  return $cb->() unless %cal_dirs;
+
+  my @remaining = sort keys %cal_dirs;
+  my $next_cal; $next_cal = sub {
+    return $cb->() unless @remaining;
+    my $dir  = shift @remaining;
+    my $meta = $cal_dirs{$dir};
+    send_backend_request($accountid, 'jmap', {
+      using => [qw(urn:ietf:params:jmap:core urn:ietf:params:jmap:calendars)],
+      methodCalls => [['Calendar/set', { create => { cal => { name => $meta->{name} // $dir } } }, 'cs']],
+    }, sub {
+      my $r = shift;
+      my $cal_id = $r->{methodResponses}[0][1]{created}{cal}{id} or return $next_cal->();
+      my %create;
+      for my $item (@{$meta->{items} // []}) {
+        my $filename = $item->{filename} or next;
+        my $ev = eval { decode_json($files->{"calendars/$dir/$filename"}) } or next;
+        delete @{$ev}{qw(id calendarIds)};
+        $ev->{calendarIds} = { $cal_id => \1 };
+        $create{$item->{uid} // $filename} = $ev;
+      }
+      if (%create) {
+        send_backend_request($accountid, 'jmap', {
+          using => [qw(urn:ietf:params:jmap:core urn:ietf:params:jmap:calendars)],
+          methodCalls => [['CalendarEvent/set', { create => \%create }, 'evs']],
+        }, sub { $next_cal->() }, sub { $next_cal->() });
+      } else { $next_cal->() }
+    }, sub { $next_cal->() });
+  };
+  $next_cal->();
+}
+
 sub do_landing {
   my ($httpd, $req) = @_;
   $httpd->stop_request();
@@ -3159,6 +3639,7 @@ $httpd->reg_cb(
   '/jmap'             => \&do_jmap,
   '/upload'           => \&do_upload,
   '/raw'              => \&do_raw,
+  '/pdpa'             => \&do_pdpa,
   '/discover'         => \&do_discover,
   '/cb/oauth'         => \&do_cb_oauth,
   '/signup'           => \&do_signup,
