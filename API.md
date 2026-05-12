@@ -287,6 +287,96 @@ Returns:
 Blob download (RFC 8620 §6.2). `name` is used as the `Content-Disposition`
 filename. Requires authentication.
 
+---
+
+## PDPA (Personal Data Portability Archive)
+
+These endpoints implement personal data export and import per
+[draft-ietf-mailmaint-pdparchive](https://datatracker.ietf.org/doc/draft-ietf-mailmaint-pdparchive/).
+Both live on `JMAP_PORT` and require the same authentication as the JMAP
+endpoint (Basic, Bearer, or cookie).
+
+### `GET /pdpa`
+
+Exports the authenticated account's data as a zip archive.
+
+**Response 200** — `Content-Type: application/zip`,
+`Content-Disposition: attachment; filename="pdpa-<accountid>.zip"`
+
+The zip contains:
+
+| Path | Contents |
+|---|---|
+| `archive.json` | Metadata: generator, timestamp, version |
+| `mail/{folder}/folder.json` | Folder metadata with a list of messages |
+| `mail/{folder}/{n}.eml` | Raw RFC-822 message (one file per message) |
+| `contacts/{ab}/folder.json` | Address book metadata with a list of cards |
+| `contacts/{ab}/{uid}.json` | JSContact card |
+| `calendars/{cal}/folder.json` | Calendar metadata with a list of events |
+| `calendars/{cal}/{uid}.json` | JSCalendar event (jscalendarbis-15) |
+
+Messages are exported from `fetch_blobs` (raw RFC-822 from IMAP), keywords
+are converted to IMAP flags (`$seen` → `\Seen` etc.). Each email is placed
+in its first listed mailbox; emails that appear in multiple mailboxes are
+exported once.
+
+**Example**
+
+```sh
+curl -u alice:password http://localhost:9000/pdpa -o alice.zip
+```
+
+---
+
+### `POST /pdpa`
+### `POST /pdpa?prefix=FolderName`
+
+Imports a PDPA zip archive into the authenticated account.
+
+**Request** — `Content-Type: application/zip`, body is the zip file.
+
+**Query parameter**
+
+| Parameter | Description |
+|---|---|
+| `prefix` | If set, all imported mail goes under `prefix/original-folder`, the address book name becomes `prefix/original-name`, and the calendar name becomes `prefix/original-name`. If absent, data is merged directly into the existing hierarchy. |
+
+**Behaviour**
+
+- **Mail**: missing mailboxes are created (parent folders first), then each
+  `.eml` is registered as a blob (`store_blob`) and imported via `Email/import`.
+  `\Recent` is stripped (server-managed). IMAP flags are converted to JMAP
+  keywords (`\Seen` → `$seen` etc.).
+- **Contacts**: a new address book is created for each source address book;
+  cards are imported via `ContactCard/set`. `id` and `addressBookIds` from the
+  archive are ignored; the server assigns new values.
+- **Calendars**: a new calendar is created for each source calendar; events
+  are imported via `CalendarEvent/set`. `id` and `calendarIds` from the archive
+  are ignored; the server assigns new values.
+
+Existing data is not replaced — imported data is added alongside it.
+
+**Response 200**
+```json
+{ "ok": true }
+```
+
+**Response 400** — if the request body is not a valid zip.
+
+**Examples**
+
+```sh
+# Merge into existing folder structure
+curl -u alice:password -X POST http://localhost:9000/pdpa \
+  -H 'Content-Type: application/zip' --data-binary @alice.zip
+
+# Import under an "Imported" subtree
+curl -u alice:password -X POST 'http://localhost:9000/pdpa?prefix=Imported' \
+  -H 'Content-Type: application/zip' --data-binary @alice.zip
+```
+
+---
+
 ### `GET /eventsource`
 
 Server-Sent Events push channel (RFC 8620 §7.3).
