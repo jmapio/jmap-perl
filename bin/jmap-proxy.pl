@@ -2114,8 +2114,8 @@ sub _pdpa_import {
   }
 
   _pdpa_import_mail($accountid, $prefix, \%files, sub {
-    _pdpa_import_contacts($accountid, \%files, sub {
-      _pdpa_import_calendars($accountid, \%files, sub {
+    _pdpa_import_contacts($accountid, $prefix, \%files, sub {
+      _pdpa_import_calendars($accountid, $prefix, \%files, sub {
         $req->respond([200, 'ok', { 'Content-Type' => 'application/json' },
           $json->encode({ ok => \1 })]);
       });
@@ -2249,7 +2249,7 @@ sub _pdpa_import_mail_emails {
 }
 
 sub _pdpa_import_contacts {
-  my ($accountid, $files, $cb) = @_;
+  my ($accountid, $prefix, $files, $cb) = @_;
 
   my %ab_dirs;
   for my $path (keys %$files) {
@@ -2263,9 +2263,11 @@ sub _pdpa_import_contacts {
     return $cb->() unless @remaining;
     my $dir  = shift @remaining;
     my $meta = $ab_dirs{$dir};
+    my $name = $meta->{name} // $dir;
+    $name = "$prefix/$name" if $prefix;
     send_backend_request($accountid, 'jmap', {
       using => [qw(urn:ietf:params:jmap:core urn:ietf:params:jmap:contacts)],
-      methodCalls => [['AddressBook/set', { create => { ab => { name => $meta->{name} // $dir } } }, 'as']],
+      methodCalls => [['AddressBook/set', { create => { ab => { name => $name } } }, 'as']],
     }, sub {
       my $r = shift;
       my $ab_id = $r->{methodResponses}[0][1]{created}{ab}{id} or return $next_ab->();
@@ -2289,7 +2291,7 @@ sub _pdpa_import_contacts {
 }
 
 sub _pdpa_import_calendars {
-  my ($accountid, $files, $cb) = @_;
+  my ($accountid, $prefix, $files, $cb) = @_;
 
   my %cal_dirs;
   for my $path (keys %$files) {
@@ -2303,9 +2305,11 @@ sub _pdpa_import_calendars {
     return $cb->() unless @remaining;
     my $dir  = shift @remaining;
     my $meta = $cal_dirs{$dir};
+    my $name = $meta->{name} // $dir;
+    $name = "$prefix/$name" if $prefix;
     send_backend_request($accountid, 'jmap', {
       using => [qw(urn:ietf:params:jmap:core urn:ietf:params:jmap:calendars)],
-      methodCalls => [['Calendar/set', { create => { cal => { name => $meta->{name} // $dir } } }, 'cs']],
+      methodCalls => [['Calendar/set', { create => { cal => { name => $name } } }, 'cs']],
     }, sub {
       my $r = shift;
       my $cal_id = $r->{methodResponses}[0][1]{created}{cal}{id} or return $next_cal->();
