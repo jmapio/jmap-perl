@@ -2944,7 +2944,18 @@ sub create_contacts_jscontact {
       $notcreated{$cid} = { type => 'notFound', description => 'No addressbook on server' };
       next;
     }
-    $card->{'@type'} //= 'Card';
+    unless (($card->{'@type'} // '') eq 'Card') {
+      $notcreated{$cid} = { type => 'invalidProperties',
+        properties => ['@type'],
+        description => '@type must be "Card"' };
+      next;
+    }
+    unless (($card->{version} // '') =~ /^[12]\.0$/) {
+      $notcreated{$cid} = { type => 'invalidProperties',
+        properties => ['version'],
+        description => 'version must be a registered JSContact version ("1.0" or "2.0")' };
+      next;
+    }
     my $uid = $card->{uid} // new_uuid_string();
     $card->{uid} = $uid;
     eval { $Self->backend_cmd('new_card', $abookhref, $card) };
