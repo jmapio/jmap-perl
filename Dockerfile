@@ -44,7 +44,7 @@ RUN cpanm --notest \
     IO::LockedFile                  \
     Mail::IMAPTalk                  \
     Moose                           \
-    Net::CalDAVTalk                 \
+    https://github.com/brong/Net-CalDAVTalk/archive/refs/tags/v0.16.tar.gz \
     Net::CardDAVTalk                \
     Net::DNS                        \
     Net::Server::Fork               \
