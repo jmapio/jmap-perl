@@ -1360,20 +1360,19 @@ sub _do_jmap_request {
   my %copy_pos_set = map { $_ => 1 } @copy_pos;
   my $n = scalar @{$data->{methodCalls}};
   my @responses = (undef) x $n;
+  my @extra_responses;  # server-injected responses (e.g. Email/set from onSuccessDestroyOriginal)
   my $session_state = '';
 
   my $remaining = 0;
   my $check_done = sub {
     return if --$remaining > 0;
     $session_state ||= _compute_session_state($accountid);
+    my @flat = ((grep { defined } @responses), @extra_responses);
     my $result = {
-      methodResponses => \@responses,
+      methodResponses => \@flat,
       sessionState    => $session_state,
     };
-    if (ref $result->{methodResponses} eq 'ARRAY') {
-      $stat{jmap_method_errors} += grep { defined $_ && $_->[0] eq 'error' }
-        @{$result->{methodResponses}};
-    }
+    $stat{jmap_method_errors} += grep { defined $_ && $_->[0] eq 'error' } @flat;
     my $body = $json->encode($result);
     warn "JMAP RESPONSE: " . length($body) . " bytes\n";
     warn "JMAP RESPONSE BODY: $body\n" if $ENV{JMAP_DEBUG};
@@ -1417,7 +1416,15 @@ sub _do_jmap_request {
     my $call = $data->{methodCalls}[$i];
     $remaining++;
     _do_copy_call($call->[0], $call->[1], $call->[2], $accountid, sub {
-      $responses[$i] = shift;
+      my $resp = shift;
+      # If resp is an array of triples (first element is itself an array-ref),
+      # put the primary response at position $i and extras after all responses.
+      if (ref($resp->[0]) eq 'ARRAY') {
+        $responses[$i] = $resp->[0];
+        push @extra_responses, @{$resp}[1..$#$resp];
+      } else {
+        $responses[$i] = $resp;
+      }
       $check_done->();
     }, sub {
       $responses[$i] = ['error', { type => 'serverError', message => "$_[0]" }, $call->[2]];
@@ -1603,22 +1610,35 @@ sub _copy_emails {
           $created{$_} = $ir->{created}{$_}     for keys %{$ir->{created}    || {}};
           $not_created{$_} = $ir->{notCreated}{$_} for keys %{$ir->{notCreated} || {}};
 
-          if ($args->{onSuccessDestroyOriginal} && %created) {
-            my @del = map { $cid_to_src{$_} } keys %created;
-            send_backend_request($from_aid, 'jmap', {
-              methodCalls => [['Email/set', { destroy => \@del }, 'd']],
-              using       => ['urn:ietf:params:jmap:core', 'urn:ietf:params:jmap:mail'],
-            }, sub {1}, sub {1});
-          }
-
-          $cb->(['Email/copy', {
+          my $copy_resp = ['Email/copy', {
             fromAccountId => $from_aid,
             accountId     => $to_aid,
             oldState      => $ir->{oldState},
             newState      => $ir->{newState},
             created       => %created     ? \%created     : undef,
             notCreated    => %not_created ? \%not_created : undef,
-          }, $tag]);
+          }, $tag];
+
+          if ($args->{onSuccessDestroyOriginal} && %created) {
+            my @del = map { $cid_to_src{$_} } keys %created;
+            send_backend_request($from_aid, 'jmap', {
+              methodCalls => [['Email/set', { destroy => \@del }, 'd']],
+              using       => ['urn:ietf:params:jmap:core', 'urn:ietf:params:jmap:mail'],
+            }, sub {
+              my $r = shift;
+              my ($set_resp) = grep { $_->[2] eq 'd' } @{$r->{methodResponses} || []};
+              $set_resp //= ['Email/set', {
+                accountId   => $from_aid,
+                oldState    => undef,
+                newState    => undef,
+                destroyed   => [],
+                notDestroyed => {},
+              }, "#$tag"];
+              $cb->([$copy_resp, $set_resp]);
+            }, sub { $cb->([$copy_resp]) });
+          } else {
+            $cb->($copy_resp);
+          }
         }, sub { $cb->(['error', { type => 'serverError', message => $_[0] }, $tag]) });
       };
 
