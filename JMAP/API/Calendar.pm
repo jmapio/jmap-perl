@@ -1171,13 +1171,13 @@ sub api_ParticipantIdentity_get {
   if ($args->{ids}) {
     for my $id (@{$args->{ids}}) {
       if ($email && $id eq 'id1') {
-        push @identities, { id => 'id1', name => '', sendTo => { imip => "mailto:$email" } };
+        push @identities, { id => 'id1', name => '', calendarAddress => "mailto:$email" };
       } else {
         push @notFound, "$id";
       }
     }
   } elsif ($email) {
-    push @identities, { id => 'id1', name => '', sendTo => { imip => "mailto:$email" } };
+    push @identities, { id => 'id1', name => '', calendarAddress => "mailto:$email" };
   }
 
   return ['ParticipantIdentity/get', {

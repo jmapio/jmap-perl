@@ -2325,7 +2325,7 @@ sub _utcnow {
     $t[5]+1900, $t[4]+1, $t[3], $t[2], $t[1], $t[0]);
 }
 
-# Set scheduleAgent=client on all participants (including organizer via replyTo)
+# Set scheduleAgent=client on all participants
 # so the CalDAV server knows the client is handling scheduling, not the server.
 sub _set_schedule_agent_client {
   my ($ev) = @_;
