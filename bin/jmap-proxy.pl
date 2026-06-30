@@ -1256,6 +1256,23 @@ sub _imap_account_capabilities {
   };
 }
 
+# Capabilities the proxy itself understands. A passthrough account's upstream
+# session may advertise far more (sieve, blob, cyrus-specific namespaces, ...);
+# do_jmap rejects any `using` capability not in this set, so /session must only
+# advertise capabilities from this set — otherwise clients echo unsupported
+# capabilities back in `using` and every request 400s.
+my %KNOWN_CAPABILITIES = map { $_ => 1 } qw(
+  urn:ietf:params:jmap:core
+  urn:ietf:params:jmap:mail
+  urn:ietf:params:jmap:submission
+  urn:ietf:params:jmap:vacationresponse
+  urn:ietf:params:jmap:mdn
+  urn:ietf:params:jmap:quota
+  urn:ietf:params:jmap:calendars
+  urn:ietf:params:jmap:contacts
+  urn:ietf:params:jmap:principals
+);
+
 sub do_session {
   my ($httpd, $req) = @_;
 
@@ -1282,12 +1299,20 @@ sub do_session {
           my $acct_caps;
 
           if (($a->{type} // '') eq 'jmap') {
-            $acct_caps = ($rec && $rec->{accountCapabilities}) || {};
+            # Only advertise capabilities the proxy itself supports — the upstream
+            # session lists many the proxy can't honour (see %KNOWN_CAPABILITIES).
+            my $up_acct = ($rec && $rec->{accountCapabilities}) || {};
+            $acct_caps = { map { $_ => $up_acct->{$_} }
+                           grep { $KNOWN_CAPABILITIES{$_} } keys %$up_acct };
             if ($rec) {
-              # union upstream top-level capabilities (first wins)
-              $top_caps{$_} //= $rec->{capabilities}{$_} for keys %{ $rec->{capabilities} || {} };
-              # honour upstream primaries
-              for my $urn (keys %{ $rec->{primaryAccounts} || {} }) {
+              # union upstream top-level capabilities (first wins), supported only.
+              # core is excluded: the proxy serves its own endpoints/limits.
+              for my $urn (grep { $KNOWN_CAPABILITIES{$_} && $_ ne 'urn:ietf:params:jmap:core' }
+                           keys %{ $rec->{capabilities} || {} }) {
+                $top_caps{$urn} //= $rec->{capabilities}{$urn};
+              }
+              # honour upstream primaries, supported caps only
+              for my $urn (grep { $KNOWN_CAPABILITIES{$_} } keys %{ $rec->{primaryAccounts} || {} }) {
                 $primary_for{$urn} //= $rec->{primaryAccounts}{$urn};
               }
             }
@@ -1365,18 +1390,6 @@ sub do_session {
     _require_auth($req);
   });
 }
-
-my %KNOWN_CAPABILITIES = map { $_ => 1 } qw(
-  urn:ietf:params:jmap:core
-  urn:ietf:params:jmap:mail
-  urn:ietf:params:jmap:submission
-  urn:ietf:params:jmap:vacationresponse
-  urn:ietf:params:jmap:mdn
-  urn:ietf:params:jmap:quota
-  urn:ietf:params:jmap:calendars
-  urn:ietf:params:jmap:contacts
-  urn:ietf:params:jmap:principals
-);
 
 sub _jmap_request_error {
   my ($req, $type, $detail) = @_;
