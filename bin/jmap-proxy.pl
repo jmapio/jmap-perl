@@ -577,6 +577,14 @@ sub run_backend_worker {
           capabilities     => $capabilities,
         });
 
+        my $fp = JMAP::JmapDB::cred_fingerprint({
+          apiUrl   => $api_url,
+          username => $args->{username} // '',
+          authType => $args->{authType} || 'basic',
+          secret   => $args->{password} // '',
+        });
+        $dbh->do("UPDATE accounts SET cred_fingerprint = ? WHERE accountid = ?", {}, $fp, $final_aid);
+
         return ['signup_jmap', [$final_aid, $display_email]];
       }
       if ($cmd eq 'setup') {
@@ -787,6 +795,13 @@ sub run_backend_worker {
             backendAccountId => $backend_aid,
             capabilities     => $session->{accounts}{$backend_aid} || {},
           });
+          my $fp = JMAP::JmapDB::cred_fingerprint({
+            apiUrl   => $session->{apiUrl},
+            username => $args->{username} // '',
+            authType => $args->{authType} || 'basic',
+            secret   => $args->{password} // '',
+          });
+          $dbh->do("UPDATE accounts SET cred_fingerprint = ? WHERE accountid = ?", {}, $fp, $accountid);
           return ['update_settings', $JSON::true];
         }
         require Mail::IMAPTalk;
@@ -832,7 +847,7 @@ sub run_backend_worker {
   }
 }
 
-my $ACCOUNTS_SCHEMA_VERSION = 1;
+my $ACCOUNTS_SCHEMA_VERSION = 2;
 
 sub _migrate_accounts_db {
   my ($dbh) = @_;
@@ -842,7 +857,7 @@ sub _migrate_accounts_db {
     # Fresh install — create full schema at version 1 (the baseline; no migration needed).
     $dbh->begin_work;
     eval {
-      $dbh->do("CREATE TABLE accounts (email TEXT PRIMARY KEY, accountid TEXT, type TEXT, poolid TEXT, needs_backfill INTEGER NOT NULL DEFAULT 1)");
+      $dbh->do("CREATE TABLE accounts (email TEXT PRIMARY KEY, accountid TEXT, type TEXT, poolid TEXT, needs_backfill INTEGER NOT NULL DEFAULT 1, cred_fingerprint TEXT)");
       $dbh->do("CREATE TABLE tokens (token TEXT PRIMARY KEY, accountid TEXT NOT NULL, last_used INTEGER, last_ip TEXT)");
       $dbh->do("PRAGMA user_version = $ACCOUNTS_SCHEMA_VERSION");
       $dbh->commit;
@@ -853,15 +868,17 @@ sub _migrate_accounts_db {
   }
 
   # Incremental migrations — each in its own transaction, version bumped atomically.
-  # To add version 2: add a block here:
-  #   if ($v < 2) {
-  #     $dbh->begin_work;
-  #     eval { ... ALTER TABLE ...; $dbh->do('PRAGMA user_version = 2'); $dbh->commit };
-  #     if ($@) { $dbh->rollback; die "migration to v2 failed: $@" }
-  #     warn "accounts.sqlite3: migrated to schema version 2\n";
-  #     $v = 2;
-  #   }
-  # Then bump $ACCOUNTS_SCHEMA_VERSION above.
+  if ($v < 2) {
+    $dbh->begin_work;
+    eval {
+      $dbh->do("ALTER TABLE accounts ADD COLUMN cred_fingerprint TEXT");
+      $dbh->do('PRAGMA user_version = 2');
+      $dbh->commit;
+    };
+    if ($@) { $dbh->rollback; die "migration to v2 failed: $@" }
+    warn "accounts.sqlite3: migrated to schema version 2\n";
+    $v = 2;
+  }
 }
 
 sub run_accounts_worker {
@@ -922,7 +939,7 @@ sub run_accounts_worker {
         return ['get_pool', { accounts => [] }] unless $row;
         my $poolid = $row->{poolid};
         my $rows = $dbh->selectall_arrayref(
-          "SELECT email, accountid, type FROM accounts WHERE poolid = ? ORDER BY accountid",
+          "SELECT email, accountid, type, cred_fingerprint FROM accounts WHERE poolid = ? ORDER BY accountid",
           { Slice => {} }, $poolid);
         for my $r (@$rows) {
           my $details = _account_details_child($r->{accountid});
@@ -1132,9 +1149,10 @@ sub _account_details_child {
   if ($has_jserver) {
     my $j = eval { $udb->selectrow_hashref("SELECT * FROM jserver LIMIT 1") } || {};
     return {
-      configured => (defined $j->{username} && length $j->{username} ? 1 : 0),
-      username   => $j->{username},
-      type       => 'jmap',
+      configured       => (defined $j->{username} && length $j->{username} ? 1 : 0),
+      username         => $j->{username},
+      type             => 'jmap',
+      backendAccountId => $j->{backendAccountId},
     };
   }
 

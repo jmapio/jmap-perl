@@ -6,8 +6,21 @@ use HTTP::Tiny;
 use JSON::XS qw(encode_json decode_json);
 use MIME::Base64 qw(encode_base64);
 use URI::Escape qw(uri_escape);
+use Digest::SHA qw(sha256_hex);
 
 my $datadir = $ENV{JMAP_DATADIR} || $ENV{JMAP_DATA} || '/data';
+
+# Stable fingerprint identifying the upstream login. Two passthrough accounts
+# with the same fingerprint share one set of upstream credentials.
+sub cred_fingerprint {
+    my ($server) = @_;
+    return sha256_hex(join("\0",
+        $server->{apiUrl}   // '',
+        $server->{username} // '',
+        $server->{authType} // 'basic',
+        $server->{secret}   // '',
+    ));
+}
 
 my @ID_KEYS = qw(accountId fromAccountId toAccountId);
 
