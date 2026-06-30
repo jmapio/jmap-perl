@@ -31,4 +31,41 @@ sub group_batches {
     return \@batches;
 }
 
+# Evaluate a JMAP ResultReference path against $data. A "*" token maps the
+# remaining path over each element of the current array and flattens one level.
+# Returns (1, $value) or (0, undef).
+sub resolve_pointer {
+    my ($data, $path) = @_;
+    my @tokens = split m{/}, $path, -1;
+    shift @tokens;   # leading empty token from the leading "/"
+    return _resolve_tokens($data, \@tokens);
+}
+
+sub _resolve_tokens {
+    my ($node, $tokens) = @_;
+    return (1, $node) unless @$tokens;
+    my ($tok, @rest) = @$tokens;
+    $tok =~ s{~1}{/}g; $tok =~ s{~0}{~}g;   # JSON Pointer unescaping
+
+    if ($tok eq '*') {
+        return (0, undef) unless ref $node eq 'ARRAY';
+        my @out;
+        for my $el (@$node) {
+            my ($ok, $v) = _resolve_tokens($el, \@rest);
+            return (0, undef) unless $ok;
+            if (ref $v eq 'ARRAY') { push @out, @$v } else { push @out, $v }
+        }
+        return (1, \@out);
+    }
+    if (ref $node eq 'HASH') {
+        return (0, undef) unless exists $node->{$tok};
+        return _resolve_tokens($node->{$tok}, \@rest);
+    }
+    if (ref $node eq 'ARRAY' && $tok =~ /^\d+$/) {
+        return (0, undef) unless $tok <= $#$node;
+        return _resolve_tokens($node->[$tok], \@rest);
+    }
+    return (0, undef);
+}
+
 1;
