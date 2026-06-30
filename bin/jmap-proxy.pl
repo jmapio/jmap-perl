@@ -40,6 +40,7 @@ use JMAP::OAuth::Google;
 use JMAP::OAuth::Fastmail;
 use JMAP::OAuth::PACC;
 use JMAP::OAuth::OIDC;
+use JMAP::Dispatch;
 
 # Backend modules (loaded in child after fork)
 # use JMAP::API; use JMAP::ImapDB; etc.
@@ -1463,115 +1464,152 @@ sub do_jmap {
 sub _do_jmap_request {
   my ($req, $accountid, $data) = @_;
 
-  my @methods = map { $_->[0] } @{$data->{methodCalls} || []};
-  $stat{jmap_method_calls} += scalar @methods;
-  warn "JMAP REQUEST ($accountid): " . join(', ', @methods) . "\n";
+  warn "JMAP REQUEST ($accountid): " . join(', ', map { $_->[0] } @{$data->{methodCalls} || []}) . "\n";
   warn "JMAP REQUEST BODY: " . $json->encode($data) . "\n" if $ENV{JMAP_DEBUG};
+  $stat{jmap_method_calls} += scalar @{$data->{methodCalls} || []};
 
-  # Find positions of cross-account copy calls that need parent-level orchestration
-  my @copy_pos;
-  for my $i (0..$#{$data->{methodCalls} || []}) {
-    push @copy_pos, $i
-      if $data->{methodCalls}[$i][0] =~ m{^(Blob|Email|CalendarEvent|ContactCard)/copy$};
-  }
+  # 1. Look up routing info for the whole pool, then build per-account maps.
+  send_backend_request('__accounts__', 'get_pool', { accountid => $accountid }, sub {
+    my $pool = shift;
+    my (%key_for_aid, %backend_for_aid, %type_for_aid);
+    for my $a (@{ $pool->{accounts} || [] }) {
+      my $aid = $a->{accountid};
+      $type_for_aid{$aid}    = $a->{type} // '';
+      $backend_for_aid{$aid} = $a->{backendAccountId};
+      $key_for_aid{$aid} = (($a->{type} // '') eq 'jmap' && $a->{cred_fingerprint})
+        ? "fp:$a->{cred_fingerprint}" : "imap:$aid";
+    }
+    $key_for_aid{$accountid} //= "imap:$accountid";
 
-  unless (@copy_pos) {
-    # Fast path: no copy methods, send entire request to one worker unchanged
-    send_backend_request($accountid, 'jmap', $data, sub {
-      my $result = shift;
-      if (ref $result->{methodResponses} eq 'ARRAY') {
-        $stat{jmap_method_errors} += grep { $_->[0] eq 'error' } @{$result->{methodResponses}};
+    my $calls   = $data->{methodCalls} || [];
+    my $batches = JMAP::Dispatch::group_batches($calls, \%key_for_aid, $accountid);
+
+    my $n = scalar @$calls;
+    my @responses = (undef) x $n;
+    my %created_ids = %{ $data->{createdIds} || {} };
+    my %resp_by_tag;   # tag => response triple (for cross-batch ResultReference)
+
+    # Resolve any cross-batch ResultReference in a call's args, in place.
+    my $resolve_refs = sub {
+      my ($call, $batch_tags) = @_;
+      my $args = $call->[1];
+      return 1 unless ref $args eq 'HASH';
+      for my $k (grep { /^#/ } keys %$args) {
+        my $ref = $args->{$k};
+        next unless ref $ref eq 'HASH' && defined $ref->{resultOf};
+        next if $batch_tags->{ $ref->{resultOf} };   # same batch: upstream resolves it
+        my $prev = $resp_by_tag{ $ref->{resultOf} };
+        if (!$prev || $prev->[0] ne ($ref->{name} // '')) {
+          $args->{_jmap_ref_error} = $k; return 0;
+        }
+        my ($ok, $val) = JMAP::Dispatch::resolve_pointer($prev->[1], $ref->{path} // '');
+        if (!$ok) { $args->{_jmap_ref_error} = $k; return 0; }
+        (my $real = $k) =~ s/^#//;
+        delete $args->{$k};
+        $args->{$real} = $val;
       }
+      return 1;
+    };
+
+    my $finish = sub {
+      my @flat = grep { defined } @responses;
+      $stat{jmap_method_errors} += grep { $_->[0] eq 'error' } @flat;
+      my $result = {
+        methodResponses => \@flat,
+        (%created_ids ? (createdIds => \%created_ids) : ()),
+        sessionState    => _compute_session_state($accountid),
+      };
       my $body = $json->encode($result);
       warn "JMAP RESPONSE: " . length($body) . " bytes\n";
       warn "JMAP RESPONSE BODY: $body\n" if $ENV{JMAP_DEBUG};
       $req->respond([200, 'ok', { 'Content-Type' => 'application/json' }, $body]);
-    }, sub {
-      my $error = shift;
-      $req->respond({
-        content => ['application/json', $json->encode({
-          methodResponses => [['error', { type => 'serverError', message => "$error" }, 'a']],
-        })],
-      });
-    });
-    return;
-  }
-
-  # Mixed or copy-only batch: handle copy calls in parent, rest in worker, then merge
-  my %copy_pos_set = map { $_ => 1 } @copy_pos;
-  my $n = scalar @{$data->{methodCalls}};
-  my @responses = (undef) x $n;
-  my @extra_responses;  # server-injected responses (e.g. Email/set from onSuccessDestroyOriginal)
-  my $session_state = '';
-
-  my $remaining = 0;
-  my $check_done = sub {
-    return if --$remaining > 0;
-    $session_state ||= _compute_session_state($accountid);
-    my @flat = ((grep { defined } @responses), @extra_responses);
-    my $result = {
-      methodResponses => \@flat,
-      sessionState    => $session_state,
     };
-    $stat{jmap_method_errors} += grep { defined $_ && $_->[0] eq 'error' } @flat;
-    my $body = $json->encode($result);
-    warn "JMAP RESPONSE: " . length($body) . " bytes\n";
-    warn "JMAP RESPONSE BODY: $body\n" if $ENV{JMAP_DEBUG};
-    $req->respond([200, 'ok', { 'Content-Type' => 'application/json' }, $body]);
-  };
 
-  # Dispatch non-copy calls to the worker
-  my @other_calls;
-  my %tag_to_pos;
-  for my $i (0..$n-1) {
-    next if $copy_pos_set{$i};
-    my $call = $data->{methodCalls}[$i];
-    $tag_to_pos{$call->[2]} = $i;
-    push @other_calls, $call;
-  }
+    # Process batches strictly in order.
+    my $i = 0;
+    my $next_batch; $next_batch = sub {
+      if ($i > $#$batches) { return $finish->() }
+      my $batch = $batches->[$i++];
 
-  if (@other_calls) {
-    $remaining++;
-    my %other_data = (%$data, methodCalls => \@other_calls);
-    send_backend_request($accountid, 'jmap', \%other_data, sub {
-      my $r = shift;
-      $session_state ||= $r->{sessionState} // '';
-      for my $resp (@{$r->{methodResponses} || []}) {
-        my $pos = $tag_to_pos{$resp->[2]};
-        $responses[$pos] = $resp if defined $pos;
+      # Cross-upstream copy batch (Task 6): single copy call routed to orchestration.
+      if ($batch->{key} eq 'orchestrate') {
+        my ($pos, $call) = @{ $batch->{calls}[0] };
+        _do_copy_call($call->[0], $call->[1], $call->[2], $accountid, sub {
+          my $resp = shift;
+          if (ref($resp->[0]) eq 'ARRAY') { $responses[$pos] = $resp->[0]; }
+          else                            { $responses[$pos] = $resp; }
+          $resp_by_tag{ $responses[$pos][2] } = $responses[$pos];
+          $next_batch->();
+        }, sub {
+          $responses[$pos] = ['error', { type => 'serverError', message => "$_[0]" }, $call->[2]];
+          $next_batch->();
+        });
+        return;
       }
-      $check_done->();
-    }, sub {
-      my $err = shift;
-      for my $call (@other_calls) {
-        my $pos = $tag_to_pos{$call->[2]};
-        $responses[$pos] = ['error', { type => 'serverError', message => "$err" }, $call->[2]]
-          if defined $pos;
-      }
-      $check_done->();
-    });
-  }
 
-  # Dispatch each copy call through parent-level orchestration
-  for my $i (@copy_pos) {
-    my $call = $data->{methodCalls}[$i];
-    $remaining++;
-    _do_copy_call($call->[0], $call->[1], $call->[2], $accountid, sub {
-      my $resp = shift;
-      # If resp is an array of triples (first element is itself an array-ref),
-      # put the primary response at position $i and extras after all responses.
-      if (ref($resp->[0]) eq 'ARRAY') {
-        $responses[$i] = $resp->[0];
-        push @extra_responses, @{$resp}[1..$#$resp];
-      } else {
-        $responses[$i] = $resp;
+      my %batch_tags = map { $_->[1][2] => 1 } @{ $batch->{calls} };
+      my (@calls, @positions);
+      for my $pc (@{ $batch->{calls} }) {
+        my ($pos, $call) = @$pc;
+        unless ($resolve_refs->($call, \%batch_tags)) {
+          $responses[$pos] = ['error', { type => 'invalidResultReference' }, $call->[2]];
+          next;
+        }
+        push @calls, $call; push @positions, $pos;
       }
-      $check_done->();
-    }, sub {
-      $responses[$i] = ['error', { type => 'serverError', message => "$_[0]" }, $call->[2]];
-      $check_done->();
-    });
-  }
+      unless (@calls) { return $next_batch->() }
+
+      # Build forward/reverse id maps for the accounts referenced in this batch.
+      my (%fwd, %rev);
+      for my $call (@calls) {
+        my $cargs = $call->[1] // {};
+        for my $key (qw(accountId fromAccountId toAccountId)) {
+          my $aid = $cargs->{$key};
+          next unless defined $aid;
+          my $b = $backend_for_aid{$aid};
+          if (defined $b) { $fwd{$aid} = $b; $rev{$b} = $aid; }
+        }
+      }
+
+      my %batch_data = (
+        %$data,
+        methodCalls => \@calls,
+        createdIds  => \%created_ids,
+        _fwd_map    => \%fwd,
+        _rev_map    => \%rev,
+      );
+      # Forward to a worker on this upstream — the first account in the batch.
+      my $worker_aid = _call_account_for($calls[0], $accountid);
+      send_backend_request($worker_aid, 'jmap', \%batch_data, sub {
+        my $r = shift;
+        my %pos_by_tag = map { $calls[$_][2] => $positions[$_] } 0..$#calls;
+        for my $resp (@{ $r->{methodResponses} || [] }) {
+          my $pos = $pos_by_tag{ $resp->[2] };
+          if (defined $pos) { $responses[$pos] = $resp; $resp_by_tag{ $resp->[2] } = $resp; }
+        }
+        $created_ids{$_} = $r->{createdIds}{$_} for keys %{ $r->{createdIds} || {} };
+        $next_batch->();
+      }, sub {
+        my $err = shift;
+        for my $idx (0..$#calls) {
+          $responses[$positions[$idx]] = ['error', { type => 'serverError', message => "$err" }, $calls[$idx][2]];
+        }
+        $next_batch->();
+      });
+    };
+    $next_batch->();
+  }, sub {
+    my $err = shift;
+    $req->respond([200, 'ok', { 'Content-Type' => 'application/json' },
+      $json->encode({ methodResponses => [['error', { type => 'serverError', message => "$err" }, 'a']] })]);
+  });
+}
+
+# Account a single call targets (mirror of Dispatch::_call_account for the worker pick).
+sub _call_account_for {
+  my ($call, $default) = @_;
+  my $args = $call->[1] // {};
+  return ($call->[0] =~ m{/copy$}) ? ($args->{fromAccountId} // $default) : ($args->{accountId} // $default);
 }
 
 sub _compute_session_state {
