@@ -1221,6 +1221,41 @@ sub do_wellknown {
   not_found($req);
 }
 
+sub _imap_account_capabilities {
+  my ($a) = @_;
+  return {
+    'urn:ietf:params:jmap:mail' => {
+      maxMailboxesPerEmail         => undef,
+      maxMailboxDepth              => undef,
+      maxSizeMailboxName           => 490,
+      maxSizeAttachmentsPerEmail   => 50_000_000,
+      emailQuerySortOptions        => [qw(
+        receivedAt sentAt size subject from to id
+        hasKeyword allInThreadHaveKeyword someInThreadHaveKeyword
+      )],
+      mayCreateTopLevelMailbox     => JSON::true,
+    },
+    'urn:ietf:params:jmap:submission' => { maxDelayedSend => 0 },
+    'urn:ietf:params:jmap:mdn'   => {},
+    'urn:ietf:params:jmap:quota' => {},
+    ($a->{caldavURL} ? ('urn:ietf:params:jmap:calendars' => {
+      maxCalendarsPerEvent     => 1,
+      minDateTime              => '1970-01-01T00:00:00Z',
+      maxDateTime              => '2099-12-31T23:59:59Z',
+      maxExpandedQueryDuration => 'P2Y',
+      maxParticipantsPerEvent  => undef,
+      mayCreateCalendar        => JSON::true,
+    },
+    'urn:ietf:params:jmap:principals' => {
+      currentUserPrincipalId => 'me',
+    }) : ()),
+    ($a->{carddavURL} ? ('urn:ietf:params:jmap:contacts' => {
+      maxAddressBooksPerCard => 1,
+      mayCreateAddressBook   => JSON::true,
+    }) : ()),
+  };
+}
+
 sub do_session {
   my ($httpd, $req) = @_;
 
@@ -1230,94 +1265,97 @@ sub do_session {
     # Get pool info for this account
     send_backend_request('__accounts__', 'get_pool', { accountid => $auth_aid }, sub {
       my $pool = shift;
-      my $accounts = {};
-      my ($primary_aid, $primary_cal_aid, $primary_contact_aid);
-      for my $a (@{$pool->{accounts} || []}) {
-        $accounts->{$a->{accountid}} = {
-          name => $a->{email} || $a->{accountid},
-          isPersonal => JSON::true,
-          isReadOnly => JSON::false,
-          accountCapabilities => {
-            'urn:ietf:params:jmap:mail' => {
-              maxMailboxesPerEmail         => undef,
-              maxMailboxDepth              => undef,
-              maxSizeMailboxName           => 490,
-              maxSizeAttachmentsPerEmail   => 50_000_000,
-              emailQuerySortOptions        => [qw(
-                receivedAt sentAt size subject from to id
-                hasKeyword allInThreadHaveKeyword someInThreadHaveKeyword
-              )],
-              mayCreateTopLevelMailbox     => JSON::true,
-            },
-            'urn:ietf:params:jmap:submission' => {
-              maxDelayedSend => 0,
-            },
-            'urn:ietf:params:jmap:mdn'   => {},
-            'urn:ietf:params:jmap:quota' => {},
-            ($a->{caldavURL}  ? ('urn:ietf:params:jmap:calendars' => {
-              maxCalendarsPerEvent     => 1,
-              minDateTime              => '1970-01-01T00:00:00Z',
-              maxDateTime              => '2099-12-31T23:59:59Z',
-              maxExpandedQueryDuration => 'P2Y',
-              maxParticipantsPerEvent  => undef,
-              mayCreateCalendar        => JSON::true,
-            },
-            'urn:ietf:params:jmap:principals' => {
-              currentUserPrincipalId => 'me',
-            }) : ()),
-            ($a->{carddavURL} ? ('urn:ietf:params:jmap:contacts' => {
-              maxAddressBooksPerCard => 1,
-              mayCreateAddressBook   => JSON::true,
-            }) : ()),
-          },
-        };
-        $primary_aid         //= $a->{accountid};
-        $primary_cal_aid     //= $a->{accountid} if $a->{caldavURL};
-        $primary_contact_aid //= $a->{accountid} if $a->{carddavURL};
-      }
-      $primary_aid //= $auth_aid;
+      my @pool = @{$pool->{accounts} || []};
 
-      my $session = {
-        capabilities => {
-          'urn:ietf:params:jmap:core' => {
-            maxSizeUpload => 50_000_000,
-            maxConcurrentUpload => 4,
-            maxSizeRequest => 10_000_000,
-            maxConcurrentRequests => 4,
-            maxCallsInRequest => 16,
-            maxObjectsInGet => 4096,
-            maxObjectsInSet => 4096,
-            collationAlgorithms => [],
+      # Collect each account's capability record (async for jmap accounts).
+      my %caprec;   # accountid => { accountCapabilities, capabilities, name, isReadOnly, isPersonal, primaryAccounts }
+      my @jmap = grep { ($_->{type} // '') eq 'jmap' } @pool;
+
+      my $assemble = sub {
+        my $accounts = {};
+        my %top_caps;
+        my (%primary_for);   # urn => accountid (first wins)
+
+        for my $a (@pool) {
+          my $aid  = $a->{accountid};
+          my $rec  = $caprec{$aid};
+          my $acct_caps;
+
+          if (($a->{type} // '') eq 'jmap') {
+            $acct_caps = ($rec && $rec->{accountCapabilities}) || {};
+            if ($rec) {
+              # union upstream top-level capabilities (first wins)
+              $top_caps{$_} //= $rec->{capabilities}{$_} for keys %{ $rec->{capabilities} || {} };
+              # honour upstream primaries
+              for my $urn (keys %{ $rec->{primaryAccounts} || {} }) {
+                $primary_for{$urn} //= $rec->{primaryAccounts}{$urn};
+              }
+            }
+            # degraded ($rec undef): empty caps, no primaries — core-only
+          }
+          else {
+            $acct_caps = _imap_account_capabilities($a);
+            $top_caps{$_} //= {} for keys %$acct_caps;
+            $primary_for{'urn:ietf:params:jmap:mail'}       //= $aid;
+            $primary_for{'urn:ietf:params:jmap:submission'} //= $aid;
+            $primary_for{'urn:ietf:params:jmap:calendars'}  //= $aid if $a->{caldavURL};
+            $primary_for{'urn:ietf:params:jmap:contacts'}   //= $aid if $a->{carddavURL};
+          }
+
+          $accounts->{$aid} = {
+            name       => ($rec && $rec->{name}) || $a->{email} || $aid,
+            isPersonal => ($rec ? $rec->{isPersonal} : JSON::true),
+            isReadOnly => ($rec && $rec->{isReadOnly}) ? JSON::true : JSON::false,
+            accountCapabilities => $acct_caps,
+          };
+        }
+
+        my $session = {
+          capabilities => {
+            'urn:ietf:params:jmap:core' => {
+              maxSizeUpload => 50_000_000,
+              maxConcurrentUpload => 4,
+              maxSizeRequest => 10_000_000,
+              maxConcurrentRequests => 4,
+              maxCallsInRequest => 16,
+              maxObjectsInGet => 4096,
+              maxObjectsInSet => 4096,
+              collationAlgorithms => [],
+            },
+            %top_caps,
           },
-          'urn:ietf:params:jmap:mail'            => {},
-          'urn:ietf:params:jmap:submission'       => {},
-          'urn:ietf:params:jmap:vacationresponse' => {},
-          'urn:ietf:params:jmap:mdn'              => {},
-          'urn:ietf:params:jmap:quota'            => {},
-          'urn:ietf:params:jmap:principals'       => {},
-          'urn:ietf:params:jmap:calendars'        => {},
-          'urn:ietf:params:jmap:contacts'         => {},
-        },
-        accounts => $accounts,
-        primaryAccounts => {
-          'urn:ietf:params:jmap:mail'       => $primary_aid,
-          'urn:ietf:params:jmap:submission' => $primary_aid,
-          ($primary_cal_aid     ? ('urn:ietf:params:jmap:calendars' => $primary_cal_aid)     : ()),
-          ($primary_contact_aid ? ('urn:ietf:params:jmap:contacts'  => $primary_contact_aid) : ()),
-        },
-        username => ($pool->{accounts} && $pool->{accounts}[0] ? $pool->{accounts}[0]{email} : ''),
-        apiUrl => "$BASEURL/jmap",
-        downloadUrl => "$BASEURL/raw/{accountId}/{blobId}/{name}",
-        uploadUrl => "$BASEURL/upload/{accountId}",
-        eventSourceUrl => "$BASEURL/eventsource?types={types}&closeafter={closeafter}&ping={ping}",
-        state => sha1_hex(join(',', sort map { $_->{accountid} } @{$pool->{accounts} || []})),
+          accounts => $accounts,
+          primaryAccounts => \%primary_for,
+          username => ($pool[0] ? $pool[0]{email} : ''),
+          apiUrl => "$BASEURL/jmap",
+          downloadUrl => "$BASEURL/raw/{accountId}/{blobId}/{name}",
+          uploadUrl => "$BASEURL/upload/{accountId}",
+          eventSourceUrl => "$BASEURL/eventsource?types={types}&closeafter={closeafter}&ping={ping}",
+          state => sha1_hex(join(',', sort map { $_->{accountid} } @pool)),
+        };
+
+        warn "SESSION " . JSON::XS::encode_json($session) . "\n" if $ENV{JMAP_DEBUG};
+        $req->respond([200, 'ok', {
+          'Content-Type'  => 'application/json',
+          'Cache-Control' => 'no-cache, no-store',
+        }, JSON::XS::encode_json($session)]);
       };
 
-      warn "SESSION " . JSON::XS::encode_json($session) . "\n";
-      $req->respond([200, 'ok', {
-        'Content-Type'  => 'application/json',
-        'Cache-Control' => 'no-cache, no-store',
-      }, JSON::XS::encode_json($session)]);
+      unless (@jmap) { $assemble->(); return; }
+
+      my $pending = scalar @jmap;
+      for my $a (@jmap) {
+        my $aid = $a->{accountid};
+        send_backend_request($aid, 'session_caps', {}, sub {
+          $caprec{$aid} = shift;
+          $assemble->() if --$pending == 0;
+        }, sub {
+          my $err = shift;
+          warn "session_caps failed for $aid: $err\n";   # degrade to core-only
+          $caprec{$aid} = undef;
+          $assemble->() if --$pending == 0;
+        });
+      }
     }, sub {
       my $err = shift;
       $req->respond([500, 'error', { 'Content-Type' => 'application/json' },
