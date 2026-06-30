@@ -25,7 +25,7 @@ the upstream server.
 
 sub new {
     my ($class, $accountid) = @_;
-    my $dbpath = "$datadir/$accountid.db";
+    my $dbpath = "$datadir/$accountid.sqlite3";
     my $dbh = DBI->connect("dbi:SQLite:dbname=$dbpath", '', '',
         { RaiseError => 1, AutoCommit => 1 });
     $dbh->do(<<'SQL');
@@ -294,7 +294,7 @@ sub proxy_blob {
 # Clean up the per-account SQLite file.
 sub delete {
     my ($Self) = @_;
-    my $dbpath = "$datadir/$Self->{accountid}.db";
+    my $dbpath = "$datadir/$Self->{accountid}.sqlite3";
     $Self->{dbh}->disconnect();
     unlink $dbpath;
 }
