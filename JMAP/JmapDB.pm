@@ -24,20 +24,24 @@ sub cred_fingerprint {
 
 my @ID_KEYS = qw(accountId fromAccountId toAccountId);
 
-# Rewrite only the accountId-style fields in each [name, args, tag] triple,
-# leaving message bodies/addresses untouched. Used for both the request
-# (methodCalls) and the response (methodResponses).
-sub _rewrite_method_ids {
-    my ($triples, $from, $to) = @_;
+# Rewrite accountId-style fields via a {from => to} map (exact match).
+sub _rewrite_method_ids_map {
+    my ($triples, $map) = @_;
     for my $triple (@{ $triples || [] }) {
         my $args = $triple->[1];
         next unless ref $args eq 'HASH';
         for my $k (@ID_KEYS) {
-            $args->{$k} = $to
-                if defined $args->{$k} && !ref $args->{$k} && $args->{$k} eq $from;
+            my $v = $args->{$k};
+            $args->{$k} = $map->{$v} if defined $v && !ref $v && defined $map->{$v};
         }
     }
     return $triples;
+}
+
+# Backwards-compatible single-pair rewrite.
+sub _rewrite_method_ids {
+    my ($triples, $from, $to) = @_;
+    return _rewrite_method_ids_map($triples, { $from => $to });
 }
 
 =head1 NAME
@@ -204,7 +208,7 @@ sub fetch_session {
 # Forward a JMAP API request to the upstream server.
 # Rewrites proxy accountId ↔ backend accountId in the JSON payload.
 sub handle_jmap {
-    my ($Self, $request) = @_;
+    my ($Self, $request, $fwd_map, $rev_map) = @_;
 
     my $server     = $Self->access_data();
     my $proxy_id   = $Self->{accountid};
@@ -213,9 +217,11 @@ sub handle_jmap {
     my $api_url    = $server->{apiUrl}
         or die "No apiUrl configured for $proxy_id\n";
 
-    # Rewrite proxy accountId → upstream accountId in the method calls only
-    # (string substitution would corrupt message bodies that contain the id).
-    _rewrite_method_ids($request->{methodCalls}, $proxy_id, $backend_id);
+    # Default to the single-account pair when no explicit map is supplied.
+    $fwd_map //= { $proxy_id   => $backend_id };
+    $rev_map //= { $backend_id => $proxy_id };
+
+    _rewrite_method_ids_map($request->{methodCalls}, $fwd_map);
     my $req_json = encode_json($request);
 
     my $http = HTTP::Tiny->new(timeout => 60);
@@ -232,7 +238,7 @@ sub handle_jmap {
 
     my $response = decode_json($resp->{content});
     # Rewrite upstream accountId → proxy accountId in the method responses only.
-    _rewrite_method_ids($response->{methodResponses}, $backend_id, $proxy_id);
+    _rewrite_method_ids_map($response->{methodResponses}, $rev_map);
 
     # RFC 8620 §5.3: empty notCreated/notUpdated/notDestroyed MUST be null,
     # not an empty object.  Cyrus returns {} — normalise here.

@@ -702,8 +702,9 @@ sub run_backend_worker {
       if ($cmd eq 'jmap') {
         my $result;
         if ($db->can('handle_jmap')) {
-          # JMAP passthrough — forward directly to upstream, rewriting accountIds
-          $result = $db->handle_jmap($args);
+          my $fwd = delete $args->{_fwd_map};
+          my $rev = delete $args->{_rev_map};
+          $result = $db->handle_jmap($args, $fwd, $rev);
         } else {
           $result = $api->handle_request($args);
         }
