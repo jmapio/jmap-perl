@@ -9,6 +9,24 @@ use URI::Escape qw(uri_escape);
 
 my $datadir = $ENV{JMAP_DATADIR} || $ENV{JMAP_DATA} || '/data';
 
+my @ID_KEYS = qw(accountId fromAccountId toAccountId);
+
+# Rewrite only the accountId-style fields in each [name, args, tag] triple,
+# leaving message bodies/addresses untouched. Used for both the request
+# (methodCalls) and the response (methodResponses).
+sub _rewrite_method_ids {
+    my ($triples, $from, $to) = @_;
+    for my $triple (@{ $triples || [] }) {
+        my $args = $triple->[1];
+        next unless ref $args eq 'HASH';
+        for my $k (@ID_KEYS) {
+            $args->{$k} = $to
+                if defined $args->{$k} && !ref $args->{$k} && $args->{$k} eq $from;
+        }
+    }
+    return $triples;
+}
+
 =head1 NAME
 
 JMAP::JmapDB — JMAP-to-JMAP passthrough account backend
@@ -182,9 +200,10 @@ sub handle_jmap {
     my $api_url    = $server->{apiUrl}
         or die "No apiUrl configured for $proxy_id\n";
 
-    # Rewrite proxy UUID → upstream accountId in the serialised request.
+    # Rewrite proxy accountId → upstream accountId in the method calls only
+    # (string substitution would corrupt message bodies that contain the id).
+    _rewrite_method_ids($request->{methodCalls}, $proxy_id, $backend_id);
     my $req_json = encode_json($request);
-    $req_json =~ s/\Q$proxy_id\E/$backend_id/g;
 
     my $http = HTTP::Tiny->new(timeout => 60);
     my $resp = $http->request('POST', $api_url, {
@@ -198,11 +217,9 @@ sub handle_jmap {
     die "Upstream JMAP request failed: $resp->{status} $resp->{reason}\n"
         unless $resp->{success};
 
-    # Rewrite upstream accountId → proxy UUID in the response.
-    my $res_json = $resp->{content};
-    $res_json =~ s/\Q$backend_id\E/$proxy_id/g;
-
-    my $response = decode_json($res_json);
+    my $response = decode_json($resp->{content});
+    # Rewrite upstream accountId → proxy accountId in the method responses only.
+    _rewrite_method_ids($response->{methodResponses}, $backend_id, $proxy_id);
 
     # RFC 8620 §5.3: empty notCreated/notUpdated/notDestroyed MUST be null,
     # not an empty object.  Cyrus returns {} — normalise here.
