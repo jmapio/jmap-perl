@@ -1482,7 +1482,19 @@ sub _do_jmap_request {
     $key_for_aid{$accountid} //= "imap:$accountid";
 
     my $calls   = $data->{methodCalls} || [];
-    my $batches = JMAP::Dispatch::group_batches($calls, \%key_for_aid, $accountid);
+    my $copy_route = sub {
+      my ($call) = @_;
+      return undef unless $call->[0] =~ m{^(Blob|Email)/copy$};
+      my $fa = $call->[1]{fromAccountId};
+      my $ta = $call->[1]{accountId};
+      my $fk = $key_for_aid{$fa // ''} // '';
+      my $tk = $key_for_aid{$ta // ''} // '';
+      # native-forward only when BOTH sides are the same passthrough upstream;
+      # the /^fp:/ check also rejects the both-empty ('' eq '') case → orchestrate
+      return undef if $fk eq $tk && $fk =~ /^fp:/;
+      return 'orchestrate';
+    };
+    my $batches = JMAP::Dispatch::group_batches($calls, \%key_for_aid, $accountid, $copy_route);
 
     my $n = scalar @$calls;
     my @responses = (undef) x $n;

@@ -15,13 +15,20 @@ sub _call_account {
 # Group consecutive method calls sharing one upstream key into batches,
 # preserving order. Returns [ { key => $k, calls => [ [pos, call], ... ] }, ... ].
 sub group_batches {
-    my ($calls, $key_for_aid, $default_aid) = @_;
+    my ($calls, $key_for_aid, $default_aid, $copy_route) = @_;
     my @batches;
     for my $pos (0 .. $#$calls) {
         my $call = $calls->[$pos];
-        my $aid  = _call_account($call, $default_aid);
-        my $key  = $key_for_aid->{$aid} // "imap:$aid";
-        if (@batches && $batches[-1]{key} eq $key) {
+        my $route = $copy_route ? $copy_route->($call) : undef;
+        my $key;
+        if (defined $route) {
+            $key = $route;   # e.g. 'orchestrate' — always its own batch
+            push @batches, { key => $key, calls => [ [$pos, $call] ], isolated => 1 };
+            next;
+        }
+        my $aid = _call_account($call, $default_aid);
+        $key = $key_for_aid->{$aid} // "imap:$aid";
+        if (@batches && $batches[-1]{key} eq $key && !$batches[-1]{isolated}) {
             push @{ $batches[-1]{calls} }, [$pos, $call];
         }
         else {
