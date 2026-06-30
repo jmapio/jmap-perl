@@ -730,6 +730,34 @@ sub run_backend_worker {
         $db->sync_addressbooks();
         return ['davsync', $JSON::true];
       }
+      if ($cmd eq 'session_caps') {
+        # Passthrough only: fetch the upstream session and return the capability
+        # slice for this account, rewritten to the proxy accountId.
+        die "session_caps only valid for passthrough accounts\n"
+          unless $db->can('handle_jmap');
+        my $server     = $db->access_data();
+        my $proxy_id   = $accountid;
+        my $backend_id = $server->{backendAccountId} // '';
+        my ($session)  = $db->fetch_session({});
+        my $acct = ($session->{accounts} || {})->{$backend_id} || {};
+
+        # Rewrite backend accountId → proxy accountId in primaryAccounts values.
+        my %primary;
+        my $up_primary = $session->{primaryAccounts} || {};
+        for my $urn (keys %$up_primary) {
+          my $v = $up_primary->{$urn};
+          $primary{$urn} = (defined $v && $v eq $backend_id) ? $proxy_id : $v;
+        }
+
+        return ['session_caps', {
+          accountCapabilities => $acct->{accountCapabilities} || {},
+          capabilities        => $session->{capabilities}     || {},
+          name                => $acct->{name} // $proxy_id,
+          isReadOnly          => $acct->{isReadOnly} ? $JSON::true : $JSON::false,
+          isPersonal          => $acct->{isPersonal} ? $JSON::true : $JSON::false,
+          primaryAccounts     => \%primary,
+        }];
+      }
       if ($cmd eq 'get_settings') {
         my $data;
         if ($db->can('handle_jmap')) {
