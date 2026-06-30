@@ -99,10 +99,29 @@ Maintain a running `%created_ids` across the ordered batches:
   `methodResponses` and `sessionState`.
 
 Within a batch, the upstream resolves both `#creationId` and `ResultReference`
-natively. **Limitation (documented):** a `ResultReference` (`resultOf` + path)
-pointing into a *different* batch cannot be resolved by a downstream upstream;
-only `createdIds` back-references cross batch boundaries. This is acceptable —
-cross-account `ResultReference`s are not used in practice.
+natively. **Cross-batch `ResultReference`s are resolved proxy-side** (§C2),
+since a downstream upstream never saw the referenced call.
+
+### C2. Cross-batch ResultReference resolution
+
+A method-call argument whose key begins with `#` is a `ResultReference`
+(RFC 8620 §3.7): `{ resultOf: <tag>, name: <method>, path: <JSON pointer> }`,
+resolved against the response of the earlier call whose id is `resultOf`.
+
+When the referenced call lands in the **same** batch, the upstream resolves it
+natively — leave it intact. When it lands in an **earlier** batch (different
+upstream), the proxy resolves it before forwarding the referencing batch:
+
+1. Track each completed call's response by tag as batches finish (batches run
+   strictly in order, so all earlier responses are available).
+2. For a `#`-arg whose `resultOf` is not in the current batch, find that call's
+   response, check its method `name` matches, apply `path` — a JSON Pointer
+   with JMAP's `/*` array-mapping semantics — to the response arguments, and
+   replace the `#arg` key with the resolved literal `arg` value.
+3. If the referenced call errored, the tag is unknown, or the path fails to
+   resolve, the referencing call fails with `invalidResultReference`.
+
+The JSON-Pointer-with-`*` evaluator is a self-contained, unit-testable unit.
 
 ### D. Copy routing (falls out of A–C)
 
@@ -184,6 +203,11 @@ configuration can't be expressed for a non-Cyrus backend, the test skips.
   accumulation. Integration: a request mixing two same-upstream accounts with a
   `#creationId` back-reference resolves correctly; single-account requests are
   unchanged.
+- **Cross-batch `ResultReference` (C2):** unit tests for the
+  JSON-Pointer-with-`*` evaluator (including `/list/*/id` array-mapping and
+  failure → `invalidResultReference`). Integration: a two-batch request where a
+  call in batch 2 references a call in batch 1 by `resultOf`+path resolves to
+  the right value; a same-batch reference is left for the upstream.
 - **Copy matrix (D/F):** run `Email/copy` and `Blob/copy` across each adapter
   configuration (native-forward, blob-shuffle different-creds, mixed both
   directions). `Email/copy/basic.t` in `--jmap` mode (different-creds pair) is
@@ -202,16 +226,17 @@ configuration can't be expressed for a non-Cyrus backend, the test skips.
    `_do_jmap_request`; generalise `handle_jmap`/`_rewrite_method_ids` to a
    proxy→backend id map so a batch can span several backend accountIds;
    single-account behaviour unchanged. The keystone.
-3. **Native-forward copy (D)** — relies on step 2's map rewrite; a same-upstream
+3. **Cross-batch `ResultReference` resolution (C2)** — JSON-Pointer-with-`*`
+   evaluator (standalone unit) + substitution of cross-batch `#`-args before
+   forwarding. Builds on step 2's by-tag response tracking.
+4. **Native-forward copy (D)** — relies on step 2's map rewrite; a same-upstream
    copy call's two id fields are rewritten by the same map. Mostly routing.
-4. **Passthrough-aware `fetch_blobs`/`store_blob` (F)** — enables blob-shuffle
+5. **Passthrough-aware `fetch_blobs`/`store_blob` (F)** — enables blob-shuffle
    copy for cross-upstream / mixed.
-5. **Test adapter configurations (G)** + the copy-matrix tests.
+6. **Test adapter configurations (G)** + the copy-matrix tests.
 
 ## Out of scope
 
-- Cross-*batch* `ResultReference` resolution (only `createdIds` back-refs cross
-  batches).
 - `StorageNode`/file (`f-`) blobs for passthrough sources (no passthrough file
   store today).
 - Push/SSE for passthrough.
