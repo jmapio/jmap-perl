@@ -331,7 +331,7 @@ is_deeply([JMAP::Dispatch::resolve_pointer($data, '/list/*/id')], [1, ['x1','x2'
 is_deeply([JMAP::Dispatch::resolve_pointer($data, '/list/0/sub/v')], [1, 1], 'index then nested');
 is((JMAP::Dispatch::resolve_pointer($data, '/missing'))[0], 0, 'missing key fails');
 is((JMAP::Dispatch::resolve_pointer($data, '/accountId/x'))[0], 0, 'descend into scalar fails');
-is((JMAP::Dispatch::resolve_pointer($data, '/list/*/nope'))[0], 1, 'star over missing subkey yields list of undefs (ok)');
+is((JMAP::Dispatch::resolve_pointer($data, '/list/*/nope'))[0], 0, 'star over missing subkey fails the whole reference (RFC 8620 §3.7)');
 
 done_testing;
 ```
@@ -668,7 +668,10 @@ sub _do_jmap_request {
       # Build forward/reverse id maps for the accounts referenced in this batch.
       my (%fwd, %rev);
       for my $call (@calls) {
-        for my $aid (grep { defined } @{$call->[1]}{qw(accountId fromAccountId toAccountId)}) {
+        my $cargs = $call->[1] // {};
+        for my $key (qw(accountId fromAccountId toAccountId)) {  # single-key reads: NO autovivification
+          my $aid = $cargs->{$key};
+          next unless defined $aid;
           my $b = $backend_for_aid{$aid};
           if (defined $b) { $fwd{$aid} = $b; $rev{$b} = $aid; }
         }
