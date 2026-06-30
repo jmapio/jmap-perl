@@ -966,14 +966,29 @@ sub run_accounts_worker {
           "SELECT accountid, poolid FROM accounts WHERE email = ?", {}, $email);
         return ['auth', undef] unless $row;
 
-        # Check password against per-account DB (credentials in iserver table)
-        my $aid = $row->{accountid};
+        # Check password against per-account DB
+        my $aid  = $row->{accountid};
+        my $type = $dbh->selectrow_array(
+          "SELECT type FROM accounts WHERE accountid = ?", {}, $aid) // '';
         my $dbfile = "$datadir/$aid.sqlite3";
         return ['auth', undef] unless -f $dbfile;
         my $udb = DBI->connect("dbi:SQLite:dbname=$dbfile");
-        my $stored = $udb->selectrow_hashref(
-          "SELECT password FROM iserver WHERE username = ?", {}, $email);
-        return ['auth', undef] unless $stored && $stored->{password} eq $password;
+
+        if ($type eq 'jmap') {
+          my $stored = $udb->selectrow_hashref(
+            "SELECT password, authType FROM jserver WHERE username = ?", {}, $email);
+          return ['auth', undef] unless $stored;
+          # Only basic-auth passthrough accounts have a comparable password.
+          return ['auth', undef] unless ($stored->{authType} || 'basic') eq 'basic';
+          require JMAP::CredentialStore;
+          my $actual = JMAP::CredentialStore->decrypt($stored->{password} // '');
+          return ['auth', undef] unless $actual eq $password;
+        }
+        else {
+          my $stored = $udb->selectrow_hashref(
+            "SELECT password FROM iserver WHERE username = ?", {}, $email);
+          return ['auth', undef] unless $stored && $stored->{password} eq $password;
+        }
 
         # Create a token for this session
         my $token = _generate_token();
@@ -997,15 +1012,28 @@ sub run_accounts_worker {
         return ['verify_credentials', undef] unless $row;
         my $aid = $row->{accountid};
         # OAuth accounts have no stored password to compare against
+        my $type = $row->{type} // '';
         return ['verify_credentials', undef]
-          if ($row->{type} // '') eq 'gmail' || ($row->{type} // '') eq 'fastmail';
+          if $type eq 'gmail' || $type eq 'fastmail';
         my $dbfile = "$datadir/$aid.sqlite3";
         return ['verify_credentials', undef] unless -f $dbfile;
         my $udb = DBI->connect("dbi:SQLite:dbname=$dbfile");
+        require JMAP::CredentialStore;
+
+        if ($type eq 'jmap') {
+          my $stored = $udb->selectrow_hashref(
+            "SELECT password, authType FROM jserver WHERE username = ?", {}, $email);
+          return ['verify_credentials', undef] unless $stored;
+          return ['verify_credentials', undef]
+            unless ($stored->{authType} || 'basic') eq 'basic';
+          my $actual = JMAP::CredentialStore->decrypt($stored->{password} // '');
+          return ['verify_credentials', undef] unless $actual eq $password;
+          return ['verify_credentials', { accountid => $aid }];
+        }
+
         my $stored = $udb->selectrow_hashref(
           "SELECT password FROM iserver WHERE username = ?", {}, $email);
         return ['verify_credentials', undef] unless $stored;
-        require JMAP::CredentialStore;
         my $actual = JMAP::CredentialStore->decrypt($stored->{password});
         return ['verify_credentials', undef] unless $actual eq $password;
         return ['verify_credentials', { accountid => $aid }];
@@ -1067,6 +1095,21 @@ sub _account_details_child {
   return {} unless -f $dbfile;
   my $udb = eval { DBI->connect("dbi:SQLite:dbname=$dbfile") };
   return {} unless $udb;
+
+  # Passthrough accounts keep credentials in the jserver table.
+  my $has_jserver = eval {
+    $udb->selectrow_array(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='jserver'");
+  };
+  if ($has_jserver) {
+    my $j = eval { $udb->selectrow_hashref("SELECT * FROM jserver LIMIT 1") } || {};
+    return {
+      configured => (defined $j->{username} && length $j->{username} ? 1 : 0),
+      username   => $j->{username},
+      type       => 'jmap',
+    };
+  }
+
   my $iserver = eval { $udb->selectrow_hashref("SELECT * FROM iserver LIMIT 1") } || {};
   my ($folders) = eval { $udb->selectrow_array("SELECT COUNT(*) FROM ifolders") } // 0;
   my ($messages) = eval { $udb->selectrow_array("SELECT COUNT(*) FROM jmessages WHERE active = 1") } // 0;
