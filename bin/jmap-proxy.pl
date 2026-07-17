@@ -244,6 +244,8 @@ sub get_backend {
   my $accountid = shift;
 
   unless ($backend{$accountid}) {
+    warn "Spawning backend worker for $accountid\n";
+
     # Create a socketpair and fork a backend worker
     socketpair(my $parent_sock, my $child_sock, AF_UNIX, SOCK_STREAM, 0)
       or die "socketpair: $!";
@@ -276,6 +278,8 @@ sub get_backend {
     # Parent: set up AnyEvent handle on our end
     close $child_sock;
     $parent_sock->blocking(0);
+
+    warn "Backend worker for $accountid spawned (pid=$pid)\n";
 
     $backend{$accountid} = [AnyEvent::Handle->new(
       fh => $parent_sock,
@@ -420,6 +424,8 @@ sub run_backend_worker {
     my ($cmd, $args, $tag) = @$request;
     my $t0 = [Time::HiRes::gettimeofday()];
 
+    warn "START $cmd ($tag) => ($accountid)\n" unless $cmd eq 'ping';
+
     my $res = eval {
       if ($cmd eq 'ping') {
         return ['pong', $accountid];
@@ -463,6 +469,8 @@ sub run_backend_worker {
           $detail->{carddavURL} = 'https://carddav.address.yahoo.com';
           $force = 1;
         }
+        warn "SIGNUP: starting for $detail->{username} (force=" . ($force ? 1 : 0) . ")\n";
+
         my $resolver = Net::DNS::Resolver->new;
         my $domain = $detail->{username};
         $domain =~ s/.*\@//;
@@ -513,20 +521,31 @@ sub run_backend_worker {
         }
 
         unless ($force) {
+          warn "SIGNUP: autodiscovery done for $detail->{username}, awaiting user confirmation "
+             . "(imapHost=" . ($detail->{imapHost} // '?') . ")\n";
           return ['signup', ['continue', $detail]];
         }
 
         # Test IMAP login
+        warn "SIGNUP: testing IMAP login for $detail->{username} at "
+           . "$detail->{imapHost}:$detail->{imapPort} (ssl=$detail->{imapSSL})\n";
         my $imap = Mail::IMAPTalk->new(
           Server => $detail->{imapHost},
           Port => $detail->{imapPort},
           UseSSL => ($detail->{imapSSL} > 1),
           UseBlocking => ($detail->{imapSSL} > 1),
         );
-        die "Cannot connect to IMAP server $detail->{imapHost}:$detail->{imapPort}\n" unless $imap;
+        unless ($imap) {
+          warn "SIGNUP: cannot connect to IMAP server $detail->{imapHost}:$detail->{imapPort}\n";
+          die "Cannot connect to IMAP server $detail->{imapHost}:$detail->{imapPort}\n";
+        }
 
         my $ok = $imap->login($detail->{username}, $detail->{password});
-        die "Login failed for $detail->{username}\n" unless $ok;
+        unless ($ok) {
+          warn "SIGNUP: IMAP login failed for $detail->{username}\n";
+          die "Login failed for $detail->{username}\n";
+        }
+        warn "SIGNUP: IMAP login OK for $detail->{username}\n";
         $imap->logout();
 
         # Create account in accounts DB
@@ -535,16 +554,19 @@ sub run_backend_worker {
         my $final_aid;
         if ($existing_aid) {
           $final_aid = $existing_aid;
+          warn "SIGNUP: $detail->{username} already has account $existing_aid, reusing it\n";
           # Join pool if requested
           if ($detail->{poolid}) {
             $dbh->do("UPDATE accounts SET poolid = ? WHERE accountid = ?",
               {}, $detail->{poolid}, $existing_aid);
+            warn "SIGNUP: joined pool $detail->{poolid} for $existing_aid\n";
           }
         } else {
           $final_aid = $accountid;
           my $poolid = $detail->{poolid} || $accountid;
           $dbh->do("INSERT INTO accounts (email, accountid, type, poolid) VALUES (?, ?, ?, ?)",
             {}, $detail->{username}, $accountid, 'imap', $poolid);
+          warn "SIGNUP: created account $accountid (poolid=$poolid) for $detail->{username}\n";
         }
 
         # Initialize DB now that the account exists
@@ -552,8 +574,10 @@ sub run_backend_worker {
         $init_db->();
 
         # Set up the account
+        warn "SIGNUP: running setuser + firstsync for $final_aid\n";
         $db->setuser($detail);
         $db->firstsync();
+        warn "SIGNUP: firstsync complete for $final_aid\n";
 
         return ['signup', ['done', $final_aid, $detail->{username}]];
       }
@@ -564,6 +588,7 @@ sub run_backend_worker {
         my $email         = $args->{email}         or die "email required\n";
         my $refresh_token = $args->{refresh_token} or die "refresh_token required\n";
         my $acct_type     = $args->{account_type}  || 'gmail';
+        warn "OAUTH_SIGNUP: starting for $email (type=$acct_type, accountid=$accountid)\n";
 
         my $existing_aid = $dbh->selectrow_array(
           "SELECT accountid FROM accounts WHERE email = ?", {}, $email);
@@ -571,6 +596,7 @@ sub run_backend_worker {
         if ($existing_aid) {
           $final_aid  = $existing_aid;
           $target_aid = $existing_aid;
+          warn "OAUTH_SIGNUP: $email already has account $existing_aid, reusing it\n";
           if ($args->{poolid}) {
             $dbh->do("UPDATE accounts SET poolid = ? WHERE accountid = ?",
               {}, $args->{poolid}, $existing_aid);
@@ -582,6 +608,7 @@ sub run_backend_worker {
           $dbh->do(
             "INSERT INTO accounts (email, accountid, type, poolid) VALUES (?,?,?,?)",
             {}, $email, $accountid, $acct_type, $poolid);
+          warn "OAUTH_SIGNUP: created account $accountid (poolid=$poolid) for $email\n";
         }
 
         # Create/open the per-account DB for the right account ID
@@ -596,6 +623,7 @@ sub run_backend_worker {
           require JMAP::ImapDB;
           $target_db = JMAP::ImapDB->new($target_aid);
         }
+        warn "OAUTH_SIGNUP: running setuser for $target_aid\n";
         $target_db->setuser({
           username   => $email,
           password   => $refresh_token,
@@ -609,7 +637,9 @@ sub run_backend_worker {
           carddavURL => $args->{carddavURL} || '',
           webdavURL  => $args->{webdavURL}  || '',
         });
+        warn "OAUTH_SIGNUP: running firstsync for $target_aid\n";
         $target_db->firstsync();
+        warn "OAUTH_SIGNUP: firstsync complete for $target_aid ($email)\n";
 
         # Make $db point to the right instance for subsequent commands
         if ($target_aid eq $accountid) {
@@ -713,6 +743,8 @@ sub run_backend_worker {
         # just makes the server wait out its login-grace-time before dropping the connection.
         my $imap_ssl = $args->{imapSSL} // 2;
         my $smtp_ssl = $args->{smtpSSL} // 3;
+        warn "SETUP: $accountid connecting to imap host "
+           . ($args->{imapHost} // '?') . ":" . ($args->{imapPort} || 993) . "\n";
         $db->setuser({
           username   => $args->{username}   || $accountid,
           email      => $args->{email},
@@ -727,8 +759,11 @@ sub run_backend_worker {
           carddavURL => $args->{carddavURL} || '',
           webdavURL  => $args->{webdavURL}  || '',
         });
+        warn "SETUP: $accountid credentials stored, running firstsync\n";
         $db->firstsync();
+        warn "SETUP: $accountid firstsync done, running sync_imap\n";
         $db->sync_imap();
+        warn "SETUP: $accountid complete\n";
         return ['setup', $JSON::true];
       }
       if ($cmd eq 'upload') {
@@ -1182,8 +1217,10 @@ sub run_accounts_worker {
           $email = ($u && (!$holder || $holder eq $aid)) ? $u : $aid;
         }
         my $poolid = $args->{poolid} || $aid;
+        warn "CREATE_ACCOUNT: $aid (type=$type, email=$email, poolid=$poolid)\n";
         $dbh->do("INSERT OR REPLACE INTO accounts (email, accountid, type, poolid, needs_backfill) VALUES (?, ?, ?, ?, 1)",
           {}, $email, $aid, $type, $poolid);
+        warn "CREATE_ACCOUNT: $aid stored in accounts.sqlite3\n";
         return ['create_account', { accountid => $aid, type => $type, poolid => $poolid }];
       }
 
@@ -1262,16 +1299,23 @@ sub run_accounts_worker {
         # Authenticate by email + password: look up account, check stored password
         my $email = $args->{username};
         my $password = $args->{password};
+        warn "AUTH: login attempt for $email\n";
         my $row = $dbh->selectrow_hashref(
           "SELECT accountid, poolid FROM accounts WHERE email = ?", {}, $email);
-        return ['auth', undef] unless $row;
+        unless ($row) {
+          warn "AUTH: no account found for $email\n";
+          return ['auth', undef];
+        }
 
         # Check password against per-account DB
         my $aid  = $row->{accountid};
         my $type = $dbh->selectrow_array(
           "SELECT type FROM accounts WHERE accountid = ?", {}, $aid) // '';
         my $dbfile = "$datadir/$aid.sqlite3";
-        return ['auth', undef] unless -f $dbfile;
+        unless (-f $dbfile) {
+          warn "AUTH: account $aid for $email has no database yet ($dbfile missing)\n";
+          return ['auth', undef];
+        }
         my $udb = DBI->connect("dbi:SQLite:dbname=$dbfile");
 
         if ($type eq 'jmap') {
@@ -1284,7 +1328,10 @@ sub run_accounts_worker {
           return ['auth', undef] unless ($stored->{authType} || 'basic') eq 'basic';
           require JMAP::CredentialStore;
           my $actual = JMAP::CredentialStore->decrypt($stored->{password} // '');
-          return ['auth', undef] unless $actual eq $password;
+          unless ($actual eq $password) {
+            warn "AUTH: wrong password for $email (account $aid)\n";
+            return ['auth', undef];
+          }
         }
         else {
           # One iserver row per account DB. Do NOT key it on $email: the IMAP
@@ -1294,8 +1341,12 @@ sub run_accounts_worker {
           # Stored encrypted (ImapDB::setuser); decrypt passes plaintext through.
           require JMAP::CredentialStore;
           my $actual = JMAP::CredentialStore->decrypt($stored->{password} // '');
-          return ['auth', undef] unless $actual eq $password;
+          unless ($actual eq $password) {
+            warn "AUTH: wrong password for $email (account $aid)\n";
+            return ['auth', undef];
+          }
         }
+        warn "AUTH: login OK for $email (account $aid)\n";
 
         # Get all accounts in the pool
         my $poolid = $row->{poolid} || $aid;
@@ -3154,6 +3205,7 @@ sub _start_google_oauth {
     client_secret => $ENV{GOOGLE_CLIENT_SECRET},
   );
   $oauth_state{$state_token} = $state;
+  warn "GOOGLE_OAUTH: redirecting $email to Google (state=$state_token, redirect_uri=$BASEURL/cb/oauth)\n";
   return $url;
 }
 
@@ -3344,6 +3396,7 @@ sub do_discover {
   my $via   = $req->parm('via')      // '';
   $email =~ s/^\s+|\s+$//g;
   my (undef, $domain) = split /\@/, $email, 2;
+  warn "DISCOVER: POST /discover username=" . ($email || '(empty)') . " via=" . ($via || '-') . "\n";
   return invalid_request($req) unless $domain;
   $domain = lc $domain;
 
@@ -3357,6 +3410,7 @@ sub do_discover {
       if ($ENV{GOOGLE_CLIENT_ID} && $ENV{GOOGLE_CLIENT_SECRET}) {
         $req->respond([302, 'Found', { Location => _start_google_oauth($email, $auth_aid) }, '']);
       } else {
+        warn "GOOGLE_OAUTH: $email is \@$domain but GOOGLE_CLIENT_ID/SECRET not set in this process's env\n";
         _render_step2($req, $email,
           'Gmail requires OAuth2. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to enable it.', {});
       }
@@ -3395,7 +3449,11 @@ sub do_cb_oauth {
   my $code        = $req->parm('code')  // '';
   my $oauth_error = $req->parm('error') // '';
 
+  warn "OAUTH_CB: hit (state=$state_token, code=" . ($code ? 'present' : 'MISSING')
+     . ", error=" . ($oauth_error || 'none') . ")\n";
+
   if ($oauth_error) {
+    warn "OAUTH_CB: provider returned error: $oauth_error\n";
     my $html = '';
     $TT->process("index.html", { baseurl => $BASEURL,
       error => "OAuth authorization failed: $oauth_error" }, \$html);
@@ -3404,6 +3462,7 @@ sub do_cb_oauth {
 
   my $state = $oauth_state{$state_token};
   unless ($state) {
+    warn "OAUTH_CB: no stored state for token $state_token (expired, already used, or worker restarted mid-flow)\n";
     my $html = '';
     $TT->process("index.html", { baseurl => $BASEURL,
       error => "OAuth session expired or invalid. Please try again." }, \$html);
@@ -3436,16 +3495,20 @@ sub do_cb_oauth {
     timeout => 15,
     sub {
       my ($body, $hdrs) = @_;
+      warn "OAUTH_CB: token exchange response status=" . ($hdrs->{Status} // '?') . "\n";
       unless (($hdrs->{Status} // 0) =~ /^2/) {
+        warn "OAUTH_CB: token exchange body: $body\n";
         return $err_html->("Token exchange failed ($hdrs->{Status}). Please try again.");
       }
       my $tokens = eval { decode_json($body) };
       if (!$tokens || $tokens->{error}) {
+        warn "OAUTH_CB: token exchange returned error: " . ($tokens->{error} // 'invalid JSON') . " body=$body\n";
         return $err_html->("OAuth token error: " . ($tokens->{error} // 'invalid response'));
       }
 
       my $access_token  = $tokens->{access_token}  or return $err_html->("No access_token in response");
       my $refresh_token = $tokens->{refresh_token} // '';
+      warn "OAUTH_CB: got access_token, refresh_token=" . ($refresh_token ? 'present' : 'EMPTY') . "\n";
 
       # Get user email from userinfo endpoint (if available)
       my $userinfo_url = $state->{userinfo_url};
@@ -3453,8 +3516,10 @@ sub do_cb_oauth {
         my ($email) = @_;
         $email ||= $state->{email};
         unless ($email) {
+          warn "OAUTH_CB: could not determine email (no userinfo email and no state email)\n";
           return $err_html->("Could not determine account email from OAuth response.");
         }
+        warn "OAUTH_CB: resolved email=$email account_type=" . ($state->{account_type} // '?') . "\n";
 
         my $auth_aid     = $state->{auth_aid};
         my $account_type = $state->{account_type};
@@ -3534,7 +3599,9 @@ sub do_cb_oauth {
           timeout => 10,
           sub {
             my ($ubody, $uhdrs) = @_;
+            warn "OAUTH_CB: userinfo response status=" . ($uhdrs->{Status} // '?') . "\n";
             my $info = eval { decode_json($ubody) };
+            warn "OAUTH_CB: userinfo body did not parse: $ubody\n" if !$info;
             $get_email_cb->($info->{email});
           });
       } else {
@@ -4351,18 +4418,23 @@ sub mgmt_api_accounts {
     my $aid = $data->{accountid};
     $httpd->stop_request();
 
+    warn "MGMT: Create Account request for '$aid' (type="
+       . ($data->{sessionUrl} ? 'jmap' : ($data->{type} || 'imap')) . ")\n";
+
     if ($data->{sessionUrl}) {
       # JMAP passthrough account — signup_jmap creates the accounts.sqlite3 entry itself.
       # The worker is keyed by $aid so signup_jmap uses it as the new accountid.
       delete $backend{$aid} if $backend{$aid};
       send_backend_request($aid, 'signup_jmap', $data, sub {
         my ($final_aid, $email) = @{shift()};
+        warn "MGMT: Create Account '$aid' -> signup_jmap OK (final accountid=$final_aid)\n";
         delete $backend{$aid} if $aid ne $final_aid;
         $req->respond([201, 'created',
           { 'Content-Type' => 'application/json' },
           JSON::XS::encode_json({ accountid => $final_aid, type => 'jmap', email => $email })]);
       }, sub {
         my $err = shift;
+        warn "MGMT: Create Account '$aid' -> signup_jmap FAILED: $err\n";
         delete $backend{$aid};
         $req->respond([500, 'error',
           { 'Content-Type' => 'application/json' },
@@ -4374,19 +4446,23 @@ sub mgmt_api_accounts {
     # IMAP account — Step 1: Create account in accounts DB via __accounts__ child
     send_backend_request('__accounts__', 'create_account', $data, sub {
       my $result = shift;
+      warn "MGMT: Create Account '$aid' -> create_account OK\n";
 
       # Kill existing backend child so it reconnects with new config
       delete $backend{$aid} if $backend{$aid};
 
       # Step 2: If IMAP config provided, set up via per-account child
       if ($data->{imapHost}) {
+        warn "MGMT: Create Account '$aid' -> starting setup (imapHost=$data->{imapHost})\n";
         send_backend_request($aid, 'setup', $data, sub {
+          warn "MGMT: Create Account '$aid' -> setup OK\n";
           $req->respond([201, 'created',
             { 'Content-Type' => 'application/json' },
             JSON::XS::encode_json({ accountid => $aid, type => $result->{type} })]);
         }, sub {
           my $err = shift;
           # Account created but sync failed
+          warn "MGMT: Create Account '$aid' -> setup FAILED: $err\n";
           $req->respond([201, 'created',
             { 'Content-Type' => 'application/json' },
             JSON::XS::encode_json({ accountid => $aid, type => $result->{type},
@@ -4400,6 +4476,7 @@ sub mgmt_api_accounts {
       }
     }, sub {
       my $err = shift;
+      warn "MGMT: Create Account '$aid' -> create_account FAILED: $err\n";
       $req->respond([500, 'error',
         { 'Content-Type' => 'application/json' },
         JSON::XS::encode_json({ error => "$err" })]);

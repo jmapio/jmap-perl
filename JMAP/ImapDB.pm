@@ -199,10 +199,12 @@ sub sync_folders {
 
   my $data = $Self->backend_cmd('folders');
   my ($prefix, $folders, $sep) = @$data;
+  $Self->log('debug', "sync_folders: IMAP LIST returned " . scalar(keys %$folders) . " folder(s) (prefix='" . ($prefix // '') . "', sep='" . ($sep // '') . "')");
 
   $Self->begin();
 
   my $ifolders = $Self->dget('ifolders');
+  $Self->log('debug', "sync_folders: " . scalar(@$ifolders) . " folder(s) currently cached locally");
   my %ibylabel = map { $_->{label} => $_ } @$ifolders;
   my %seen;
 
@@ -231,6 +233,7 @@ sub sync_folders {
   foreach my $folder (@$ifolders) {
     my $id = $folder->{ifolderid};
     next if $seen{$id};
+    $Self->log('debug', "sync_folders: removing local folder '$folder->{imapname}' (label='$folder->{label}') - not present in latest LIST");
     $Self->ddelete('ifolders', {ifolderid => $id});
   }
 
