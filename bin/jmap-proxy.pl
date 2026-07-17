@@ -973,7 +973,10 @@ sub run_accounts_worker {
         my $udb = DBI->connect("dbi:SQLite:dbname=$dbfile");
         my $stored = $udb->selectrow_hashref(
           "SELECT password FROM iserver WHERE username = ?", {}, $email);
-        return ['auth', undef] unless $stored && $stored->{password} eq $password;
+        return ['auth', undef] unless $stored;
+        require JMAP::CredentialStore;
+        my $actual = JMAP::CredentialStore->decrypt($stored->{password});
+        return ['auth', undef] unless $actual eq $password;
 
         # Create a token for this session
         my $token = _generate_token();
