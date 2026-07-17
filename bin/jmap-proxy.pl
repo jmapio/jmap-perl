@@ -658,15 +658,19 @@ sub run_backend_worker {
         return ['signup_jmap', [$final_aid, $display_email]];
       }
       if ($cmd eq 'setup') {
+        # Default to implicit SSL/STARTTLS — plaintext on the standard SSL ports (993/587)
+        # just makes the server wait out its login-grace-time before dropping the connection.
+        my $imap_ssl = $args->{imapSSL} // 2;
+        my $smtp_ssl = $args->{smtpSSL} // 3;
         $db->setuser({
           username   => $args->{username}   || $accountid,
           password   => $args->{password}   || '',
           imapHost   => $args->{imapHost},
           imapPort   => $args->{imapPort}   || 993,
-          imapSSL    => $args->{imapSSL}    // 0,
+          imapSSL    => $imap_ssl,
           smtpHost   => $args->{smtpHost}   || $args->{imapHost},
           smtpPort   => $args->{smtpPort}   || 587,
-          smtpSSL    => $args->{smtpSSL}    // 0,
+          smtpSSL    => $smtp_ssl,
           caldavURL  => $args->{caldavURL}  || '',
           carddavURL => $args->{carddavURL} || '',
           webdavURL  => $args->{webdavURL}  || '',
@@ -4417,6 +4421,12 @@ sub mgmt_dashboard {
     <div class="form-group"><label>Type</label><input id="f-type" value="imap"></div>
     <div class="form-group"><label>IMAP Host</label><input id="f-host" placeholder="imap.example.com"></div>
     <div class="form-group"><label>IMAP Port</label><input id="f-port" value="993"></div>
+    <div class="form-group"><label>IMAP Encryption</label>
+      <select id="f-ssl">
+        <option value="2" selected>SSL/TLS (implicit, usually port 993)</option>
+        <option value="1">None (plaintext, usually port 143)</option>
+      </select>
+    </div>
     <div class="form-group"><label>Username</label><input id="f-user" placeholder="user@example.com"></div>
     <div class="form-group"><label>Password</label><input id="f-pass" type="password"></div>
     <div class="form-group"><label>CalDAV URL (optional)</label><input id="f-caldav" placeholder="https://example.com"></div>
@@ -4471,6 +4481,7 @@ function addAccount() {
     type: document.getElementById('f-type').value,
     imapHost: document.getElementById('f-host').value,
     imapPort: parseInt(document.getElementById('f-port').value) || 993,
+    imapSSL: parseInt(document.getElementById('f-ssl').value) || 2,
     username: document.getElementById('f-user').value,
     password: document.getElementById('f-pass').value,
     caldavURL: document.getElementById('f-caldav').value,
