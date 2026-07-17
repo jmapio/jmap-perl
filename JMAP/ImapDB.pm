@@ -3019,6 +3019,23 @@ sub sync_imap {
   $Self->sync_jmap();
 }
 
+# Cheap check for whether any folder still needs (re-)backfilling — same
+# condition backfill() itself uses, without doing any of the work. Used by
+# the proxy to notice when sync_folders() has turned up folders that need
+# backfilling after the account's one-shot needs_backfill flag was already
+# cleared (e.g. newly-discovered folders, or previously mis-merged folders
+# that now get their own row with a fresh uidfirst == uidnext).
+sub has_pending_backfill {
+  my $Self = shift;
+
+  $Self->begin();
+  my ($count) = $Self->dbh->selectrow_array(
+    "SELECT COUNT(*) FROM ifolders WHERE uidnext > 1 AND uidfirst > 1");
+  $Self->commit();
+
+  return $count > 0;
+}
+
 sub backfill {
   my $Self = shift;
 

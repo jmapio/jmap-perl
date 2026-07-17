@@ -168,6 +168,13 @@ sub mk_json {
     elsif ($res->[0] eq 'synced') {
       $sync_times{$accountid} = $res->[1];
     }
+    elsif ($res->[0] eq 'needsbackfill') {
+      # Re-arm the backfill loop for this account. Also persist the flag so
+      # a restart before the loop finishes still picks it back up via
+      # get_needs_backfill(), same as the normal signup path.
+      send_backend_request('__accounts__', 'set_needs_backfill', { accountid => $accountid }, sub {}, sub {});
+      prod_backfill($accountid);
+    }
     elsif ($res->[0] eq 'sendat') {
       schedule_send($accountid, $res->[1]);
     }
@@ -862,6 +869,14 @@ sub run_backend_worker {
           if ($args->{force}) { $db->sync_files_safely() }
           else                { $db->sync_files_if_due(300, { first => 0 }) }   # first walk: backfill worker
         }
+        # sync_folders() may have turned up folders needing backfill after
+        # the account's one-shot needs_backfill flag was already cleared
+        # (new folders, or folders that previously got merged onto the
+        # wrong row and now have their own fresh uidfirst == uidnext) — tell
+        # the parent so it can (re)start the backfill loop for this account.
+        eval {
+          $write_json->(['needsbackfill', time()]) if $db->has_pending_backfill();
+        };
         eval { $write_json->(['synced', time()]) };
         return ['sync', $JSON::true];
       }
@@ -1275,6 +1290,12 @@ sub run_accounts_worker {
         my $aid = $args->{accountid};
         $dbh->do("UPDATE accounts SET needs_backfill = 0 WHERE accountid = ?", {}, $aid);
         return ['clear_backfill', { accountid => $aid }];
+      }
+
+      if ($cmd eq 'set_needs_backfill') {
+        my $aid = $args->{accountid};
+        $dbh->do("UPDATE accounts SET needs_backfill = 1 WHERE accountid = ?", {}, $aid);
+        return ['set_needs_backfill', { accountid => $aid }];
       }
 
       if ($cmd eq 'delete_account') {
