@@ -14,7 +14,7 @@ sub auth_url_and_state {
 
     my $meta   = $args{meta};
     my $scopes = join(' ', @{ $meta->{scopes_supported} // [] });
-    $scopes ||= 'https://mail.google.com/';
+    $scopes ||= 'urn:ietf:params:oauth:scope:mail';
 
     my $auth_url = URI->new($meta->{authorization_endpoint});
     $auth_url->query_param(response_type         => 'code');
