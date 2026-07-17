@@ -107,6 +107,11 @@ sub connect_imap {
   my $usessl = $Self->_imap_ssl();
   my %extra = $Self->_imap_extra();
   my @ssl = map { $_ => $extra{$_} } grep { /^SSL_/ } keys %extra;
+  # The port the socket below uses: a stored port may be empty
+  my $where = ($Self->{auth}{imapHost} // '?') . ':'
+            . ($Self->{auth}{imapPort} || ($usessl ? 993 : 143));
+  warn "IMAP: connecting to $where (ssl=" . ($usessl ? 1 : 0) . ") as "
+     . ($Self->{auth}{username} // '?') . "\n" if $ENV{JMAP_DEBUG};
   for (1..3) {
     # Our own socket, because Server => would have IMAPTalk open one that we
     # could only put a timeout on after the greeting and login are over
@@ -125,9 +130,11 @@ sub connect_imap {
     );
     next unless $Self->{imap};
     $Self->{lastused} = time();
+    warn "IMAP: connected and logged in to $where\n" if $ENV{JMAP_DEBUG};
     return $Self->{imap};
   }
 
+  warn "IMAP: could not connect to $where: $@\n";
   die "Could not connect to IMAP server: $@";
 }
 
