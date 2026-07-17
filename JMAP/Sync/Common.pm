@@ -483,6 +483,14 @@ sub folders {
   my $listcmd = $imap->capability()->{xlist} ? 'xlist' : 'list';
   my @folders = $imap->$listcmd('', '*');
 
+  # Some servers advertise the XLIST capability but don't return
+  # well-formed XLIST data (observed against a Dovecot deployment that
+  # replies to XLIST with just the tagged completion status instead of
+  # folder tuples). Fall back to the standard LIST command in that case.
+  if ($listcmd eq 'xlist' && grep { ref($_) ne 'ARRAY' } @folders) {
+    @folders = $imap->list('', '*');
+  }
+
   my %folders;
   foreach my $folder (@folders) {
     my ($role) = grep { not $KNOWN_SPECIALS{lc $_} } @{$folder->[0]};
