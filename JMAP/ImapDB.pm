@@ -379,7 +379,7 @@ sub sync_jmailboxes {
     my $id = $mailbox->{jmailboxid};
     next unless $mailbox->{active};
     next if $seen{$id};
-    $Self->dmaybeupdate('jmailboxes', {active => 0}, {jmailboxid => $id}, 'jnoncountsmodseq');
+    $Self->dmaybedirty('jmailboxes', {active => 0}, {jmailboxid => $id}, 'jnoncountsmodseq');
   }
 
   $Self->commit();
