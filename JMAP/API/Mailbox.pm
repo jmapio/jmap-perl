@@ -512,13 +512,18 @@ sub api_Mailbox_queryChanges {
   my @new_ids = map { $_->{jmailboxid} } @$data;
   my %new_idx;
   $new_idx{$new_ids[$_]} = $_ for 0..$#new_ids;
+  my %old_idx;
+  $old_idx{$old_ids->[$_]} = $_ for 0..$#$old_ids;
 
-  my @removed = grep { !exists $new_idx{$_} } @$old_ids;
-  my %old_set  = map { $_ => 1 } @$old_ids;
+  # An id that stayed in the results but changed index (e.g. sort on a
+  # mutable property like sortOrder/name) must be reported in both removed
+  # and added per RFC 8620 5.6, or the client's cached order goes stale.
+  my @removed = grep { !exists $new_idx{$_} || $new_idx{$_} != $old_idx{$_} } @$old_ids;
   my @added;
   for my $i (0..$#new_ids) {
-    push @added, { id => "$new_ids[$i]", index => $i }
-      unless exists $old_set{$new_ids[$i]};
+    my $id = $new_ids[$i];
+    push @added, { id => "$id", index => $i }
+      if !exists $old_idx{$id} || $old_idx{$id} != $i;
   }
 
   $Self->{db}->save_query('Mailbox', $qparams, $newQueryState, \@new_ids);
