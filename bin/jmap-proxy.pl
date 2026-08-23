@@ -1852,14 +1852,28 @@ sub _do_copy_call {
   # Every branch below must be listed in JMAP::Dispatch::copy_methods, or the
   # classifier will never route the call here.  t/dispatch-copy-route.t asserts
   # the two stay in step.
-  if    ($method eq 'Blob/copy')         { _copy_blobs($args, $from_aid, $to_aid, $tag, $cb, $errcb) }
-  elsif ($method eq 'Email/copy')        { _copy_emails($args, $from_aid, $to_aid, $tag, $cb, $errcb) }
-  elsif ($method eq 'CalendarEvent/copy'){ _copy_objects('CalendarEvent', $args, $from_aid, $to_aid, $tag, $cb, $errcb) }
-  elsif ($method eq 'ContactCard/copy')  { _copy_objects('ContactCard',   $args, $from_aid, $to_aid, $tag, $cb, $errcb) }
-  elsif ($method eq 'FileNode/copy')     {
-    JMAP::FileNodeCopy::copy(send => \&send_backend_request, args => $args, from => $from_aid, to => $to_aid,
-                             tag => $tag, cb => $cb, errcb => $errcb, created_ids => $created_ids);
-  }
+  my $dispatch = sub {
+    if    ($method eq 'Blob/copy')         { _copy_blobs($args, $from_aid, $to_aid, $tag, $cb, $errcb) }
+    elsif ($method eq 'Email/copy')        { _copy_emails($args, $from_aid, $to_aid, $tag, $cb, $errcb) }
+    elsif ($method eq 'CalendarEvent/copy'){ _copy_objects('CalendarEvent', $args, $from_aid, $to_aid, $tag, $cb, $errcb) }
+    elsif ($method eq 'ContactCard/copy')  { _copy_objects('ContactCard',   $args, $from_aid, $to_aid, $tag, $cb, $errcb) }
+    elsif ($method eq 'FileNode/copy')     {
+      JMAP::FileNodeCopy::copy(send => \&send_backend_request, args => $args, from => $from_aid, to => $to_aid,
+                               tag => $tag, cb => $cb, errcb => $errcb, created_ids => $created_ids);
+    }
+  };
+
+  # fromAccountId/accountId come straight from the JMAP request body — without
+  # this, any authenticated user could pull another account's mail/contacts/
+  # events into their own by simply naming that account's id here, or write
+  # into an account they don't own. Both ends must be in the caller's pool.
+  _check_account_access($auth_accountid, $from_aid, sub {
+    _check_account_access($auth_accountid, $to_aid, $dispatch, sub {
+      $cb->(['error', { type => 'accountNotFound' }, $tag]);
+    });
+  }, sub {
+    $cb->(['error', { type => 'accountNotFound' }, $tag]);
+  });
 }
 
 sub _copy_blobs {
