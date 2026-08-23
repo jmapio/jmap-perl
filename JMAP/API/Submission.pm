@@ -268,7 +268,15 @@ sub api_EmailSubmission_changes {
 
   my $hasMore = 0;
   if ($args->{maxChanges} and $#$data >= $args->{maxChanges}) {
+    # [4]=jmodseq. Rows changed in the same transaction share a jmodseq;
+    # cutting a batch in half would set newState to that shared value, and
+    # a later 'jmodseq > sinceState' fetch would then skip the un-returned
+    # rows of that batch forever. Back off to the last full batch instead.
+    my $boundary_modseq = $data->[$args->{maxChanges}][4];
     $#$data = $args->{maxChanges} - 1;
+    pop @$data while (@$data and $data->[-1][4] == $boundary_modseq);
+    return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
+      unless @$data;
     $newState = "$data->[-1][4]";
     $hasMore = 1;
   }
