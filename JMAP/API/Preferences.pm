@@ -267,8 +267,9 @@ sub api_ClientPreferences_set {
   foreach my $key (keys %$update) {
     if ($key eq 'singleton') {
       my $value = $Self->update_singleton_value('api_ClientPreferences_get', $update->{singleton});
-      $updated->{singleton} = eval { $Self->{db}->update_prefs('ClientPreferences', $value) };
-      $notUpdated->{singleton} = $@ if $@;
+      my $res = eval { $Self->{db}->update_prefs('ClientPreferences', $value) };
+      if ($@) { $notUpdated->{singleton} = "$@" }
+      else    { $updated->{singleton}    = $res }
     }
     else {
       $notUpdated->{$key} = "Can't update anything except singleton";
@@ -400,8 +401,9 @@ sub api_CalendarPreferences_set {
   foreach my $key (keys %$update) {
     if ($key eq 'singleton') {
       my $value = $Self->update_singleton_value('api_CalendarPreferences_get', $update->{singleton});
-      $updated->{singleton} = eval { $Self->{db}->update_prefs('CalendarPreferences', $value) };
-      $notUpdated->{singleton} = $@ if $@;
+      my $res = eval { $Self->{db}->update_prefs('CalendarPreferences', $value) };
+      if ($@) { $notUpdated->{singleton} = "$@" }
+      else    { $updated->{singleton}    = $res }
     }
     else {
       $notUpdated->{$key} = "Can't update anything except singleton";
