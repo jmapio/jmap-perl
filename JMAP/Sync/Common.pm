@@ -17,7 +17,12 @@ use MIME::Base64 qw(decode_base64);
 use MIME::QuotedPrint qw(decode_qp);
 use Sys::Hostname;
 
-my %KNOWN_SPECIALS = map { lc $_ => 1 } qw(\\HasChildren \\HasNoChildren \\NoSelect \\NoInferiors);
+# RFC 6154 special-use attributes (plus the non-standard but widely used
+# \Inbox/\Spam) — the only LIST attributes that should be treated as a
+# folder "role". Everything else a server may report (\HasChildren,
+# \NoSelect, \Marked, \Unmarked, \Subscribed, \NonExistent, \Remote, ...)
+# is structural/state metadata, not a role, and must NOT be used as one.
+my %SPECIAL_USE = map { lc $_ => 1 } qw(\\All \\Archive \\Drafts \\Flagged \\Junk \\Sent \\Trash \\Inbox \\Spam);
 
 sub new {
   my $Class = shift;
@@ -516,8 +521,8 @@ sub move_card {
 sub folder_label {
   my ($prefix, $folder) = @_;
 
-  # A role is any flag that is not merely structural (\HasChildren etc).
-  my ($role) = grep { not $KNOWN_SPECIALS{lc $_} } @{ $folder->[0] || [] };
+  # Only a special-use flag is a role, see %SPECIAL_USE.
+  my ($role) = grep { $SPECIAL_USE{lc $_} } @{ $folder->[0] || [] };
   return $role if $role;
 
   my $sep   = $folder->[1];
