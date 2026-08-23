@@ -725,6 +725,11 @@ sub _limit_changes {
   return ($data, 0) unless $args->{maxChanges} and @$data > $args->{maxChanges};
   $data = [ sort { $a->{jmodseq} <=> $b->{jmodseq} } @$data ];
   my $next = $data->[$args->{maxChanges}];
+  # Keep only the first maxChanges candidates, then back off any trailing
+  # rows that share jmodseq with the first excluded row so we never split
+  # a modseq group (splitting would set newState to a value that makes
+  # future 'jmodseq > sinceState' queries skip the un-returned rows).
+  $#$data = $args->{maxChanges} - 1;
   pop @$data while (@$data and $data->[-1]{jmodseq} == $next->{jmodseq});
   return (undef, 0) unless @$data;
   $$newState_ref = "$data->[-1]{jmodseq}";
