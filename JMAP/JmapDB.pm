@@ -188,11 +188,13 @@ sub _auth_header {
 # Returns the session hashref on success, or dies with a human-readable error.
 sub fetch_session {
     my ($Self, $args) = @_;
+    require JMAP::CredentialStore;
     # $args may override stored creds (used during signup/update)
-    my $url      = $args->{sessionUrl} || ($Self->access_data())->{sessionUrl};
-    my $username = $args->{username}   // ($Self->access_data())->{username} // '';
-    my $password = $args->{password}   // ($Self->access_data())->{password} // '';
-    my $authType = $args->{authType}   || ($Self->access_data())->{authType} || 'basic';
+    my $stored   = $Self->access_data();
+    my $url      = $args->{sessionUrl} || $stored->{sessionUrl};
+    my $username = $args->{username}   // $stored->{username} // '';
+    my $password = $args->{password}   // JMAP::CredentialStore->decrypt($stored->{password} // '');
+    my $authType = $args->{authType}   || $stored->{authType} || 'basic';
 
     my $auth = ($authType eq 'bearer')
         ? "Bearer $password"
