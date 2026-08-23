@@ -380,7 +380,7 @@ sub api_Mailbox_query {
       filter => $args->{filter},
       sort => $args->{sort},
       queryState => $newQueryState,
-      canCalculateChanges => $JSON::false,
+      canCalculateChanges => $JSON::true,
       position => 0,
       total => $total,
       ids => [],
