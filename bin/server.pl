@@ -809,9 +809,9 @@ sub HandleKeepAlive {
       my $backfill = delete $backend{"$accountid:backfill"};
       delete $idler{$accountid};
       eval { $old->disconnect() };
-      eval { ShutdownHandle($sync) };
-      eval { ShutdownHandle($dav) };
-      eval { ShutdownHandle($backfill) };
+      eval { ShutdownHandle($sync->[0]) };
+      eval { ShutdownHandle($dav->[0]) };
+      eval { ShutdownHandle($backfill->[0]) };
     }
   }
 }
