@@ -407,14 +407,18 @@ sub api_Calendar_set {
 sub _iso_duration_to_seconds {
   my ($dur) = @_;
   return 0 unless defined $dur && $dur =~ /^P/;
+  my ($date_part, $time_part) = split(/T/, $dur, 2);
+  $date_part //= '';
   my $s = 0;
-  $s += $1 * 365 * 86400 if $dur =~ /(\d+)Y/;
-  $s += $1 *  30 * 86400 if $dur =~ /(\d+)M(?=[^T]*$)/;  # months (before T)
-  $s += $1*   7 * 86400  if $dur =~ /(\d+)W/;
-  $s += $1 *     86400   if $dur =~ /(\d+)D/;
-  $s += $1 *      3600   if $dur =~ /T.*?(\d+)H/;
-  $s += $1 *        60   if $dur =~ /T.*?(\d+)M/;
-  $s += $1               if $dur =~ /T.*?(\d+)S/;
+  $s += $1 * 365 * 86400 if $date_part =~ /(\d+)Y/;
+  $s += $1 *  30 * 86400 if $date_part =~ /(\d+)M/;  # months (date part, before T)
+  $s += $1*   7 * 86400  if $date_part =~ /(\d+)W/;
+  $s += $1 *     86400   if $date_part =~ /(\d+)D/;
+  if (defined $time_part) {
+    $s += $1 *  3600 if $time_part =~ /(\d+)H/;
+    $s += $1 *    60 if $time_part =~ /(\d+)M/;  # minutes (time part, after T)
+    $s += $1         if $time_part =~ /(\d+(?:\.\d+)?)S/;
+  }
   return int($s);
 }
 
