@@ -1226,7 +1226,7 @@ sub get_submission_changes {
     {}, $since_modseq);
 }
 
-my $USER_SCHEMA_VERSION = 12;
+my $USER_SCHEMA_VERSION = 13;
 
 sub save_query {
   my ($Self, $type, $params, $state, $ids) = @_;
@@ -1766,6 +1766,21 @@ EOF
     };
     if ($@) { $dbh->rollback; die "user DB migration to v12 failed: $@" }
     $v = 12;
+  }
+
+  if ($v < 13) {
+    # ifolders.uniqueid: server-side stable folder identifier (e.g. Cyrus's
+    # /vendor/cmu/cyrus-imapd/uniqueid), used to keep a folder's JMAP mailbox id
+    # stable across IMAP renames. Only present on IMAP account DBs; eval swallows
+    # the error on accounts without an ifolders table.
+    $dbh->begin_work;
+    eval {
+      eval { $dbh->do("ALTER TABLE ifolders ADD COLUMN uniqueid TEXT") };
+      $dbh->do('PRAGMA user_version = 13');
+      $dbh->commit;
+    };
+    if ($@) { $dbh->rollback; die "user DB migration to v13 failed: $@" }
+    $v = 13;
   }
 }
 

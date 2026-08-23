@@ -223,7 +223,7 @@ sub sync_folders {
       next unless ref($status) eq 'HASH';
       eval { $Self->dmaybeupdate('ifolders', {
         uniqueid => $status->{'/vendor/cmu/cyrus-imapd/uniqueid'},
-      }, {ifolderid => $getstatus{$name}}); };
+      }, {ifolderid => $getuniqueid{$name}}); };
     }
     $Self->commit();
   }
