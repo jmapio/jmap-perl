@@ -5051,6 +5051,7 @@ sub update_contacts_jscontact {
         $notchanged{$carduid} = { type => 'notFound', description => 'No such address book' };
         next;
       }
+      $new_href =~ s{/$}{};
       my $old_collection = $icard->{href};
       $old_collection =~ s{/[^/]+$}{};
       if ($old_collection ne $new_href) {
@@ -5062,7 +5063,6 @@ sub update_contacts_jscontact {
         # Derive new href: same filename, new collection
         (my $filename = $icard->{href}) =~ s{.*/}{};
         my $new_card_href = "$new_href/$filename";
-        $new_href =~ s{/$}{};
         $Self->begin();
         $Self->dmaybeupdate('icards',
           { href => $new_card_href, iaddressbookid => $iab_by_jab{$new_jab_id} },
