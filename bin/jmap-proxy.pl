@@ -8,6 +8,16 @@ use lib $ENV{JMAP_HOME} || '/home/jmap/jmap-perl';
 
 use strict;
 use warnings;
+# warn()/print() anywhere in this process that touches a non-Latin1 character
+# (umlauts, emoji — routine in real mail/calendar/contact data) trips "Wide
+# character in warn/print" on STDERR, which some callee's own `use warnings`
+# scope can escalate to fatal (seen killing an account's backend worker from
+# inside Text::JSCalendar). Deliberately binmode(), not `use open ':std'`:
+# `use open` sets the default layer for every filehandle *created* afterwards
+# in this lexical scope too — including the socketpair() below used for
+# worker IPC — which broke AnyEvent::Handle's raw sysread()/syswrite() on it.
+# binmode() touches only the named handle, no such leakage.
+binmode(STDERR, ':encoding(UTF-8)');
 use AnyEvent;
 use AnyEvent::HTTPD;
 use AnyEvent::Handle;
