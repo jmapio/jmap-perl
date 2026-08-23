@@ -368,8 +368,8 @@ sub run_backend_worker {
         return ['info', [$email, $type]];
       }
 
-      # Initialize DB for commands that need it (not signup/signup_jmap — they create the account first)
-      $init_db->() if $cmd ne 'signup' && $cmd ne 'signup_jmap' && !$db;
+      # Initialize DB for commands that need it (not signup/signup_oauth/signup_jmap — they create the account first)
+      $init_db->() if $cmd ne 'signup' && $cmd ne 'signup_oauth' && $cmd ne 'signup_jmap' && !$db;
 
       # Defensive: clean up stale transactions between commands
       if ($db && $db->in_transaction()) {
