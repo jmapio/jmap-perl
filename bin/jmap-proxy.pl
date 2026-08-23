@@ -3643,18 +3643,22 @@ sub _do_accounts_authed {
   if ($path eq '/accounts/edit' && $method eq 'get') {
     my $aid = $req->parm('accountid') || $auth_aid;
     $httpd->stop_request();
-    send_backend_request($aid, 'get_settings', {}, sub {
-      my $settings = shift;
-      my $html = '';
-      $TT->process("edit-settings.html", {
-        baseurl    => $BASEURL,
-        accountid  => $aid,
-        settings   => $settings,
-      }, \$html) || return $req->respond([500, 'error', {}, $Template::ERROR]);
-      $req->respond([200, 'ok', { 'Content-Type' => 'text/html; charset=utf-8' }, $html]);
+    _check_account_access($auth_aid, $aid, sub {
+      send_backend_request($aid, 'get_settings', {}, sub {
+        my $settings = shift;
+        my $html = '';
+        $TT->process("edit-settings.html", {
+          baseurl    => $BASEURL,
+          accountid  => $aid,
+          settings   => $settings,
+        }, \$html) || return $req->respond([500, 'error', {}, $Template::ERROR]);
+        $req->respond([200, 'ok', { 'Content-Type' => 'text/html; charset=utf-8' }, $html]);
+      }, sub {
+        my $err = shift;
+        $req->respond([500, 'error', {}, "get settings failed: $err"]);
+      });
     }, sub {
-      my $err = shift;
-      $req->respond([500, 'error', {}, "get settings failed: $err"]);
+      $req->respond([403, 'forbidden', {}, 'Forbidden']);
     });
     return;
   }
@@ -3679,23 +3683,27 @@ sub _do_accounts_authed {
       webdavURL  => $req->parm('webdavURL')  || '',
     );
 
-    send_backend_request($aid, 'update_settings', \%args, sub {
-      # Kill the running worker so next request gets fresh IMAP connection
-      if ($backend{$aid}) {
-        send_backend_request($aid, 'delete', {}, sub { delete $backend{$aid} }, sub { delete $backend{$aid} });
-      }
-      $req->respond([301, 'redirected', { Location => "$BASEURL/accounts" }, "Redirected"]);
+    _check_account_access($auth_aid, $aid, sub {
+      send_backend_request($aid, 'update_settings', \%args, sub {
+        # Kill the running worker so next request gets fresh IMAP connection
+        if ($backend{$aid}) {
+          send_backend_request($aid, 'delete', {}, sub { delete $backend{$aid} }, sub { delete $backend{$aid} });
+        }
+        $req->respond([301, 'redirected', { Location => "$BASEURL/accounts" }, "Redirected"]);
+      }, sub {
+        my $err = shift;
+        # Show error back on the edit form
+        my $html = '';
+        $TT->process("edit-settings.html", {
+          baseurl   => $BASEURL,
+          accountid => $aid,
+          settings  => \%args,
+          error     => $err,
+        }, \$html) || return $req->respond([500, 'error', {}, $Template::ERROR]);
+        $req->respond([200, 'ok', { 'Content-Type' => 'text/html; charset=utf-8' }, $html]);
+      });
     }, sub {
-      my $err = shift;
-      # Show error back on the edit form
-      my $html = '';
-      $TT->process("edit-settings.html", {
-        baseurl   => $BASEURL,
-        accountid => $aid,
-        settings  => \%args,
-        error     => $err,
-      }, \$html) || return $req->respond([500, 'error', {}, $Template::ERROR]);
-      $req->respond([200, 'ok', { 'Content-Type' => 'text/html; charset=utf-8' }, $html]);
+      $req->respond([403, 'forbidden', {}, 'Forbidden']);
     });
     return;
   }
@@ -3743,12 +3751,16 @@ sub _do_accounts_authed {
     my $aid = $req->parm('accountid');
     return invalid_request($req) unless $aid;
     $httpd->stop_request();
-    # Set the account's poolid to itself
-    send_backend_request('__accounts__', 'set_poolid', { accountid => $aid, poolid => $aid }, sub {
-      $req->respond([301, 'redirected', { Location => "$BASEURL/accounts" }, "Redirected"]);
+    _check_account_access($auth_aid, $aid, sub {
+      # Set the account's poolid to itself
+      send_backend_request('__accounts__', 'set_poolid', { accountid => $aid, poolid => $aid }, sub {
+        $req->respond([301, 'redirected', { Location => "$BASEURL/accounts" }, "Redirected"]);
+      }, sub {
+        my $err = shift;
+        $req->respond([500, 'error', {}, "detach failed: $err"]);
+      });
     }, sub {
-      my $err = shift;
-      $req->respond([500, 'error', {}, "detach failed: $err"]);
+      $req->respond([403, 'forbidden', {}, 'Forbidden']);
     });
     return;
   }
@@ -3759,34 +3771,38 @@ sub _do_accounts_authed {
     return invalid_request($req) unless $aid;
     $httpd->stop_request();
 
-    my $finish_delete = sub {
-      send_backend_request('__accounts__', 'delete_account', { accountid => $aid }, sub {
-        # If we deleted the authenticated account, clear cookie and go home
-        if ($aid eq $auth_aid) {
-          my $cookie = bake_cookie("jmap_proxy", { value => '', path => '/', expires => '-1d' });
-          $req->respond([301, 'redirected',
-            { 'Set-Cookie' => $cookie, Location => "$BASEURL/" }, "Redirected"]);
-        } else {
-          $req->respond([301, 'redirected', { Location => "$BASEURL/accounts" }, "Redirected"]);
-        }
-      }, sub {
-        my $err = shift;
-        $req->respond([500, 'error', {}, "delete failed: $err"]);
-      });
-    };
+    _check_account_access($auth_aid, $aid, sub {
+      my $finish_delete = sub {
+        send_backend_request('__accounts__', 'delete_account', { accountid => $aid }, sub {
+          # If we deleted the authenticated account, clear cookie and go home
+          if ($aid eq $auth_aid) {
+            my $cookie = bake_cookie("jmap_proxy", { value => '', path => '/', expires => '-1d' });
+            $req->respond([301, 'redirected',
+              { 'Set-Cookie' => $cookie, Location => "$BASEURL/" }, "Redirected"]);
+          } else {
+            $req->respond([301, 'redirected', { Location => "$BASEURL/accounts" }, "Redirected"]);
+          }
+        }, sub {
+          my $err = shift;
+          $req->respond([500, 'error', {}, "delete failed: $err"]);
+        });
+      };
 
-    # Tell per-account child to clean up if running
-    if ($backend{$aid}) {
-      send_backend_request($aid, 'delete', {}, sub {
-        delete $backend{$aid};
+      # Tell per-account child to clean up if running
+      if ($backend{$aid}) {
+        send_backend_request($aid, 'delete', {}, sub {
+          delete $backend{$aid};
+          $finish_delete->();
+        }, sub {
+          delete $backend{$aid};
+          $finish_delete->();
+        });
+      } else {
         $finish_delete->();
-      }, sub {
-        delete $backend{$aid};
-        $finish_delete->();
-      });
-    } else {
-      $finish_delete->();
-    }
+      }
+    }, sub {
+      $req->respond([403, 'forbidden', {}, 'Forbidden']);
+    });
     return;
   }
 
