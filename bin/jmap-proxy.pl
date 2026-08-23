@@ -3680,10 +3680,12 @@ sub _do_accounts_authed {
     );
 
     send_backend_request($aid, 'update_settings', \%args, sub {
-      # Kill the running worker so next request gets fresh IMAP connection
-      if ($backend{$aid}) {
-        send_backend_request($aid, 'delete', {}, sub { delete $backend{$aid} }, sub { delete $backend{$aid} });
-      }
+      # Drop our end of the worker's socket so it sees EOF and exits cleanly;
+      # the next request respawns it with the new settings. NOTE: do NOT send
+      # it the 'delete' RPC command here — that unlinks the account's local
+      # sqlite3 database and data directory (see JMAP::DB::delete), which
+      # would wipe the just-synced mail cache instead of just restarting it.
+      delete $backend{$aid};
       $req->respond([301, 'redirected', { Location => "$BASEURL/accounts" }, "Redirected"]);
     }, sub {
       my $err = shift;
