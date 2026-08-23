@@ -18,6 +18,7 @@ use AnyEvent;
 use AnyEvent::Socket;
 use Data::Dumper;
 use JMAP::Sync::Gmail;
+use JMAP::Sync::AOL;
 
 sub new {
   my $class = shift;
@@ -28,12 +29,15 @@ sub new {
 
 sub access_token {
   my $Self = shift;
+  require JMAP::CredentialStore;
+
   $Self->begin();
   my $server = $Self->dgetone('iserver');
   $Self->commit();
 
+  my $refresh_token = JMAP::CredentialStore->decrypt($server->{password});
   my $O = JMAP::Sync::AOL::O();
-  my $data = $O->refresh($server->{password});
+  my $data = $O->refresh($refresh_token);
 
   return [$server->{imapHost}, $server->{username}, $data->{access_token}, $server->{imapPort}, $server->{imapSSL}];
 }
