@@ -4113,7 +4113,6 @@ sub update_mailboxes {
     if (defined $data->{parentId}) {
       $parentid = $idmap->($parentid);
       my $parent = $Self->dgetone('ifolders', { jmailboxid => $parentid }, 'imapname,sep');
-      warn "PARENT: " . Dumper($parent, $parentid, $data);
       # RFC 8621 S2: "There MUST NOT be a loop" -- the new parent may not be
       # this mailbox or any of its descendants, counting earlier updates in
       # this same request.
