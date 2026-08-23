@@ -16,10 +16,9 @@ sub mkauth_handler {
     # if we get an ID response then let the regular handler take
     return 1 if $handle->{rbuf} =~ m/^$id /m;
     if ($handle->{rbuf} =~ s/^\+ ?(.+?)\r\n//m) {
-      my $plus = $1;
-      my $message = $2;
+      my $message = $1;
       my $err = eval { decode_base64($message) } || $message;
-      die $message; # XXX - we could fire off an event and then return...
+      die $err; # XXX - we could fire off an event and then return...
       return 1;
     }
     return 0; # we want more text to be sure...
