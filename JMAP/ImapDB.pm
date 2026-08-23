@@ -68,9 +68,15 @@ sub setuser {
   my $args = shift;
   require JMAP::CredentialStore;
 
-  # Strip fields that belong to accounts.sqlite3, not the per-account iserver table
-  my %iserver = %$args;
-  delete $iserver{$_} for qw(poolid accountid force);
+  # Only forward actual iserver columns — anything else (accountid, poolid,
+  # type, email, force, ...) belongs to accounts.sqlite3 or is request
+  # metadata, and would make the INSERT/UPDATE fail with "no such column"
+  # (callers pass through raw request bodies, so new stray fields turning
+  # up here is expected, not exceptional).
+  my @iserver_columns = qw(username password imapHost imapPort imapSSL
+                            imapPrefix imapSep smtpHost smtpPort smtpSSL
+                            caldavURL carddavURL webdavURL lastfoldersync);
+  my %iserver = map { exists $args->{$_} ? ($_ => $args->{$_}) : () } @iserver_columns;
   $args = \%iserver;
 
   # Encrypt the credential before writing
