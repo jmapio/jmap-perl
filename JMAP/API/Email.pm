@@ -418,7 +418,7 @@ sub api_Email_query {
     $start = 0 if $start < 0;
   }
 
-  my $end = $args->{limit} ? $start + $args->{limit} - 1 : $#$data;
+  my $end = defined $args->{limit} ? $start + $args->{limit} - 1 : $#$data;
   $end = $#$data if $end > $#$data;
 
   my @result = map { $data->[$_]{msgid} } $start..$end;
