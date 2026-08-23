@@ -853,8 +853,14 @@ sub run_backend_worker {
         return ['sync', $JSON::true] if $db->can('handle_jmap');
         $db->sync_folders();
         $db->sync_imap();
-        $db->sync_calendars();
-        $db->sync_addressbooks();
+        # CalDAV/CardDAV are optional extras — a broken or unsupported DAV
+        # server (e.g. SOGo rejecting a PROPFIND) must not abort the whole
+        # 'sync' command, which would kill this worker and take mail sync
+        # down with it every single tick.
+        eval { $db->sync_calendars() };
+        warn "sync_calendars failed for $accountid: $@" if $@;
+        eval { $db->sync_addressbooks() };
+        warn "sync_addressbooks failed for $accountid: $@" if $@;
         # A full WebDAV walk costs a request per collection, so the periodic
         # tick only runs it every 300s (spec "Sync"); an explicit sync from
         # the management API ({force => 1}) always does.
@@ -883,8 +889,10 @@ sub run_backend_worker {
         return ['send_due', $db->send_due()];
       }
       if ($cmd eq 'davsync') {
-        $db->sync_calendars();
-        $db->sync_addressbooks();
+        eval { $db->sync_calendars() };
+        warn "sync_calendars failed for $accountid: $@" if $@;
+        eval { $db->sync_addressbooks() };
+        warn "sync_addressbooks failed for $accountid: $@" if $@;
         return ['davsync', $JSON::true];
       }
       if ($cmd eq 'session_caps') {
