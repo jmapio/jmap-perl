@@ -3181,9 +3181,23 @@ sub do_folder {
   }, \%fetches);
 
   if ($res->{newstate}{uidvalidity} != $uidvalidity) {
-    # going to want to nuke everything for the existing folder and create this - but for now, just die
-    use Data::Dumper;
-    die "UIDVALIDITY CHANGED $imapname: $uidvalidity => $res->{newstate}{uidvalidity}" . Dumper($data);
+    # The server's UIDVALIDITY no longer matches ours — every UID we had
+    # cached for this folder is meaningless (the mailbox was recreated or
+    # reindexed server-side). The data in $res was fetched using UID ranges
+    # from the old UIDVALIDITY, so it can't be trusted either — discard it,
+    # reset our local tracking for this folder, and let the next sync cycle
+    # refetch everything from scratch under the new UIDVALIDITY.
+    warn "UIDVALIDITY CHANGED for $imapname: $uidvalidity => $res->{newstate}{uidvalidity} — resetting folder state\n";
+    $Self->begin();
+    $Self->ddelete('imessages', {ifolderid => $ifolderid});
+    $Self->dupdate('ifolders', {
+      uidvalidity   => $res->{newstate}{uidvalidity},
+      uidfirst      => 1,
+      uidnext       => 1,
+      highestmodseq => 0,
+    }, {ifolderid => $ifolderid});
+    $Self->commit();
+    return 0;
   }
 
   $Self->begin();
