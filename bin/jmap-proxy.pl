@@ -67,6 +67,20 @@ my $BASEURL = $ENV{BASEURL} || 'http://localhost:' . ($ENV{JMAP_PORT} || 9000);
 my $jmaphome = $ENV{JMAP_HOME} || '/home/jmap/jmap-perl';
 my $datadir = $ENV{JMAP_DATADIR} || '/data';
 
+# When JMAP_DISABLE_SIGNUP is set, no *new* accounts may be created. Re-authenticating
+# an address that already exists in accounts.sqlite3 stays allowed, so expired OAuth
+# refresh tokens and changed passwords can still be repaired by existing users.
+# Enforced in the worker (see the signup/signup_oauth/signup_jmap handlers) so it
+# covers every route into account creation, not just POST /signup.
+# Empty, 0, false, no and off (any case) leave signup open; anything else closes it.
+my $DISABLE_SIGNUP = ($ENV{JMAP_DISABLE_SIGNUP} // '') =~ /^\s*(?:0|false|no|off)?\s*$/i ? 0 : 1;
+
+sub _deny_new_account {
+  my ($email) = @_;
+  warn "SIGNUP_DISABLED: refusing to create new account for $email (JMAP_DISABLE_SIGNUP is set)\n";
+  die "Registration is disabled on this server\n";
+}
+
 mkdir "$datadir/tmp" unless -d "$datadir/tmp";
 
 # Templates escape every value they print: `| html` in markup and attributes,
@@ -443,6 +457,16 @@ sub run_backend_worker {
 
         my $detail = { %$args };
         my $force = delete $detail->{force};
+
+        # Reject unknown addresses up front, otherwise a locked-down server still runs
+        # the full DNS autodiscovery + IMAP login probe and drags the user through the
+        # two-step form before refusing at the INSERT.
+        if ($DISABLE_SIGNUP) {
+          my $known = $dbh->selectrow_array(
+            "SELECT accountid FROM accounts WHERE email = ?", {}, $detail->{username});
+          _deny_new_account($detail->{username}) unless $known;
+        }
+
         $detail->{imapPort} ||= 993;
         $detail->{imapSSL} ||= 2;
         $detail->{smtpPort} ||= 587;
@@ -541,6 +565,7 @@ sub run_backend_worker {
               {}, $detail->{poolid}, $existing_aid);
           }
         } else {
+          _deny_new_account($detail->{username}) if $DISABLE_SIGNUP;
           $final_aid = $accountid;
           my $poolid = $detail->{poolid} || $accountid;
           $dbh->do("INSERT INTO accounts (email, accountid, type, poolid) VALUES (?, ?, ?, ?)",
@@ -576,6 +601,7 @@ sub run_backend_worker {
               {}, $args->{poolid}, $existing_aid);
           }
         } else {
+          _deny_new_account($email) if $DISABLE_SIGNUP;
           $final_aid  = $accountid;
           $target_aid = $accountid;
           my $poolid = $args->{poolid} || $accountid;
@@ -674,6 +700,7 @@ sub run_backend_worker {
               {}, $args->{poolid}, $existing_aid);
           }
         } else {
+          _deny_new_account($display_email) if $DISABLE_SIGNUP;
           $final_aid = $accountid;
           my $poolid = $args->{poolid} || $accountid;
           $dbh->do(
@@ -1167,6 +1194,8 @@ sub run_accounts_worker {
       }
 
       if ($cmd eq 'create_account') {
+        # Deliberately NOT gated by JMAP_DISABLE_SIGNUP: this is the admin path
+        # (management API), which stays usable while self-service signup is closed.
         my $aid = $args->{accountid};
         my $type = $args->{type} || 'imap';
         # 'email' is what JMAP Basic Auth looks clients up by -- default to the
