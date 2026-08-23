@@ -183,6 +183,9 @@ sub mk_json {
         $stat{backend_errors}++;
         warn "Backend error on $accountid: $res->[1]\n";
         delete $backend{$accountid};
+        # The worker exits after an error and dropping the handle skips on_eof, so
+        # fail what was queued behind this request here. Left in %waiting it would
+        # never be answered, and the sync timer would skip this account for good.
         # Siblings first: this callback may issue a fresh request on the same
         # accountid, which must not then be swept up by the old failure.
         _fail_pending($accountid, "backend error: $res->[1]");
@@ -244,12 +247,18 @@ sub get_backend {
         my (undef, undef, $msg) = @_;
         warn "Backend handle error for $accountid: " . ($msg // '?') . "\n";
         delete $backend{$accountid};
+        # Any requests still waiting on this (now-dead) backend would otherwise
+        # hang forever, and their cmd ids ("#0", "#1", ...) would collide with
+        # a freshly-spawned backend's counter, which also starts at 0 — fail
+        # them now instead of leaving them to rot in %waiting.
         _fail_pending($accountid, "backend handle error: " . ($msg // 'unknown'));
+        _maybe_finish_shutdown() if $shutting_down;
       },
       on_eof => sub {
         warn "Backend handle EOF for $accountid\n";
         delete $backend{$accountid};
         _fail_pending($accountid, 'backend closed connection');
+        _maybe_finish_shutdown() if $shutting_down;
       },
     ), 0, $pid, time()];
 
