@@ -328,7 +328,7 @@ sub do_files {
     my $type = $req->headers->{"content-type"};
     return invalid_request($req) unless $type;
 
-    my $data = [ $type, $req->content() ];
+    my $data = [ $accountid, $type, $req->content() ];
 
     $httpd->stop_request();
 
