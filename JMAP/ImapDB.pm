@@ -348,6 +348,17 @@ sub sync_jmailboxes {
       mayAdmin        => $has_rights ? ($r{a} ? 1 : 0) : 1,
     );
     if ($id) {
+      # %details carries no 'role', so a role is only ever written by the
+      # dmake() below — at creation time. A mailbox that existed before its
+      # name became recognisable (a new %ROLE_MAP entry, or the server starting
+      # to report special-use attributes) would therefore keep role=NULL for
+      # good, no matter how often it re-syncs. Fill it in, but never overwrite
+      # an existing role: that may be a deliberate Mailbox/set from a client,
+      # and don't steal a role another mailbox already claims this round.
+      if ($role and not $roletoid{$role} and not ($jbyid{$id} and $jbyid{$id}{role})) {
+        $Self->dmaybedirty('jmailboxes', {role => $role}, {jmailboxid => $id}, 'jnoncountsmodseq');
+        $roletoid{$role} = $id;
+      }
       if ($role and $roletoid{$role} and $roletoid{$role} ne $id) {
         # still gotta move it
         $id = $roletoid{$role};
