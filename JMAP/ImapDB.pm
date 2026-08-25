@@ -73,6 +73,19 @@ sub setuser {
   delete $iserver{$_} for qw(poolid accountid force);
   $args = \%iserver;
 
+  # Signup posts the autoconfig result through hidden form fields, so an
+  # undetected socketType arrives as '' rather than undef — which slips past
+  # every '// $default' and gets stored as 0. Nothing reads 0 back as "unset":
+  # it means plaintext to the '|| 1' in the Sync transports, so the proxy then
+  # talks cleartext to 993/587 and both IMAP and SMTP fail. Only 1/2/3 are
+  # valid; anything else means "not configured", so apply the default. Keys the
+  # caller didn't pass at all are left alone — those are partial updates.
+  my %ssl_default = (imapSSL => 2, smtpSSL => 3);
+  foreach my $key (sort keys %ssl_default) {
+    next unless exists $args->{$key};
+    $args->{$key} = $ssl_default{$key} unless ($args->{$key} // '') =~ /^[123]$/;
+  }
+
   # Encrypt the credential before writing
   $args->{password} = JMAP::CredentialStore->encrypt($args->{password})
     if defined $args->{password};

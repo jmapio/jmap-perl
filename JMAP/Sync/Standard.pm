@@ -14,7 +14,9 @@ sub _imap_class { 'Mail::IMAPTalk' }
 
 sub _imap_ssl {
   my $Self = shift;
-  ($Self->{auth}{imapSSL} || 1) - 1;  # Internal: 1=plain, 2=SSL; IMAPTalk: 0=plain, 1=SSL
+  # Internal: 1=plain, 2=SSL; IMAPTalk: 0=plain, 1=SSL. An unset/invalid value
+  # must not degrade to plaintext — that just hangs against an implicit-TLS 993.
+  (($Self->{auth}{imapSSL} || 2) > 1) ? 1 : 0;
 }
 
 sub _imap_extra {
@@ -25,7 +27,10 @@ sub _imap_extra {
 
 sub _smtp_transport {
   my ($Self, $helo) = @_;
-  my $smtpSSL = $Self->{auth}{smtpSSL} || 1;
+  # Falling back to plaintext here is never right: submission servers only
+  # advertise AUTH after the connection is secured, so an unset value would
+  # make every send fail with "no AUTH mechanism". Default to STARTTLS.
+  my $smtpSSL = $Self->{auth}{smtpSSL} || 3;
   Email::Sender::Transport::SMTP->new({
     helo          => $helo,
     host          => $Self->{auth}{smtpHost},

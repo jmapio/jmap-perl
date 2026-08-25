@@ -962,7 +962,7 @@ sub run_backend_worker {
         require Mail::IMAPTalk;
         my $host = $args->{imapHost} or die "imapHost required\n";
         my $port = $args->{imapPort} || 993;
-        my $ssl  = $args->{imapSSL} // 2;
+        my $ssl  = ($args->{imapSSL} // '') =~ /^[123]$/ ? $args->{imapSSL} : 2;
         my $imap = Mail::IMAPTalk->new(
           Server      => $host,
           Port        => $port,
@@ -3441,6 +3441,10 @@ sub do_signup {
   my %opts;
   for my $key (qw(username password imapHost imapPort imapSSL smtpHost smtpPort smtpSSL caldavURL carddavURL webdavURL force)) {
     $opts{$key} = $req->parm($key);
+    # The step-2 form carries the autoconfig result in hidden fields, so a
+    # value autoconfig couldn't determine arrives as '' — which is defined and
+    # would therefore win over every '// $default' downstream.
+    delete $opts{$key} unless length($opts{$key} // '');
   }
 
   return invalid_request($req) unless $opts{username} && $opts{password};
