@@ -631,6 +631,31 @@ sub run_backend_worker {
       }
       if ($cmd eq 'fetch_blobs') {
         my %result;
+        # Passthrough accounts have no local blob store: download from upstream
+        # into a temp file so the destination worker can re-upload it.
+        if ($db->can('handle_jmap')) {
+          for my $blobid (@{$args->{ids} || []}) {
+            my $up_blob = $blobid;
+            if ($blobid =~ /^m-(.+)$/) {
+              # resolve the email's upstream blobId via Email/get
+              my $eid = $1;
+              my $r = $db->handle_jmap({
+                using => ['urn:ietf:params:jmap:core','urn:ietf:params:jmap:mail'],
+                methodCalls => [['Email/get', { accountId => $accountid, ids => [$eid], properties => ['blobId'] }, 'g']],
+              });
+              my ($resp) = grep { $_->[2] eq 'g' } @{ $r->{methodResponses} || [] };
+              my $email = $resp && $resp->[0] eq 'Email/get' ? $resp->[1]{list}[0] : undef;
+              unless ($email && $email->{blobId}) { $result{$blobid} = undef; next; }
+              $up_blob = $email->{blobId};
+            }
+            my ($type, $body) = eval { $db->proxy_blob($up_blob, 'copy', 'application/octet-stream') };
+            if (!defined $body) { $result{$blobid} = undef; next; }
+            my $fh = File::Temp->new(DIR => "$datadir/tmp", UNLINK => 0, SUFFIX => '.blob');
+            binmode $fh; print $fh $body; close $fh;
+            $result{$blobid} = { type => $type || 'application/octet-stream', path => $fh->filename, is_temp => 1 };
+          }
+          return ['fetch_blobs', \%result];
+        }
         for my $blobid (@{$args->{ids} || []}) {
           if ($blobid =~ /^f-(.+)$/) {
             my $fileid = $1;
@@ -674,6 +699,15 @@ sub run_backend_worker {
         my $src     = $args->{path}    or die "store_blob: no path\n";
         my $type    = $args->{type}    || 'application/octet-stream';
         my $is_temp = $args->{is_temp} || 0;
+
+        # Passthrough destination: upload straight to the upstream and hand
+        # back its blobId; there is no local jfiles store to insert into.
+        if ($db->can('handle_jmap')) {
+          my $r = $db->proxy_upload($type, $src);
+          unlink $src if $is_temp;
+          return ['store_blob', { blobId => $r->{blobId} }];
+        }
+
         my $size    = (stat($src))[7]  // 0;
         my $expires = time() + 7 * 86400;
 
