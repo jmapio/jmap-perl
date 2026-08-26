@@ -94,6 +94,38 @@ passes requests through directly instead of syncing via IMAP.
 - [x] **102/102 JMAP TestSuite tests passing** (87 Email/Mailbox/Thread + 2 Calendar/get + 13 CalendarEvent/AddressBook/ContactCard)
 - [x] Normalise empty notCreated/notUpdated/notDestroyed to null (RFC 8620 §5.3) in passthrough
 - [x] JMAPProxy test adapter: cyrus_backend flag propagates Cyrus-specific TODO blocks
+- [x] /session capabilities assembled from upstream, filtered to the supported set
+
+### Done: multi-account request dispatch
+
+A single JMAP request may target several accounts on different upstreams. The
+dispatcher routes each method call to its account's upstream and batches
+consecutive same-upstream calls into one forwarded request.
+
+- [x] `JMAP::Dispatch` — pure, unit-tested core: `group_batches` (order-preserving
+      same-upstream batching) and `resolve_pointer` (JSON Pointer with JMAP `*` semantics)
+- [x] `cred_fingerprint` (accounts schema v2) identifies the upstream login;
+      key is `fp:<fingerprint>` for passthrough, `imap:<accountid>` otherwise
+- [x] Batches run strictly in order; `createdIds` threaded across them
+- [x] Cross-batch `ResultReference` resolution proxy-side
+- [x] Id rewriting generalised from a single proxy↔backend pair to a map, so one
+      forwarded batch can span several backend accountIds under one login
+
+### Done: cross-account copy
+
+- [x] Same-upstream copies forwarded natively; cross-upstream copies routed to
+      parent-level orchestration
+- [x] Passthrough-aware `fetch_blobs`/`store_blob` — download from the source
+      upstream, upload to the destination upstream (the blob shuffle that makes
+      Email/copy work between different-credential passthrough accounts)
+- [x] Passthrough accounts can bind to a **delegated/shared** upstream account via
+      `backendAccountId` on registration, so one login can back several proxy
+      accounts. This is what makes the native-forward path reachable: two distinct
+      proxy accounts can now share a `cred_fingerprint`.
+- [x] Adapter configs `same_creds_account_pair` and `mixed_account_pair`
+- [x] **Zero proxy-specific test failures**: every JMAP-TestSuite failure in
+      passthrough mode also fails against Cyrus-native, and the proxy fixes three
+      that fail natively (CalendarEvent/copy, ContactCard/copy, Email/import)
 
 ## Phase 4: Push Notifications ✅
 

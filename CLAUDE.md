@@ -42,6 +42,9 @@ Hard rules that are easy to violate:
 - `JMAP/DB.pm` — base DB class (SQLite schema, transactions, sync state, query snapshot cache).
   - `JMAP/ImapDB.pm` (← DB) — IMAP/CalDAV/CardDAV sync. `FastmailDB`, `GmailDB`, `AOLDB` extend it.
   - `JMAP/JmapDB.pm` — standalone, for JMAP passthrough backends.
+- `JMAP/Dispatch.pm` — pure, unit-testable dispatch core: `group_batches` (order-preserving
+  same-upstream batching) and `resolve_pointer` (JSON Pointer with JMAP `*` semantics).
+  No I/O, no DB — keep it that way; `t/dispatch-*.t` covers it.
 - `JMAP/API.pm` — JMAP request handler; dispatches to per-datatype method modules in
   `JMAP/API/` (`Email`, `Mailbox`, `Thread`, `Calendar`, `Contact`, `Submission`,
   `StorageNode`, `MDN`, `Quota`, `Preferences`).
@@ -49,11 +52,51 @@ Hard rules that are easy to violate:
 - `JMAP/OAuth/` — OAuth2 signup (`Google`, `Fastmail`, `OIDC`, `PACC`, `PKCE`).
 - `JMAP/CredentialStore.pm` — pluggable at-rest encryption for stored credentials.
 
+## Passthrough request dispatch (`_do_jmap_request`)
+
+One JMAP request can span several accounts on different upstreams. The parent groups the
+method calls into batches by **upstream key** and runs the batches strictly in order,
+threading `createdIds` forward and resolving cross-batch `ResultReference`s itself.
+
+- **Upstream key**: passthrough account → `fp:<cred_fingerprint>`; anything else →
+  `imap:<accountid>` (unique, so it never shares a batch).
+  `cred_fingerprint` = sha256(apiUrl, username, authType, secret), computed in the worker —
+  only the fingerprint, never the raw credentials, reaches the parent.
+- **Copy routing**: a `/copy` call whose two sides share one passthrough upstream is
+  forwarded natively; otherwise it goes to parent-level orchestration (`_do_copy_call`),
+  which shuffles blobs via `fetch_blobs`/`store_blob`.
+  The classifier must list **every** `/copy` method `_do_copy_call` handles — a method
+  missing from that regex is forwarded to a worker and comes back `unknownMethod`.
+  (`t/dispatch-copy-route.t` passes its own stub classifier, so it does **not** catch this.)
+- **Server-injected responses**: an orchestrated copy may return several triples (e.g. the
+  `Email/set` for `onSuccessDestroyOriginal`). `@responses` is position-indexed, so extras
+  go in `@extra_responses` and are appended after all responses. Dropping them silently
+  loses the `Email/set` from the client's view.
+
+## Multi-account passthrough (one login, several accounts)
+
+An upstream login often exposes more than its own account (delegated/shared accounts).
+Register one proxy account per upstream account, all with the same `username`/`password`
+but a different `backendAccountId` (validated against the upstream session's `accounts`).
+
+- `email` is the **proxy-side login** and must stay unique, so it falls back to the
+  `backendAccountId` for any account not bound to the primary.
+- Consequently the credential lookups in the `auth` / `verify_credentials` worker commands
+  must read the account DB's single `jserver` row — **never** key it on `email`, which does
+  not match the stored upstream username for a delegated binding.
+- Accounts sharing a login share a `cred_fingerprint`, which is exactly what makes a copy
+  between them native-forwardable. Before this existed, no two proxy accounts could share a
+  fingerprint, so the native-forward branch was unreachable.
+
 ## Data model
 
-- `accounts.sqlite3` — global: which accounts exist, type, tokens, auth, pool grouping (`poolid`).
+- `accounts.sqlite3` — global: which accounts exist, type, tokens, auth, pool grouping (`poolid`),
+  and `cred_fingerprint` (schema v2) identifying the upstream login for passthrough accounts
+  (NULL for everything else).
 - one `<accountid>.sqlite3` per account — all synced mail/calendar/contact state plus
   the `iserver` table (backend connection config, including auto-detected `imapSep`).
+  Passthrough accounts instead keep a single `jserver` row (upstream credentials,
+  session/api/upload/download URLs, `backendAccountId`, capabilities).
   Schema version is tracked; recent additions include the `jqueries` snapshot cache
   (schema v10) used by `queryChanges`.
 
@@ -84,6 +127,13 @@ bin/run-jmap-tests.sh --direct
 # Local Perl unit/integration tests (module conversion + end-to-end against Cyrus).
 # cyrus-proxy.t and integration.t skip unless CYRUS_URL/CYRUS_USER/CYRUS_PASS are set.
 CYRUS_URL=http://localhost:8080 CYRUS_USER=user1 CYRUS_PASS=password prove -lv t/
+
+# Passthrough integration tests (delegated-account registration, native-forward copy).
+# These provision their own Cyrus users, so run against a --jmap stack.
+bin/restart-test-proxy.sh --jmap clean
+CYRUS_URL=http://localhost:8080 JMAP_PROXY_URL=http://localhost:9000 \
+  JMAP_MGMT_URL=http://localhost:8081 \
+  prove -lv t/passthrough-delegated-account.t t/passthrough-copy-matrix.t
 ```
 
 Debugging: set `JMAP_DEBUG=1` to log full request/response bodies. Proxy stderr goes
@@ -92,7 +142,24 @@ to `/tmp/jmap-proxy.log` when started via `restart-test-proxy.sh`.
 Test-account hygiene: `any_account` reuses `user1` and accumulates state across runs —
 use `pristine_account` for tests that create named resources (mailboxes, calendars,
 addressbooks). `pool_account_pair` creates two pristine accounts in one pool for
-cross-account `/copy` tests.
+cross-account `/copy` tests. In passthrough mode, `same_creds_account_pair` gives a
+primary plus a delegated account under **one** login (shared fingerprint → native-forward
+copy), and `mixed_account_pair` gives a passthrough + IMAP pair (always orchestrated).
+
+**Creating Cyrus users: use the separator Cyrus reports, not the config.**
+`test-config.json` says `cyrus_hierarchy_separator: "."` but Cyrus actually reports `/`
+(the adapter's `_detected_separator` queries NAMESPACE). Creating `user.NAME` makes a stray
+top-level mailbox rather than a user; Cyrus then answers HTTP with **503** and logs
+`could not autoprovision calendars for userid NAME: Invalid user`, while IMAP login still
+succeeds — which looks exactly like a broken container. Always create `user/NAME`.
+The Cyrus container's own mgmt API (`PUT :8001/api/<user>`) needs a request **body**;
+a bare PUT dies `need data` in `Cyrus::AccountSync` and returns 500.
+
+Reading the suite results: the raw failure count drifts as the Cyrus container is recreated,
+so the meaningful gate is a **same-session passthrough-vs-`--direct` diff** — a failure that
+also fails `--direct` is Cyrus's, not the proxy's. As of this branch that diff is empty.
+`t/AddressBook/changes` and `t/Calendar/changes` are occasionally flaky under full-suite
+load; re-run them in isolation before believing a failure.
 
 ## Specs
 
