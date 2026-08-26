@@ -1518,7 +1518,9 @@ sub _do_jmap_request {
     my $calls   = $data->{methodCalls} || [];
     my $copy_route = sub {
       my ($call) = @_;
-      return undef unless $call->[0] =~ m{^(Blob|Email)/copy$};
+      # Must list every /copy method _do_copy_call can orchestrate — anything
+      # missing here is forwarded to a worker and comes back unknownMethod.
+      return undef unless $call->[0] =~ m{^(Blob|Email|CalendarEvent|ContactCard)/copy$};
       my $fa = $call->[1]{fromAccountId};
       my $ta = $call->[1]{accountId};
       my $fk = $key_for_aid{$fa // ''} // '';
