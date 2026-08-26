@@ -536,12 +536,23 @@ sub run_backend_worker {
           or die "No apiUrl in upstream JMAP session\n";
         $api_url = $abs_url->($api_url);
 
-        # Find the primary mail accountId on the upstream server
-        my $mail_cap   = 'urn:ietf:params:jmap:mail';
-        my $backend_aid = $session->{primaryAccounts}{$mail_cap}
+        # Which upstream account does this proxy account represent?  By default the
+        # primary mail account, but a caller may bind to any account the login can
+        # see (e.g. a delegated/shared account), which is how one set of upstream
+        # credentials can back several proxy accounts.
+        my $mail_cap    = 'urn:ietf:params:jmap:mail';
+        my $primary_aid = $session->{primaryAccounts}{$mail_cap}
           or die "No primary mail account in upstream JMAP session\n";
+        my $backend_aid = $args->{backendAccountId} // $primary_aid;
+        die "backendAccountId '$backend_aid' is not present in the upstream JMAP session\n"
+          unless $session->{accounts}{$backend_aid};
         my $capabilities = $session->{accounts}{$backend_aid} || {};
-        my $display_email = $args->{username} || $backend_aid;
+        # `email` is the proxy-side login and must stay unique per account. Two
+        # accounts on one upstream login share a username, so fall back to the
+        # backend accountId to keep them distinct.
+        my $display_email = $args->{email}
+          // ($backend_aid eq $primary_aid ? ($args->{username} || $backend_aid)
+                                           : $backend_aid);
 
         # Create the account entry in accounts.sqlite3
         my $existing_aid = $dbh->selectrow_array(
@@ -820,8 +831,13 @@ sub run_backend_worker {
           # Verify new JMAP credentials then update stored settings
           my ($session) = $db->fetch_session($args);
           my $mail_cap  = 'urn:ietf:params:jmap:mail';
-          my $backend_aid = $session->{primaryAccounts}{$mail_cap}
+          my $primary_aid = $session->{primaryAccounts}{$mail_cap}
             or die "No primary mail account in upstream JMAP session\n";
+          # Keep an existing delegated binding unless the caller changes it.
+          my $backend_aid = $args->{backendAccountId}
+            // ($db->access_data()->{backendAccountId} || $primary_aid);
+          die "backendAccountId '$backend_aid' is not present in the upstream JMAP session\n"
+            unless $session->{accounts}{$backend_aid};
           $db->setuser({
             username         => $args->{username} // '',
             password         => $args->{password} // '',
@@ -1056,8 +1072,10 @@ sub run_accounts_worker {
         my $udb = DBI->connect("dbi:SQLite:dbname=$dbfile");
 
         if ($type eq 'jmap') {
+          # One jserver row per account DB.  Do NOT key this on $email: an account
+          # bound to a delegated upstream account stores the primary's username.
           my $stored = $udb->selectrow_hashref(
-            "SELECT password, authType FROM jserver WHERE username = ?", {}, $email);
+            "SELECT password, authType FROM jserver LIMIT 1");
           return ['auth', undef] unless $stored;
           # Only basic-auth passthrough accounts have a comparable password.
           return ['auth', undef] unless ($stored->{authType} || 'basic') eq 'basic';
@@ -1102,8 +1120,10 @@ sub run_accounts_worker {
         require JMAP::CredentialStore;
 
         if ($type eq 'jmap') {
+          # As in 'auth': one row per account DB, keyed on the upstream login,
+          # which differs from $email for a delegated binding.
           my $stored = $udb->selectrow_hashref(
-            "SELECT password, authType FROM jserver WHERE username = ?", {}, $email);
+            "SELECT password, authType FROM jserver LIMIT 1");
           return ['verify_credentials', undef] unless $stored;
           return ['verify_credentials', undef]
             unless ($stored->{authType} || 'basic') eq 'basic';

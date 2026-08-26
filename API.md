@@ -183,6 +183,16 @@ is reachable.
 | `username` | no | Username for authenticating to the upstream. |
 | `password` | no | Password or Bearer token. |
 | `authType` | no | `"basic"` (default) or `"bearer"`. |
+| `backendAccountId` | no | Bind this proxy account to a specific upstream account instead of the login's primary mail account. Must be one of the accounts listed in the upstream Session; an unknown value is rejected. |
+
+One upstream login often exposes several accounts (its own, plus delegated or
+shared ones). Register one proxy account per upstream account, all with the same
+`username`/`password` but a different `backendAccountId`. Because `email` is the
+proxy-side login and must stay unique, it defaults to the `backendAccountId` for
+any account not bound to the primary — pass `email` explicitly to override.
+Accounts sharing one upstream login also share a credential fingerprint, which
+lets the proxy forward a cross-account copy between them to the upstream
+directly instead of shuffling blobs through the proxy.
 
 **Response 201**
 ```json
