@@ -115,6 +115,25 @@ sub decrypt {
     return $value;  # legacy plaintext
 }
 
+# Deterministic keyed MAC over $data.
+#
+# For values that must be comparable across accounts but must not reveal their
+# input if the database is stolen — the credential fingerprint being the case in
+# point: it covers the upstream password, and an unkeyed digest of it would be an
+# offline guessing oracle, defeating the point of encrypting credentials at rest.
+#
+# Equal inputs give equal outputs under a fixed backend, which is all the
+# fingerprint needs. When credentials are stored in plaintext anyway there is
+# nothing left to protect, so a bare digest is fine.
+sub mac {
+    my (undef, $data) = @_;
+    $data = '' unless defined $data;
+    my $backend = _active_backend();
+    return $backend->can('mac')
+         ? $backend->mac($data)
+         : do { require Digest::SHA; Digest::SHA::sha256_hex($data) };
+}
+
 # True if the value looks like it has already been encrypted.
 sub is_encrypted {
     my (undef, $value) = @_;
@@ -150,6 +169,14 @@ sub new {
         $key = Digest::SHA::sha256($hex); # passphrase → 32-byte derived key
     }
     return bless { key => $key }, $class;
+}
+
+# Keyed MAC — HMAC-SHA256 under the same master key, so a stolen database
+# cannot be used to guess the MAC'd input offline.
+sub mac {
+    my ($self, $data) = @_;
+    require Digest::SHA;
+    return Digest::SHA::hmac_sha256_hex($data, $self->{key});
 }
 
 sub encrypt {
@@ -260,6 +287,16 @@ sub encrypt {
     my $resp = $self->_api('POST', "$self->{mount}/encrypt/$self->{key}",
         { plaintext => $b64 });
     return $resp->{data}{ciphertext};  # already looks like "vault:v1:..."
+}
+
+# Keyed MAC via the Transit HMAC endpoint.  Deterministic for a given key
+# version, which is all a fingerprint comparison needs.  Returns a string like
+# "vault:v1:<base64>" — treat it as opaque.
+sub mac {
+    my ($self, $data) = @_;
+    my $resp = $self->_api('POST', "$self->{mount}/hmac/$self->{key}",
+        { input => encode_base64($data, ''), algorithm => 'sha2-256' });
+    return $resp->{data}{hmac};
 }
 
 sub decrypt {

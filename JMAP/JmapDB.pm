@@ -6,15 +6,22 @@ use HTTP::Tiny;
 use JSON::XS qw(encode_json decode_json);
 use MIME::Base64 qw(encode_base64);
 use URI::Escape qw(uri_escape);
-use Digest::SHA qw(sha256_hex);
 
 my $datadir = $ENV{JMAP_DATADIR} || $ENV{JMAP_DATA} || '/data';
 
 # Stable fingerprint identifying the upstream login. Two passthrough accounts
 # with the same fingerprint share one set of upstream credentials.
+#
+# This covers the upstream secret and is stored in plaintext in accounts.sqlite3,
+# so it MUST be a keyed MAC: a bare digest would let anyone who stole the database
+# brute-force the password offline (apiUrl/username/authType are all known), which
+# is exactly what encrypting credentials at rest is meant to prevent.
+# JMAP::CredentialStore->mac keys this with the same master key, and degrades to a
+# plain digest only when credentials are stored in plaintext anyway.
 sub cred_fingerprint {
     my ($server) = @_;
-    return sha256_hex(join("\0",
+    require JMAP::CredentialStore;
+    return JMAP::CredentialStore->mac(join("\0",
         $server->{apiUrl}   // '',
         $server->{username} // '',
         $server->{authType} // 'basic',
