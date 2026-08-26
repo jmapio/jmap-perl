@@ -1500,6 +1500,7 @@ sub _do_jmap_request {
     my @responses = (undef) x $n;
     my %created_ids = %{ $data->{createdIds} || {} };
     my %resp_by_tag;   # tag => response triple (for cross-batch ResultReference)
+    my @extra_responses;  # server-injected responses (e.g. Email/set from onSuccessDestroyOriginal)
 
     # Resolve any cross-batch ResultReference in a call's args, in place.
     my $resolve_refs = sub {
@@ -1524,7 +1525,7 @@ sub _do_jmap_request {
     };
 
     my $finish = sub {
-      my @flat = grep { defined } @responses;
+      my @flat = ((grep { defined } @responses), @extra_responses);
       $stat{jmap_method_errors} += grep { $_->[0] eq 'error' } @flat;
       my $result = {
         methodResponses => \@flat,
@@ -1548,8 +1549,13 @@ sub _do_jmap_request {
         my ($pos, $call) = @{ $batch->{calls}[0] };
         _do_copy_call($call->[0], $call->[1], $call->[2], $accountid, sub {
           my $resp = shift;
-          if (ref($resp->[0]) eq 'ARRAY') { $responses[$pos] = $resp->[0]; }
-          else                            { $responses[$pos] = $resp; }
+          # An array of triples: primary response at $pos, extras (e.g. the
+          # Email/set for onSuccessDestroyOriginal) appended after all responses.
+          if (ref($resp->[0]) eq 'ARRAY') {
+            $responses[$pos] = $resp->[0];
+            push @extra_responses, @{$resp}[1..$#$resp];
+          }
+          else { $responses[$pos] = $resp; }
           $resp_by_tag{ $responses[$pos][2] } = $responses[$pos];
           $next_batch->();
         }, sub {
