@@ -544,8 +544,11 @@ sub run_backend_worker {
         my $primary_aid = $session->{primaryAccounts}{$mail_cap}
           or die "No primary mail account in upstream JMAP session\n";
         my $backend_aid = $args->{backendAccountId} // $primary_aid;
+        # Only validate an explicitly requested binding.  Servers that omit the
+        # `accounts` map (non-conformant, but previously accepted) must keep
+        # working when they are simply defaulting to the primary account.
         die "backendAccountId '$backend_aid' is not present in the upstream JMAP session\n"
-          unless $session->{accounts}{$backend_aid};
+          if defined $args->{backendAccountId} && !$session->{accounts}{$backend_aid};
         my $capabilities = $session->{accounts}{$backend_aid} || {};
         # `email` is the proxy-side login and must stay unique per account. Two
         # accounts on one upstream login share a username, so fall back to the
@@ -747,9 +750,11 @@ sub run_backend_worker {
       }
       if ($cmd eq 'jmap') {
         my $result;
+        # Strip the routing hints unconditionally — they are internal to the
+        # parent<->worker protocol and must not reach a backend handler.
+        my $fwd = delete $args->{_fwd_map};
+        my $rev = delete $args->{_rev_map};
         if ($db->can('handle_jmap')) {
-          my $fwd = delete $args->{_fwd_map};
-          my $rev = delete $args->{_rev_map};
           $result = $db->handle_jmap($args, $fwd, $rev);
         } else {
           $result = $api->handle_request($args);
@@ -836,8 +841,9 @@ sub run_backend_worker {
           # Keep an existing delegated binding unless the caller changes it.
           my $backend_aid = $args->{backendAccountId}
             // ($db->access_data()->{backendAccountId} || $primary_aid);
+          # As in signup_jmap: only validate a binding the caller asked for.
           die "backendAccountId '$backend_aid' is not present in the upstream JMAP session\n"
-            unless $session->{accounts}{$backend_aid};
+            if defined $args->{backendAccountId} && !$session->{accounts}{$backend_aid};
           $db->setuser({
             username         => $args->{username} // '',
             password         => $args->{password} // '',
@@ -1493,6 +1499,18 @@ sub do_jmap {
   }
   if (@{$data->{methodCalls}} > 16) {
     return _jmap_request_error($req, 'requestTooLarge', 'The request contains more method calls than the server allows.');
+  }
+  # Each invocation must be [name, arguments, methodCallId] (RFC 8620 §3.2).
+  # Without this the dispatcher dereferences a non-arrayref and dies mid-handler,
+  # leaving the request with no response at all and the connection held open.
+  for my $call (@{$data->{methodCalls}}) {
+    unless (ref $call eq 'ARRAY' && @$call >= 3
+            && defined $call->[0] && !ref $call->[0]
+            && ref $call->[1] eq 'HASH'
+            && defined $call->[2] && !ref $call->[2]) {
+      return _jmap_request_error($req, 'notRequest',
+        'Each method call must be [name, arguments, methodCallId].');
+    }
   }
 
   for my $cap (@{$data->{using}}) {
