@@ -124,7 +124,47 @@ for my $who ($primary, $shared) {
     or diag "status $r->{status}: " . substr($r->{content} // '', 0, 200);
 }
 
-# 5. An explicitly bogus backendAccountId must be rejected, not silently
+# 5. A call that OMITS accountId must run against the account it is bound to.
+#    The upstream's own default is the login's PRIMARY account, so without the
+#    proxy spelling the id out, a delegated account silently reads the primary's
+#    data. Compare an implicit call against an explicit one.
+{
+  my $jmap_as = sub {
+    my ($who, @calls) = @_;
+    my $r = $http->post("$proxy_url/jmap", {
+      headers => { 'Content-Type' => 'application/json',
+                   Authorization  => 'Basic ' . encode_base64("$who:$pass", '') },
+      content => encode_json({
+        using => ['urn:ietf:params:jmap:core', 'urn:ietf:params:jmap:mail'],
+        methodCalls => \@calls }),
+    });
+    return undef unless $r->{success};
+    return decode_json($r->{content});
+  };
+  my $mailbox_names = sub {
+    my ($r) = @_;
+    my ($resp) = grep { $_->[2] eq 'm' } @{ ($r || {})->{methodResponses} || [] };
+    return undef unless $resp && $resp->[0] eq 'Mailbox/get';
+    return join(',', sort map { $_->{name} // '' } @{ $resp->[1]{list} || [] });
+  };
+
+  # Give the two upstream accounts distinguishable contents.
+  $jmap_as->($primary, ['Mailbox/set',
+    { accountId => $primary, create => { m => { name => 'MARKER-PRIMARY' } } }, 's']);
+  $jmap_as->($shared, ['Mailbox/set',
+    { accountId => $shared,  create => { m => { name => 'MARKER-SHARED' } } }, 's']);
+
+  my $implicit = $mailbox_names->($jmap_as->($shared, ['Mailbox/get', {}, 'm']));
+  my $explicit = $mailbox_names->($jmap_as->($shared,
+    ['Mailbox/get', { accountId => $shared }, 'm']));
+
+  ok($explicit && $explicit =~ /MARKER-SHARED/,
+     "explicit accountId reads the delegated account");
+  is($implicit, $explicit,
+     "omitting accountId reads the BOUND account, not the login's primary");
+}
+
+# 6. An explicitly bogus backendAccountId must be rejected, not silently
 #    defaulted to the primary.
 my ($st3, $body3) = $register->(
   accountid        => "$shared-bogus",

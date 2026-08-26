@@ -1553,21 +1553,12 @@ sub _do_jmap_request {
     }
     $key_for_aid{$accountid} //= "imap:$accountid";
 
-    my $calls   = $data->{methodCalls} || [];
-    my $copy_route = sub {
-      my ($call) = @_;
-      # Must list every /copy method _do_copy_call can orchestrate — anything
-      # missing here is forwarded to a worker and comes back unknownMethod.
-      return undef unless $call->[0] =~ m{^(Blob|Email|CalendarEvent|ContactCard)/copy$};
-      my $fa = $call->[1]{fromAccountId};
-      my $ta = $call->[1]{accountId};
-      my $fk = $key_for_aid{$fa // ''} // '';
-      my $tk = $key_for_aid{$ta // ''} // '';
-      # native-forward only when BOTH sides are the same passthrough upstream;
-      # the /^fp:/ check also rejects the both-empty ('' eq '') case → orchestrate
-      return undef if $fk eq $tk && $fk =~ /^fp:/;
-      return 'orchestrate';
-    };
+    my $calls = $data->{methodCalls} || [];
+    # Spell out the account a call leaves implicit BEFORE routing or rewriting.
+    # The upstream's own default is its login's primary account, which is the
+    # wrong account when this proxy account is bound to a delegated one.
+    JMAP::Dispatch::apply_default_accounts($calls, $accountid);
+    my $copy_route = JMAP::Dispatch::copy_router(\%key_for_aid, $accountid);
     my $batches = JMAP::Dispatch::group_batches($calls, \%key_for_aid, $accountid, $copy_route);
 
     my $n = scalar @$calls;
@@ -1671,7 +1662,7 @@ sub _do_jmap_request {
         _rev_map    => \%rev,
       );
       # Forward to a worker on this upstream — the first account in the batch.
-      my $worker_aid = _call_account_for($calls[0], $accountid);
+      my $worker_aid = JMAP::Dispatch::call_account($calls[0], $accountid);
       send_backend_request($worker_aid, 'jmap', \%batch_data, sub {
         my $r = shift;
         my %pos_by_tag = map { $calls[$_][2] => $positions[$_] } 0..$#calls;
@@ -1695,13 +1686,6 @@ sub _do_jmap_request {
     $req->respond([200, 'ok', { 'Content-Type' => 'application/json' },
       $json->encode({ methodResponses => [['error', { type => 'serverError', message => "$err" }, 'a']] })]);
   });
-}
-
-# Account a single call targets (mirror of Dispatch::_call_account for the worker pick).
-sub _call_account_for {
-  my ($call, $default) = @_;
-  my $args = $call->[1] // {};
-  return ($call->[0] =~ m{/copy$}) ? ($args->{fromAccountId} // $default) : ($args->{accountId} // $default);
 }
 
 sub _compute_session_state {
@@ -1749,6 +1733,9 @@ sub _do_copy_call {
     }, $tag]);
   }
 
+  # Every branch below must be listed in JMAP::Dispatch::copy_methods, or the
+  # classifier will never route the call here.  t/dispatch-copy-route.t asserts
+  # the two stay in step.
   if    ($method eq 'Blob/copy')         { _copy_blobs($args, $from_aid, $to_aid, $tag, $cb, $errcb) }
   elsif ($method eq 'Email/copy')        { _copy_emails($args, $from_aid, $to_aid, $tag, $cb, $errcb) }
   elsif ($method eq 'CalendarEvent/copy'){ _copy_objects('CalendarEvent', $args, $from_aid, $to_aid, $tag, $cb, $errcb) }

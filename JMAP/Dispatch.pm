@@ -2,14 +2,83 @@ package JMAP::Dispatch;
 use strict;
 use warnings;
 
+# The /copy methods the parent orchestrates. MUST stay in step with the dispatch
+# table in _do_copy_call (bin/jmap-proxy.pl): a copy method missing from here is
+# forwarded to a worker, whose API does not implement /copy, and the client gets
+# {"type":"unknownMethod"}.
+my %COPY_METHODS = map { $_ => 1 } qw(
+    Blob/copy
+    Email/copy
+    CalendarEvent/copy
+    ContactCard/copy
+);
+
+sub is_copy_method { return $COPY_METHODS{ $_[0] // '' } ? 1 : 0 }
+sub copy_methods   { return sort keys %COPY_METHODS }
+
+# Core/echo is the only method whose arguments are not account-scoped — it must
+# echo back exactly what it was given, so never inject an accountId into it.
+my %NO_ACCOUNT_METHOD = ('Core/echo' => 1);
+
+sub _set_default {
+    my ($args, $field, $default) = @_;
+    # A "#field" ResultReference will supply this field later; leave it alone so
+    # the reference still wins.
+    return if exists $args->{$field} || exists $args->{"#$field"};
+    $args->{$field} = $default;
+}
+
+# Spell out the account ids a call leaves implicit, in place.
+#
+# A JMAP call may omit accountId to mean "the account I am authenticated as".
+# The proxy MUST materialise that before forwarding: the upstream would apply its
+# OWN default (the login's primary account), which is the wrong account whenever
+# a proxy account is bound to a delegated upstream account. Making the ids
+# explicit also lets the id-rewriting map translate them.
+sub apply_default_accounts {
+    my ($calls, $default_aid) = @_;
+    for my $call (@{ $calls || [] }) {
+        next unless ref $call eq 'ARRAY' && ref $call->[1] eq 'HASH';
+        next if $NO_ACCOUNT_METHOD{ $call->[0] // '' };
+        my $args = $call->[1];
+        if (is_copy_method($call->[0])) {
+            _set_default($args, 'fromAccountId', $default_aid);
+            _set_default($args, 'accountId',     $default_aid);
+        }
+        else {
+            _set_default($args, 'accountId', $default_aid);
+        }
+    }
+    return $calls;
+}
+
 # Map a single method call to the accountid it targets.
+sub call_account { return _call_account(@_) }
+
 sub _call_account {
     my ($call, $default_aid) = @_;
     my $args = $call->[1] // {};
-    if ($call->[0] =~ m{/copy$}) {
+    if (is_copy_method($call->[0])) {
         return $args->{fromAccountId} // $default_aid;
     }
     return $args->{accountId} // $default_aid;
+}
+
+# Build the copy classifier used by group_batches: a copy is 'orchestrate' unless
+# both sides resolve to the same passthrough upstream, in which case it is
+# native-forwarded (undef) and the upstream performs the copy itself.
+sub copy_router {
+    my ($key_for_aid, $default_aid) = @_;
+    return sub {
+        my ($call) = @_;
+        return undef unless is_copy_method($call->[0]);
+        my $args = $call->[1] // {};
+        my $fk = $key_for_aid->{ $args->{fromAccountId} // $default_aid // '' } // '';
+        my $tk = $key_for_aid->{ $args->{accountId}     // $default_aid // '' } // '';
+        # The /^fp:/ test also rejects the both-unknown ('' eq '') case.
+        return undef if $fk eq $tk && $fk =~ /^fp:/;
+        return 'orchestrate';
+    };
 }
 
 # Group consecutive method calls sharing one upstream key into batches,
