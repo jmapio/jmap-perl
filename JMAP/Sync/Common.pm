@@ -470,6 +470,30 @@ sub move_card {
   $talk->MoveContact($old_href, "$new_collection/$filename");
 }
 
+# Derive the label for a single LIST/XLIST row: [\@flags, $separator, $name].
+#
+# RFC 3501 allows a NIL hierarchy delimiter, so the separator may be undef.
+# Interpolating that into a character class compiles m/^[]/ and dies.
+#
+# \Q..\E on both prefix and separator: the usual Cyrus prefix "INBOX." ends in
+# a dot, which unquoted would eat a character from "INBOXXArchive".
+sub folder_label {
+  my ($prefix, $folder) = @_;
+
+  # A role is any flag that is not merely structural (\HasChildren etc).
+  my ($role) = grep { not $KNOWN_SPECIALS{lc $_} } @{ $folder->[0] || [] };
+  return $role if $role;
+
+  my $sep   = $folder->[1];
+  my $label = defined $folder->[2] ? $folder->[2] : '';
+
+  $label =~ s{^\Q$prefix\E}{} if defined $prefix && length $prefix;
+  # Strip a leading separator too, in case the prefix did not include one.
+  $label =~ s{^\Q$sep\E}{}    if defined $sep    && length $sep;
+
+  return $label;
+}
+
 # read folder list from the server
 sub folders {
   my $Self = shift;
@@ -485,18 +509,9 @@ sub folders {
 
   my %folders;
   foreach my $folder (@folders) {
-    my ($role) = grep { not $KNOWN_SPECIALS{lc $_} } @{$folder->[0]};
     my $name = $folder->[2];
-    my $label;
-    if ($role) {
-      $label = $role;
-    }
-    else {
-      $label = $folder->[2];
-      $label =~ s{^$prefix}{};
-      $label =~ s{^[$folder->[1]]}{}; # just in case prefix was missing sep
-    }
-    $folders{$name} = [$folder->[1], $label];
+    next unless defined $name;   # a row with no name is not addressable
+    $folders{$name} = [$folder->[1], folder_label($prefix, $folder)];
   }
 
   return [$prefix, \%folders, $sep];
