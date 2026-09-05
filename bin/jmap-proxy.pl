@@ -78,6 +78,36 @@ my %waiting;     # name => { cmd_id => [success_cb, error_cb] }
 my %backfilling; # accountid => 1 while prod_backfill loop is active
 my %sync_times;  # accountid => unix timestamp of last successful sync
 
+# Take one pending entry, without autovivifying %waiting{$name} for a response
+# we were not expecting.
+sub _take_pending {
+  my ($name, $cmd) = @_;
+  return undef unless exists $waiting{$name};
+  my $entry = delete $waiting{$name}{$cmd};
+  delete $waiting{$name} unless %{ $waiting{$name} };
+  return $entry;
+}
+
+# Call whenever a backend goes away. Each %waiting entry has an HTTP connection
+# parked on $req->respond(); dropping one without firing its error callback
+# strands that socket in CLOSE_WAIT, and enough of those exhaust our file
+# descriptors, at which point accept() fails EMFILE forever and the
+# level-triggered event loop livelocks.
+sub _fail_pending {
+  my ($name, $reason) = @_;
+  my $entries = delete $waiting{$name} or return 0;
+  my $n = 0;
+  for my $cmd (sort keys %$entries) {
+    $n++;
+    # Each in its own eval: these unwind into HTTP response paths, and one of
+    # them dying must not strand the connections behind all the others.
+    eval { $entries->{$cmd}[1]->($reason); 1 }
+      or warn "Error callback for $name/$cmd died: $@";
+  }
+  warn "Failed $n in-flight request(s) for $name: $reason\n" if $n;
+  return $n;
+}
+
 # EventSource (SSE) push connections
 # %PushMap: accountid => { conn_id => { write => sub, accountids => [...], close_after => '' } }
 my %PushMap;
@@ -137,19 +167,24 @@ sub mk_json {
     elsif ($res->[0] eq 'bye') {
       warn "Backend closing $accountid\n";
       delete $backend{$accountid};
+      # The child is gone: nothing queued on it will ever be answered.
+      _fail_pending($accountid, 'backend closed');
+      _maybe_finish_shutdown() if $shutting_down;
     }
-    elsif ($waiting{$accountid}{$res->[2]}) {
+    elsif (my $entry = _take_pending($accountid, $res->[2])) {
       if ($res->[0] eq 'error') {
         $stat{backend_errors}++;
-        $waiting{$accountid}{$res->[2]}[1]->($res->[1]);
         warn "Backend error on $accountid: $res->[1]\n";
         delete $backend{$accountid};
+        # Siblings first: this callback may issue a fresh request on the same
+        # accountid, which must not then be swept up by the old failure.
+        _fail_pending($accountid, "backend error: $res->[1]");
+        $entry->[1]->($res->[1]);
       }
       else {
         $backend{$accountid}[3] = time() if $backend{$accountid};
-        $waiting{$accountid}{$res->[2]}[0]->($res->[1]);
+        $entry->[0]->($res->[1]);
       }
-      delete $waiting{$accountid}{$res->[2]};
       _maybe_finish_shutdown() if $shutting_down;
     }
     else {
@@ -175,7 +210,7 @@ sub get_backend {
       close $parent_sock;
       $0 = "[jmap proxy] $accountid";
 
-      # Close all other backend handles in the child
+      # The child inherits the pending table but owns none of those connections.
       %backend = ();
       %waiting = ();
 
@@ -199,12 +234,15 @@ sub get_backend {
     $backend{$accountid} = [AnyEvent::Handle->new(
       fh => $parent_sock,
       on_error => sub {
-        warn "Backend handle error for $accountid\n";
+        my (undef, undef, $msg) = @_;
+        warn "Backend handle error for $accountid: " . ($msg // '?') . "\n";
         delete $backend{$accountid};
+        _fail_pending($accountid, "backend handle error: " . ($msg // 'unknown'));
       },
       on_eof => sub {
         warn "Backend handle EOF for $accountid\n";
         delete $backend{$accountid};
+        _fail_pending($accountid, 'backend closed connection');
       },
     ), 0, $pid, time()];
 
