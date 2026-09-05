@@ -44,7 +44,7 @@ RUN cpanm --notest \
     IO::LockedFile                  \
     Mail::IMAPTalk                  \
     Moose                           \
-    https://github.com/brong/Net-CalDAVTalk/archive/refs/tags/v0.16.tar.gz \
+    Net::CalDAVTalk                 \
     Net::CardDAVTalk                \
     Net::DNS                        \
     Net::Server::Fork               \
@@ -71,5 +71,12 @@ ENV JMAP_MGMT_PORT=8080
 ENV JMAP_MGMT_HOST=127.0.0.1
 
 EXPOSE 9000 8080
+
+# Liveness probe: a wedged or spinning event loop still holds the port open, so
+# only an actual request distinguishes it from a healthy one.
+# Note that Docker marks the container unhealthy but will NOT restart it --
+# --restart acts on exit only. Restarting on unhealthy needs a supervisor.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+  CMD perl -MHTTP::Tiny -e 'exit(HTTP::Tiny->new(timeout => 5)->get("http://127.0.0.1:$ENV{JMAP_MGMT_PORT}/healthz")->{success} ? 0 : 1)'
 
 ENTRYPOINT ["/opt/jmap-perl/bin/docker-entrypoint.sh"]
