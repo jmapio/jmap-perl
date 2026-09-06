@@ -586,5 +586,6 @@ require JMAP::API::Submission;
 require JMAP::API::StorageNode;
 require JMAP::API::MDN;
 require JMAP::API::Quota;
+require JMAP::API::Principal;
 
 1;

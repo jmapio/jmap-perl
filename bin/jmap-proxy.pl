@@ -41,6 +41,7 @@ use JMAP::OAuth::Fastmail;
 use JMAP::OAuth::PACC;
 use JMAP::OAuth::OIDC;
 use JMAP::Dispatch;
+use JMAP::Capabilities qw(imap_account_capabilities);
 
 # Backend modules (loaded in child after fork)
 # use JMAP::API; use JMAP::ImapDB; etc.
@@ -1339,41 +1340,6 @@ sub do_wellknown {
   not_found($req);
 }
 
-sub _imap_account_capabilities {
-  my ($a) = @_;
-  return {
-    'urn:ietf:params:jmap:mail' => {
-      maxMailboxesPerEmail         => undef,
-      maxMailboxDepth              => undef,
-      maxSizeMailboxName           => 490,
-      maxSizeAttachmentsPerEmail   => 50_000_000,
-      emailQuerySortOptions        => [qw(
-        receivedAt sentAt size subject from to id
-        hasKeyword allInThreadHaveKeyword someInThreadHaveKeyword
-      )],
-      mayCreateTopLevelMailbox     => JSON::true,
-    },
-    'urn:ietf:params:jmap:submission' => { maxDelayedSend => 0 },
-    'urn:ietf:params:jmap:mdn'   => {},
-    'urn:ietf:params:jmap:quota' => {},
-    ($a->{caldavURL} ? ('urn:ietf:params:jmap:calendars' => {
-      maxCalendarsPerEvent     => 1,
-      minDateTime              => '1970-01-01T00:00:00Z',
-      maxDateTime              => '2099-12-31T23:59:59Z',
-      maxExpandedQueryDuration => 'P2Y',
-      maxParticipantsPerEvent  => undef,
-      mayCreateCalendar        => JSON::true,
-    },
-    'urn:ietf:params:jmap:principals' => {
-      currentUserPrincipalId => 'me',
-    }) : ()),
-    ($a->{carddavURL} ? ('urn:ietf:params:jmap:contacts' => {
-      maxAddressBooksPerCard => 1,
-      mayCreateAddressBook   => JSON::true,
-    }) : ()),
-  };
-}
-
 # Capabilities the proxy itself understands. A passthrough account's upstream
 # session may advertise far more (sieve, blob, cyrus-specific namespaces, ...);
 # do_jmap rejects any `using` capability not in this set, so /session must only
@@ -1437,7 +1403,7 @@ sub do_session {
             # degraded ($rec undef): empty caps, no primaries — core-only
           }
           else {
-            $acct_caps = _imap_account_capabilities($a);
+            $acct_caps = imap_account_capabilities($a);
             $top_caps{$_} //= {} for keys %$acct_caps;
             $primary_for{'urn:ietf:params:jmap:mail'}       //= $aid;
             $primary_for{'urn:ietf:params:jmap:submission'} //= $aid;

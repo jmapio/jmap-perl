@@ -739,7 +739,9 @@ sub api_CalendarEvent_get {
       $item->{calendarIds} = { "$data->{jcalendarid}" => JSON::true } if _prop_wanted($args, 'calendarIds');
       $item->{isOrigin}    = _is_origin($organizer, $user->{email})   if _prop_wanted($args, 'isOrigin');
       $item->{isDraft}     = $JSON::false if _prop_wanted($args, 'isDraft');
-      $item->{baseEventId} = undef        if _prop_wanted($args, 'baseEventId');
+      # draft-ietf-jmap-calendars S10.9.2: set only on a synthetic instance id,
+      # and it names the real event the instance was generated from.
+      $item->{baseEventId} = $master_uid  if _prop_wanted($args, 'baseEventId');
       _add_calendar_event_computed_props($item, $args);
       push @list, $item;
       next;
