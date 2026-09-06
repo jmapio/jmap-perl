@@ -43,6 +43,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Set up Buildx
+        # push-by-digest needs the docker-container driver, not the
+        # default docker driver.
+        uses: docker/setup-buildx-action@v3
+
       - name: Extract labels for Docker
         id: meta
         uses: docker/metadata-action@v5
