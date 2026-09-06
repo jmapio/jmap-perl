@@ -157,9 +157,18 @@ a bare PUT dies `need data` in `Cyrus::AccountSync` and returns 500.
 
 Reading the suite results: the raw failure count drifts as the Cyrus container is recreated,
 so the meaningful gate is a **same-session passthrough-vs-`--direct` diff** — a failure that
-also fails `--direct` is Cyrus's, not the proxy's. As of this branch that diff is empty.
+also fails `--direct` is Cyrus's, not the proxy's.
 `t/AddressBook/changes` and `t/Calendar/changes` are occasionally flaky under full-suite
 load; re-run them in isolation before believing a failure.
+
+Against the expanded suite (140 files, 2026-09-07) the IMAP-mode diff is **eight failures
+the proxy owns**, all of which `--direct` passes: `sinceState` is never validated so
+`Mailbox/changes` and `Email/changes` answer normally instead of `cannotCalculateChanges`
+(RFC 8620 §5.2); `EmailSubmission/changes` returns `invalidArguments: ["ids"]`;
+`Principal/get` is `unknownMethod`; `AddressBook/set` ignores `onDestroyRemoveContents`
+and `onSuccessSetIsDefault`; and `CalendarEvent/query` ignores `expandRecurrences`.
+The five `--direct` failures are the four Cyrus bugs in the `testsuite-fixes` branch plus
+the unimplemented `Identity/set`.
 
 ## Specs
 
