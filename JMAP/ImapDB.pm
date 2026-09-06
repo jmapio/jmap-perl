@@ -970,13 +970,6 @@ sub set_default_addressbook {
   $Self->commit();
 }
 
-sub unset_default_addressbook {
-  my ($Self, $jaddressbookid) = @_;
-  $Self->begin();
-  $Self->dbh->do("UPDATE jaddressbooks SET isDefault = 0 WHERE jaddressbookid = ? AND active = 1", {}, $jaddressbookid);
-  $Self->commit();
-}
-
 sub do_addressbooks {
   my $Self = shift;
   my $books = shift;

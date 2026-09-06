@@ -631,11 +631,11 @@ sub api_AddressBook_set {
     $Self->{db}->begin();
     my $has = $Self->{db}->dgetone('jcontacts', { jaddressbookid => $id, active => 1 }, 'contactuid');
     my $contacts;
-    if ($has && $args->{onDestroyRemoveContacts}) {
+    if ($has && $args->{onDestroyRemoveContents}) {
       $contacts = $Self->{db}->dget('jcontacts', { jaddressbookid => $id, active => 1 }, 'contactuid');
     }
     $Self->{db}->commit();
-    if ($has && !$args->{onDestroyRemoveContacts}) {
+    if ($has && !$args->{onDestroyRemoveContents}) {
       $pre_notDestroyed{$id} = { type => 'addressBookHasContents' };
     } else {
       if ($has && $contacts) {
@@ -649,14 +649,12 @@ sub api_AddressBook_set {
 
   $Self->{db}->sync_addressbooks();
 
-  if (my $osis = $args->{onSuccessSetIsDefault}) {
-    for my $id (keys %$osis) {
-      my $real_id = $Self->idmap($id) // $id;
-      if ($osis->{$id}) {
-        $Self->{db}->set_default_addressbook($real_id);
-      } else {
-        $Self->{db}->unset_default_addressbook($real_id);
-      }
+  # RFC 9610 S2.3: onSuccessSetIsDefault is a single Id (or a "#"-prefixed
+  # creation reference), honoured only if every create, update and destroy
+  # succeeded. An id the server does not know is ignored without an error.
+  if (defined(my $osis = $args->{onSuccessSetIsDefault})) {
+    unless (%$notCreated or %$notUpdated or %$notDestroyed) {
+      $Self->{db}->set_default_addressbook($Self->idmap($osis));
     }
   }
 
