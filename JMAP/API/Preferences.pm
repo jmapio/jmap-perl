@@ -514,36 +514,6 @@ sub api_VacationResponse_set {
   }];
 }
 
-sub api_Quota_get {
-  my $Self = shift;
-  my $args = shift;
-
-  $Self->begin();
-  my $user = $Self->{db}->get_user();
-  my $accountid = $Self->{db}->accountid();
-  $Self->commit();
-
-  my @list = (
-    {
-      id => 'mail',
-      used => 1,
-      total => 2,
-    },
-    {
-      id => 'files',
-      used => 1,
-      total => 2,
-    },
-  );
-
-  return ['Quota/get', {
-    accountId => $accountid,
-    state => 'dummy',
-    list => _filter_list(\@list, $args->{ids}),
-    notFound => [],
-  }];
-}
-
 sub getSavedSearches {
   my $Self = shift;
   my $args = shift;

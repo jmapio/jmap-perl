@@ -161,14 +161,16 @@ also fails `--direct` is Cyrus's, not the proxy's.
 `t/AddressBook/changes` and `t/Calendar/changes` are occasionally flaky under full-suite
 load; re-run them in isolation before believing a failure.
 
-Against the expanded suite (140 files, 2026-09-07) the IMAP-mode diff is **eight failures
-the proxy owns**, all of which `--direct` passes: `sinceState` is never validated so
-`Mailbox/changes` and `Email/changes` answer normally instead of `cannotCalculateChanges`
-(RFC 8620 §5.2); `EmailSubmission/changes` returns `invalidArguments: ["ids"]`;
-`Principal/get` is `unknownMethod`; `AddressBook/set` ignores `onDestroyRemoveContents`
-and `onSuccessSetIsDefault`; and `CalendarEvent/query` ignores `expandRecurrences`.
-The five `--direct` failures are the four Cyrus bugs in the `testsuite-fixes` branch plus
-the unimplemented `Identity/set`.
+On the expanded suite (140 files, 2026-09-07) IMAP mode is **140/140 against the proxy**
+and 135/140 `--direct`: the four Cyrus bugs in the `testsuite-fixes` branch plus the
+unimplemented `Identity/set`. So the diff is clean and the proxy fixes five.
+
+**Every `api_*` method lives in exactly one module.** `JMAP::API::*` all declare
+`package JMAP::API`, so two files defining the same sub is legal Perl — the last
+`require` in `JMAP/API.pm` silently wins. That had already happened twice (a stub
+`Quota/get` in `Preferences.pm` returning `used => 1, total => 2`, and a
+`Principal/get` in `Calendar.pm`), and only a redefinition warning gave it away.
+`grep -h '^sub api_' JMAP/API/*.pm | sort | uniq -d` must stay empty.
 
 ## Specs
 

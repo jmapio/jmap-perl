@@ -968,48 +968,6 @@ sub _busy_status_for_event {
   return 'unavailable';
 }
 
-sub api_Principal_get {
-  my ($Self, $args) = @_;
-
-  my ($user, $accountid) = $Self->_api_init($args);
-  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
-  $Self->commit();
-
-  my $principal = {
-    id          => 'me',
-    type        => 'individual',
-    name        => $user->{email} // '',
-    description => JSON::null,
-    email       => $user->{email} // '',
-    timeZone    => JSON::null,
-    capabilities => {
-      'urn:ietf:params:jmap:calendars' => {
-        accountId          => $accountid,
-        mayGetAvailability => JSON::true,
-        mayActAs           => JSON::false,
-      },
-    },
-  };
-
-  my $ids = $args->{ids};
-  my (@list, @not_found);
-  if (!defined $ids) {
-    @list = ($principal);
-  } else {
-    for my $id (@$ids) {
-      if ($id eq 'me') { push @list,      $principal }
-      else              { push @not_found, $id        }
-    }
-  }
-
-  return ['Principal/get', {
-    accountId => $accountid,
-    state     => 'dummy',
-    list      => \@list,
-    notFound  => \@not_found,
-  }];
-}
-
 sub api_Principal_getAvailability {
   my ($Self, $args) = @_;
 

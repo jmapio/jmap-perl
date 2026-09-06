@@ -30,7 +30,16 @@ sub _principal {
     description  => undef,
     email        => $email,
     timeZone     => undef,
-    capabilities => {},
+    # draft-ietf-jmap-calendars S2.1. Only one Principal exists here, so it is
+    # never a share target.
+    capabilities => $iserver->{caldavURL} ? {
+      'urn:ietf:params:jmap:calendars' => {
+        accountId          => "$accountid",
+        mayGetAvailability => JSON::true,
+        mayShareWith       => JSON::false,
+        calendarAddress    => $email ? "mailto:$email" : undef,
+      },
+    } : {},
     accounts     => {
       "$accountid" => {
         name                => "$name",
