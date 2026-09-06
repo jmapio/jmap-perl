@@ -473,10 +473,18 @@ sub _classify_changes {
 
 sub _check_since_state {
   my ($Self, $args, $user, $newState) = @_;
+  my $since = $args->{sinceState};
   return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceState']}])
-    unless $args->{sinceState};
+    unless defined $since and length $since;
+
+  # Every state string this server hands out is a decimal modseq, so anything
+  # else -- or anything ahead of the current state -- is a token we never
+  # issued and cannot compute a delta from (RFC 8620 section 5.2).
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
-    if ($user->{jdeletedmodseq} and $args->{sinceState} <= $user->{jdeletedmodseq});
+    unless $since =~ /\A[0-9]+\z/ and $since <= $newState;
+
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
+    if ($user->{jdeletedmodseq} and $since <= $user->{jdeletedmodseq});
   return ();
 }
 

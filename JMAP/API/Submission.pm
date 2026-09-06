@@ -194,14 +194,18 @@ sub api_EmailSubmission_get {
 
   my $newState = "$user->{jstateEmailSubmission}";
 
-  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['ids']}])
-    unless $args->{ids};
   #properties: String[] A list of properties to fetch for each message.
+
+  # RFC 8620 S5.1: a null "ids" asks for every record of the type. The set of
+  # live submissions is small, so answer it rather than rejecting the call.
+  my @ids = $args->{ids}
+    ? map { $Self->idmap($_) } @{$args->{ids}}
+    : map { $_->[0] } @{ $Self->{db}->get_submissions('jsubid') };
 
   my %seenids;
   my %missingids;
   my @list;
-  foreach my $subid (map { $Self->idmap($_) } @{$args->{ids}}) {
+  foreach my $subid (@ids) {
     next if $seenids{$subid};
     $seenids{$subid} = 1;
     my $data = $Self->{db}->dgetone('jsubmission', { jsubid => $subid });
