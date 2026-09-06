@@ -49,9 +49,12 @@ Then open `http://localhost:8080` to add accounts via the management dashboard.
 
 ## JMAP compliance
 
-132/132 JMAP TestSuite tests passing against Cyrus IMAP, covering:
-RFC 8620 core, RFC 8621 mail, JMAP Calendars, JMAP Contacts (RFC 9610),
-Quota (RFC 9425), Principal, MDN (RFC 9007), and EmailSubmission.
+Verified against the Perl [JMAP-TestSuite](https://github.com/fastmail/JMAP-TestSuite),
+covering RFC 8620 core, RFC 8621 mail, JMAP Calendars, JMAP Contacts
+(RFC 9610), Quota (RFC 9425), Principal, MDN (RFC 9007), and EmailSubmission.
+
+Run it yourself with `bin/run-jmap-tests.sh`; `--direct` runs the same suite
+against Cyrus's own JMAP, so you can tell a proxy bug from a backend one.
 
 ## License
 

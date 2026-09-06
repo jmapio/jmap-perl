@@ -8,7 +8,7 @@ set -e
 
 DATADIR="${JMAP_DATADIR:-/tmp/jmap-proxy-test}"
 OUTFILE="/tmp/jmap-test-results.txt"
-TESTSUITE="${JMAP_TESTSUITE:-/Users/brong/src/JMAP-TestSuite}"
+TESTSUITE="${JMAP_TESTSUITE:-$(cd "$(dirname "$0")/../../JMAP-TestSuite" 2>/dev/null && pwd)}"
 
 DIRECT=0
 ARGS=()
