@@ -1499,6 +1499,25 @@ sub update_messages {
 
   foreach my $msgid (keys %map) {
     my $action = $changes->{$msgid};
+
+    # A mailboxIds entry naming a mailbox that does not exist -- including an
+    # unresolved "#creationId" from a later call in the same request -- must
+    # reject the update. Letting it through copied the message nowhere and then
+    # removed it from every folder it was in.
+    if (exists $action->{mailboxIds}) {
+      my @unknown = grep {
+        !exists $jidmap{$_} or (!$Self->{is_gmail} and !$jmailmap{$_})
+      } map { $idmap->($_) } keys %{ $action->{mailboxIds} || {} };
+      if (@unknown or !%{ $action->{mailboxIds} || {} }) {
+        $notchanged{$msgid} = {
+          type        => 'invalidProperties',
+          properties  => ['mailboxIds'],
+          description => @unknown ? "no such mailbox: @unknown" : "mailboxIds must not be empty",
+        };
+        next;
+      }
+    }
+
     eval {
                         foreach my $ifolderid (sort keys %{$map{$msgid}}) {
                                 my @uids = sort keys %{$map{$msgid}{$ifolderid}};

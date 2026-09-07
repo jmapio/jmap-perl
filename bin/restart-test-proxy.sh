@@ -3,6 +3,8 @@
 # Usage: ./bin/restart-test-proxy.sh [clean] [--jmap]
 #   clean: wipe the DB and re-sync
 #   --jmap: register test user as a JMAP passthrough account (default: IMAP)
+# Env: CYRUS_IMAGE overrides the Cyrus test-server image used by `clean`
+#   (e.g. a locally built cyrus-test-server:<branch> to test a Cyrus fix).
 
 set -e
 
@@ -55,7 +57,7 @@ if [ "$CLEAN" = "1" ]; then
         -p ${CYRUS_IMAP_PORT}:8143 \
         -p 8080:8080 \
         -p 8001:8001 \
-        ghcr.io/cyrusimap/cyrus-docker-test-server:latest >/dev/null
+        "${CYRUS_IMAGE:-ghcr.io/cyrusimap/cyrus-docker-test-server:latest}" >/dev/null
 
     # Wait for Cyrus IMAP to be ready
     echo -n "Waiting for Cyrus..."

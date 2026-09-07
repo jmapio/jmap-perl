@@ -2,6 +2,7 @@
 
 package JMAP::API;
 
+use JMAP::Dispatch;
 use Carp;
 use JMAP::DB;
 use strict;
@@ -260,67 +261,58 @@ sub push_results {
   foreach my $result (@_) {
     $result->[2] = $tag;
     push @{$Self->{results}}, $result;
-    push @{$Self->{resultsbytag}{$tag}}, $result->[1]
-      unless $result->[0] eq 'error';
+    # Every response is recorded, errors included: a ResultReference to a
+    # failed call must fail on the name check, not fall through (RFC 8620 §3.7).
+    push @{$Self->{resultsbytag}{$tag}}, [ $result->[0], $result->[1] ];
   }
 }
 
-sub _parsepath {
-  my $path = shift;
-  my $item = shift;
-
-  return $item unless $path =~ s{^/([^/]+)}{};
-  # rfc6501
-  my $selector = $1;
-  $selector =~ s{~1}{/}g;
-  $selector =~ s{~0}{~}g;
-
-  if (ref($item) eq 'ARRAY') {
-    if ($selector eq '*') {
-      my @res;
-      foreach my $one (@$item) {
-        my $res =  _parsepath($path, $one);
-        push @res, ref($res) eq 'ARRAY' ? @$res : $res;
-      }
-      return \@res;
-    }
-    if ($selector =~ m/^\d+$/) {
-      return _parsepath($path, $item->[$selector]);
-    }
-  }
-  if (ref($item) eq 'HASH') {
-    return _parsepath($path, $item->{$selector});
-  }
-
-  return $item;
-}
-
+# Resolve one ResultReference (RFC 8620 §3.7). Returns the referenced value or
+# dies with the reason the reference could not be resolved:
+#   1. the FIRST response whose method call id equals resultOf is selected, and
+#      an error response counts, so a reference to a failed call fails;
+#   2. that response's name must equal the reference's name;
+#   3. path is a JSON Pointer (RFC 6901) plus the "*" array map, applied to the
+#      response arguments; a pointer that does not resolve fails.
+# The value is substituted as-is: argument type checking happens afterwards.
 sub resolve_backref {
-  my $Self = shift;
-  my $tag = shift;
-  my $path = shift;
-
+  my ($Self, $ref) = @_;
+  die "ResultReference must be an object\n" unless ref $ref eq 'HASH';
+  my ($tag, $name, $path) = @{$ref}{qw(resultOf name path)};
+  for my $f (qw(resultOf name path)) {
+    die "ResultReference.$f must be a string\n"
+      unless defined $ref->{$f} && !ref $ref->{$f};
+  }
   my $results = $Self->{resultsbytag}{$tag};
-  die "No such result $tag" unless $results;
-
-  my $res = _parsepath($path, @$results);
-
-  $res = [$res] if (defined($res) and ref($res) ne 'ARRAY');
-  return $res;
+  die "no response to method call id $tag\n" unless $results && @$results;
+  my ($rname, $rargs) = @{ $results->[0] };
+  die "response to $tag is $rname, not $name\n" unless $rname eq $name;
+  die "path must be a JSON Pointer\n" unless $path eq '' || $path =~ m{^/};
+  my ($ok, $val) = JMAP::Dispatch::resolve_pointer($rargs, $path);
+  die "path $path does not resolve in the $rname response\n" unless $ok;
+  return $val;
 }
 
+# Replace every "#foo" ResultReference argument with its resolved value.
+# Returns the resolved arguments, or (undef, $error) for the method.
 sub resolve_args {
   my $Self = shift;
   my $args = shift;
   my %res;
   foreach my $key (keys %$args) {
-    if ($key =~ m/^\#(.*)/) {
+    if ($key =~ m/^\#(.*)/s) {
       my $outkey = $1;
-      my $res = eval { $Self->resolve_backref($args->{$key}{resultOf}, $args->{$key}{path}) };
-      if ($@) {
-        return (undef, { type => 'invalidResultReference', message => $@ });
+      # RFC 8620 §3.7: "foo" and "#foo" together is invalidArguments.
+      if (exists $args->{$outkey}) {
+        return (undef, { type => 'invalidArguments', arguments => [$outkey],
+                         description => "both $outkey and #$outkey were given" });
       }
-      $res{$outkey} = $res;
+      my $val = eval { $Self->resolve_backref($args->{$key}) };
+      if ($@) {
+        chomp(my $why = $@);
+        return (undef, { type => 'invalidResultReference', description => $why });
+      }
+      $res{$outkey} = $val;
     }
     else {
       $res{$key} = $args->{$key};
@@ -399,7 +391,8 @@ sub handle_request {
         }
       }
       else {
-        push @items, ['error', $error];
+        # Record the error, or the method gets no response at all.
+        $Self->push_results($tag, ['error', $error]);
         next;
       }
     }

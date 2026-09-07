@@ -140,6 +140,12 @@ consecutive same-upstream calls into one forwarded request.
 
 ### Done
 - [x] Core/echo (RFC 8620 Section 4)
+- [x] Reject a missing accountId (invalidArguments) and an unknown one (accountNotFound) in the parent (RFC 8620 Section 3.6.2); nothing is ever defaulted to the login's account
+- [x] Blob/copy orchestration reads `blobIds` and returns `copied` as Id[Id] (RFC 8620 Section 6.3); it previously read `ids` and so always answered null
+- [x] ResultReference resolution follows RFC 8620 Section 3.7: the response name must match, the path is a strict JSON Pointer, a reference to an errored call fails, and "foo" plus "#foo" together is invalidArguments (IMAP worker and parent cross-batch path alike)
+- [x] A method whose ResultReference fails now gets its error response; it was silently dropped from methodResponses
+- [x] Email/set update rejects mailboxIds naming an unknown mailbox (including an unresolved forward "#creationId") with invalidProperties; it previously copied the message nowhere and then removed it from its folders
+- [x] downloadUrl carries the `{type}` variable RFC 8620 Section 2 requires
 - [x] sessionState in JMAP responses (RFC 8620)
 - [x] Null empty /set result fields (RFC 8620 Section 5.3)
 - [x] EmailSubmission state tracking (jstateEmailSubmission)

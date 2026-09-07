@@ -36,7 +36,9 @@ fi
 cd "$TESTSUITE"
 
 if [ "${#ARGS[@]}" -eq 0 ]; then
-  TESTS="t/Email/ t/Mailbox/ t/Thread/ t/Calendar/ t/CalendarEvent/ t/AddressBook/ t/ContactCard/ t/Identity/ t/VacationResponse/ t/Quota/ t/Principal/ t/SearchSnippet/ t/MDN/ t/EmailSubmission/"
+  # The whole suite, always. A hand-picked directory list here once hid t/core/,
+  # t/Blob/ and the top-level t/*.t files for months -- and five real bugs with them.
+  TESTS="t/"
 else
   TESTS="${ARGS[*]}"
 fi

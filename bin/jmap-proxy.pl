@@ -1437,7 +1437,8 @@ sub do_session {
           primaryAccounts => \%primary_for,
           username => ($pool[0] ? $pool[0]{email} : ''),
           apiUrl => "$BASEURL/jmap",
-          downloadUrl => "$BASEURL/raw/{accountId}/{blobId}/{name}",
+          # RFC 8620 §2: downloadUrl MUST carry accountId, blobId, name AND type.
+          downloadUrl => "$BASEURL/raw/{accountId}/{blobId}/{name}?type={type}",
           uploadUrl => "$BASEURL/upload/{accountId}",
           eventSourceUrl => "$BASEURL/eventsource?types={types}&closeafter={closeafter}&ping={ping}",
           state => sha1_hex(join(',', sort map { $_->{accountid} } @pool)),
@@ -1558,10 +1559,6 @@ sub _do_jmap_request {
     $key_for_aid{$accountid} //= "imap:$accountid";
 
     my $calls = $data->{methodCalls} || [];
-    # Spell out the account a call leaves implicit BEFORE routing or rewriting.
-    # The upstream's own default is its login's primary account, which is the
-    # wrong account when this proxy account is bound to a delegated one.
-    JMAP::Dispatch::apply_default_accounts($calls, $accountid);
     my $copy_route = JMAP::Dispatch::copy_router(\%key_for_aid, $accountid);
     my $batches = JMAP::Dispatch::group_batches($calls, \%key_for_aid, $accountid, $copy_route);
 
@@ -1571,26 +1568,40 @@ sub _do_jmap_request {
     my %resp_by_tag;   # tag => response triple (for cross-batch ResultReference)
     my @extra_responses;  # server-injected responses (e.g. Email/set from onSuccessDestroyOriginal)
 
+    # A call with no accountId, or one naming an account outside this session,
+    # is answered here (invalidArguments / accountNotFound, RFC 8620 §3.6.2) and
+    # never forwarded. The batch loop below skips any position already answered.
+    my $account_errors = JMAP::Dispatch::check_accounts($calls, \%key_for_aid);
+    for my $pos (keys %$account_errors) {
+      $responses[$pos] = ['error', $account_errors->{$pos}, $calls->[$pos][2]];
+      $resp_by_tag{ $calls->[$pos][2] } = $responses[$pos];
+    }
+
     # Resolve any cross-batch ResultReference in a call's args, in place.
+    # Returns undef on success, or the error arguments for the method.
     my $resolve_refs = sub {
       my ($call, $batch_tags) = @_;
       my $args = $call->[1];
-      return 1 unless ref $args eq 'HASH';
+      return undef unless ref $args eq 'HASH';
       for my $k (grep { /^#/ } keys %$args) {
+        (my $real = $k) =~ s/^#//;
+        # RFC 8620 §3.7: "foo" and "#foo" together is invalidArguments.
+        return { type => 'invalidArguments', arguments => [$real],
+                 description => "both $real and $k were given" }
+          if exists $args->{$real};
         my $ref = $args->{$k};
         next unless ref $ref eq 'HASH' && defined $ref->{resultOf};
         next if $batch_tags->{ $ref->{resultOf} };   # same batch: upstream resolves it
         my $prev = $resp_by_tag{ $ref->{resultOf} };
         if (!$prev || $prev->[0] ne ($ref->{name} // '')) {
-          $args->{_jmap_ref_error} = $k; return 0;
+          return { type => 'invalidResultReference' };
         }
         my ($ok, $val) = JMAP::Dispatch::resolve_pointer($prev->[1], $ref->{path} // '');
-        if (!$ok) { $args->{_jmap_ref_error} = $k; return 0; }
-        (my $real = $k) =~ s/^#//;
+        return { type => 'invalidResultReference' } unless $ok;
         delete $args->{$k};
         $args->{$real} = $val;
       }
-      return 1;
+      return undef;
     };
 
     my $finish = sub {
@@ -1616,6 +1627,7 @@ sub _do_jmap_request {
       # Cross-upstream copy batch (Task 6): single copy call routed to orchestration.
       if ($batch->{key} eq 'orchestrate') {
         my ($pos, $call) = @{ $batch->{calls}[0] };
+        return $next_batch->() if defined $responses[$pos];   # rejected by check_accounts
         _do_copy_call($call->[0], $call->[1], $call->[2], $accountid, sub {
           my $resp = shift;
           # An array of triples: primary response at $pos, extras (e.g. the
@@ -1638,8 +1650,10 @@ sub _do_jmap_request {
       my (@calls, @positions);
       for my $pc (@{ $batch->{calls} }) {
         my ($pos, $call) = @$pc;
-        unless ($resolve_refs->($call, \%batch_tags)) {
-          $responses[$pos] = ['error', { type => 'invalidResultReference' }, $call->[2]];
+        next if defined $responses[$pos];   # rejected by check_accounts
+        if (my $err = $resolve_refs->($call, \%batch_tags)) {
+          $responses[$pos] = ['error', $err, $call->[2]];
+          $resp_by_tag{ $call->[2] } //= $responses[$pos];
           next;
         }
         push @calls, $call; push @positions, $pos;
@@ -1749,7 +1763,9 @@ sub _do_copy_call {
 sub _copy_blobs {
   my ($args, $from_aid, $to_aid, $tag, $cb, $errcb) = @_;
 
-  my $ids = $args->{ids} // [];
+  # RFC 8620 §6.3: the argument is blobIds, and "copied" maps each source blobId
+  # straight to the new blobId (Id[Id]), not to an object.
+  my $ids = $args->{blobIds} // [];
   unless (@$ids) {
     return $cb->(['Blob/copy', {
       fromAccountId => $from_aid,
@@ -1788,7 +1804,7 @@ sub _copy_blobs {
       unless (@to_store) { return $finish->() }
       my ($orig_id, $info) = @{ shift @to_store };
       send_backend_request($to_aid, 'store_blob', $info, sub {
-        $copied{$orig_id} = { blobId => shift->{blobId} };
+        $copied{$orig_id} = shift->{blobId};
         $store_next->();
       }, sub {
         unlink $info->{path} if $info->{is_temp};

@@ -16,40 +16,42 @@ my %COPY_METHODS = map { $_ => 1 } qw(
 sub is_copy_method { return $COPY_METHODS{ $_[0] // '' } ? 1 : 0 }
 sub copy_methods   { return sort keys %COPY_METHODS }
 
-# Core/echo is the only method whose arguments are not account-scoped — it must
-# echo back exactly what it was given, so never inject an accountId into it.
+# Core/echo is the only method whose arguments are not account-scoped -- it must
+# echo back exactly what it was given, so never demand an accountId of it.
 my %NO_ACCOUNT_METHOD = ('Core/echo' => 1);
 
-sub _set_default {
-    my ($args, $field, $default) = @_;
-    # A "#field" ResultReference will supply this field later; leave it alone so
-    # the reference still wins.
-    return if exists $args->{$field} || exists $args->{"#$field"};
-    $args->{$field} = $default;
-}
-
-# Spell out the account ids a call leaves implicit, in place.
+# Validate the account ids on each call before anything is routed or rewritten.
 #
-# A JMAP call may omit accountId to mean "the account I am authenticated as".
-# The proxy MUST materialise that before forwarding: the upstream would apply its
-# OWN default (the login's primary account), which is the wrong account whenever
-# a proxy account is bound to a delegated upstream account. Making the ids
-# explicit also lets the id-rewriting map translate them.
-sub apply_default_accounts {
-    my ($calls, $default_aid) = @_;
-    for my $call (@{ $calls || [] }) {
+# Returns { position => error_arguments } for the calls that must not be
+# forwarded. RFC 8620 §3.6.2: a missing (or non-string) required argument is
+# invalidArguments, and an accountId that is not one of the session's accounts
+# is accountNotFound. $known is a hashref whose keys are the valid accountIds.
+#
+# A call may omit accountId only via a "#accountId" ResultReference, which is
+# resolved later; that is left alone here. The proxy used to fill in the
+# authenticated account for a missing id instead, but that hid client bugs and,
+# for a delegated passthrough binding, let the upstream pick its OWN default
+# (the login's primary account) -- the wrong account.
+sub check_accounts {
+    my ($calls, $known) = @_;
+    my %errors;
+    for my $pos (0 .. $#{ $calls || [] }) {
+        my $call = $calls->[$pos];
         next unless ref $call eq 'ARRAY' && ref $call->[1] eq 'HASH';
         next if $NO_ACCOUNT_METHOD{ $call->[0] // '' };
-        my $args = $call->[1];
-        if (is_copy_method($call->[0])) {
-            _set_default($args, 'fromAccountId', $default_aid);
-            _set_default($args, 'accountId',     $default_aid);
+        my $args   = $call->[1];
+        my @fields = is_copy_method($call->[0]) ? qw(fromAccountId accountId) : qw(accountId);
+        my (@missing, $unknown);
+        for my $f (@fields) {
+            next if exists $args->{"#$f"};
+            my $v = $args->{$f};
+            if (!defined $v || ref $v) { push @missing, $f; next }
+            $unknown = 1 unless $known->{$v};
         }
-        else {
-            _set_default($args, 'accountId', $default_aid);
-        }
+        if (@missing)    { $errors{$pos} = { type => 'invalidArguments', arguments => \@missing } }
+        elsif ($unknown) { $errors{$pos} = { type => 'accountNotFound' } }
     }
-    return $calls;
+    return \%errors;
 }
 
 # Map a single method call to the accountid it targets.

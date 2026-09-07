@@ -124,10 +124,11 @@ for my $who ($primary, $shared) {
     or diag "status $r->{status}: " . substr($r->{content} // '', 0, 200);
 }
 
-# 5. A call that OMITS accountId must run against the account it is bound to.
-#    The upstream's own default is the login's PRIMARY account, so without the
-#    proxy spelling the id out, a delegated account silently reads the primary's
-#    data. Compare an implicit call against an explicit one.
+# 5. An explicit accountId reads the delegated account, and a call that OMITS
+#    accountId is rejected (invalidArguments, RFC 8620 §3.6.2) rather than
+#    forwarded. The upstream's own default for a missing id is the login's
+#    PRIMARY account, so forwarding it would silently read the primary's data;
+#    the proxy used to paper over that by filling the id in, now it refuses.
 {
   my $jmap_as = sub {
     my ($who, @calls) = @_;
@@ -154,14 +155,24 @@ for my $who ($primary, $shared) {
   $jmap_as->($shared, ['Mailbox/set',
     { accountId => $shared,  create => { m => { name => 'MARKER-SHARED' } } }, 's']);
 
-  my $implicit = $mailbox_names->($jmap_as->($shared, ['Mailbox/get', {}, 'm']));
   my $explicit = $mailbox_names->($jmap_as->($shared,
     ['Mailbox/get', { accountId => $shared }, 'm']));
-
   ok($explicit && $explicit =~ /MARKER-SHARED/,
      "explicit accountId reads the delegated account");
-  is($implicit, $explicit,
-     "omitting accountId reads the BOUND account, not the login's primary");
+  unlike($explicit // '', qr/MARKER-PRIMARY/,
+     "explicit accountId does not see the login's primary account");
+
+  my $implicit = $jmap_as->($shared, ['Mailbox/get', {}, 'm']);
+  my ($resp) = grep { $_->[2] eq 'm' } @{ ($implicit || {})->{methodResponses} || [] };
+  is($resp && $resp->[0], 'error', "omitting accountId is an error, not a default");
+  is($resp && $resp->[1]{type}, 'invalidArguments',
+     "omitting accountId is invalidArguments");
+
+  # And an accountId that is not one of the session's accounts is accountNotFound.
+  my $cross = $jmap_as->($shared, ['Mailbox/get', { accountId => 'no-such-proxy-account' }, 'm']);
+  ($resp) = grep { $_->[2] eq 'm' } @{ ($cross || {})->{methodResponses} || [] };
+  is($resp && $resp->[1]{type}, 'accountNotFound',
+     "an accountId outside the session is accountNotFound");
 }
 
 # 6. An explicitly bogus backendAccountId must be rejected, not silently

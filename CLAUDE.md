@@ -42,8 +42,10 @@ Hard rules that are easy to violate:
 - `JMAP/DB.pm` — base DB class (SQLite schema, transactions, sync state, query snapshot cache).
   - `JMAP/ImapDB.pm` (← DB) — IMAP/CalDAV/CardDAV sync. `FastmailDB`, `GmailDB`, `AOLDB` extend it.
   - `JMAP/JmapDB.pm` — standalone, for JMAP passthrough backends.
-- `JMAP/Dispatch.pm` — pure, unit-testable dispatch core: `group_batches` (order-preserving
-  same-upstream batching) and `resolve_pointer` (JSON Pointer with JMAP `*` semantics).
+- `JMAP/Dispatch.pm` — pure, unit-testable dispatch core: `check_accounts` (a missing
+  `accountId` is `invalidArguments`, one outside the session is `accountNotFound` — the
+  proxy never defaults it), `group_batches` (order-preserving same-upstream batching) and
+  `resolve_pointer` (JSON Pointer with JMAP `*` semantics).
   No I/O, no DB — keep it that way; `t/dispatch-*.t` covers it.
 - `JMAP/API.pm` — JMAP request handler; dispatches to per-datatype method modules in
   `JMAP/API/` (`Email`, `Mailbox`, `Thread`, `Calendar`, `Contact`, `Submission`,
@@ -136,6 +138,11 @@ CYRUS_URL=http://localhost:8080 JMAP_PROXY_URL=http://localhost:9000 \
   prove -lv t/passthrough-delegated-account.t t/passthrough-copy-matrix.t
 ```
 
+Testing a Cyrus fix end to end: build Cyrus in a `dar` container for the branch's worktree,
+`docker commit` that container as a builder image, build the test-server image from it with
+the test-server Dockerfile's stage 1 swapped for `FROM <that image> AS builder`, then
+`CYRUS_IMAGE=<image> bin/restart-test-proxy.sh clean` and `bin/run-jmap-tests.sh --direct`.
+
 Debugging: set `JMAP_DEBUG=1` to log full request/response bodies. Proxy stderr goes
 to `/tmp/jmap-proxy.log` when started via `restart-test-proxy.sh`.
 
@@ -161,9 +168,16 @@ also fails `--direct` is Cyrus's, not the proxy's.
 `t/AddressBook/changes` and `t/Calendar/changes` are occasionally flaky under full-suite
 load; re-run them in isolation before believing a failure.
 
-On the expanded suite (140 files, 2026-09-07) IMAP mode is **140/140 against the proxy**
-and 135/140 `--direct`: the four Cyrus bugs in the `testsuite-fixes` branch plus the
-unimplemented `Identity/set`. So the diff is clean and the proxy fixes five.
+`run-jmap-tests.sh` with no arguments runs **all of `t/`**. It used to run a hand-picked
+directory list, which silently skipped `t/core/`, `t/Blob/` and the top-level `t/*.t` for
+months and hid five real proxy bugs (ResultReference validation, dropped error responses,
+Blob/copy arguments, downloadUrl `{type}`, unknown-mailbox moves). Never narrow it again.
+
+On the full suite (166 files, 2026-09-07) IMAP mode is **166/166 against the proxy** and
+154/166 `--direct`: the five Cyrus bugs in the `testsuite-fixes` branch plus the
+unimplemented `Identity/set`, and seven accountId tests (`t/core/accountId-required.t` and
+six `foreign-account.t`) where Cyrus accepts a missing accountId, accepts a foreign
+`fromAccountId` on an empty `/copy`, or lacks the method. So the diff is clean.
 
 **Every `api_*` method lives in exactly one module.** `JMAP::API::*` all declare
 `package JMAP::API`, so two files defining the same sub is legal Perl — the last
