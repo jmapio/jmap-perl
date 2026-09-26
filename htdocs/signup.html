@@ -41,16 +41,16 @@
 <div class="signup-form">
 <form action="/signup" method="post">
 <input type="hidden" name="force" value="1">
-<input type="hidden" name="username" value="[% username %]">
-<input type="hidden" name="password" value="[% password %]">
+<input type="hidden" name="username" value="[% username | html %]">
+<input type="hidden" name="password" value="[% password | html %]">
 
 <table>
   <tr><td colspan="2" class="section-head">IMAP</td></tr>
   <tr>
     <th>Host</th>
     <td>
-      <input type="text" class="host" name="imapHost" value="[% imapHost %]">
-      <input type="number" class="port" name="imapPort" value="[% imapPort %]">
+      <input type="text" class="host" name="imapHost" value="[% imapHost | html %]">
+      <input type="number" class="port" name="imapPort" value="[% imapPort | html %]">
       <select name="imapSSL">
         <option value="1"[% IF imapSSL == 1 %] selected[% END %]>Plaintext</option>
         <option value="2"[% IF imapSSL == 2 %] selected[% END %]>SSL</option>
@@ -63,8 +63,8 @@
   <tr>
     <th>Host</th>
     <td>
-      <input type="text" class="host" name="smtpHost" value="[% smtpHost %]">
-      <input type="number" class="port" name="smtpPort" value="[% smtpPort %]">
+      <input type="text" class="host" name="smtpHost" value="[% smtpHost | html %]">
+      <input type="number" class="port" name="smtpPort" value="[% smtpPort | html %]">
       <select name="smtpSSL">
         <option value="1"[% IF smtpSSL == 1 %] selected[% END %]>Plaintext</option>
         <option value="2"[% IF smtpSSL == 2 %] selected[% END %]>SSL</option>
@@ -76,11 +76,11 @@
   <tr><td colspan="2" class="section-head">CalDAV / CardDAV (optional)</td></tr>
   <tr>
     <th>CalDAV URL</th>
-    <td><input type="text" class="url" name="caldavURL" value="[% caldavURL %]"></td>
+    <td><input type="text" class="url" name="caldavURL" value="[% caldavURL | html %]"></td>
   </tr>
   <tr>
     <th>CardDAV URL</th>
-    <td><input type="text" class="url" name="carddavURL" value="[% carddavURL %]"></td>
+    <td><input type="text" class="url" name="carddavURL" value="[% carddavURL | html %]"></td>
   </tr>
 </table>
 
