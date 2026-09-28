@@ -314,7 +314,7 @@ sub sync_jmailboxes {
             $Self->dmake('jmailboxes', {
               name => $name,
               jmailboxid => $id,
-              sortOrder => 0,
+              sortOrder => 10,  # discovered over IMAP, not created through JMAP
               parentId => $parentId,
             }, 'jnoncountsmodseq');
             $byname{$parentId//''}{$name} = $id;
