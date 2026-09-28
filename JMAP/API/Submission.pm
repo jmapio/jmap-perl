@@ -153,7 +153,7 @@ sub api_EmailSubmission_queryChanges {
   $Self->commit();
 
   my @added;
-  my @destroyed;
+  my @removed;
 
   my $index = 0;
   foreach my $item (@$data) {
@@ -162,7 +162,7 @@ sub api_EmailSubmission_queryChanges {
       next;
     }
     # changed
-    push @destroyed, "$item->[0]";
+    push @removed, "$item->[0]";
     next unless $item->[6];                 # [6]=active
     push @added, { id => "$item->[0]", index => $index };
     $index++;
@@ -175,7 +175,7 @@ sub api_EmailSubmission_queryChanges {
     oldQueryState => $sinceQueryState,
     newQueryState => $newQueryState,
     total => $total,
-    destroyed => \@destroyed,
+    removed => \@removed,
     added => \@added,
   }];
 }
