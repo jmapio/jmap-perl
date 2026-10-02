@@ -30,6 +30,7 @@ sub imap_account_capabilities {
       mayCreateTopLevelMailbox     => JSON::true,
     },
     'urn:ietf:params:jmap:submission' => { maxDelayedSend => 0 },
+    'urn:ietf:params:jmap:vacationresponse' => {},
     'urn:ietf:params:jmap:mdn'   => {},
     'urn:ietf:params:jmap:quota' => {},
     ($conf->{caldavURL} ? ('urn:ietf:params:jmap:calendars' => {

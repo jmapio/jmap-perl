@@ -1408,6 +1408,7 @@ sub do_session {
             $top_caps{$_} //= {} for keys %$acct_caps;
             $primary_for{'urn:ietf:params:jmap:mail'}       //= $aid;
             $primary_for{'urn:ietf:params:jmap:submission'} //= $aid;
+            $primary_for{'urn:ietf:params:jmap:vacationresponse'} //= $aid;
             $primary_for{'urn:ietf:params:jmap:calendars'}  //= $aid if $a->{caldavURL};
             $primary_for{'urn:ietf:params:jmap:contacts'}   //= $aid if $a->{carddavURL};
           }

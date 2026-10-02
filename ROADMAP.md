@@ -325,10 +325,11 @@ Tests in JMAP-TestSuite cover all four methods with pool_account_pair support.
 - [x] `subParts`: structural recursion preserved for `bodyStructure`; leaf parts return `[]` when explicitly requested
 - [x] `EmailSubmission/query` filter `identityIds`: schema v9 adds `identity` column to
       `jsubmission`; saved on create; `_submission_match` predicate fixed (was broken latent bug)
-- [x] `Email/set` create rejects what RFC 8621 §4.6 says it MUST: a part with both `partId`
-      and `blobId`, a `partId` missing from `bodyValues`, `charset` with a `partId`, and a
-      top-level `bodyStructure` header already defined on the Email. A `size` given with a
-      `blobId` is ignored, as the RFC says (the suite used to demand a rejection there).
+- [x] `urn:ietf:params:jmap:vacationresponse` advertised: `VacationResponse/get|set` store the
+      singleton in `juserprefs`. **The backend does not send the auto-reply**: nothing pushes it
+      to the IMAP server's Sieve, so for now this is JMAP-visible state only. TODO: ManageSieve
+      (Cyrus/Dovecot) to install a real vacation script.
+
 ---
 
 ### draft-ietf-jmap-calendars-26 — JMAP Calendars
