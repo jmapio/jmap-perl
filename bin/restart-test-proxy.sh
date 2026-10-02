@@ -142,7 +142,7 @@ cat > "$DATADIR/test-config.json" <<TESTCONFIG
   "cyrus_admin_user"           : "admin",
   "cyrus_admin_pass"           : "admin",
   "cyrus_hierarchy_separator"  : ".",
-  "cyrus_backend"              : true,
+  "cyrus_backend"              : $( [ "$BACKEND" = "jmap" ] && echo true || echo false ),
   "passthrough"                : $( [ "$BACKEND" = "jmap" ] && echo true || echo false )
 }
 TESTCONFIG
