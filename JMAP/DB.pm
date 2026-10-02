@@ -557,6 +557,54 @@ sub _validate_email_create {
     }
   }
 
+  # RFC 8621 S4.6: a body part "may specify a partId OR a blobId, but not
+  # both"; a partId "MUST be present in the bodyValues property"; and charset
+  # "MUST be omitted if a partId is given" (it comes from the bodyValues).
+  my $bodyValues = ref $item->{bodyValues} eq 'HASH' ? $item->{bodyValues} : {};
+  my $check_part = sub {
+    my ($part, $path) = @_;
+    return unless ref $part eq 'HASH' && exists $part->{partId};
+    if (exists $part->{blobId}) {
+      push @bad, "$path/partId", "$path/blobId";
+    }
+    elsif (!defined $part->{partId} || !exists $bodyValues->{$part->{partId}}) {
+      push @bad, "$path/partId";
+    }
+    push @bad, "$path/charset" if exists $part->{charset};
+  };
+  for my $list (qw(textBody htmlBody attachments)) {
+    next unless ref $item->{$list} eq 'ARRAY';
+    my $i = 0;
+    $check_part->($_, "$list/" . $i++) for @{$item->{$list}};
+  }
+  if (ref $item->{bodyStructure} eq 'HASH') {
+    my @parts = (['bodyStructure', $item->{bodyStructure}]);
+    while (my $entry = shift @parts) {
+      my ($path, $part) = @$entry;
+      next unless ref $part eq 'HASH';
+      $check_part->($part, $path);
+      if (ref $part->{subParts} eq 'ARRAY') {
+        my $i = 0;
+        push @parts, ["$path/subParts/" . $i++, $_] for @{$part->{subParts}};
+      }
+    }
+
+    # RFC 8621 S4.6: "the bodyStructure EmailBodyPart MUST NOT contain a
+    # property representing a header field that is already defined on the
+    # Email object" -- its header fields ARE the message's header fields.
+    my %on_email;
+    for my $key (keys %$item) {
+      if ($key =~ /^header:([^:]+)/) { $on_email{lc $1} = 1 }
+    }
+    for my $hname (keys %header_convenience) {
+      $on_email{$hname} = 1 if exists $item->{ $header_convenience{$hname} };
+    }
+    for my $key (sort keys %{$item->{bodyStructure}}) {
+      next unless $key =~ /^header:([^:]+)/;
+      push @bad, "bodyStructure/$key" if $on_email{lc $1};
+    }
+  }
+
   return @bad;
 }
 
