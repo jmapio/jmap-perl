@@ -42,7 +42,8 @@ sub imap_account_capabilities {
     },
     'urn:ietf:params:jmap:principals' => {
       currentUserPrincipalId => 'me',
-    }) : ()),
+    },
+    'urn:ietf:params:jmap:principals:availability' => {}) : ()),
     ($conf->{carddavURL} ? ('urn:ietf:params:jmap:contacts' => {
       maxAddressBooksPerCard => 1,
       mayCreateAddressBook   => JSON::true,

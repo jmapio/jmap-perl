@@ -1355,6 +1355,7 @@ my %KNOWN_CAPABILITIES = map { $_ => 1 } qw(
   urn:ietf:params:jmap:calendars
   urn:ietf:params:jmap:contacts
   urn:ietf:params:jmap:principals
+  urn:ietf:params:jmap:principals:availability
 );
 
 sub do_session {
