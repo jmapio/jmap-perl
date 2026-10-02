@@ -42,7 +42,8 @@ Hard rules that are easy to violate:
 - `JMAP/DB.pm` — base DB class (SQLite schema, transactions, sync state, query snapshot cache).
   - `JMAP/ImapDB.pm` (← DB) — IMAP/CalDAV/CardDAV sync. `FastmailDB`, `GmailDB`, `AOLDB` extend it.
   - `JMAP/JmapDB.pm` — standalone, for JMAP passthrough backends.
-- `JMAP/Dispatch.pm` — pure, unit-testable dispatch core: `check_accounts` (a missing
+- `JMAP/Dispatch.pm` — pure, unit-testable dispatch core: the method → capability table,
+  `check_accounts` (a missing
   `accountId` is `invalidArguments`, one outside the session is `accountNotFound` — the
   proxy never defaults it), `group_batches` (order-preserving same-upstream batching) and
   `resolve_pointer` (JSON Pointer with JMAP `*` semantics).
@@ -185,6 +186,16 @@ six `foreign-account.t`) where Cyrus accepts a missing accountId, accepts a fore
 `Quota/get` in `Preferences.pm` returning `used => 1, total => 2`, and a
 `Principal/get` in `Calendar.pm`), and only a redefinition warning gave it away.
 `grep -h '^sub api_' JMAP/API/*.pm | sort | uniq -d` must stay empty.
+
+**Every method is labelled with the capability that selects it.** `JMAP::Dispatch`
+holds the method → capability table (`method_capabilities`,
+`method_capability_missing`); `handle_request` answers `unknownMethod` for a
+method whose capability the request's `using` does not list, so a request can
+be filtered before anything in it runs. Adding an `api_*` sub means adding it
+to the table under the specification that defines it (RFC 8621 puts
+`Identity/*` under `submission`, RFC 9404 puts `Blob/copy` under `core`, the
+blobext draft lets `Blob/get` and `Blob/lookup` run under `blob` or `blob2`).
+`t/dispatch-method-capability.t` fails on any method left out.
 
 ## Specs
 

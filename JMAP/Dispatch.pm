@@ -16,6 +16,100 @@ my %COPY_METHODS = map { $_ => 1 } qw(
 sub is_copy_method { return $COPY_METHODS{ $_[0] // '' } ? 1 : 0 }
 sub copy_methods   { return sort keys %COPY_METHODS }
 
+# Which capability selects each method. RFC 8620 §3.3: a request names the
+# specifications it uses in "using"; a method only exists for a request that
+# lists the capability defining it (RFC 9404 §4: methods are "selected by" a
+# capability). A method whose capability is absent is answered unknownMethod,
+# the same reply a server without that extension would give, which lets a
+# request be filtered before any of it is run.
+#
+# Values are the alternatives: any one listed capability suffices. Every api_
+# method in JMAP/API/*.pm MUST appear here (t/dispatch-method-capability.t
+# checks), so adding a method means deciding which specification defines it.
+my %METHOD_CAPABILITIES;
+{
+  my %by_capability = (
+    # RFC 8620
+    'urn:ietf:params:jmap:core' => [qw(
+      Core/echo Blob/copy
+      PushSubscription/get PushSubscription/set PushSubscription/changes
+      ClientPreferences/get ClientPreferences/set
+      UserPreferences/get UserPreferences/set
+    )],
+    # RFC 8621 §2-5
+    'urn:ietf:params:jmap:mail' => [qw(
+      Mailbox/get Mailbox/changes Mailbox/query Mailbox/queryChanges Mailbox/set
+      Thread/get Thread/changes
+      Email/get Email/changes Email/query Email/queryChanges Email/set
+      Email/copy Email/import Email/parse
+      SearchSnippet/get
+    )],
+    # RFC 8621 §6-7: Identity and EmailSubmission share the submission capability
+    'urn:ietf:params:jmap:submission' => [qw(
+      Identity/get Identity/changes Identity/set
+      EmailSubmission/get EmailSubmission/changes EmailSubmission/query
+      EmailSubmission/queryChanges EmailSubmission/set
+    )],
+    # RFC 8621 §8
+    'urn:ietf:params:jmap:vacationresponse' => [qw(VacationResponse/get VacationResponse/set)],
+    # RFC 9007
+    'urn:ietf:params:jmap:mdn' => [qw(MDN/send MDN/parse)],
+    # RFC 9425
+    'urn:ietf:params:jmap:quota' => [qw(Quota/get Quota/changes Quota/query Quota/queryChanges)],
+    # RFC 9670
+    'urn:ietf:params:jmap:principals' => [qw(
+      Principal/get Principal/changes Principal/query Principal/queryChanges Principal/set
+    )],
+    # draft-ietf-jmap-calendars §1.5.2
+    'urn:ietf:params:jmap:principals:availability' => [qw(Principal/getAvailability)],
+    # draft-ietf-jmap-calendars; Calendar/refreshSynced and CalendarPreferences
+    # are proxy extensions to the same data
+    'urn:ietf:params:jmap:calendars' => [qw(
+      Calendar/get Calendar/changes Calendar/set Calendar/refreshSynced
+      CalendarEvent/get CalendarEvent/changes CalendarEvent/query
+      CalendarEvent/queryChanges CalendarEvent/set CalendarEvent/copy
+      ParticipantIdentity/get ParticipantIdentity/changes ParticipantIdentity/set
+      CalendarPreferences/get CalendarPreferences/set
+    )],
+    'urn:ietf:params:jmap:calendars:parse' => [qw(CalendarEvent/parse)],
+    # RFC 9610; Contact, ContactGroup and Addressbook are the pre-RFC forms of
+    # the same data the proxy still answers
+    'urn:ietf:params:jmap:contacts' => [qw(
+      AddressBook/get AddressBook/changes AddressBook/set
+      ContactCard/get ContactCard/changes ContactCard/query
+      ContactCard/queryChanges ContactCard/set ContactCard/copy
+      Addressbook/get Addressbook/changes
+      Contact/get Contact/changes Contact/query Contact/set
+      ContactGroup/get ContactGroup/changes ContactGroup/set
+    )],
+    # draft-ietf-jmap-filenode
+    'urn:ietf:params:jmap:filenode' => [qw(StorageNode/get StorageNode/query)],
+    # RFC 9404
+    'urn:ietf:params:jmap:blob' => [qw(Blob/upload Blob/get Blob/lookup)],
+    # draft-ietf-jmap-blobext supersedes RFC 9404: Blob/get and Blob/lookup are
+    # selected by either capability, Blob/set and Blob/convert only by blob2
+    'urn:ietf:params:jmap:blob2' => [qw(Blob/set Blob/convert Blob/get Blob/lookup)],
+  );
+  for my $cap (sort keys %by_capability) {
+    push @{ $METHOD_CAPABILITIES{$_} }, $cap for @{ $by_capability{$cap} };
+  }
+}
+
+# The capabilities that select $method (any one suffices); empty if unknown.
+sub method_capabilities { return @{ $METHOD_CAPABILITIES{ $_[0] // '' } || [] } }
+sub known_methods       { return sort keys %METHOD_CAPABILITIES }
+
+# undef when $method may run for a request whose "using" is the hashref
+# $using (capability => true); otherwise the arrayref of capabilities the
+# request would have needed to list. A method not in the table is left to
+# the handler, which answers unknownMethod for names it has no code for.
+sub method_capability_missing {
+    my ($method, $using) = @_;
+    my @caps = method_capabilities($method) or return undef;
+    return undef if grep { $using && $using->{$_} } @caps;
+    return \@caps;
+}
+
 # Core/echo is the only method whose arguments are not account-scoped -- it must
 # echo back exactly what it was given, so never demand an accountId of it.
 my %NO_ACCOUNT_METHOD = ('Core/echo' => 1);

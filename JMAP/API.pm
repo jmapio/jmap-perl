@@ -221,6 +221,8 @@ sub _validate_args {
   for my $param (keys %$schema) {
     my $type = $schema->{$param};
     next if $type =~ /[\?!]$/ && !exists $args->{$param};
+    # An optional argument given as null means "not given" (its type is X|null).
+    next if $type =~ /\?$/ && !defined $args->{$param};
     if (exists $args->{$param}) {
       push @bad, $param unless _validate_type($args->{$param}, $type);
     }
@@ -341,6 +343,10 @@ sub handle_request {
     }
   }
 
+  # Methods defined by an extension are only available when the request lists
+  # the extension's capability in "using" (RFC 8620 S3.3); Blob/* check this.
+  $Self->{using} = { map { $_ => 1 } @{ ref $request->{using} eq 'ARRAY' ? $request->{using} : [] } };
+
   my $methods = $request->{methodCalls};
 
   foreach my $item (@$methods) {
@@ -351,6 +357,15 @@ sub handle_request {
     $can =~ s{/}{_};
     my $FuncRef = $Self->can("api_$can");
     my $logbit = '';
+    # A method only exists for a request that lists the capability defining it.
+    if ($FuncRef and my $caps = JMAP::Dispatch::method_capability_missing($command, $Self->{using})) {
+      $Self->push_results($tag, ['error', {
+        type        => 'unknownMethod',
+        description => "Method $command requires capability " . join(' or ', @$caps)
+                     . ' which is not present in the "using" property.',
+      }]);
+      next;
+    }
     if ($FuncRef) {
       my ($myargs, $error) = $Self->resolve_args($args);
       if ($myargs) {
