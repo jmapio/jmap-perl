@@ -1613,7 +1613,9 @@ sub _do_jmap_request {
       $stat{jmap_method_errors} += grep { $_->[0] eq 'error' } @flat;
       my $result = {
         methodResponses => \@flat,
-        (%created_ids ? (createdIds => \%created_ids) : ()),
+        # RFC 8620 S3.4: createdIds is "only returned if given in the request",
+        # and then holds every id the client passed plus the ones created here.
+        (ref $data->{createdIds} eq 'HASH' ? (createdIds => \%created_ids) : ()),
         sessionState    => _compute_session_state($accountid),
       };
       my $body = $json->encode($result);

@@ -449,7 +449,10 @@ sub handle_request {
   }
 
   # Build createdIds: only the IDs that were set during this request
-  # (strip the leading '#' that we store internally).
+  # (strip the leading '#' that we store internally). This is the parent<->
+  # worker protocol: the parent merges them into its own map and applies
+  # RFC 8620 S3.4 (createdIds is returned to the client only when the request
+  # carried one, then complete with the client's own entries).
   my %created_ids;
   for my $k (keys %{$Self->{idmap}}) {
     next unless $k =~ /^#(.+)$/;
