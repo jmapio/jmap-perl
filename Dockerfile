@@ -28,6 +28,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates           \
     libcryptx-perl            \
     sqlite3                   \
+    libpng-dev libjpeg62-turbo-dev libgif-dev libwebp-dev \
+    liblzma-dev libzstd-dev   \
     && rm -rf /var/lib/apt/lists/*
 
 # CPAN modules not in Debian
@@ -57,6 +59,8 @@ RUN cpanm --notest \
     URI                             \
     EV                              \
     Crypt::JWT                      \
+    Imager Imager::File::PNG Imager::File::JPEG Imager::File::GIF Imager::File::WEBP \
+    IO::Compress::Xz IO::Compress::Zstd Image::ExifTool \
     && rm -rf /root/.cpanm
 
 COPY . /opt/jmap-perl

@@ -325,6 +325,10 @@ Tests in JMAP-TestSuite cover all four methods with pool_account_pair support.
 - [x] `subParts`: structural recursion preserved for `bodyStructure`; leaf parts return `[]` when explicitly requested
 - [x] `EmailSubmission/query` filter `identityIds`: schema v9 adds `identity` column to
       `jsubmission`; saved on create; `_submission_match` predicate fixed (was broken latent bug)
+- [x] `Email/set` create rejects what RFC 8621 §4.6 says it MUST: a part with both `partId`
+      and `blobId`, a `partId` missing from `bodyValues`, `charset` with a `partId`, and a
+      top-level `bodyStructure` header already defined on the Email. A `size` given with a
+      `blobId` is ignored, as the RFC says (the suite used to demand a rejection there).
 - [x] `urn:ietf:params:jmap:vacationresponse` advertised: `VacationResponse/get|set` store the
       singleton in `juserprefs`. **The backend does not send the auto-reply**: nothing pushes it
       to the IMAP server's Sieve, so for now this is JMAP-visible state only. TODO: ManageSieve
@@ -426,6 +430,28 @@ Tests in JMAP-TestSuite cover all four methods with pool_account_pair support.
 - [x] `ContactCard/query` `anchor`/`anchorOffset` not implemented
 - [x] `ContactCard/set` update `addressBookIds`: now issues CardDAV MOVE to the new collection and updates `icards.iaddressbookid` + `jcontacts.jaddressbookid`
 - [x] Multiple address books per card / multiple calendars per event: both specs define `maxAddressBooksPerCard` / `maxCalendarsPerEvent` capability fields for exactly this. We now advertise `1` for both and return `invalidProperties` if a client sends >1 truthy entry. True multi-membership would require junction tables + DAV COPY semantics (copies diverge independently — unlike IMAP COPY which shares the blob).
+
+---
+
+### RFC 9404 and draft-ietf-jmap-blobext — Blob extensions ✅
+
+IMAP-backed accounts advertise `urn:ietf:params:jmap:blob` and
+`urn:ietf:params:jmap:blob2`; passthrough accounts forward both to the upstream
+and advertise only what it does. Implemented in `JMAP/API/Blob.pm` over the pure
+`JMAP/BlobConvert.pm` (unit tests in `t/blob-convert.t`; suite tests under
+`t/Blob/` in JMAP-TestSuite, which also run against Cyrus and Stalwart).
+
+| Method | Capability | Notes |
+|--------|------------|-------|
+| `Blob/upload` | blob | DataSourceObjects (`data:asText`, `data:asBase64`, `blobId`+range), `#cid` references within the call, `createdIds` entry per blob |
+| `Blob/get` | blob or blob2 | `data`, `data:asText`, `data:asBase64`, `size`, `digest:{sha-256,sha,sha-512,md5}`, `offset`/`length`, `isTruncated`, `isEncodingProblem`; under blob2 also `chunks` (one chunk: blobs are stored whole) and `imageData` (Image::Size, plus EXIF via Image::ExifTool when installed) |
+| `Blob/lookup` | blob or blob2 | type names `Email`, `Thread`, `Mailbox` for `m-` blobs; `unknownDataType` otherwise |
+| `Blob/set` | blob2 | create (as upload, plus `size`/`position`/`digest:*` checks on sources), update = touch `expires` (`f-` blobs get another week), destroy (`f-` only; a message's blob is `blobHasReference`) |
+| `Blob/convert` | blob2 | `archive`/`extract` zip and tar, `compress`/`decompress` gzip, bzip2, plus xz and zstd when `IO::Compress::Xz`/`Zstd` load, `delta`/`patch` `text/x-diff`, `imageConvert` when Imager and its format plugins load; dependency order between creations, cycles rejected, `isIncomplete` for partial extraction |
+
+Not done: `chunkSize` (blobs are not stored chunked), per-account `uploadUrl`
+(null; the session one serves), `noPersist` (accepted, blob persisted anyway),
+rdiff/bsdiff deltas, cpio archives, deferred conversion.
 
 ---
 

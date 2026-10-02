@@ -6,6 +6,7 @@ use warnings;
 package JMAP::Capabilities;
 
 use JSON;
+require JMAP::API::Blob;   # blob_account_capabilities(), no DB needed
 
 use Exporter 'import';
 our @EXPORT_OK = qw(imap_account_capabilities);
@@ -31,6 +32,8 @@ sub imap_account_capabilities {
     },
     'urn:ietf:params:jmap:submission' => { maxDelayedSend => 0 },
     'urn:ietf:params:jmap:vacationresponse' => {},
+    # RFC 9404 and draft-ietf-jmap-blobext: what this build can do with blobs
+    JMAP::API::blob_account_capabilities(),
     'urn:ietf:params:jmap:mdn'   => {},
     'urn:ietf:params:jmap:quota' => {},
     ($conf->{caldavURL} ? ('urn:ietf:params:jmap:calendars' => {

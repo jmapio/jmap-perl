@@ -50,7 +50,9 @@ Hard rules that are easy to violate:
   No I/O, no DB — keep it that way; `t/dispatch-*.t` covers it.
 - `JMAP/API.pm` — JMAP request handler; dispatches to per-datatype method modules in
   `JMAP/API/` (`Email`, `Mailbox`, `Thread`, `Calendar`, `Contact`, `Submission`,
-  `StorageNode`, `MDN`, `Quota`, `Preferences`).
+  `StorageNode`, `MDN`, `Quota`, `Preferences`, `Blob`). `JMAP/BlobConvert.pm` is the pure
+  engine behind the blob extensions (RFC 9404 and the blobext draft): UTF-8 checks, digests,
+  archive/compress/delta/image recipes, with runtime detection of the optional modules.
 - `JMAP/Sync/` — backend sync drivers (`Standard`, `Gmail`, `Fastmail`, `AOL`, `Common`).
 - `JMAP/OAuth/` — OAuth2 signup (`Google`, `Fastmail`, `OIDC`, `PACC`, `PKCE`).
 - `JMAP/CredentialStore.pm` — pluggable at-rest encryption for stored credentials.

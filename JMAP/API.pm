@@ -68,6 +68,35 @@ my %PARAM_SCHEMA = (
     fetchAllBodyValues   => 'bool?',
     maxBodyValueBytes    => 'posint!',
   },
+  # RFC 9404 and draft-ietf-jmap-blobext (JMAP/API/Blob.pm)
+  'Blob/upload' => {
+    accountId          => 'string?',
+    create             => '{object}',
+  },
+  'Blob/set' => {
+    accountId          => 'string?',
+    ifInState          => 'string?',
+    create             => '{object}?',
+    update             => '{object}?',
+    destroy            => '[string]?',
+  },
+  'Blob/get' => {
+    accountId            => 'string?',
+    ids                  => '[string]',
+    properties           => '[string]?',
+    offset               => 'uint?',
+    length               => 'uint?',
+    dataSourceProperties => '[string]?',
+  },
+  'Blob/lookup' => {
+    accountId          => 'string?',
+    typeNames          => '[string]',
+    ids                => '[string]',
+  },
+  'Blob/convert' => {
+    accountId          => 'string?',
+    create             => '{object}',
+  },
   'Email/changes' => {
     accountId          => 'string?',
     sinceState         => 'string',
@@ -595,5 +624,6 @@ require JMAP::API::StorageNode;
 require JMAP::API::MDN;
 require JMAP::API::Quota;
 require JMAP::API::Principal;
+require JMAP::API::Blob;
 
 1;
