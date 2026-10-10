@@ -825,6 +825,13 @@ sub run_backend_worker {
         $db->sync_imap();
         $db->sync_calendars();
         $db->sync_addressbooks();
+        # A full WebDAV walk costs a request per collection, so the periodic
+        # tick only runs it every 300s (spec "Sync"); an explicit sync from
+        # the management API ({force => 1}) always does.
+        if ($db->can('sync_files')) {
+          if ($args->{force}) { eval { $db->sync_files(); 1 } or do { $db->reset(); warn "sync_files: $@" } }
+          else                { $db->sync_files_if_due(300) }
+        }
         eval { $write_json->(['synced', time()]) };
         return ['sync', $JSON::true];
       }
@@ -1398,6 +1405,7 @@ my %KNOWN_CAPABILITIES = map { $_ => 1 } qw(
   urn:ietf:params:jmap:principals:availability
   urn:ietf:params:jmap:blob
   urn:ietf:params:jmap:blob2
+  urn:ietf:params:jmap:filenode
 );
 
 sub do_session {
@@ -1446,13 +1454,14 @@ sub do_session {
             # degraded ($rec undef): empty caps, no primaries — core-only
           }
           else {
-            $acct_caps = imap_account_capabilities($a);
+            $acct_caps = imap_account_capabilities({ %$a, baseurl => $BASEURL });
             $top_caps{$_} //= {} for keys %$acct_caps;
             $primary_for{'urn:ietf:params:jmap:mail'}       //= $aid;
             $primary_for{'urn:ietf:params:jmap:submission'} //= $aid;
             $primary_for{'urn:ietf:params:jmap:vacationresponse'} //= $aid;
             $primary_for{'urn:ietf:params:jmap:calendars'}  //= $aid if $a->{caldavURL};
             $primary_for{'urn:ietf:params:jmap:contacts'}   //= $aid if $a->{carddavURL};
+            $primary_for{'urn:ietf:params:jmap:filenode'}   //= $aid if $a->{webdavURL};
           }
 
           $accounts->{$aid} = {
@@ -4206,7 +4215,7 @@ sub mgmt_api_accounts {
   if ($path =~ m{^/api/accounts/([^/]+)/sync$} && $method eq 'post') {
     my $aid = $1;
     $httpd->stop_request();
-    send_backend_request($aid, 'sync', {}, sub {
+    send_backend_request($aid, 'sync', { force => 1 }, sub {
       $req->respond([200, 'ok',
         { 'Content-Type' => 'application/json' },
         JSON::XS::encode_json({ synced => $aid })]);

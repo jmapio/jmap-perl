@@ -61,6 +61,7 @@ sub _imap_extra { () }
 
 sub _caldav_url  { $_[0]->{auth}{caldavURL} }
 sub _carddav_url { $_[0]->{auth}{carddavURL} }
+sub _webdav_url  { $_[0]->{auth}{webdavURL} }
 sub _dav_auth    { my $Self = shift; (password => $Self->{auth}{password}) }
 
 # --- Connection methods ---
@@ -135,6 +136,38 @@ sub connect_contacts {
   );
 
   return $Self->{contacts};
+}
+
+sub connect_files {
+  my $Self = shift;
+  my $url  = $Self->_webdav_url() or return;
+
+  if ($Self->{files}) {
+    $Self->{lastused} = time();
+    return $Self->{files};
+  }
+
+  require JMAP::Sync::WebDAVTalk;
+  $Self->{files} = JMAP::Sync::WebDAVTalk->new(
+    user => $Self->{auth}{username},
+    $Self->_dav_auth(),
+    url  => $url,
+  );
+  $Self->{lastused} = time();
+  return $Self->{files};
+}
+
+# FileNode backend commands: thin pass-throughs, so ImapDB never holds a
+# WebDAV connection itself (the same split as calendars and contacts).
+# PropFind becomes files_prop_find, SetAcl files_set_acl, and so on.
+for my $m (qw(PropFind SyncCollection Probe Raw Get Put Mkcol Move Copy Delete PropPatch GetAcl SetAcl)) {
+  my $cmd = 'files_' . lc($m =~ s/(?<!^)([A-Z])/_$1/gr);
+  no strict 'refs';
+  *$cmd = sub {
+    my $Self = shift;
+    my $dav = $Self->connect_files() or die "no WebDAV URL\n";
+    return $dav->$m(@_);
+  };
 }
 
 sub send_email {

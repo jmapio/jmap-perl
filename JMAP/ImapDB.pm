@@ -24,6 +24,8 @@ use Text::JSContact qw(vcard_to_jscontact jscontact_to_vcard);
 use Data::Dumper;
 use JMAP::Sync::Gmail;
 use JMAP::Sync::Standard;
+use JMAP::FileNode;
+use URI::Escape ();
 
 my $json = JSON::XS->new->utf8->canonical();
 
@@ -1067,6 +1069,196 @@ sub do_addressbooks {
   $Self->commit();
 }
 
+# --- FileNode over WebDAV (docs/superpowers/specs/2026-10-09-filenode-webdav-design.md) ---
+#
+# Every WebDAV request goes through backend_cmd, which refuses to run inside
+# a transaction: each function below reads what it needs, commits, talks to
+# the server, and only then opens the transaction that writes the mirror.
+
+# The FileNode root: the unescaped path of the account's webdavURL, or undef.
+sub files_root {
+  my $Self = shift;
+  $Self->begin();
+  my $url = $Self->dgetfield('iserver', {}, 'webdavURL');
+  $Self->commit();
+  return undef unless $url;
+  (my $path = $url) =~ s{^https?://[^/]+}{};
+  $path = URI::Escape::uri_unescape($path);
+  $path = eval { Encode::decode_utf8($path, Encode::FB_CROAK) } // $path;
+  $path =~ s{/+$}{};
+  return $path;
+}
+
+# What the server really supports (Probe), worked out once per account and
+# kept in iserver.webdavFeatures.  A probe that fails is not cached, so a
+# server that was briefly down is probed again next time.
+sub filenode_features {
+  my $Self = shift;
+  return $Self->{_filefeatures} if $Self->{_filefeatures};
+  $Self->begin();
+  my $json = $Self->dgetfield('iserver', {}, 'webdavFeatures');
+  $Self->commit();
+  my $f = $json ? eval { decode_json($json) } : undef;
+  unless (ref $f eq 'HASH') {
+    my $root = $Self->files_root() or return {};
+    $f = eval { $Self->backend_cmd('files_probe', $root) };
+    unless (ref $f eq 'HASH') {
+      warn "filenode_features: probe failed: $@";
+      return {};
+    }
+    $Self->begin();
+    $Self->dupdate('iserver', { webdavFeatures => JSON::XS::encode_json($f) });
+    $Self->commit();
+  }
+  return $Self->{_filefeatures} = $f;
+}
+
+# call in transaction
+sub filenode_rows {
+  my $Self = shift;
+  return $Self->dget('jfilenodes', { active => 1 });
+}
+
+# call in transaction
+sub filenode_row {
+  my ($Self, $nodeid) = @_;
+  return $Self->dgetone('jfilenodes', { nodeid => $nodeid, active => 1 });
+}
+
+# One mirror row's columns from a listing entry.  Client-set timestamps live
+# in dead properties where the server keeps them (spec "Properties without a
+# WebDAV home"); otherwise the live ones are used.
+sub _filenode_cols {
+  my ($e) = @_;
+  my $name = $e->{href} =~ m{([^/]+)$} ? $1 : $e->{href};
+  my $dir = $e->{isCollection};
+  return (
+    href        => $e->{href},
+    name        => $name,
+    nodetype    => $dir ? 'directory' : 'file',
+    etag        => $e->{etag},
+    ctag        => $e->{ctag},
+    size        => $dir ? undef : ($e->{size} // 0),
+    type        => $dir ? undef : ($e->{type} || 'application/octet-stream'),
+    created     => JMAP::FileNode::epoch($e->{dead}{created}) // $e->{created} // $e->{modified},
+    modified    => JMAP::FileNode::epoch($e->{dead}{modified}) // $e->{modified},
+    fileid      => $e->{fileid},
+    fingerprint => $e->{sha1},
+    privs       => defined $e->{privileges} ? join(' ', @{$e->{privileges}}) : undef,
+    (defined $e->{dead}{executable}   ? (executable   => $e->{dead}{executable} ? 1 : 0) : ()),
+    (defined $e->{dead}{isSubscribed} ? (isSubscribed => $e->{dead}{isSubscribed} ? 1 : 0) : ()),
+    (defined $e->{dead}{accessed}     ? (accessed     => JMAP::FileNode::epoch($e->{dead}{accessed})) : ()),
+  );
+}
+
+# Walk the whole tree, one collection at a time, with PROPFIND Depth 1 (spec
+# "Sync"): an unchanged collection ETag is never a reason to skip a subtree.
+# Only direct children of the collection asked about are taken, and each
+# collection is listed once, so a bogus listing cannot make the walk loop.
+sub _files_walk {
+  my ($Self, $root) = @_;
+  my ($rootentry) = grep { !$_->{missing} && $_->{href} eq $root }
+                    @{ $Self->backend_cmd('files_prop_find', "$root/", 0) };
+  $rootentry ||= { href => $root, dead => {} };
+  $rootentry->{isCollection} = 1;
+  my @listing = ($rootentry);
+  my %seen = ($root => 1);
+  my @todo = ($root);
+  while (defined(my $dir = shift @todo)) {
+    my $entries = $Self->backend_cmd('files_prop_find', "$dir/", 1);
+    for my $e (@$entries) {
+      next if $e->{missing};
+      next unless $e->{href} =~ m{^\Q$dir\E/[^/]+\z};
+      next if $e->{href} =~ m{/\.jmap-probe-[^/]*\z};   # filenode_features' scratch file
+      next if $seen{$e->{href}}++;
+      push @listing, $e;
+      push @todo, $e->{href} if $e->{isCollection};
+    }
+  }
+  return \@listing;
+}
+
+# One full sync of the WebDAV tree into jfilenodes.  Returns 1, or nothing
+# when the account has no webdavURL.
+sub sync_files {
+  my $Self = shift;
+  my $root = $Self->files_root() or return;
+  my $features = $Self->filenode_features();
+  my $listing = $Self->_files_walk($root);
+
+  $Self->begin();
+  my $mirror = $Self->filenode_rows();
+  my $plan = JMAP::FileNode::reconcile($mirror, $listing, $features);
+  my %id_by_href = map { $_->{href} => $_->{nodeid} } @$mirror;
+  delete $id_by_href{ $_->{href} } for @{$plan->{destroy}};
+  $id_by_href{ $_->[1]{href} } = $_->[0]{nodeid} for @{$plan->{update}};
+  $id_by_href{ $_->{href} } = $_->{nodeid} for @{$plan->{create}};
+  my $parent_of = sub {
+    my $href = shift;
+    return undef if $href eq $root;
+    (my $p = $href) =~ s{/[^/]+$}{};
+    return $id_by_href{$p};
+  };
+  my $now = time();
+  for my $e (@{$plan->{create}}) {
+    $Self->dmake('jfilenodes', {
+      executable => 0, isSubscribed => 1,
+      _filenode_cols($e),
+      nodeid => $e->{nodeid}, parentid => $parent_of->($e->{href}),
+      changed => $now,
+      role => ($e->{href} eq $root ? 'home' : undef),
+    });
+  }
+  my %privs_changed;
+  for my $u (@{$plan->{update}}) {
+    my ($row, $e) = @$u;
+    # Only what really differs: reconcile also counts fields the mirror
+    # stores normalised (a directory's type, a missing size).
+    my %cols = (parentid => $parent_of->($e->{href}), _filenode_cols($e));
+    my %diff = map { $_ => $cols{$_} } grep { ($row->{$_} // '') ne ($cols{$_} // '') } keys %cols;
+    next unless %diff;
+    # A node is only "changed" (new modseq, new "changed" time) when a
+    # FileNode property changes.  The href alone (an ancestor was renamed),
+    # a directory's ETag/ctag (Cyrus changes them whenever a child changes),
+    # fileid and fingerprint are the mirror's bookkeeping, not properties.
+    my @visible = grep {
+      !/^(?:href|ctag|fileid|fingerprint)\z/ && !($_ eq 'etag' && $cols{nodetype} eq 'directory')
+    } keys %diff;
+    if (@visible) {
+      $Self->ddirty('jfilenodes', { %diff, changed => $now }, { nodeid => $row->{nodeid} });
+    }
+    else {
+      $Self->dupdate('jfilenodes', \%diff, { nodeid => $row->{nodeid} });
+    }
+    $privs_changed{$row->{nodeid}} = 1 if exists $diff{privs};
+  }
+  # draft S5: a child's mayRename/mayDelete come from its parent's
+  # privileges, so the children of a node whose privileges changed are
+  # changed too.
+  for my $nodeid (sort keys %privs_changed) {
+    $Self->ddirty('jfilenodes', { changed => $now }, { parentid => $nodeid, active => 1 });
+  }
+  for my $row (@{$plan->{destroy}}) {
+    $Self->ddirty('jfilenodes', { active => 0, changed => $now }, { nodeid => $row->{nodeid} });
+  }
+  $Self->dupdate('iserver', { lastfilesync => $now });
+  $Self->commit();
+  return 1;
+}
+
+# Sync when the last one is older than $maxage seconds (spec "Sync": 60 on
+# demand from a FileNode method, 300 from the periodic sync).  Never dies.
+sub sync_files_if_due {
+  my ($Self, $maxage) = @_;
+  return unless $Self->files_root();
+  $Self->begin();
+  my $last = $Self->dgetfield('iserver', {}, 'lastfilesync') // 0;
+  $Self->commit();
+  return if time() - $last < $maxage;
+  eval { $Self->sync_files(); 1 } or do { $Self->reset(); warn "sync_files: $@" };
+}
+
+
 
 sub labels {
   my $Self = shift;
@@ -1152,8 +1344,8 @@ sub firstsync {
   # Know the account's calendars and address books from the start, so the
   # first /get reports what the server already has and a later /changes does
   # not present pre-existing collections as newly created.
-  for my $sync (qw(sync_calendars sync_addressbooks)) {
-    eval { $Self->$sync(); 1 } or warn "firstsync: $sync failed: $@";
+  for my $sync (qw(sync_calendars sync_addressbooks sync_files)) {
+    eval { $Self->$sync(); 1 } or do { $Self->reset(); warn "firstsync: $sync failed: $@" };
   }
 }
 

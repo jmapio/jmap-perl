@@ -7,6 +7,7 @@ package JMAP::Capabilities;
 
 use JSON;
 require JMAP::API::Blob;   # blob_account_capabilities(), no DB needed
+require JMAP::FileNode;   # %CAPS
 
 use Exporter 'import';
 our @EXPORT_OK = qw(imap_account_capabilities);
@@ -18,8 +19,18 @@ our $MAX_DELAYED_SEND = 30 * 86400;
 
 # The accountCapabilities for an IMAP-backed account, as it appears both in the
 # session resource (RFC 8620 S1.6.2) and in a Principal's "accounts" map
-# (RFC 9670 S2). $conf needs only caldavURL and carddavURL: the parent passes
-# the accounts.sqlite3 row, the per-account worker passes its iserver row.
+# (RFC 9670 S2). $conf needs only caldavURL, carddavURL and webdavURL (plus
+# baseurl for FileNode's webWriteUrlTemplate): the parent passes the account's
+# details, the per-account worker passes its iserver row.
+# The proxy's own base URL: what the parent passes, else BASEURL as
+# bin/jmap-proxy.pl works it out (a worker building a Principal has no
+# $conf->{baseurl}, and must advertise the same template as the session).
+sub _baseurl {
+  my ($conf) = @_;
+  my $base = $conf->{baseurl} || $ENV{BASEURL} || 'http://localhost:' . ($ENV{JMAP_PORT} || 9000);
+  return $base =~ s{/+\z}{}r;
+}
+
 sub imap_account_capabilities {
   my ($conf) = @_;
   $conf //= {};
@@ -67,6 +78,11 @@ sub imap_account_capabilities {
     ($conf->{carddavURL} ? ('urn:ietf:params:jmap:contacts' => {
       maxAddressBooksPerCard => 1,
       mayCreateAddressBook   => JSON::true,
+    }) : ()),
+    # draft-ietf-jmap-filenode S2: only for an account with a WebDAV home.
+    ($conf->{webdavURL} ? ('urn:ietf:params:jmap:filenode' => {
+      %JMAP::FileNode::CAPS,
+      webWriteUrlTemplate => _baseurl($conf) . '/filenode/{accountId}/{id}',
     }) : ()),
   };
 }

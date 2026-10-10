@@ -711,7 +711,7 @@ require JMAP::API::Thread;
 require JMAP::API::Calendar;
 require JMAP::API::Contact;
 require JMAP::API::Submission;
-require JMAP::API::StorageNode;
+require JMAP::API::FileNode;
 require JMAP::API::MDN;
 require JMAP::API::Quota;
 require JMAP::API::Principal;
