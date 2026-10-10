@@ -114,7 +114,9 @@ their **metadata only**: every method reads the mirror, every write goes to WebD
 - **Test stack**: `restart-test-proxy.sh clean` builds and runs `<CYRUS_IMAGE>-webdav`, a
   derived image with `webdav` in `httpmodules`; restarting the Cyrus container breaks its
   auth, so always rebuild with `clean`. Cyrus has no FileNode, so `t/FileNode/` has no
-  `--direct` baseline: every failure there is the proxy's.
+  `--direct` baseline: every failure there is the proxy's — except
+  `t/FileNode/set/zero-byte.t`, which fails because Cyrus cannot store an empty file (a
+  zero-length PUT stores the previous request's body; the proxy answers `serverFail`).
 
 ## Passthrough request dispatch (`_do_jmap_request`)
 

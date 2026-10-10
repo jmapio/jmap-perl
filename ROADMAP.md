@@ -491,6 +491,9 @@ Follow-ups:
     (`DAV:recognized-principal`)
   - DELETE of a collection with subcollections answers 204 but leaves them (and itself)
   - a dead-property PROPPATCH on a file answers 200 but stores nothing
+  - a zero-length PUT answers 201 but stores the connection's previous request body
+    (`dav_store_resource` treats a zero length as "use `strlen`"), and on a fresh connection
+    never answers: no zero-byte files (the proxy refuses the PUT rather than keep the garbage)
 
 ---
 
