@@ -2786,6 +2786,33 @@ sub update_filenodes {
     }
   }
 
+  # 5c. A MOVE must not change created or modified (draft S3.1: "The server
+  # does not automatically update this value"), but a server may reset
+  # its creationdate and getlastmodified on MOVE (Cyrus does, unless in the
+  # same second).  A moved node whose server values moved, and which the
+  # client has not set itself (now or before), gets its pre-move values
+  # pinned as client values (R4: the columns keep the server's).
+  for my $id (sort keys %moved) {
+    my $was = $byid{$id} or next;
+    $Self->begin();
+    my $row = $Self->filenode_row($id);
+    $Self->commit();
+    next unless $row;
+    my $dead = $deadof->($row);
+    my $p = $plan{$id} ? $plan{$id}{patch} : {};
+    my %pin;
+    for my $k (qw(created modified)) {
+      next if defined $dead->{$k} || exists $p->{$k};
+      my $old = $was->{$k} // ($k eq 'created' ? $was->{modified} : undef);
+      my $new = $row->{$k} // ($k eq 'created' ? $row->{modified} : undef);
+      next unless defined $old && ($new // '') ne $old;
+      $pin{$k} = JMAP::FileNode::utc($old);
+    }
+    next unless %pin;
+    $Self->_filenode_dead_set($row, \%pin)
+      or warn "update_filenodes: pinning @{[ sort keys %pin ]} of $row->{href} after its move failed\n";
+  }
+
   # 6. content, type and the client-set properties
   for my $id (sort keys %plan) {
     my ($uid, $p, $dead) = @{ $plan{$id} }{qw(uid patch dead)};

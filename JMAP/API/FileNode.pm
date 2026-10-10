@@ -289,21 +289,36 @@ sub api_FileNode_set {
   # changed from what the client sent -- a renamed name, a resolved
   # "#cid" parent, a rounded timestamp (RFC 8620 S5.3)
   $Self->begin();
-  my (%createdOut, %byid);
-  for my $cid (sort keys %$created) {
-    my $row = $Self->{db}->filenode_row($created->{$cid}{nodeid}) or next;
-    $byid{$row->{nodeid}} = $row;
-    $byid{$row->{parentid}} //= $Self->{db}->filenode_row($row->{parentid}) if defined $row->{parentid};
-    $createdOut{$cid} = $row;
-  }
+  my %after = map { $_->{nodeid} => $_ } @{ $Self->{db}->filenode_rows() };
+  my %createdOut = map { ($_ => $after{ $created->{$_}{nodeid} } // ()) } keys %$created;
   $user = $Self->{db}->get_user();
   my $newState = "$user->{jstateFileNode}";
   $Self->commit();
   for my $cid (keys %createdOut) {
-    my $full = $Self->_filenode_object($createdOut{$cid}, \%byid);
+    my $full = $Self->_filenode_object($createdOut{$cid}, \%after);
     my $sent = $args->{create}{$cid};
     $createdOut{$cid} = { map { ($_ => $full->{$_}) }
                           grep { $_ eq 'id' || !exists $sent->{$_} || !$same->($sent->{$_}, $full->{$_}) } keys %$full };
+  }
+  # updated: every property that now differs from before the call and was
+  # not set to that value by the patch (RFC 8620 S5.3) -- the blobId a
+  # server that changes ETags on MOVE gave a renamed file, the myRights a
+  # move into a shared directory brought, a size the server rounded, the
+  # new "changed" -- on top of what update_filenodes reported itself
+  for my $uid (keys %update) {
+    my $id = $Self->idmap($uid) // $uid;
+    next unless exists $updated->{$id} && $before{$id} && $after{$id};
+    my $sent = $args->{update}{$uid};
+    my $pre  = $Self->_filenode_object($before{$id}, \%before);
+    my $post = $Self->_filenode_object($after{$id}, \%after);
+    my %out = %{ $updated->{$id} || {} };
+    for my $k (grep { $_ ne 'id' } keys %$post) {
+      next if $same->($pre->{$k}, $post->{$k});
+      next if exists $sent->{$k} && $same->($sent->{$k}, $post->{$k});
+      next if !exists $sent->{$k} && grep { m{^\Q$k\E/} } keys %$sent;   # patched below it: as update_filenodes judged
+      $out{$k} = $post->{$k};
+    }
+    $updated->{$id} = %out ? \%out : undef;
   }
   my %d;
   return ['FileNode/set', {

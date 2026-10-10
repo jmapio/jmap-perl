@@ -300,19 +300,37 @@ Operations:
   PROPPATCH for dead properties.
 - Rename or move: MOVE with `Overwrite: F`. A destination that is the node
   itself or one of its descendants is `invalidProperties` on `parentId`.
+  A server may reset `creationdate` and `getlastmodified` on MOVE (Cyrus
+  does, unless in the same second); `created` and `modified` must not
+  change (draft S3.1), so when the re-listing after the move shows the
+  server's values moved and the client has not set them, the pre-move
+  values are pinned as client values (dead properties / the mirror's
+  `deadprops`; the columns keep the server's, per "Server values go in
+  columns").
 - Content change: PUT with `If-Match: <etag in the mirror>`. A 412 means the
   file changed underneath us: the update fails, and the next sync updates
   the mirror.
-- `onExists`: `replace` overwrites (`Overwrite: T`) after the
-  `nodeHasChildren` check; `rename` tries `name[2].ext`, `name[3].ext`, …;
-  `newest` compares `modified` against the mirror; `unchanged` is
-  `invalidArguments`.
-- Destroy: DELETE. A directory with children is `nodeHasChildren` unless
-  `onDestroyRemoveChildren` is set, checked against the mirror, which counts
-  children being destroyed in the same call.
+- `onExists`: `replace` of a file by a file is one MOVE with `Overwrite: T`
+  -- but only after re-listing the destination and finding the holder still
+  the file the mirror knew, with the same ETag, since `Overwrite: T` would
+  delete a collection with all its members (RFC 4918 S9.9.3); anything else
+  goes through the destroy path (server-side member check, `If-Match`), or
+  a plain MOVE if the name is free now. A replacing create PUTs with
+  `If-Match`; 412 is `alreadyExists` naming what holds the name now.
+  `rename` tries `name[2].ext`, `name[3].ext`, …; `newest` compares
+  `modified` against the mirror; `unchanged` is `invalidArguments`.
+- Destroy: a file is DELETEd with `If-Match: <etag in the mirror>` (none for
+  a weak ETag, which could never match); 412 is `serverFail` ("changed on
+  the server") and the parent is re-listed. A directory with children is
+  `nodeHasChildren` unless `onDestroyRemoveChildren` is set, checked against
+  the server's own listing, which counts children being destroyed in the
+  same call.
 
-After each operation the mirror row is updated from the response (`ETag`,
-`Location`) and the parent collection is re-listed.
+After each operation the parent collection is re-listed and the mirror
+rows follow it. `updated` then carries every property whose value differs
+from before the call and was not set to that value by the patch (RFC 8620
+S5.3): on Cyrus a renamed file's new `blobId` (its ETag changes on MOVE),
+the `myRights` a move into a shared directory brings, `changed`.
 
 WebDAV has no transactions, so each create, update and destroy succeeds or
 fails on its own and is reported that way. If an item fails partway (the

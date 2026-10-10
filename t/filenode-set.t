@@ -16,7 +16,7 @@ require JMAP::API;
 
 my $R = '/dav/drive/user/u';
 my $T0 = 1_700_000_000;
-my (%tree, @log, %fail, $put_garbles, $bogus_delete, $deadprops_stored, $move_leaves_shell, $ci_server);
+my (%tree, @log, %fail, $put_garbles, $bogus_delete, $deadprops_stored, $move_leaves_shell, $ci_server, $move_resets_mtime);
 # a case-insensitive server: a path finds the collection whatever its case
 sub ci { my $d = shift; return $d unless $ci_server && !$tree{$d}; my ($k) = grep { lc $_ eq lc $d } keys %tree; return $k // $d }
 # sharing: each collection's own (non-inherited) ACEs, the principals the
@@ -144,6 +144,7 @@ no warnings qw(redefine once);
       my $n = $to . substr($h, length $dir);
       $tree{$n} = { %{ delete $tree{$h} }, href => $n };
       $tree{$n}{etag} = 'm' . ++$etag unless $tree{$n}{isCollection};   # Cyrus: a file's ETag changes on MOVE
+      $tree{$n}{modified} = $T0 + 10_000 + $etag if $move_resets_mtime;    # Cyrus: and so does getlastmodified
       $acl{$n} = delete $acl{$h} if exists $acl{$h};                    # a collection keeps its own ACL
     }
     # Cyrus: a collection that held collections leaves an empty one behind
@@ -456,7 +457,11 @@ ok(!grep({ !$id{$_} } keys %id), 'update fixture created') or diag explain $set;
 @log = ();
 $set = set(update => { $id{a} => { name => 'b.txt' }, $id{b} => { name => 'a.txt' } })->[1];
 is_deeply([ sort keys %{ $set->{updated} || {} } ], [ sort @id{qw(a b)} ], 'swap two names') or diag explain $set;
-is($set->{updated}{$id{a}}, undef, 'nothing to report beyond what was asked');
+# the fake, like Cyrus, gives a moved file a new ETag: the blobId changed in
+# a way the client did not ask for, so it is reported (RFC 8620 S5.3)
+is_deeply([ sort grep { $_ ne 'changed' } keys %{ $set->{updated}{$id{a}} || {} } ], ['blobId'], 'the new blobId is reported, and nothing else')
+  or diag explain $set;
+is($set->{updated}{$id{a}}{blobId}, get($id{a})->{$id{a}}{blobId}, 'and it is the one the node has now');
 my @moves = grep { /files_move/ } @log;
 is(scalar @moves, 3, 'three MOVEs');
 like($moves[2], qr{/\.~tmp~}, 'one node was parked under a temporary name, and moved on last') or diag explain \@moves;
@@ -1407,6 +1412,42 @@ sub files_under { my $p = shift; return [ sort grep { m{^\Q$p\E/} && !$tree{$_}{
   ok(!(grep { /^files_delete/ } @log), 'and nothing was deleted') or diag explain \@log;
   $ci_server = 0;
   features();
+}
+
+# --- a MOVE that resets the server's timestamps (Cyrus): created and
+# modified stay what they were (draft S3.1: "The server does not
+# automatically update this value"), pinned as client values (R4)
+{
+  features();
+  my $x = mk(P => { parentId => $home, name => 'TS' }, f => { parentId => '#P', name => 'f.txt', blobId => 'f-x' },
+             d => { parentId => '#P', name => 'd' });
+  my $f0 = get($x->{f})->{$x->{f}};
+  my $d0 = get($x->{d})->{$x->{d}};
+  $move_resets_mtime = 1;
+  $set = set(update => { $x->{f} => { name => 'g.txt' }, $x->{d} => { name => 'd2' } })->[1];
+  my $f1 = get($x->{f})->{$x->{f}};
+  is($f1->{modified}, $f0->{modified}, 'modified is unchanged by a rename') or diag explain [ $f0, $f1 ];
+  is($f1->{created}, $f0->{created}, 'and so is created');
+  is(rows()->{"$R/TS/g.txt"}{modified}, $tree{"$R/TS/g.txt"}{modified}, 'the column holds what the server says (R4)');
+  is($set->{updated}{$x->{f}}{blobId}, $f1->{blobId}, 'updated carries the new blobId');
+  ok(!exists $set->{updated}{$x->{f}}{modified} && !exists $set->{updated}{$x->{f}}{created}, 'and no timestamp: none changed') or diag explain $set;
+  is(get($x->{d})->{$x->{d}}{modified}, $d0->{modified}, 'a directory\'s modified too');
+  $db->sync_files();
+  is(get($x->{f})->{$x->{f}}{modified}, $f0->{modified}, 'a full sync keeps the pinned value');
+  # a modified the client sets in the same call is the value
+  $set = set(update => { $x->{f} => { name => 'h.txt', modified => '2021-01-01T00:00:00Z' } })->[1];
+  is(get($x->{f})->{$x->{f}}{modified}, '2021-01-01T00:00:00Z', 'a modified set in the same update wins');
+  $move_resets_mtime = 0;
+  # a server that keeps its timestamps across MOVE: nothing to pin, nothing written
+  features(deadProps => 1);
+  my $y = mk(k => { parentId => $x->{P}, name => 'k.txt', blobId => 'f-x' });
+  my $k0 = get($y->{k})->{$y->{k}};
+  @log = ();
+  set(update => { $y->{k} => { name => 'k2.txt' } });
+  ok(!grep({ /^files_prop_patch/ } @log), 'a server that keeps timestamps across MOVE: nothing pinned') or diag explain \@log;
+  is(get($y->{k})->{$y->{k}}{modified}, $k0->{modified}, 'and modified is still the server\'s');
+  features();
+  set(onDestroyRemoveChildren => JSON::true, destroy => [ $x->{P} ]);
 }
 
 # --- a stale mirror and onExists replace (RFC 4918 S9.9.3: Overwrite: T

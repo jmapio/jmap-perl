@@ -307,7 +307,29 @@ my ($u0) = @{ jmap(['FileNode/set', { create => {
 } }]) };
 my %id = map { $_ => $u0->{created}{$_}{id} } qw(P Q a b);
 
-my ($u) = @{ jmap(['FileNode/set', { update => { $id{a} => { name => 'b.txt' }, $id{b} => { name => 'a.txt' } } }]) };
+# a rename: Cyrus gives the file a new ETag and resets its timestamps (unless
+# in the same second, hence the sleep).  The blobId changed in a way the
+# client did not ask for, so updated carries it (RFC 8620 S5.3); created and
+# modified do not change (draft S3.1), pinned in the mirror, and a full sync
+# keeps them
+my $a0 = get1($id{a});
+sleep 2;
+my ($u) = @{ jmap(['FileNode/set', { update => { $id{a} => { name => 'a-renamed.txt' } } }]) };
+ok(exists $u->{updated}{$id{a}}, 'rename a file') or diag explain $u;
+my $a1 = get1($id{a});
+isnt($a1->{blobId}, $a0->{blobId}, 'Cyrus gave it a new ETag: a new blobId');
+is($u->{updated}{$id{a}}{blobId}, $a1->{blobId}, 'updated carries the new blobId') or diag explain $u;
+is($a1->{modified}, $a0->{modified}, 'modified is unchanged by the rename');
+is($a1->{created}, $a0->{created}, 'and so is created');
+force_sync();
+my $a2 = get1($id{a});
+is($a2->{modified}, $a0->{modified}, 'a full sync keeps modified');
+is($a2->{created}, $a0->{created}, 'and created');
+is($a2->{blobId}, $a1->{blobId}, 'and the blobId');
+($u) = @{ jmap(['FileNode/set', { update => { $id{a} => { name => 'a.txt' } } }]) };
+ok(exists $u->{updated}{$id{a}}, 'and back') or diag explain $u;
+
+($u) = @{ jmap(['FileNode/set', { update => { $id{a} => { name => 'b.txt' }, $id{b} => { name => 'a.txt' } } }]) };
 ok(exists $u->{updated}{$id{a}} && exists $u->{updated}{$id{b}}, 'swap two names in one /set') or diag explain $u;
 my ($ga) = @{ jmap(['FileNode/get', { ids => [ $id{a} ], properties => ['name'] }]) };
 is($ga->{list}[0]{name}, 'b.txt', 'a is now b.txt, same id');
