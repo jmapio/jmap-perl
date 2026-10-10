@@ -2227,7 +2227,7 @@ sub create_filenodes {
     }
     if (my $bad = _filenode_put_mismatch($row, $content)) {
       # never leave a node whose content is not what the client gave
-      $Self->backend_cmd('files_delete', $href);
+      eval { $Self->backend_cmd('files_delete', $href); 1 } or warn "create_filenodes: DELETE $href: $@";
       eval { $Self->_files_refresh_dir($parent->{href}) };
       $notcreated{$cid} = { type => 'serverFail', description => $bad };
       next;
