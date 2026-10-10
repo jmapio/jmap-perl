@@ -31,6 +31,17 @@ sub _baseurl {
   return $base =~ s{/+\z}{}r;
 }
 
+# FileNode needs a WebDAV home that a Probe has worked on: the parent's
+# account details carry that as "filenode"; an iserver row (a worker) has
+# webdavFeatures, which only a successful Probe stores.
+sub filenode_ok {
+  my ($conf) = @_;
+  return 0 unless $conf && $conf->{webdavURL};
+  return $conf->{filenode} ? 1 : 0 if exists $conf->{filenode};
+  my $f = $conf->{webdavFeatures} ? eval { decode_json($conf->{webdavFeatures}) } : undef;
+  return (ref $f eq 'HASH' && %$f) ? 1 : 0;
+}
+
 sub imap_account_capabilities {
   my ($conf) = @_;
   $conf //= {};
@@ -79,8 +90,9 @@ sub imap_account_capabilities {
       maxAddressBooksPerCard => 1,
       mayCreateAddressBook   => JSON::true,
     }) : ()),
-    # draft-ietf-jmap-filenode S2: only for an account with a WebDAV home.
-    ($conf->{webdavURL} ? ('urn:ietf:params:jmap:filenode' => {
+    # draft-ietf-jmap-filenode S2: only for an account with a WebDAV home
+    # that a Probe has worked on (a server with no WebDAV advertises nothing).
+    (filenode_ok($conf) ? ('urn:ietf:params:jmap:filenode' => {
       %JMAP::FileNode::CAPS,
       webWriteUrlTemplate => _baseurl($conf) . '/filenode/{accountId}/{id}',
     }) : ()),

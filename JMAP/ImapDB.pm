@@ -1115,11 +1115,21 @@ sub filenode_features {
 
 # The RFC 4331 quota on the files root, { used, available } in bytes, or
 # undef: no WebDAV, or a server that reports no quota (Probe found none).
+# When the PROPFIND fails, the last value read is given again (with a
+# warning), so the files Quota does not flap destroyed/created across
+# Quota/changes; with none read yet, it dies.
 sub files_quota {
   my $Self = shift;
   my $root = $Self->files_root() or return undef;
   return undef unless $Self->filenode_features()->{quota};
-  return $Self->backend_cmd('files_quota', "$root/");
+  my $q = eval { $Self->backend_cmd('files_quota', "$root/") };
+  if (my $err = $@) {
+    die $err unless $Self->{_files_quota_last};
+    warn "files_quota: $err -- reusing the last value\n";
+    return $Self->{_files_quota_last};
+  }
+  $Self->{_files_quota_last} = $q;
+  return $q;
 }
 
 # The features filenode_features last loaded, without any I/O ({} if none).
@@ -2963,6 +2973,12 @@ sub firstsync {
   for my $sync (qw(sync_calendars sync_addressbooks)) {
     eval { $Self->$sync(); 1 } or do { $Self->reset(); warn "firstsync: $sync failed: $@" };
   }
+
+  # Probe the WebDAV server now (the walk itself is left to backfill): the
+  # session advertises FileNode only once a Probe has worked, and a client
+  # that signs up reads the session straight away.
+  eval { $Self->filenode_features(); 1 } or do { $Self->reset(); warn "firstsync: filenode_features failed: $@" }
+    if $Self->files_root();
 }
 
 sub _trimh {

@@ -1339,6 +1339,8 @@ sub _account_details_child {
     caldavURL  => $iserver->{caldavURL},
     carddavURL => $iserver->{carddavURL},
     webdavURL  => $iserver->{webdavURL},
+    # FileNode is advertised only once a Probe of the WebDAV server worked
+    filenode   => JMAP::Capabilities::filenode_ok($iserver) ? 1 : 0,
     folders    => $folders,
     messages   => $messages,
   };
@@ -1486,7 +1488,7 @@ sub do_session {
             $primary_for{'urn:ietf:params:jmap:vacationresponse'} //= $aid;
             $primary_for{'urn:ietf:params:jmap:calendars'}  //= $aid if $a->{caldavURL};
             $primary_for{'urn:ietf:params:jmap:contacts'}   //= $aid if $a->{carddavURL};
-            $primary_for{'urn:ietf:params:jmap:filenode'}   //= $aid if $a->{webdavURL};
+            $primary_for{'urn:ietf:params:jmap:filenode'}   //= $aid if $acct_caps->{'urn:ietf:params:jmap:filenode'};
           }
 
           $accounts->{$aid} = {

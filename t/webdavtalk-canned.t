@@ -14,7 +14,7 @@ use JMAP::Sync::WebDAVTalk;
   sub Raw {
     my ($Self, $m, $p, $b, %h) = @_;
     push @{ $Self->{log} }, "$m $p";
-    return $Self->{script}->($m, $p, $b, %h);
+    return $Self->{script}->($m, $p, $b // '', %h);
   }
 }
 
@@ -46,6 +46,7 @@ sub mk {
     if ($m eq 'PROPFIND' && $b =~ /quota/) { return { status => 404, headers => {}, content => '' } }
     if ($m eq 'PROPFIND') {
       my $moved = $d->{log} && grep { /^MOVE/ } @{ $d->{log} };
+      return r207(ms(resp("$root/", '<D:resourcetype><D:collection/></D:resourcetype>'))) unless $d->{name};
       my $name = $moved ? "$d->{name}-moved" : $d->{name};
       my $etag = $moved ? ($o{moved_etag} // $o{etag}) : $o{etag};
       return r207(ms(resp($name, qq{<D:getetag>"$etag"</D:getetag>} . ($o{dead} ? '<J:probe>x</J:probe>' : ''))));
@@ -276,7 +277,7 @@ is(JMAP::Sync::WebDAVTalk::principal_base(undef, ['/principals/']), undef, 'no o
   is_deeply($q->(sub { r207(ms($members)) }), { used => 10, available => 90 }, 'Quota: the collection\'s own values');
   is($q->(sub { r207(ms(resp('/r/', '<D:quota-used-bytes>10</D:quota-used-bytes>'))) }), undef,
      'Quota: no quota-available-bytes, no quota');
-  is($q->(sub { +{ status => 404, headers => {}, content => '' } }), undef, 'Quota: PROPFIND refused, no quota');
+  ok(!eval { $q->(sub { +{ status => 503, headers => {}, content => '' } }); 1 }, 'Quota: a failed PROPFIND dies (not "no quota")');
 }
 
 # Delete with If-Match sends the ETag quoted
@@ -287,6 +288,15 @@ is(JMAP::Sync::WebDAVTalk::principal_base(undef, ['/principals/']), undef, 'no o
   is($h{'If-Match'}, '"abc"', 'Delete sends If-Match');
   $d->Delete('/r/f');
   ok(!exists $h{'If-Match'}, 'and none without if_match');
+}
+
+# no WebDAV collection at the root (a server without WebDAV): Probe dies, so
+# nothing is kept and FileNode is not advertised
+{
+  my $d = bless { log => [], script => sub { +{ status => 404, headers => {}, content => '' } } }, 'Stub';
+  ok(!eval { $d->Probe($root); 1 }, 'Probe dies when the root is not a WebDAV collection');
+  like($@, qr/not a WebDAV collection/, 'saying so');
+  ok(!grep({ /^PUT/ } @{ $d->{log} }), 'and writes nothing');
 }
 
 done_testing;

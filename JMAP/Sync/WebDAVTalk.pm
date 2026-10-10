@@ -132,15 +132,16 @@ sub PropFind {
 }
 
 # RFC 4331: the quota covering $path, as { used, available } (bytes), or
-# undef when the server reports no quota there.  A Depth-0 PROPFIND of just
-# these two properties: they are not in every listing, because a server may
-# work the quota out afresh for every resource it lists.
+# undef when the server reports no quota there; dies if the PROPFIND itself
+# fails (so a caller can tell "no quota" from "could not ask").  A Depth-0
+# PROPFIND of just these two properties: they are not in every listing,
+# because a server may work the quota out afresh for every resource it lists.
 sub Quota {
   my ($Self, $path) = @_;
   my $res = $Self->_xml('PROPFIND', $path,
     qq{<?xml version="1.0" encoding="utf-8"?><D:propfind xmlns:D="DAV:"><D:prop>}
     . '<D:quota-used-bytes/><D:quota-available-bytes/></D:prop></D:propfind>', Depth => 0);
-  return undef unless $res->{status} == 207;
+  die "PROPFIND $path (quota): HTTP $res->{status}\n" unless $res->{status} == 207;
   (my $want = $path) =~ s{/+\z}{};
   my @e = @{ parse_multistatus($res->{content}) };
   my ($e) = grep { $_->{href} eq $want } @e;
@@ -371,6 +372,9 @@ sub _try_list { my ($Self, $p) = @_; my $r = eval { $Self->PropFind($p, 1) }; re
 sub Probe {
   my ($Self, $root) = @_;
   my %f = (syncCollection => 0, acl => 0, deadProps => 0, etagIsContent => 0, quota => 0);
+  # no WebDAV collection there at all: nothing to probe (dies, so nothing is kept)
+  my $home = $Self->Raw('PROPFIND', "$root/", undef, Depth => 0)->{status};
+  die "Probe: $root/ is not a WebDAV collection (PROPFIND: HTTP $home)\n" unless $home == 207;
   my $name = "$root/.jmap-probe-" . lc(new_uuid_string() =~ s/-//gr);
   my $bytes = "jmap-probe\n";
   my $put = $Self->Put($name, $bytes, type => 'text/plain', if_none_match => 1);
