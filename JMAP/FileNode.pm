@@ -199,4 +199,40 @@ sub reconcile {
   return { create => \@create, update => \@update, destroy => \@destroy };
 }
 
+
+# draft S3.2.3: creations whose parentId is "#cid" must follow cid.  Any
+# left in a cycle of #refs go last, where their parentId does not resolve
+# and they fail with invalidProperties.
+sub order_creates {
+  my $create = shift;
+  my (@order, %done);
+  my @todo = sort keys %$create;
+  my $progress = 1;
+  while (@todo && $progress) {
+    $progress = 0;
+    my @next;
+    for my $cid (@todo) {
+      my $p = $create->{$cid}{parentId} // '';
+      if ($p =~ /^#(.+)\z/s && exists $create->{$1} && !$done{$1}) { push @next, $cid; next }
+      push @order, $cid;
+      $done{$cid} = $progress = 1;
+    }
+    @todo = @next;
+  }
+  return [ @order, @todo ];
+}
+
+# draft S3.2.3 onExists "rename": name[2].ext, name[3].ext, ... -- the
+# extension is the part after the last "." unless that "." starts the name.
+# $taken holds the sibling names, lower-cased when $ci is true.
+sub unique_name {
+  my ($name, $taken, $ci) = @_;
+  my ($base, $ext) = $name =~ /^(.+)(\.[^.]+)\z/s ? ($1, $2) : ($name, '');
+  for my $n (2 .. 100_000) {
+    my $try = "$base\[$n\]$ext";
+    return $try unless $taken->{ $ci ? lc $try : $try };
+  }
+  die "no free name for $name\n";
+}
+
 1;
