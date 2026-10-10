@@ -108,4 +108,79 @@ sub epoch {
   return $t;
 }
 
+# Match a complete fresh listing against the mirror (spec "Ids" and
+# "Defending against bogus servers").  A fingerprint match is only accepted
+# when it is unique on both sides.  Entries in "create" are the caller's own
+# listing hashrefs, with {nodeid} assigned onto them.
+sub reconcile {
+  my ($mirror, $listing, $features) = @_;
+  $features ||= {};
+  my (%row_used, %entry_used, @update);
+  my $type_of = sub { $_[0]{isCollection} ? 'directory' : 'file' };
+  # privileges count: a changed ACL changes the derived myRights (draft "Access Control")
+  my $changed = sub {
+    my ($row, $e) = @_;
+    my $eprivs = defined $e->{privileges} ? join(' ', @{$e->{privileges}}) : undef;
+    return 1 if ($row->{privs} // '') ne ($eprivs // '');
+    return scalar grep { ($row->{$_} // '') ne ($e->{$_} // '') } qw(href etag size modified type);
+  };
+  my $pair = sub {
+    my ($row, $e) = @_;
+    $row_used{$row->{nodeid}} = $entry_used{$e->{href}} = 1;
+    push @update, [$row, $e] if $changed->($row, $e);
+  };
+
+  # 1. server stable ids (a fileid seen twice on either side is ambiguous)
+  my (%rows_by_fileid, %entries_by_fileid);
+  push @{ $rows_by_fileid{$_->{fileid}} }, $_ for grep { defined $_->{fileid} } @$mirror;
+  push @{ $entries_by_fileid{$_->{fileid}} }, $_ for grep { defined $_->{fileid} } @$listing;
+  for my $id (keys %entries_by_fileid) {
+    next unless @{ $rows_by_fileid{$id} || [] } == 1 && @{ $entries_by_fileid{$id} } == 1;
+    $pair->($rows_by_fileid{$id}[0], $entries_by_fileid{$id}[0]);
+  }
+  # 2. same path, same kind
+  my %rows_by_href;
+  push @{ $rows_by_href{$_->{href}} }, $_ for grep { !$row_used{$_->{nodeid}} } @$mirror;
+  for my $e (grep { !$entry_used{$_->{href}} } @$listing) {
+    my $rows = $rows_by_href{$e->{href}} or next;
+    next unless @$rows == 1;
+    my $row = $rows->[0];
+    next if $row_used{$row->{nodeid}} || $row->{nodetype} ne $type_of->($e);
+    $pair->($row, $e);
+  }
+  # 3. files only: fingerprints, strongest first, unique on both sides
+  my $sizemod = sub { defined $_[0]{size} && defined $_[0]{modified} ? "$_[0]{size}/$_[0]{modified}" : undef };
+  my @tiers = (
+    [ sub { $_[0]{fingerprint} }, sub { $_[0]{sha1} } ],
+    ($features->{etagIsContent} ? [ sub { $_[0]{etag} }, sub { $_[0]{etag} } ] : ()),
+    [ $sizemod, $sizemod ],
+  );
+  for my $tier (@tiers) {
+    my ($rk, $ek) = @$tier;
+    my (%rows, %entries);
+    for my $row (grep { !$row_used{$_->{nodeid}} && $_->{nodetype} eq 'file' } @$mirror) {
+      my $k = $rk->($row);
+      push @{ $rows{$k} }, $row if defined $k;
+    }
+    for my $e (grep { !$entry_used{$_->{href}} && !$_->{isCollection} } @$listing) {
+      my $k = $ek->($e);
+      push @{ $entries{$k} }, $e if defined $k;
+    }
+    for my $k (keys %rows) {
+      next unless @{$rows{$k}} == 1 && @{ $entries{$k} || [] } == 1;
+      $pair->($rows{$k}[0], $entries{$k}[0]);
+    }
+  }
+
+  # a fileid repeated in the listing cannot name two nodes: fall back to local ids
+  my @create;
+  for my $e (grep { !$entry_used{$_->{href}} } @$listing) {
+    $e->{nodeid} = defined $e->{fileid} && @{ $entries_by_fileid{$e->{fileid}} } == 1
+                 ? server_id($e->{fileid}) : local_id();
+    push @create, $e;
+  }
+  my @destroy = grep { !$row_used{$_->{nodeid}} } @$mirror;
+  return { create => \@create, update => \@update, destroy => \@destroy };
+}
+
 1;
