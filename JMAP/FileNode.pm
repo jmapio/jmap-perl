@@ -80,6 +80,22 @@ sub _expand {
   @p{qw(write-content write-properties bind unbind)} = (1) x 4 if $p{write};
   return \%p;
 }
+# R7: an empty or absent current-user-privilege-set means "not reported" (Cyrus
+# lists files with none).  Such a node inherits its parent collection's
+# privileges, walking up until a non-empty set is found; only a non-empty set
+# is authoritative.  Returns an arrayref, or undef when nothing up the chain
+# reports one (rights() then grants everything).  $parent_of is a code ref
+# mapping a row to its parent row (or undef).
+sub effective_privs {
+  my ($row, $parent_of) = @_;
+  my %seen;
+  while ($row && !$seen{$row->{nodeid}}++) {
+    return [ split ' ', $row->{privs} ] if defined $row->{privs} && length $row->{privs};
+    $row = $parent_of->($row);
+  }
+  return undef;
+}
+
 sub rights {
   my ($privs, $parent) = @_;
   return { map { $_ => JSON::true } qw(mayRead mayAddChildren mayRename mayDelete mayModifyContent mayShare) }

@@ -19,8 +19,9 @@ my @FILENODE_PROPERTIES = qw(
 sub _filenode_object {
   my ($Self, $row, $byid) = @_;
   my $parent = defined $row->{parentid} ? $byid->{$row->{parentid}} : undef;
-  my $privs  = defined $row->{privs} ? [ split ' ', $row->{privs} ] : undef;
-  my $pprivs = $parent && defined $parent->{privs} ? [ split ' ', $parent->{privs} ] : undef;
+  my $up = sub { defined $_[0]{parentid} ? $byid->{$_[0]{parentid}} : undef };
+  my $privs  = JMAP::FileNode::effective_privs($row, $up);
+  my $pprivs = $parent ? JMAP::FileNode::effective_privs($parent, $up) : undef;
   my $isfile = $row->{nodetype} eq 'file';
   # client-set values the server keeps as dead properties override the
   # server's own (ImapDB::_filenode_cols keeps them apart)

@@ -63,7 +63,12 @@ my $state = $all->{state};
 
 # changes made behind the proxy's back show up
 $dav->Mkcol("$root/$tag");
-$dav->Put("$root/$tag/one.txt", "1", type => 'text/plain');
+# reconcile's weakest move tier matches size + getlastmodified, and only when
+# unique across the whole drive; a fixed 1-byte payload can collide with any
+# other small file another test or run wrote in the same second (the move then
+# correctly becomes destroy + create).  Use a size nothing else uses.
+my $onebody = 'x' x (101 + int(rand(800)));
+$dav->Put("$root/$tag/one.txt", $onebody, type => 'text/plain');
 force_sync();
 my ($c) = @{ jmap(['FileNode/changes', { sinceState => $state }]) };
 is(scalar @{$c->{created}}, 2, 'external MKCOL + PUT are two creations') or diag explain $c;
@@ -72,8 +77,9 @@ my ($file) = grep { $_->{name} eq 'one.txt' } @{$g2->{list}};
 my ($dir)  = grep { $_->{name} eq $tag } @{$g2->{list}};
 is($file->{parentId}, $dir->{id}, 'parent linkage');
 is($dir->{parentId}, $home->{id}, 'directory under home');
-is($file->{size}, 1, 'size');
+is($file->{size}, length $onebody, 'size');
 is($file->{type}, 'text/plain', 'type');
+is($file->{myRights}{mayModifyContent}, JSON::true, 'a Cyrus file (no privileges listed) inherits write-content from its parent');
 like($file->{blobId}, qr/^d-/, 'blobId');
 like($file->{id}, qr/^[LS]/, 'id prefix');
 is($dir->{blobId}, undef, 'a directory has no blobId');

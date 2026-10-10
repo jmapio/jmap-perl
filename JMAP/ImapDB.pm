@@ -1410,14 +1410,14 @@ sub put_filenode_content {
   $Self->commit();
   return { status => 404 } unless $row;
   return { status => 400 } unless $row->{nodetype} eq 'file';
-  # Cyrus lists a file with an empty privilege set (it reports none for
-  # members), which says nothing: only a non-empty set is enforced here, and
-  # otherwise the server decides (its 403 comes back as 403).
-  if (defined $row->{privs} && length $row->{privs}) {
-    my $r = JMAP::FileNode::rights([split ' ', $row->{privs}],
-                                   $parent && defined $parent->{privs} ? [split ' ', $parent->{privs}] : undef);
-    return { status => 403 } unless $r->{mayModifyContent};
-  }
+  # R7: effective privileges (a file Cyrus lists with none inherits its
+  # parent's); the server's own 403 is passed through as well.
+  $Self->begin();
+  my $up = sub { defined $_[0]{parentid} ? $Self->filenode_row($_[0]{parentid}) : undef };
+  my $eff  = JMAP::FileNode::effective_privs($row, $up);
+  my $peff = $parent ? JMAP::FileNode::effective_privs($parent, $up) : undef;
+  $Self->commit();
+  return { status => 403 } unless JMAP::FileNode::rights($eff, $peff)->{mayModifyContent};
   $type = $row->{type} unless defined $type && length $type;
   $type //= 'application/octet-stream';
   $type =~ s/\s*;.*$//;

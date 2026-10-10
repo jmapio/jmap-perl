@@ -89,4 +89,23 @@ is_deeply(\%h, { created => undef, name => 'x' }, 'epoch inside a hash construct
 is(JMAP::FileNode::epoch(JMAP::FileNode::utc(1234567890)), 1234567890, 'epoch(utc(t)) round-trips');
 is(JMAP::FileNode::utc(JMAP::FileNode::epoch('2009-02-13T23:31:30Z')), '2009-02-13T23:31:30Z', 'utc(epoch(s)) round-trips');
 
+# R7: empty privileges inherit from the nearest ancestor that reports some
+{
+  my %n = (
+    home => { nodeid => 'h', privs => 'read write-content bind unbind' },
+    ro   => { nodeid => 'r', privs => 'read', parentid => 'h' },
+    f1   => { nodeid => 'f1', privs => '', parentid => 'h' },
+    f2   => { nodeid => 'f2', privs => '', parentid => 'r' },
+    f3   => { nodeid => 'f3', privs => undef },
+  );
+  my %by = map { $_->{nodeid} => $_ } values %n;
+  my $up = sub { defined $_[0]{parentid} ? $by{ $_[0]{parentid} } : undef };
+  my $eff = sub { JMAP::FileNode::effective_privs($n{$_[0]}, $up) };
+  ok(JMAP::FileNode::rights($eff->('f1'), $eff->('home'))->{mayModifyContent}, 'empty file privs + parent with write-content: mayModifyContent');
+  ok(!JMAP::FileNode::rights($eff->('f2'), $eff->('ro'))->{mayModifyContent}, 'parent without write-content: not');
+  ok(!defined $eff->('f3'), 'no privs anywhere: undef');
+  ok(JMAP::FileNode::rights($eff->('f3'), undef)->{mayModifyContent}, 'and then all rights');
+  is_deeply($eff->('ro'), ['read'], 'a non-empty set is authoritative');
+}
+
 done_testing;
