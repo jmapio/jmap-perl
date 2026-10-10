@@ -90,7 +90,7 @@ XML
 sub Raw {
   my ($Self, $method, $path, $body, %headers) = @_;
   $headers{Authorization} = $Self->auth_header() if $Self->{user};
-  my $res = $Self->ua->request($method, $Self->request_url($path), {
+  my $res = $Self->ua->request($method, $Self->_url($path), {
     headers => \%headers,
     (defined $body ? (content => $body) : ()),
   });
@@ -110,7 +110,7 @@ sub PropFind {
 sub SyncCollection {
   my ($Self, $path, $token) = @_;
   my $body = qq{<?xml version="1.0" encoding="utf-8"?>\n<D:sync-collection xmlns:D="DAV:">}
-           . '<D:sync-token>' . ($token // '') . '</D:sync-token><D:sync-level>1</D:sync-level>'
+           . '<D:sync-token>' . _xesc($token) . '</D:sync-token><D:sync-level>1</D:sync-level>'
            . ($PROPFIND_BODY =~ /(<D:prop>.*<\/D:prop>)/s)[0] . '</D:sync-collection>';
   $body =~ s/<D:sync-collection xmlns:D="DAV:">/<D:sync-collection xmlns:D="DAV:" xmlns:CS="http:\/\/calendarserver.org\/ns\/" xmlns:J="$NS_J" xmlns:oc="http:\/\/owncloud.org\/ns" xmlns:ME="https:\/\/www.fastmail.com\/dav\/">/;
   my $res = $Self->_xml('REPORT', $path, $body, Depth => 1);
@@ -140,7 +140,8 @@ sub Put {
 
 sub Mkcol  { $_[0]->Raw('MKCOL', "$_[1]/")->{status} }
 sub Delete { $_[0]->Raw('DELETE', $_[1])->{status} }
-sub _dest  { my ($Self, $path) = @_; return $Self->request_url($path) }
+sub _url   { my ($Self, $path) = @_; return $Self->request_url(encode_utf8($path)) }
+sub _dest  { my ($Self, $path) = @_; return $Self->_url($path) }
 sub Move {
   my ($Self, $from, $to, %o) = @_;
   return $Self->Raw('MOVE', $from, undef, Destination => $Self->_dest($to), Overwrite => ($o{overwrite} ? 'T' : 'F'))->{status};

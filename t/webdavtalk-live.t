@@ -40,5 +40,14 @@ ok(!$f2->{etagIsContent}, 'Cyrus: ETags are not move-stable content hashes');
 ok($f2->{syncCollection}, 'Cyrus: sync-collection');
 ok($f2->{acl}, 'Cyrus: ACL');
 
+my $u = "$dir/\x{4e2d}\x{6587} \x{1F600}.txt";
+is($dav->Put($u, "wide", type => 'text/plain')->{status}, 201, 'PUT non-Latin-1 name');
+my ($w) = grep { $_->{href} eq $u } @{ $dav->PropFind($dir, 1) };
+ok($w, 'PropFind round-trips non-Latin-1 name');
+is($dav->Get($u)->{content}, 'wide', 'GET non-Latin-1 name');
+my $u2 = "$dir/\x{4e2d}\x{6587}2 caf\x{e9}.txt";
+is($dav->Move($u, $u2), 201, 'MOVE non-Latin-1 name');
+ok((grep { $_->{href} eq $u2 } @{ $dav->PropFind($dir, 1) }), 'moved name listed');
+
 $dav->Raw('DELETE', "$dir/");
 done_testing;
