@@ -38,6 +38,8 @@ sub mk {
     return { status => 201, headers => { etag => qq{"$o{etag}"} }, content => '' } if $m eq 'PUT';
     return { status => 207, headers => {}, content => ms('<D:response><D:href>x</D:href><D:propstat><D:prop/><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>') }
       if $m eq 'PROPPATCH';
+    return { status => 201, headers => {}, content => '' } if $m eq 'MKCOL' && defined $o{shell};
+    return { status => ($o{shell} ? 207 : 404), headers => {}, content => '' } if $m eq 'PROPFIND' && $p =~ m{-d/\z};
     return { status => 201, headers => {}, content => '' } if $m eq 'MOVE';
     return { status => 204, headers => {}, content => '' } if $m eq 'DELETE';
     if ($m eq 'PROPFIND' && $b =~ /<D:acl/) { return { status => 403, headers => {}, content => '' } }
@@ -79,6 +81,15 @@ for my $st (400, 403) {
 }
 my $ok = mk(etag => 'zz', sync => 207)->SyncCollection($root, 'a<b');
 is($ok->{token}, 'tok1', 'sync 207 gives a token');
+
+# (c2) a collection MOVE that leaves an empty collection behind (Cyrus)
+{
+  my $d = mk(etag => 'zz', shell => 1);
+  is(probe($d)->{moveLeavesEmpty}, 1, 'the old name still answers after a collection MOVE: moveLeavesEmpty 1');
+  ok((grep { m{^DELETE .*-d-moved/\z} } @{ $d->{log} }) && (grep { m{^DELETE .*-d/\z} } @{ $d->{log} }), 'and the probe tidies both');
+  is(probe(mk(etag => 'zz', shell => 0))->{moveLeavesEmpty}, 0, 'gone after the MOVE: moveLeavesEmpty 0');
+  ok(!exists probe(mk(etag => 'zz'))->{moveLeavesEmpty}, 'no MKCOL: unknown');
+}
 
 # (d) scratch file always deleted
 {

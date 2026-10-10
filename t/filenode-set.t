@@ -16,7 +16,9 @@ require JMAP::API;
 
 my $R = '/dav/drive/user/u';
 my $T0 = 1_700_000_000;
-my (%tree, @log, %fail, $bogus_delete, $deadprops_stored);
+my (%tree, @log, %fail, $bogus_delete, $deadprops_stored, $move_leaves_shell, $ci_server);
+# a case-insensitive server: a path finds the collection whatever its case
+sub ci { my $d = shift; return $d unless $ci_server && !$tree{$d}; my ($k) = grep { lc $_ eq lc $d } keys %tree; return $k // $d }
 # sharing: each collection's own (non-inherited) ACEs, the principals the
 # server knows, and an override for the answer to an ACL request
 my (%acl, %principal, $acl_answer, @acl_reqs, $acl_tree, $inherits);
@@ -40,7 +42,9 @@ no warnings qw(redefine once);
   my $dir = $path =~ s{/\z}{}r;
   return $fail{$cmd} if $fail{$cmd} && $cmd ne 'files_put';
   if ($cmd eq 'files_prop_find') {
-    my $self = $tree{$dir} or die "PROPFIND $path: HTTP 404\n";
+    my $real = ci($dir);
+    my $self = $tree{$real} or die "PROPFIND $path: HTTP 404\n";
+    $self = { %$self, href => $dir } if $real ne $dir;   # the server echoes the spelling asked for
     my $with = sub {   # a listing that asks for the ACL gets it, and the owner
       my $e = { %{ $_[0] } };
       return $e unless ref $a[1] eq 'HASH' && $a[1]{acl};
@@ -50,7 +54,7 @@ no warnings qw(redefine once);
       return $e;
     };
     return [ $with->($self) ] if $a[0] == 0;
-    return [ $with->($self), map { $with->($tree{$_}) } kids($dir) ];
+    return [ $with->($self), map { $with->($tree{$_}) } kids($real) ];
   }
   if ($cmd eq 'files_raw') {   # PROPFIND Depth 0, status only
     die "unexpected raw $a[0]" unless $a[0] eq 'PROPFIND';
@@ -98,6 +102,7 @@ no warnings qw(redefine once);
     return 201;
   }
   if ($cmd eq 'files_delete') {
+    $dir = ci($dir);
     return 404 unless $tree{$dir};
     if ($tree{$dir}{isCollection}) {
       my @sub = grep { m{^\Q$dir\E/} } keys %tree;
@@ -134,6 +139,9 @@ no warnings qw(redefine once);
       $tree{$n}{etag} = 'm' . ++$etag unless $tree{$n}{isCollection};   # Cyrus: a file's ETag changes on MOVE
       $acl{$n} = delete $acl{$h} if exists $acl{$h};                    # a collection keeps its own ACL
     }
+    # Cyrus: a collection that held collections leaves an empty one behind
+    $tree{$dir} = { href => $dir, isCollection => 1, etag => 'c' . ++$etag, modified => $T0, dead => {} }
+      if $move_leaves_shell && grep { $tree{$_}{isCollection} && m{^\Q$to\E/} } keys %tree;
     return $existed ? 204 : 201;
   }
   if ($cmd eq 'files_prop_patch') {
@@ -1285,6 +1293,57 @@ sub files_under { my $p = shift; return [ sort grep { m{^\Q$p\E/} && !$tree{$_}{
   $set = set(update => { $x->{G} => { shareWith => { user2 => { mayRead => $t } } } })->[1];
   is($set->{notUpdated}{$x->{G}}{type}, 'serverFail', 'a group named admin is not dropped: serverFail');
   is(JSON->new->canonical->encode($acl{"$R/R3G"}), $before, 'and its ACL is unchanged');
+  features();
+}
+
+# --- a MOVE that leaves an empty collection behind (Cyrus; moveLeavesEmpty)
+{
+  my $learnt = sub { $db->begin(); my $f = decode_json($db->dgetfield('iserver', {}, 'webdavFeatures')); $db->commit(); $f->{moveLeavesEmpty} };
+  my $looked = sub { my $h = shift; scalar grep { $_ eq "files_prop_find $h/" || $_ eq "files_delete $h/" } @log };
+  # not known yet, a server that leaves one: found on the first nested move, and tidied
+  features();
+  $move_leaves_shell = 1;
+  my $x = mk(P => { parentId => $home, name => 'ML1' }, c => { parentId => '#P', name => 'c' });
+  $set = set(update => { $x->{P} => { name => 'ML1b' } })->[1];
+  ok(exists $set->{updated}{$x->{P}}, 'a nested directory renamed') or diag explain $set;
+  ok(!$tree{"$R/ML1"}, 'the empty collection left at the old name is gone');
+  ok($tree{"$R/ML1b/c"}, 'the moved tree is whole');
+  is($learnt->(), 1, 'and the server is known to leave one');
+  # known: a flat directory's move is checked too
+  $x = mk(P => { parentId => $home, name => 'ML2' });
+  @log = ();
+  set(update => { $x->{P} => { name => 'ML2b' } });
+  ok($looked->("$R/ML2"), 'a server known to leave one: every directory move is checked');
+  $move_leaves_shell = 0;
+
+  # a server that does not: once learnt, nothing extra is sent
+  features();
+  $x = mk(P => { parentId => $home, name => 'ML3' }, c => { parentId => '#P', name => 'c' });
+  @log = ();
+  set(update => { $x->{P} => { name => 'ML3b' } });
+  is($learnt->(), 0, 'a nested move that leaves nothing: learnt');
+  $x = mk(P => { parentId => $home, name => 'ML4' }, c => { parentId => '#P', name => 'c' });
+  @log = ();
+  set(update => { $x->{P} => { name => 'ML4b' } });
+  is($looked->("$R/ML4"), 0, 'and from then on no PROPFIND or DELETE of the old name') or diag explain \@log;
+  # not known yet: a flat directory's move tells nothing, so nothing is asked
+  features();
+  $x = mk(P => { parentId => $home, name => 'ML5' });
+  @log = ();
+  set(update => { $x->{P} => { name => 'ML5b' } });
+  is($looked->("$R/ML5"), 0, 'unknown, a flat directory: no extra requests');
+
+  # a case-only rename on a case-insensitive server: the old href is the
+  # moved collection itself, and nothing is deleted
+  features(moveLeavesEmpty => 1);
+  $ci_server = 1;
+  $x = mk(P => { parentId => $home, name => 'Foo' });
+  @log = ();
+  $set = set(update => { $x->{P} => { name => 'foo' } })->[1];
+  ok(exists $set->{updated}{$x->{P}}, 'a case-only rename') or diag explain $set;
+  ok($tree{"$R/foo"}, 'the directory is there under its new name');
+  ok(!(grep { /^files_delete/ } @log), 'and nothing was deleted') or diag explain \@log;
+  $ci_server = 0;
   features();
 }
 

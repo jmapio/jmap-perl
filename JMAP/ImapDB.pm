@@ -1257,6 +1257,48 @@ sub _files_learn {
   $Self->commit();
 }
 
+# Cyrus answers the MOVE of a collection that holds collections with a 2xx
+# and moves all of it, but leaves an empty collection behind at the old
+# name.  Probe learns whether a server does that (moveLeavesEmpty); an
+# account probed before that was learnt finds out on the first MOVE of a
+# directory holding a directory.  Only such a server pays for the check,
+# and only an empty collection at exactly the old href goes, through
+# _files_delete_collection, which refuses anything with a member and checks
+# again afterwards.  Never when the move only changed case: on a server
+# with case-insensitive names the old href IS the moved collection.
+# Residual race: a client that MKCOLs an empty collection at the old name
+# between the MOVE and this check loses it.  Not in a transaction.
+sub _files_move_leftover {
+  my ($Self, $row, $to) = @_;
+  my $old = $row->{href};
+  (my $dest = $to) =~ s{/\z}{};
+  return if lc $old eq lc $dest;
+  my $f = $Self->filenode_features();
+  my $leaves = $f->{moveLeavesEmpty};
+  return if defined $leaves && !$leaves;
+  unless (defined $leaves) {
+    # only the move of a directory holding a directory tells
+    $Self->begin();
+    my $nested = grep { $_->{nodetype} eq 'directory' } @{ $Self->_filenode_subtree($row->{nodeid}) };
+    $Self->commit();
+    return unless $nested;
+  }
+  my $left = eval { $Self->backend_cmd('files_prop_find', "$old/", 1) };
+  my $shell = ref $left eq 'ARRAY' && @$left == 1 && $left->[0]{isCollection}
+           && ($left->[0]{href} =~ s{/\z}{}r) eq $old;
+  unless (defined $leaves) {
+    if ($shell || (!$left && $@ =~ /HTTP 404/)) {
+      $f->{moveLeavesEmpty} = $shell ? 1 : 0;
+      $Self->begin();
+      $Self->dupdate('iserver', { webdavFeatures => JSON::XS::encode_json($f) });
+      $Self->commit();
+    }
+  }
+  return unless $shell;
+  my $st = eval { $Self->_files_delete_collection($old, 0, {}) } // "died: $@";
+  warn "update_filenodes: the empty collection a MOVE left at $old: $st\n" unless $st =~ /^2/;
+}
+
 # Is this principal href one the server does not answer as a principal?
 # RFC 3744 S8.1.1 DAV:recognized-principal: an ACL request may only name
 # principals.  Cyrus answers 404 for any principal principal_parse_path
@@ -2482,16 +2524,7 @@ sub update_filenodes {
     my $status = eval { $Self->backend_cmd('files_move', _filenode_path($row), $isdir ? "$to/" : $to, overwrite => $overwrite ? 1 : 0) };
     return (undef, $@) unless defined $status;
     return ($status) unless $status =~ /^2/;
-    # Cyrus answers the MOVE of a collection that holds collections with a
-    # 2xx and moves all of it, but leaves an empty collection behind at the
-    # old name: it goes, if it is still there and still empty
-    if ($isdir) {
-      my $left = eval { $Self->backend_cmd('files_prop_find', _filenode_path($row), 1) };
-      if (ref $left eq 'ARRAY' && @$left == 1) {
-        my $st = eval { $Self->backend_cmd('files_delete', _filenode_path($row)) } // '';
-        warn "update_filenodes: the empty collection a MOVE left at $row->{href}: DELETE $st\n" unless $st =~ /^2/;
-      }
-    }
+    $Self->_files_move_leftover($row, $to) if $isdir;
     $Self->begin();
     my $t = time();
     my %cols = (href => $to, name => $name, parentid => $dir->{nodeid});

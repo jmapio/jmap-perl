@@ -571,10 +571,14 @@ SKIP: {
   my $guard = bless sub {
     eval {
       if ($ohome) {
+        # no staged copy is ever left behind, on the server either
+        my @staged = grep { $_->{href} =~ m{/\.jmap-copy-} } @{ $odav->PropFind("$oroot/", 1) };
+        ok(!@staged, 'no staged copy left in the destination') or diag explain \@staged;
         # Cyrus refuses (500) a second DELETE of one collection name within
         # the same second (its delayed-delete names collide): once more, later
         for my $try (1, 2) {
-          my ($oq) = @{ $ojmap->('FileNode/query', { filter => { parentId => $ohome->{id}, nameMatch => "$tag*" } }) };
+          my ($oq) = @{ $ojmap->('FileNode/query', { filter => { operator => 'OR', conditions => [
+            { parentId => $ohome->{id}, nameMatch => "$tag*" }, { parentId => $ohome->{id}, nameMatch => '.jmap-copy-*' } ] } }) };
           my ($od) = @{ $ojmap->('FileNode/set', { onDestroyRemoveChildren => JSON::true, destroy => $oq->{ids} || [] }) };
           last unless $od->{notDestroyed};
           sleep 2;

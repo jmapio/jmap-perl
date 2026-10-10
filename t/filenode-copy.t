@@ -310,4 +310,31 @@ setup();
   is_deeply([ $out->[1][0], $out->[1][1]{type}, $out->[1][2] ], [ 'error', 'serverFail', 't' ], 'a lost implicit destroy is reported') or diag explain $out;
 }
 
+# the staging rename's answer lost: look before taking anything back
+for my $case ([ 'done', 1 ], [ 'not done', 0 ]) {
+  my ($what, $run) = @$case;
+  setup();
+  my $old = mk($acct{B}, 'home', 'd', undef, id => 'OLD');
+  my $out;
+  my $lossy = sub {
+    my @a = @_;
+    if ($a[0] eq 'B' && $a[1] eq 'jmap' && grep { $_->[1]{update} } @{ $a[2]{methodCalls} }) {
+      $send->(@a[0 .. 2], sub {}, sub {}) if $run;   # the rename happens (or not), the answer is lost
+      return $a[4]->('connection reset');
+    }
+    $send->(@a);
+  };
+  JMAP::FileNodeCopy::copy(send => $lossy, args => { fromAccountId => 'A', accountId => 'B', onExists => 'replace',
+    onDestroyRemoveChildren => JSON::true, create => { c => { id => 'D', parentId => 'home' } } },
+    from => 'A', to => 'B', tag => 't', cb => sub { $out = shift }, errcb => sub { $out = $_[0] });
+  if ($run) {
+    ok($out->[1]{created}{c}, "a lost answer to a rename that was $what: created") or diag explain $out;
+    is_deeply(names($acct{B}, 'home'), [ 'd', 'd/a.txt', 'd/sub', 'd/sub/b.txt' ], 'and in place');
+  }
+  else {
+    like($out->[1]{notCreated}{c}{description} // '', qr/connection reset/, "a lost answer to a rename $what: notCreated") or diag explain $out;
+    is_deeply(names($acct{B}, 'home'), [ 'd' ], 'the staged copy taken back, the old one kept');
+  }
+}
+
 done_testing;

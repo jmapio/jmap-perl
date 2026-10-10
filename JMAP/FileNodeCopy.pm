@@ -295,7 +295,7 @@ sub _write {
     $c{$_} = $s->{$_} for grep { defined $s->{$_} } qw(created modified accessed executable isSubscribed);
     return \%c;
   };
-  my (%sets, %keys_of, %srcids_of, %parentkey, %path_of_key, %final, %target, %dup_of);
+  my (%sets, %keys_of, %srcids_of, %parentkey, %path_of_key, %final, %staged_name, %target, %dup_of);
   my $n = 0;
   CID: for my $cid (sort keys %$plan) {
     my ($top, @desc) = @{ $plan->{$cid} };
@@ -304,19 +304,20 @@ sub _write {
     my %over = map { ($_ => $create->{$cid}{$_}) } grep { $_ ne 'id' } keys %{ $create->{$cid} };
     $over{parentId} = $parent_of->{$cid} if exists $parent_of->{$cid};
     my %mine = ($tk => { %{ $carry->($top) }, %over });
+    my $tkey;
     if ($o{staging}) {
-      # two items aimed at one name would replace each other
+      # two items aimed at one name would replace each other: the later
+      # fails (the name is claimed below, once this item is sure to be sent)
       my $name = $mine{$tk}{name};
-      my $k = join "\0", map { ref $_ || !defined $_ ? '' : $o{ci} ? lc $_ : $_ } $mine{$tk}{parentId}, $name;
-      if (my $first = $target{$k}) {
+      $tkey = join "\0", map { ref $_ || !defined $_ ? '' : $o{ci} ? lc $_ : $_ } $mine{$tk}{parentId}, $name;
+      if (my $first = $target{$tkey}) {
         $notcreated->{$cid} = { type => 'alreadyExists', description => "the copy of $first goes to the same name" };
         $dup_of{$cid} = $first;
         next CID;
       }
-      $target{$k} = $cid;
       if (@desc) {
         $final{$cid} = $name;
-        $mine{$tk}{name} = staging_name();
+        $mine{$tk}{name} = $staged_name{$cid} = staging_name();
       }
     }
     $path_of_key{$tk} = $path->{ $top->{id} };
@@ -333,6 +334,7 @@ sub _write {
       $parentkey{$k} = $pk;
       $path_of_key{$k} = $path->{ $d->{id} };
     }
+    $target{$tkey} = $cid if defined $tkey;
     %sets = (%sets, %mine);
     $keys_of{$cid} = [ $tk, map { $key{ $_->{id} } } @desc ];
     $srcids_of{$cid} = [ $top->{id}, map { $_->{id} } @desc ];
@@ -406,7 +408,8 @@ sub _write {
       }, sub { $lost->("$_[0]") });
     };
 
-    # 5. take back what must not stay: the explicit nodes, children first
+    # 5. take back what must not stay: the explicit nodes this copy made
+    # (listed parent first; the destroying server orders them itself)
     my $rollback = sub {
       my @cids = sort grep { !$created{$_} } keys %rollback;
       return $finish->() unless @cids;
@@ -452,8 +455,35 @@ sub _write {
       $newState = $u->{newState} // $newState;
       $rollback->();
     }, sub {
-      $notcreated->{$_} = { type => 'serverFail', description => "renaming the copy: $_[0]" } for values %rename;
-      $rollback->();
+      # the answer was lost, not necessarily the rename: look before
+      # taking anything back
+      my $why = "renaming the copy: $_[0]";
+      my $left = sub {   # $id where it is now, or gone: not ours to remove
+        my ($id, $where) = @_;
+        my $cid = $rename{$id};
+        $notcreated->{$cid} = { type => 'serverFail', description => "$why; the copy, $id, is left $where" };
+        delete $rollback{$cid};
+      };
+      $jmap->(['FileNode/get', { accountId => $to, ids => [ sort keys %rename ], properties => ['name'] }, 'v'], sub {
+        my ($vr) = @_;
+        unless ($vr->[0] eq 'FileNode/get') {
+          $left->($_, 'in place, unchecked') for sort keys %rename;
+          return $rollback->();
+        }
+        my %now = map { ($_->{id} => $_->{name}) } @{ $vr->[1]{list} || [] };
+        for my $id (sort keys %rename) {
+          my $cid = $rename{$id};
+          my ($tk) = @{ $keys_of{$cid} };
+          if (!defined $now{$id})                   { $left->($id, 'nowhere: it is gone') }
+          elsif ($now{$id} eq $final{$cid})         { $created{$cid} = $ok->{$tk}; delete $rollback{$cid} }
+          elsif ($now{$id} eq $staged_name{$cid})   { $notcreated->{$cid} = { type => 'serverFail', description => $why } }
+          else                                      { $left->($id, "named $now{$id}") }
+        }
+        $rollback->();
+      }, sub {
+        $left->($_, 'in place, unchecked') for sort keys %rename;
+        $rollback->();
+      });
     });
   }, sub { $fail->($_[0]) });
 }

@@ -371,6 +371,19 @@ sub Probe {
   $Self->Delete($name);   # never leave the scratch file behind
   die $err unless $ok;
 
+  # a MOVE of a collection holding a collection: does an empty collection
+  # stay behind at the old name (Cyrus)?  Unknown (undef) if this cannot run
+  my $d = "$name-d";
+  if (($Self->Mkcol($d) // '') =~ /^2/) {
+    if (($Self->Mkcol("$d/b") // '') =~ /^2/ && ($Self->Move("$d/", "$d-moved/") // '') =~ /^2/) {
+      $f{moveLeavesEmpty} = $Self->Raw('PROPFIND', "$d/", undef, Depth => 0)->{status} == 207 ? 1 : 0;
+      $Self->Delete("$d-moved/b/");
+      $Self->Delete("$d-moved/");
+    }
+    $Self->Delete("$d/b/");
+    $Self->Delete("$d/");
+  }
+
   $f{syncCollection} = $Self->SyncCollection($root, '') ? 1 : 0;
   # RFC 3744 S7.2: an ACL server says "access-control" in its DAV header;
   # and the DAV:acl property must really be readable
