@@ -16,7 +16,7 @@ require JMAP::API;
 
 my $R = '/dav/drive/user/u';
 my $T0 = 1_700_000_000;
-my (%tree, @log, %fail, $bogus_delete, $deadprops_stored, $move_leaves_shell, $ci_server);
+my (%tree, @log, %fail, $put_garbles, $bogus_delete, $deadprops_stored, $move_leaves_shell, $ci_server);
 # a case-insensitive server: a path finds the collection whatever its case
 sub ci { my $d = shift; return $d unless $ci_server && !$tree{$d}; my ($k) = grep { lc $_ eq lc $d } keys %tree; return $k // $d }
 # sharing: each collection's own (non-inherited) ACEs, the principals the
@@ -33,7 +33,7 @@ sub reset_tree {
 sub kids { my $p = shift; return sort grep { m{^\Q$p\E/[^/]+\z} } keys %tree }
 
 no warnings qw(redefine once);
-*JMAP::ImapDB::get_blob = sub { my ($Self, $id) = @_; return $id eq 'f-x' ? ('text/plain', 'uploaded') : $id eq 'f-y' ? ('text/x-y', 'second!') : () };
+*JMAP::ImapDB::get_blob = sub { my ($Self, $id) = @_; return $id eq 'f-x' ? ('text/plain', 'uploaded') : $id eq 'f-y' ? ('text/x-y', 'second!') : $id eq 'f-e' ? ('text/plain', '') : () };
 *JMAP::ImapDB::backend_cmd = sub {
   my ($Self, $cmd, $path, @a) = @_;
   die "in transaction\n" if $Self->in_transaction();
@@ -92,6 +92,8 @@ no warnings qw(redefine once);
     (my $p = $path) =~ s{/[^/]+\z}{};
     return { status => 409 } unless $tree{$p};
     # a PUT over an existing resource keeps its dead properties, as servers do
+    # Cyrus #drive: a zero-length PUT stores the connection's previous request body
+    $bytes = '<D:propfind/>' if $put_garbles && !length $bytes;
     $tree{$path} = { href => $path, isCollection => 0, etag => 'e' . ++$etag, size => length $bytes,
                      type => $o{type}, modified => $T0 + $etag, dead => ($tree{$path} ? $tree{$path}{dead} : {}) };
     return { status => 201, etag => "e$etag" };
@@ -259,6 +261,20 @@ $tree{"$R/dir/late.txt"} = { href => "$R/dir/late.txt", isCollection => 0, etag 
 $set = set(create => { a => { parentId => $dirid, name => 'late.txt', blobId => 'f-x' } })->[1];
 is($set->{notCreated}{a}{type}, 'alreadyExists', 'a 412 is alreadyExists');
 is($set->{notCreated}{a}{existingId}, rows()->{"$R/dir/late.txt"}{nodeid}, 'naming the node the refresh found');
+
+# a server that stores other bytes than it was sent (Cyrus #drive, for an
+# empty body): never a node whose content is not what the client gave
+$put_garbles = 1;
+$set = set(create => { a => { parentId => $dirid, name => 'empty.txt', blobId => 'f-e' } })->[1];
+is($set->{notCreated}{a}{type}, 'serverFail', 'a PUT the server stored wrongly is serverFail') or diag explain $set;
+ok(!$tree{"$R/dir/empty.txt"}, 'and the wrong resource is deleted again');
+ok(!rows()->{"$R/dir/empty.txt"}, 'and is not in the mirror');
+$set = set(update => { $fid => { blobId => 'f-e' } })->[1];
+is($set->{notUpdated}{$fid}{type}, 'serverFail', 'a content update the server stored wrongly is serverFail') or diag explain $set;
+$put_garbles = 0;
+$set = set(create => { a => { parentId => $dirid, name => 'empty.txt', blobId => 'f-e' } })->[1];
+is($set->{created}{a}{size}, 0, 'a server that stores what it is sent makes a zero-byte file') or diag explain $set;
+set(destroy => [ $set->{created}{a}{id} ]);
 
 # a server that refuses
 $fail{files_put} = 403;

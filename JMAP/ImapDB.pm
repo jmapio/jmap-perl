@@ -1845,6 +1845,10 @@ sub put_filenode_content {
     unless $res->{status} =~ /^2/;
   my $rows = $parent ? $Self->_files_refresh_dir($parent->{href}) : {};
   my $new = $rows->{$row->{href}} or return { status => 409 };
+  if (my $bad = _filenode_put_mismatch($new, $bytes)) {
+    warn "put_filenode_content $row->{href}: $bad\n";
+    return { status => 502, description => $bad };
+  }
   # the PUT carried the type, so the server's getcontenttype holds it now
   $Self->_filenode_dead_set($new, { type => undef }) if exists $dead->{type};
   return { status => 200, blobId => JMAP::FileNode::blob_id($new->{nodeid}, $new->{etag}), size => 0 + length($bytes), type => $type };
@@ -1863,6 +1867,17 @@ sub _filenode_http_error {
            : $status == 412 || $status == 405 ? 'alreadyExists'
            : 'serverFail';
   return { type => $type, description => "$what: HTTP $status" };
+}
+
+# A PUT the server stored wrongly (spec "Defending against bogus servers"):
+# Cyrus #drive answers a zero-length PUT 201 and stores the connection's
+# previous request body instead (dav_store_resource takes a zero length to
+# mean strlen).  The listing after the PUT gives the size the server holds.
+sub _filenode_put_mismatch {
+  my ($row, $bytes) = @_;
+  return undef if !defined $bytes || $row->{nodetype} ne 'file' || !defined $row->{size};
+  return undef if $row->{size} == length $bytes;
+  return "the WebDAV server stored $row->{size} bytes for a PUT of " . length($bytes);
 }
 
 # WebDAV path of a node: collections end in "/" (Delete, Move and PropPatch
@@ -2208,6 +2223,13 @@ sub create_filenodes {
     my $row = $rows->{$href};
     unless ($row && $row->{nodetype} eq $nodetype) {
       $notcreated{$cid} = { type => 'serverFail', description => 'the new node is not in its parent\'s listing' };
+      next;
+    }
+    if (my $bad = _filenode_put_mismatch($row, $content)) {
+      # never leave a node whose content is not what the client gave
+      $Self->backend_cmd('files_delete', $href);
+      eval { $Self->_files_refresh_dir($parent->{href}) };
+      $notcreated{$cid} = { type => 'serverFail', description => $bad };
       next;
     }
     unless ($Self->_filenode_dead_set($row, $v->{dead}, $overwrite ? 1 : 0)) {
@@ -2735,6 +2757,7 @@ sub update_filenodes {
       unless ($r->{status} == 200) {
         $notupdated{$id} = $r->{status} == 412
           ? { type => 'serverFail', description => 'PUT: HTTP 412 (the file changed on the server; the next sync will show it)' }
+          : $r->{description} ? { type => 'serverFail', description => $r->{description} }
           : _filenode_http_error($r->{status}, 'PUT');
         next;
       }
