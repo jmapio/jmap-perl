@@ -267,4 +267,16 @@ is(JMAP::Sync::WebDAVTalk::principal_base(undef, ['/principals/']), undef, 'no o
   is(probe($d)->{principalBase}, '/principals/users/', 'Probe: /principals/ is not where users are; /principals/users/ is');
 }
 
+# RFC 4331 quota: Quota() reads the collection's own response (a server may
+# list members too) and wants both properties.
+{
+  my $members = resp('/r/', '<D:quota-used-bytes>10</D:quota-used-bytes><D:quota-available-bytes>90</D:quota-available-bytes>')
+              . resp('/r/f', '<D:quota-used-bytes>1</D:quota-used-bytes><D:quota-available-bytes>2</D:quota-available-bytes>');
+  my $q = sub { my $c = shift; my $d = bless { log => [], script => sub { $c->(@_) } }, 'Stub'; $d->Quota('/r/') };
+  is_deeply($q->(sub { r207(ms($members)) }), { used => 10, available => 90 }, 'Quota: the collection\'s own values');
+  is($q->(sub { r207(ms(resp('/r/', '<D:quota-used-bytes>10</D:quota-used-bytes>'))) }), undef,
+     'Quota: no quota-available-bytes, no quota');
+  is($q->(sub { +{ status => 404, headers => {}, content => '' } }), undef, 'Quota: PROPFIND refused, no quota');
+}
+
 done_testing;

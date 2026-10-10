@@ -3,7 +3,7 @@
 ## Current State (April 2026)
 
 The JMAP proxy syncs email, calendars, and contacts from IMAP/CalDAV/CardDAV
-backends and exposes them over the JMAP protocol (RFCs 8620/8621).  It also
+backends (and files from WebDAV) and exposes them over the JMAP protocol (RFCs 8620/8621).  It also
 supports direct JMAP-to-JMAP passthrough for backends that already speak JMAP.
 
 - **132/132 JMAP TestSuite tests passing** against Cyrus IMAP (87 Email/Mailbox/Thread + 2 Calendar/get + 26 CalendarEvent/AddressBook/ContactCard + 17 Identity/VacationResponse/Quota/Principal/SearchSnippet/MDN/EmailSubmission)
@@ -219,7 +219,8 @@ Internal refactoring to improve maintainability; no user-visible changes.
 - [x] Sync providers: extract `connect_*` and `send_email` boilerplate into `JMAP::Sync::Common`
       (Standard/Gmail/Fastmail/AOL override only what differs via hook methods)
 - [x] API.pm split: decomposed 4,900-line god object into 9 domain files
-      (Mailbox, Email, Thread, Calendar, Contact, Submission, Preferences, StorageNode, MDN)
+      (Mailbox, Email, Thread, Calendar, Contact, Submission, Preferences, StorageNode, MDN;
+      StorageNode has since become FileNode)
 - [x] OAuth extraction: Google/Fastmail/PACC flows into `JMAP::OAuth::*` pure-computation modules;
       PKCE helpers in `JMAP::OAuth::PKCE`; OIDC token generation in `JMAP::OAuth::OIDC`
 - [x] Shared `_api_init` helper (begin + get_user + accountId check)
@@ -452,6 +453,44 @@ and advertise only what it does. Implemented in `JMAP/API/Blob.pm` over the pure
 Not done: `chunkSize` (blobs are not stored chunked), per-account `uploadUrl`
 (null; the session one serves), `noPersist` (accepted, blob persisted anyway),
 rdiff/bsdiff deltas, cpio archives, deferred conversion.
+
+---
+
+### draft-ietf-jmap-filenode — FileNode over WebDAV ✅
+
+IMAP-backed accounts with a `webdavURL` advertise `urn:ietf:params:jmap:filenode`; the
+files live on the WebDAV server (Cyrus `#drive` in the test stack) and a metadata mirror
+serves every method. Design: `docs/superpowers/specs/2026-10-09-filenode-webdav-design.md`.
+Replaces the fake `StorageNode` data.
+
+- [x] `FileNode/get` (`fetchParents`), `/changes`, `/query` (every filter but `body`, `depth`,
+      the `tree` sort), `/queryChanges`
+- [x] `FileNode/set`: create, move/rename (swaps, cycles), content, destroy with
+      `onDestroyRemoveChildren`, `onExists` `replace`/`rename`/`newest`, `compareCaseInsensitively`
+- [x] `FileNode/copy` across accounts (in the parent, like the other `/copy` orchestration)
+- [x] `shareWith` over RFC 3744 ACLs, carried down to subdirectories and across moves
+- [x] Direct HTTP write (`webWriteUrlTemplate`, PUT)
+- [x] Quota: a `files:octets` Quota with `FileNode` in `types` from the RFC 4331 quota
+- [x] Suite tests: `t/FileNode/` in JMAP-TestSuite
+
+Follow-ups:
+- [ ] `S`/`L` (server/local) id prefixes for every data type — changing existing ids makes
+      every client resync, so it needs its own plan
+- [ ] -15 extended attributes and named streams
+- [ ] `onExists: "unchanged"` (needs JMAP-CONDITIONAL; `invalidArguments` until then)
+- [ ] PATCH writes on the direct-write URL (415 today)
+- [ ] Stream large blobs (download, PUT, cross-account copy) instead of holding them in memory
+- [ ] `sync-collection` with `sync-level: infinite` where a server supports it (one REPORT
+      instead of one PROPFIND per collection)
+- [ ] Upstream a Net::DAVTalk XML parser fix for `xml:lang` (WebDAVTalk strips `xml:*`
+      attributes as a workaround)
+- [ ] Cyrus bugs to file:
+  - a MOVE of a collection that contains collections leaves an empty collection behind
+  - a second DELETE of the same name within a second answers 500
+  - `DAV:acl` lists ACEs (e.g. `defaultacl`'s `admin`) that an ACL request then refuses
+    (`DAV:recognized-principal`)
+  - DELETE of a collection with subcollections answers 204 but leaves them (and itself)
+  - a dead-property PROPPATCH on a file answers 200 but stores nothing
 
 ---
 

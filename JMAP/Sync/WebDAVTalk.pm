@@ -78,6 +78,11 @@ sub parse_multistatus {
           $e{privileges} = [ map { my $p = $_; map { s/^\{DAV:\}//r } grep { /^\{DAV:\}/ } keys %$p }
                              map { _list($_) } $val->{"${D}privilege"} ];
         }
+        elsif ($key eq "${D}quota-used-bytes" || $key eq "${D}quota-available-bytes") {
+          # RFC 4331 S3, S4: unsigned integers; anything else is ignored
+          my $t = _text($val);
+          $e{$key =~ /used/ ? 'quotaUsed' : 'quotaAvailable'} = $t + 0 if defined $t && $t =~ /\A\s*\d+\s*\z/;
+        }
         elsif ($key eq "${D}acl")   { $e{acl} = parse_aces($val) }
         elsif ($key eq "${D}owner") { my $o = ref $val eq 'HASH' ? _href_path($val->{"${D}href"}) : undef; $e{owner} = $o if defined $o }
         elsif ($key =~ /^\{\Q$NS_J\E\}(.+)$/) { $e{dead}{$1} = _text($val) }
@@ -124,6 +129,24 @@ sub PropFind {
   my $res = $Self->_xml('PROPFIND', $path, $body, Depth => $depth // 1);
   die "PROPFIND $path: HTTP $res->{status}\n" unless $res->{status} == 207;
   return parse_multistatus($res->{content});
+}
+
+# RFC 4331: the quota covering $path, as { used, available } (bytes), or
+# undef when the server reports no quota there.  A Depth-0 PROPFIND of just
+# these two properties: they are not in every listing, because a server may
+# work the quota out afresh for every resource it lists.
+sub Quota {
+  my ($Self, $path) = @_;
+  my $res = $Self->_xml('PROPFIND', $path,
+    qq{<?xml version="1.0" encoding="utf-8"?><D:propfind xmlns:D="DAV:"><D:prop>}
+    . '<D:quota-used-bytes/><D:quota-available-bytes/></D:prop></D:propfind>', Depth => 0);
+  return undef unless $res->{status} == 207;
+  (my $want = $path) =~ s{/+\z}{};
+  my @e = @{ parse_multistatus($res->{content}) };
+  my ($e) = grep { $_->{href} eq $want } @e;
+  $e //= $e[0] if @e == 1;
+  return undef unless $e && defined $e->{quotaUsed} && defined $e->{quotaAvailable};
+  return { used => $e->{quotaUsed}, available => $e->{quotaAvailable} };
 }
 
 sub SyncCollection {

@@ -160,7 +160,7 @@ sub connect_files {
 # FileNode backend commands: thin pass-throughs, so ImapDB never holds a
 # WebDAV connection itself (the same split as calendars and contacts).
 # PropFind becomes files_prop_find, SetAcl files_set_acl, and so on.
-for my $m (qw(PropFind SyncCollection Probe Raw Get Put Mkcol Move Copy Delete PropPatch GetAcl SetAcl AclInfo)) {
+for my $m (qw(PropFind SyncCollection Probe Raw Get Put Mkcol Move Copy Delete PropPatch GetAcl SetAcl AclInfo Quota)) {
   my $cmd = 'files_' . lc($m =~ s/(?<!^)([A-Z])/_$1/gr);
   no strict 'refs';
   *$cmd = sub {

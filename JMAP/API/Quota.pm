@@ -37,13 +37,36 @@ sub _quota_to_jmap {
   };
 }
 
+# The FileNode draft's Quotas section: the WebDAV server's RFC 4331 quota
+# on the files root ({ used, available }, bytes) as an octets Quota.
+sub _files_quota_to_jmap {
+  my ($dav, $name) = @_;
+  return undef unless $dav;
+  return {
+    id           => 'files:octets',
+    resourceType => 'octets',
+    used         => int($dav->{used}),
+    hardLimit    => int($dav->{used} + $dav->{available}),
+    scope        => 'account',
+    name         => $name,
+    types        => ['FileNode'],
+  };
+}
+
 sub _get_all_quotas {
   my ($Self, $user) = @_;
   my $name = $user->{email} // '';
   # Commit before backend_cmd (which requires no open transaction)
   $Self->commit();
   my $raw = eval { $Self->{db}->backend_cmd('get_quota') } || [];
-  return map { _quota_to_jmap($_, $name) } @$raw;
+  my @quotas = map { _quota_to_jmap($_, $name) } @$raw;
+  if ($Self->{db}->can('files_quota')) {
+    my $dav = eval { $Self->{db}->files_quota() };
+    warn "Quota: files quota: $@" if $@;
+    my $files = _files_quota_to_jmap($dav, $name);
+    push @quotas, $files if $files;
+  }
+  return @quotas;
 }
 
 sub api_Quota_get {

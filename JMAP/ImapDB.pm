@@ -1113,6 +1113,15 @@ sub filenode_features {
   return $Self->{_filefeatures} = $f;
 }
 
+# The RFC 4331 quota on the files root, { used, available } in bytes, or
+# undef: no WebDAV, or a server that reports no quota (Probe found none).
+sub files_quota {
+  my $Self = shift;
+  my $root = $Self->files_root() or return undef;
+  return undef unless $Self->filenode_features()->{quota};
+  return $Self->backend_cmd('files_quota', "$root/");
+}
+
 # The features filenode_features last loaded, without any I/O ({} if none).
 sub filenode_features_cached { return $_[0]{_filefeatures} || {} }
 

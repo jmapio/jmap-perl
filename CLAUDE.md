@@ -47,7 +47,9 @@ Hard rules that are easy to violate:
 
 - `bin/jmap-proxy.pl` — the server (parent + worker loop + cross-account `/copy` orchestration).
 - `JMAP/DB.pm` — base DB class (SQLite schema, transactions, sync state, query snapshot cache).
-  - `JMAP/ImapDB.pm` (← DB) — IMAP/CalDAV/CardDAV sync. `FastmailDB`, `GmailDB`, `AOLDB` extend it.
+  - `JMAP/ImapDB.pm` (← DB) — IMAP/CalDAV/CardDAV/WebDAV sync, including the FileNode mirror,
+    its writes and `shareWith` (`set_filenode_sharewith` and its propagation).
+    `FastmailDB`, `GmailDB`, `AOLDB` extend it.
   - `JMAP/JmapDB.pm` — standalone, for JMAP passthrough backends.
 - `JMAP/Dispatch.pm` — pure, unit-testable dispatch core: the method → capability table,
   `check_accounts` (a missing
@@ -59,18 +61,60 @@ Hard rules that are easy to violate:
   `i;unicode-casemap`) advertised in `collationAlgorithms`. Every string comparator in a
   `/query` sort goes through `JMAP::Collation::compare` with the Comparator's `collation`;
   a bare `cmp` there ignores it. Pure, like `Dispatch`; `t/collation.t` covers it.
+- `JMAP/FileNode.pm` — pure FileNode logic: ids, blob ids, name rules, globs, rights,
+  reconciliation, `/set` ordering, filters and sorts. No I/O, no DB; `t/filenode-*.t`.
+- `JMAP/Sync/WebDAVTalk.pm` — a `Net::DAVTalk` subclass for FileNode: PROPFIND normalised to
+  entries, PUT/MKCOL/MOVE/COPY/DELETE/PROPPATCH, RFC 3744 ACLs, RFC 4331 quota, and `Probe`
+  (what the server really does). Protocol only, no DB.
 - `JMAP/FileNodeCopy.pm` — cross-account `FileNode/copy`, run in the parent: every request
   goes through an injected `send` (the proxy's `send_backend_request`), so it never blocks and
   `t/filenode-copy.t` drives it against a fake. Pages the source listing, stages a directory
   copy under a temporary name when `onExists` would replace, rolls back by explicit ids.
 - `JMAP/API.pm` — JMAP request handler; dispatches to per-datatype method modules in
   `JMAP/API/` (`Email`, `Mailbox`, `Thread`, `Calendar`, `Contact`, `Submission`,
-  `StorageNode`, `MDN`, `Quota`, `Preferences`, `Blob`). `JMAP/BlobConvert.pm` is the pure
+  `FileNode`, `Principal`, `MDN`, `Quota`, `Preferences`, `Blob`). `JMAP/API/FileNode.pm` serves
+  every `FileNode/*` method from the mirror (`FileNode/copy` is cross-account only, in
+  `FileNodeCopy`). `JMAP/BlobConvert.pm` is the pure
   engine behind the blob extensions (RFC 9404 and the blobext draft): UTF-8 checks, digests,
   archive/compress/delta/image recipes, with runtime detection of the optional modules.
 - `JMAP/Sync/` — backend sync drivers (`Standard`, `Gmail`, `Fastmail`, `AOL`, `Common`).
 - `JMAP/OAuth/` — OAuth2 signup (`Google`, `Fastmail`, `OIDC`, `PACC`, `PKCE`).
 - `JMAP/CredentialStore.pm` — pluggable at-rest encryption for stored credentials.
+
+## FileNode over WebDAV
+
+Design: `docs/superpowers/specs/2026-10-09-filenode-webdav-design.md`. Files live on the
+account's WebDAV server (`iserver.webdavURL`; on Cyrus, `#drive`), and `jfilenodes` mirrors
+their **metadata only**: every method reads the mirror, every write goes to WebDAV first.
+
+- **Ids say where they come from**: `S` + hash of the server's stable id (survives any move),
+  `L` + uuid when the server has none (survives the proxy's moves; another client's move is
+  matched by fingerprint). A sync never reissues an id it already holds.
+- **Sync cadence**: one PROPFIND per collection, so not every tick — 60 s on demand from a
+  FileNode method, 300 s from the periodic `sync`, first walk in the backfill worker. Never
+  prune a subtree on an unchanged collection ETag: Cyrus does not propagate them upwards.
+- **Server values go in columns, client values in dead props** under
+  `https://jmap.io/ns/filenode` (R4). Dead-prop support is learnt by reading one back:
+  Cyrus answers a file's PROPPATCH 200 and stores nothing.
+- **Trust nothing the server says about itself.** `Probe` tries each feature and keeps the
+  result in `iserver.webdavFeatures` (`deadProps`, `etagIsContent`, `acl`, `quota`, ...);
+  other facts are learnt on first use (`moveLeavesEmpty`, `principalBase`, `privileges`).
+  An account probed before a key existed lacks it, so code must treat a missing key as
+  "unknown", not "no". Each defence has a canned bad response in `t/webdavtalk-canned.t`.
+- **`FileNode/set` is judged by its final state**: destroys, creates and moves are ordered
+  (temporary names break swaps and cycles) so sibling names stay unique at every step. A
+  node the client asked to move or rename is **never deleted by the same call** — not by a
+  destroy, a `replace`, or `onDestroyRemoveChildren` — even when that move is refused.
+- **`shareWith` is the directory's WebDAV ACL**. Cyrus ACLs do not inherit, so the proxy
+  carries each change down to existing subdirectories itself, and a directory that moves
+  carries the sharing delta between its old and new parent. Files are never shared (an ACL
+  on a Cyrus file rewrites its collection's). Cyrus lists ACEs (e.g. `defaultacl`'s
+  `admin`) that it then refuses back; the proxy fails the share rather than drop one,
+  unless it is named in `JMAP_FILES_DROPPABLE_PRINCIPALS` (the test stack sets `admin`).
+- **Test stack**: `restart-test-proxy.sh clean` builds and runs `<CYRUS_IMAGE>-webdav`, a
+  derived image with `webdav` in `httpmodules`; restarting the Cyrus container breaks its
+  auth, so always rebuild with `clean`. Cyrus has no FileNode, so `t/FileNode/` has no
+  `--direct` baseline: every failure there is the proxy's.
 
 ## Passthrough request dispatch (`_do_jmap_request`)
 

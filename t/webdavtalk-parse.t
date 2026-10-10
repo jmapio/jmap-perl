@@ -79,4 +79,28 @@ is_deeply($d->{dead}, { executable => '1', accessed => '2026-10-01T00:00:00Z' },
 is($d->{fileid}, '00001234ocabc', 'oc:fileid');
 is($d->{sha1}, 'aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d', 'ME:sha1hex');
 
+# RFC 4331 quota properties (Cyrus #drive reports both on the home collection).
+my $quota = <<'XML';
+<?xml version="1.0" encoding="utf-8"?>
+<D:multistatus xmlns:D="DAV:">
+  <D:response>
+    <D:href>/dav/drive/user/user1/</D:href>
+    <D:propstat><D:prop>
+      <D:quota-used-bytes>4096</D:quota-used-bytes>
+      <D:quota-available-bytes>104853504</D:quota-available-bytes>
+    </D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat>
+  </D:response>
+  <D:response>
+    <D:href>/dav/drive/user/user2/</D:href>
+    <D:propstat><D:prop><D:quota-used-bytes>-1</D:quota-used-bytes></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat>
+    <D:propstat><D:prop><D:quota-available-bytes/></D:prop><D:status>HTTP/1.1 404 Not Found</D:status></D:propstat>
+  </D:response>
+</D:multistatus>
+XML
+my ($qa, $qb) = @{ $parse->($quota) };
+is($qa->{quotaUsed}, 4096, 'quota-used-bytes');
+is($qa->{quotaAvailable}, 104853504, 'quota-available-bytes');
+is($qb->{quotaUsed}, undef, 'a quota value that is not an unsigned integer is ignored');
+ok(!exists $qb->{quotaAvailable}, 'a 404 quota property is absent');
+
 done_testing;
