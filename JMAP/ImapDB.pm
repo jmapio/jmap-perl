@@ -2228,12 +2228,13 @@ sub create_filenodes {
       }
     }
 
-    # WebDAV first ...
+    # WebDAV first ... (a replacing PUT only over the file the mirror knew:
+    # If-Match; a 412 is the alreadyExists below, naming what is there now)
     my $href = "$parent->{href}/$name";
     my $status = $nodetype eq 'directory'
       ? $Self->backend_cmd('files_mkcol', $href)
       : $Self->backend_cmd('files_put', $href, $content, type => ($c->{type} // $ctype // 'application/octet-stream'),
-                           ($overwrite ? () : (if_none_match => 1)))->{status};
+                           ($overwrite ? (if_match => $overwrite->{etag}) : (if_none_match => 1)))->{status};
     unless ($status =~ /^2/) {
       my $err = _filenode_http_error($status, $nodetype eq 'directory' ? 'MKCOL' : 'PUT');
       if ($err->{type} eq 'alreadyExists') {
@@ -2712,6 +2713,26 @@ sub update_filenodes {
       $Self->commit();
     }
     my $overwrite = defined $temp ? undef : $plan{$id}{overwrite};
+    if ($overwrite) {
+      # Overwrite: T deletes whatever holds the name, a collection with all
+      # its members included (RFC 4918 S9.9.3), on the mirror's word that it
+      # is a file.  The destination is re-listed first: the one MOVE goes
+      # only if the holder is still the file the mirror knew, with the same
+      # ETag.  Anything else is destroyed the slow way (its server-side
+      # member check, If-Match), or, if the name is free now, not at all.
+      my $rows = eval { $Self->_files_refresh_dir($dir->{href}) } || {};
+      my $occ = $rows->{"$dir->{href}/$dest{$id}[1]"};
+      if (!$occ) { $overwrite = undef }
+      elsif ($occ->{nodeid} ne $overwrite || $occ->{nodetype} ne 'file'
+             || ($occ->{etag} // '') ne ($byid{$overwrite}{etag} // '')) {
+        unless ($rights->($occ)->{mayDelete}) {
+          $fail->({ type => 'forbidden', description => 'no mayDelete on the node it would replace' });
+          next;
+        }
+        if (my $err = $run_destroy->($occ->{nodeid})) { $fail->({ %$err }); next }
+        $overwrite = undef;
+      }
+    }
     my ($status, $err) = $do_move->($row, $dir, $temp // $dest{$id}[1], $overwrite);
     if (defined $status && $status =~ /^2/) {
       if (defined $temp) { $parked{$id} = $byid{$id} } else { delete $parked{$id}; $arrived{$id} = 1 }

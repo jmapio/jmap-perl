@@ -1409,5 +1409,64 @@ sub files_under { my $p = shift; return [ sort grep { m{^\Q$p\E/} && !$tree{$_}{
   features();
 }
 
+# --- a stale mirror and onExists replace (RFC 4918 S9.9.3: Overwrite: T
+# deletes a collection and all its members): what holds the name is looked
+# at again on the server before anything is replaced
+{
+  features();
+  my $x = mk(P => { parentId => $home, name => 'OW' }, a => { parentId => '#P', name => 'a.txt', blobId => 'f-x' },
+             b => { parentId => '#P', name => 'b.txt', blobId => 'f-y' }, c => { parentId => '#P', name => 'c.txt', blobId => 'f-y' },
+             d => { parentId => '#P', name => 'd.txt', blobId => 'f-y' }, e => { parentId => '#P', name => 'e.txt', blobId => 'f-y' });
+  my $dir_with = sub {   # behind the proxy's back, $h is now a collection with a file in it
+    my $h = shift;
+    $tree{$h} = { href => $h, isCollection => 1, etag => 'c' . ++$etag, modified => $T0, dead => {} };
+    $tree{"$h/keep"} = { href => "$h/keep", isCollection => 0, etag => 'k', size => 1, type => 'text/plain', modified => $T0, dead => {} };
+  };
+  $dir_with->("$R/OW/b.txt");
+  @log = ();
+  $set = set(onExists => 'replace', update => { $x->{a} => { name => 'b.txt' } })->[1];
+  is($set->{notUpdated}{$x->{a}}{type}, 'nodeHasChildren', 'a move onto a file that became a directory with children: nodeHasChildren') or diag explain $set;
+  ok($tree{"$R/OW/b.txt/keep"} && $tree{"$R/OW/a.txt"}, 'nothing lost: the directory, its file and the mover all stay');
+  ok(!grep({ /^files_move/ } @log), 'no MOVE was sent') or diag explain \@log;
+  my $newb = rows()->{"$R/OW/b.txt"};
+  is($newb->{nodetype}, 'directory', 'the mirror caught up');
+  $set = set(onExists => 'replace', onDestroyRemoveChildren => JSON::true, update => { $x->{a} => { name => 'b.txt' } })->[1];
+  ok(exists $set->{updated}{$x->{a}}, 'with onDestroyRemoveChildren the client allowed it: moved') or diag explain $set;
+  ok((grep { $_ eq $newb->{nodeid} } @{ $set->{destroyed} || [] }), 'the directory as the mirror now knows it is listed as destroyed')
+    or diag explain $set;
+  is(content("$R/OW/b.txt"), '8:text/plain', 'a\'s content is at b.txt');
+  ok(!$tree{"$R/OW/b.txt/keep"}, 'and the directory is gone');
+
+  # a file rewritten since (a new ETag): replaced as asked, but with a
+  # conditional DELETE of what is there now, not a blind Overwrite: T
+  $tree{"$R/OW/c.txt"}{etag} = 'rewritten';
+  @log = ();
+  $set = set(onExists => 'replace', update => { $x->{a} => { name => 'c.txt' } })->[1];
+  ok(exists $set->{updated}{$x->{a}}, 'a move onto a file rewritten since: replaced') or diag explain $set;
+  is_deeply($set->{destroyed}, [ $x->{c} ], 'the replaced node listed');
+  ok((grep { /^files_delete / } @log), 'through a DELETE of its own') or diag explain \@log;
+  is(content("$R/OW/c.txt"), '8:text/plain', 'a\'s content is at c.txt');
+
+  # the holder gone since: the name is simply free, and nothing is "destroyed" by this call
+  delete $tree{"$R/OW/d.txt"};
+  $set = set(onExists => 'replace', update => { $x->{a} => { name => 'd.txt' } })->[1];
+  ok(exists $set->{updated}{$x->{a}}, 'a move onto a name freed since: moved') or diag explain $set;
+  ok(!grep({ $_ eq $x->{d} } @{ $set->{destroyed} || [] }), 'the node that vanished is not claimed as destroyed');
+
+  # a replacing create PUTs over the file the mirror knew only (If-Match):
+  # the holder turned directory is alreadyExists, naming it, and keeps its file
+  $dir_with->("$R/OW/e.txt");
+  $set = set(onExists => 'replace', create => { n => { parentId => $x->{P}, name => 'e.txt', blobId => 'f-x' } })->[1];
+  is($set->{notCreated}{n}{type}, 'alreadyExists', 'a replacing create over a file that became a directory: alreadyExists') or diag explain $set;
+  is($set->{notCreated}{n}{existingId}, rows()->{"$R/OW/e.txt"}{nodeid}, 'naming the node as the mirror now knows it');
+  ok($tree{"$R/OW/e.txt/keep"}, 'and its file is kept');
+  # a file rewritten since: alreadyExists too, so the client decides again over the new content
+  $tree{"$R/OW/d.txt"}{etag} = 'rewritten';
+  $set = set(onExists => 'replace', create => { n => { parentId => $x->{P}, name => 'd.txt', blobId => 'f-y' } })->[1];
+  is($set->{notCreated}{n}{type}, 'alreadyExists', 'a replacing create over a file rewritten since: alreadyExists') or diag explain $set;
+  is(content("$R/OW/d.txt"), '8:text/plain', 'the rewritten file is untouched');
+  set(onDestroyRemoveChildren => JSON::true, destroy => [ $x->{P} ]);
+}
+
 ok(!$db->in_transaction(), 'no transaction left open');
 done_testing;
