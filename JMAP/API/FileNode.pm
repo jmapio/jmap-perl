@@ -310,4 +310,101 @@ sub api_FileNode_set {
   }];
 }
 
+# The ids matching a /query, in order: filter and sort run on the objects
+# FileNode/get returns (client-set dead properties overlaid).
+sub _filenode_query_ids {
+  my ($Self, $args, $rows) = @_;
+  my %rowbyid = map { $_->{nodeid} => $_ } @$rows;
+  my @objs = map { $Self->_filenode_object($_, \%rowbyid) } @$rows;
+  my %byid = map { $_->{id} => $_ } @objs;
+  my $ctx = { byid => \%byid };
+  my $filter = $args->{filter};
+  # draft S3.2.5 depth: "The number of levels of subdirectories to recurse
+  # into".  With a top-level parentId (or ancestorId) condition P and depth
+  # d > 0, the query covers the nodes at most d levels below P's children:
+  # P's children are level 0, their children level 1, and so on.
+  my $depth = $args->{depth} // 0;
+  my $key = ref $filter eq 'HASH' && !exists $filter->{operator}
+            ? (defined $filter->{parentId} ? 'parentId' : defined $filter->{ancestorId} ? 'ancestorId' : undef)
+            : undef;
+  my @m;
+  if ($depth > 0 && $key) {
+    my %f = %$filter;
+    my $base = delete $f{$key};
+    @m = grep { JMAP::FileNode::filter_match($_, \%f, $ctx) } grep {
+      my @a = JMAP::FileNode::_ancestors($_->{id}, \%byid);
+      my ($i) = grep { $a[$_] eq $base } 0 .. $#a;
+      defined $i && $i <= $depth;
+    } @objs;
+  }
+  else {
+    @m = grep { !$filter || JMAP::FileNode::filter_match($_, $filter, $ctx) } @objs;
+  }
+  return [ map { $_->{id} } @{ JMAP::FileNode::sort_nodes(\@m, $args->{sort} || [], \%byid) } ];
+}
+
+sub _filenode_query_problem {
+  my ($Self, $args) = @_;
+  my %ok = map { $_ => 1 } @{ $JMAP::FileNode::CAPS{fileNodeQuerySortOptions} };
+  for my $c (@{ $args->{sort} || [] }) {
+    return $Self->_transError(['error', {type => 'unsupportedSort', sort => $c}]) unless $ok{$c->{property} // ''};
+  }
+  return ();
+}
+
+sub _filenode_query_params {
+  my ($args) = @_;
+  return { filter => $args->{filter}, sort => $args->{sort}, depth => $args->{depth} // 0 };
+}
+
+sub api_FileNode_query {
+  my ($Self, $args) = @_;
+  my ($user, $accountid) = $Self->_filenode_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
+  my @e = $Self->_filenode_query_problem($args);
+  return @e if @e;
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['depth']}])
+    if defined $args->{depth} && $args->{depth} !~ /\A\d+\z/;
+  my $rows = $Self->{db}->filenode_rows();
+  my $state = "$user->{jstateFileNode}";
+  $Self->commit();
+  my $ids = $Self->_filenode_query_ids($args, $rows);
+  $Self->{db}->save_query('FileNode', _filenode_query_params($args), $state, $ids);
+  my ($start, $end) = $Self->_apply_window([ map { { id => $_ } } @$ids ], $args, sub { $_[0]{id} });
+  return ['error', {type => 'anchorNotFound'}] unless defined $start;
+  return ['FileNode/query', { accountId => $accountid, queryState => $state, canCalculateChanges => JSON::true,
+                              position => $start + 0, total => scalar(@$ids), ids => [ @$ids[$start .. $end] ] }];
+}
+
+sub api_FileNode_queryChanges {
+  my ($Self, $args) = @_;
+  my ($user, $accountid) = $Self->_filenode_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
+  my @e = $Self->_filenode_query_problem($args);
+  return @e if @e;
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['depth']}])
+    if defined $args->{depth} && $args->{depth} !~ /\A\d+\z/;
+  my $state = "$user->{jstateFileNode}";
+  my $since = $args->{sinceQueryState};
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceQueryState']}])
+    unless defined $since;
+  my $params = _filenode_query_params($args);
+  my $rows = $Self->{db}->filenode_rows();
+  my %changed = map { $_->{nodeid} => 1 } @{ $Self->{db}->dget('jfilenodes', { jmodseq => ['>', $since] }, 'nodeid') };
+  $Self->commit();
+  # load_query and save_query open their own transactions
+  my $old = $Self->{db}->load_query('FileNode', $params, $since);
+  return ['error', {type => 'cannotCalculateChanges', newQueryState => $state}] unless $old;
+  my $new = $Self->_filenode_query_ids($args, $rows);
+  $Self->{db}->save_query('FileNode', $params, $state, $new);
+  # every property is mutable, so a changed node is removed and re-added (RFC 8620 S5.6)
+  my %oldset = map { $_ => 1 } @$old;
+  my %newset = map { $_ => 1 } @$new;
+  my @removed = grep { !$newset{$_} || $changed{$_} } @$old;
+  my @added = map { { id => $new->[$_], index => $_ } } grep { !$oldset{$new->[$_]} || $changed{$new->[$_]} } 0 .. $#$new;
+  return ['error', { type => 'tooManyChanges' }] if $args->{maxChanges} && @removed + @added > $args->{maxChanges};
+  return ['FileNode/queryChanges', { accountId => $accountid, oldQueryState => "$since", newQueryState => $state,
+                                     removed => \@removed, added => \@added, total => scalar(@$new) }];
+}
+
 1;

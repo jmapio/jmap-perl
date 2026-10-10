@@ -180,12 +180,17 @@ my @EMAIL_FILTER = qw(inMailbox inMailboxOtherThan before after minSize maxSize
   allInThreadHaveKeyword someInThreadHaveKeyword noneInThreadHaveKeyword
   hasKeyword notKeyword hasAttachment text from to cc bcc subject body header);
 my @MAILBOX_FILTER = qw(parentId name role hasAnyRole isSubscribed);
+my @FILENODE_FILTER = qw(isTopLevel parentId ancestorId descendantId nodeType role hasAnyRole
+  blobId isExecutable createdBefore createdAfter modifiedBefore modifiedAfter accessedBefore
+  accessedAfter minSize maxSize name nameMatch type typeMatch text);
 my %FILTER_CONDITIONS = (
   'Email/query'          => \@EMAIL_FILTER,
   'Email/queryChanges'   => \@EMAIL_FILTER,
   'SearchSnippet/get'    => \@EMAIL_FILTER,
   'Mailbox/query'        => \@MAILBOX_FILTER,
   'Mailbox/queryChanges' => \@MAILBOX_FILTER,
+  'FileNode/query'        => \@FILENODE_FILTER,
+  'FileNode/queryChanges' => \@FILENODE_FILTER,
 );
 
 # Returns a description of the first problem in a filter tree, or undef.

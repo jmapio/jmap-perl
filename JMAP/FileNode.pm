@@ -352,4 +352,90 @@ sub unique_name {
   die "no free name for $name\n";
 }
 
+use JMAP::Collation;
+
+sub _ancestors {
+  my ($id, $byid) = @_;
+  my @a;
+  my %seen;
+  for (my $p = $byid->{$id} ? $byid->{$id}{parentId} : undef; defined $p && !$seen{$p}++; $p = $byid->{$p} ? $byid->{$p}{parentId} : undef) {
+    push @a, $p;
+  }
+  return @a;
+}
+
+# draft S3.2.5 FilterCondition / RFC 8620 FilterOperator.
+sub filter_match {
+  my ($o, $f, $ctx) = @_;
+  if (exists $f->{operator}) {
+    my @c = @{ $f->{conditions} || [] };
+    return (grep { !filter_match($o, $_, $ctx) } @c) ? 0 : 1 if $f->{operator} eq 'AND';
+    return (grep {  filter_match($o, $_, $ctx) } @c) ? 1 : 0 if $f->{operator} eq 'OR';
+    return (grep {  filter_match($o, $_, $ctx) } @c) ? 0 : 1;   # NOT
+  }
+  my $byid = $ctx->{byid};
+  my $date = sub { epoch($_[0]) // 0 };
+  if (exists $f->{isTopLevel})   { return 0 unless !defined $o->{parentId} == !!$f->{isTopLevel} }
+  if (defined $f->{parentId})    { return 0 unless ($o->{parentId} // '') eq $f->{parentId} }
+  if (defined $f->{ancestorId})  { return 0 unless grep { $_ eq $f->{ancestorId} } _ancestors($o->{id}, $byid) }
+  if (defined $f->{descendantId}){ return 0 unless grep { $_ eq $o->{id} } _ancestors($f->{descendantId}, $byid) }
+  if (defined $f->{nodeType})    { return 0 unless $o->{nodeType} eq $f->{nodeType} }
+  if (defined $f->{role})        { return 0 unless ($o->{role} // '') eq $f->{role} }
+  if (exists $f->{hasAnyRole})   { return 0 unless !!defined($o->{role}) == !!$f->{hasAnyRole} }
+  if (defined $f->{blobId})      { return 0 unless ($o->{blobId} // '') eq $f->{blobId} }
+  if (exists $f->{isExecutable}) { return 0 unless !!$o->{executable} == !!$f->{isExecutable} }
+  for my $p (qw(created modified accessed)) {
+    if (defined $f->{"${p}Before"}) { return 0 unless $date->($o->{$p}) <  $date->($f->{"${p}Before"}) }
+    if (defined $f->{"${p}After"})  { return 0 unless $date->($o->{$p}) >= $date->($f->{"${p}After"}) }
+  }
+  if (defined $f->{minSize})     { return 0 unless defined $o->{size} && $o->{size} >= $f->{minSize} }
+  if (defined $f->{maxSize})     { return 0 unless defined $o->{size} && $o->{size} <  $f->{maxSize} }
+  if (defined $f->{name})        { return 0 unless $o->{name} eq $f->{name} }
+  if (defined $f->{nameMatch})   { return 0 unless $o->{name} =~ glob_regex($f->{nameMatch}) }
+  if (defined $f->{type})        { return 0 unless ($o->{type} // '') eq $f->{type} }
+  if (defined $f->{typeMatch})   { return 0 unless ($o->{type} // '') =~ glob_regex($f->{typeMatch}) }
+  if (defined $f->{text}) {
+    my $g = glob_regex("*$f->{text}*");
+    return 0 unless $o->{name} =~ $g || ($o->{type} // '') =~ $g;
+  }
+  return 1;
+}
+
+my %NODE_ORDER = (directory => 0, symlink => 1, file => 2);
+
+sub sort_nodes {
+  my ($objs, $sort, $byid) = @_;
+  my %keys;
+  my $cmp_one = sub {
+    my ($c, $x, $y) = @_;
+    my $p = $c->{property};
+    my $r;
+    if    ($p eq 'name')     { $r = JMAP::Collation::compare($c->{collation}, $x->{name}, $y->{name}, \%keys) }
+    elsif ($p eq 'nodeType') { $r = $NODE_ORDER{$x->{nodeType}} <=> $NODE_ORDER{$y->{nodeType}} }
+    elsif ($p eq 'type')     { $r = ($NODE_ORDER{$x->{nodeType}} <=> $NODE_ORDER{$y->{nodeType}})
+                                 || JMAP::Collation::compare($c->{collation}, $x->{type} // '', $y->{type} // '', \%keys) }
+    elsif ($p eq 'size')     { $r = (defined $x->{size} ? 0 : 1) <=> (defined $y->{size} ? 0 : 1) || ($x->{size} // 0) <=> ($y->{size} // 0) }
+    else                     { $r = (epoch($x->{$p}) // 0) <=> (epoch($y->{$p}) // 0) }
+    $r = -$r if defined $c->{isAscending} && !$c->{isAscending} && $p ne 'size';
+    $r = ((defined $x->{size} ? 0 : 1) <=> (defined $y->{size} ? 0 : 1)) || (($y->{size} // 0) <=> ($x->{size} // 0))
+      if $p eq 'size' && defined $c->{isAscending} && !$c->{isAscending};
+    return $r;
+  };
+  my @flat = grep { ($_->{property} // '') ne 'tree' } @$sort;
+  my $cmp = sub { my ($x, $y) = @_; for my $c (@flat) { my $r = $cmp_one->($c, $x, $y); return $r if $r } return $x->{id} cmp $y->{id} };
+  return [ sort { $cmp->($a, $b) } @$objs ] unless grep { ($_->{property} // '') eq 'tree' } @$sort;
+
+  # draft S3.2.5 "tree": by name, each directory followed by its sorted children
+  my $tc = { property => 'name', collation => (grep { $_->{property} eq 'tree' } @$sort)[0]{collation} };
+  my %in = map { $_->{id} => $_ } @$objs;
+  my %kids;
+  push @{ $kids{ defined $_->{parentId} && $in{$_->{parentId}} ? $_->{parentId} : '' } }, $_ for @$objs;
+  my $order = sub { my ($x, $y) = @_; ($NODE_ORDER{$x->{nodeType}} <=> $NODE_ORDER{$y->{nodeType}}) || $cmp_one->($tc, $x, $y) || $x->{id} cmp $y->{id} };
+  my @out;
+  my $walk;
+  $walk = sub { for my $n (sort { $order->($a, $b) } @{ $kids{$_[0]} || [] }) { push @out, $n; $walk->($n->{id}) } };
+  $walk->('');
+  return \@out;
+}
+
 1;

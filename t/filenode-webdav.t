@@ -50,7 +50,7 @@ is_deeply($sess->{capabilities}{'urn:ietf:params:jmap:filenode'}, {}, 'and it is
 my $acap = $sess->{accounts}{$user}{accountCapabilities}{'urn:ietf:params:jmap:filenode'};
 is($acap->{maxSizeFileNodeName}, 255, 'account capability');
 
-# the root (FileNode/query arrives in a later task: find it with a full /get)
+# the root (find it with FileNode/query or a full /get)
 force_sync();   # whatever else changed on the drive is in the mirror before $state is taken
 my ($all) = @{ jmap(['FileNode/get', { ids => undef }]) };
 my @top = grep { !defined $_->{parentId} } @{$all->{list}};
@@ -361,5 +361,34 @@ my ($dd, $ff) = ($u->{created}{d}{id}, $u->{created}{f}{id});
 is($u->{updated}{$ff}{size}, 7, 'move a directory and replace a file\'s content inside it, in one call') or diag explain $u;
 is(raw($u->{updated}{$ff}{blobId})->{content}, 'second!', 'the new content downloads');
 jmap(['FileNode/set', { onDestroyRemoveChildren => JSON::true, destroy => [ $rid{R} ] }]);
+
+# --- query (Task 9)
+my ($qb) = @{ jmap(['FileNode/query', { filter => { body => 'x' } }]) };
+is($qb->{type}, 'unsupportedFilter', 'body filter is unsupported');
+
+my ($qn) = @{ jmap(['FileNode/set', { create => { d1 => { parentId => $home->{id}, name => "$tag-deep" },
+  d2 => { parentId => '#d1', name => 'd2' }, f3 => { parentId => '#d2', name => 'f3', blobId => $blob->{blobId} } } }]) };
+my ($qq) = @{ jmap(['FileNode/query', { filter => { ancestorId => $home->{id} }, sort => [ { property => 'tree' } ] }]) };
+is_deeply($qq->{ids}, [ map { $qn->{created}{$_}{id} } qw(d1 d2 f3) ], 'tree query over the home directory: depth-first') or diag explain $qq;
+my ($q0) = @{ jmap(['FileNode/query', { filter => { parentId => $qn->{created}{d1}{id} } }]) };
+is_deeply($q0->{ids}, [ $qn->{created}{d2}{id} ], 'depth 0: children only');
+my ($q1) = @{ jmap(['FileNode/query', { filter => { parentId => $qn->{created}{d1}{id} }, depth => 1 }]) };
+is_deeply([ sort @{$q1->{ids}} ], [ sort $qn->{created}{d2}{id}, $qn->{created}{f3}{id} ], 'depth 1: one level further');
+jmap(['FileNode/set', { onDestroyRemoveChildren => JSON::true, destroy => [ $qn->{created}{d1}{id} ] }]);
+
+# queryChanges: a created node is added, a destroyed one removed
+my ($qa) = @{ jmap(['FileNode/query', { filter => { parentId => $home->{id} }, sort => [ { property => 'name' } ] }]) };
+my ($qc) = @{ jmap(['FileNode/set', { create => { n => { parentId => $home->{id}, name => "$tag-qc" } } }]) };
+my $nid = $qc->{created}{n}{id};
+my ($qd) = @{ jmap(['FileNode/queryChanges', { filter => { parentId => $home->{id} }, sort => [ { property => 'name' } ],
+                                              sinceQueryState => $qa->{queryState} }]) };
+is_deeply([ map { $_->{id} } @{$qd->{added}} ], [ $nid ], 'queryChanges: the new node is added') or diag explain $qd;
+is_deeply($qd->{removed}, [], 'and nothing removed');
+my ($qe) = @{ jmap(['FileNode/queryChanges', { filter => { parentId => $home->{id} }, sort => [ { property => 'size' } ],
+                                              sinceQueryState => $qa->{queryState} }]) };
+is($qe->{type}, 'cannotCalculateChanges', 'queryChanges with other parameters cannot be calculated');
+my ($qs) = @{ jmap(['FileNode/query', { sort => [ { property => 'name', collation => 'i;bogus' } ] }]) };
+is($qs->{type}, 'unsupportedSort', 'unknown collation');
+jmap(['FileNode/set', { destroy => [ $nid ] }]);
 
 done_testing;

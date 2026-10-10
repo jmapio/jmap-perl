@@ -86,7 +86,7 @@ my %METHOD_CAPABILITIES;
       ContactGroup/get ContactGroup/changes ContactGroup/set
     )],
     # draft-ietf-jmap-filenode
-    'urn:ietf:params:jmap:filenode' => [qw(FileNode/get FileNode/changes FileNode/set)],
+    'urn:ietf:params:jmap:filenode' => [qw(FileNode/get FileNode/changes FileNode/set FileNode/query FileNode/queryChanges)],
     # RFC 9404
     'urn:ietf:params:jmap:blob' => [qw(Blob/upload Blob/get Blob/lookup)],
     # draft-ietf-jmap-blobext supersedes RFC 9404: Blob/get and Blob/lookup are
