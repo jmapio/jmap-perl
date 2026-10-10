@@ -631,5 +631,27 @@ my ($bad) = keys %{ $set->{notUpdated} || {} };
 like($set->{notUpdated}{$bad // ''}{description} // '', qr{left at \Q$R\E/R9/\.~tmp~}, 'the error names where the node was left')
   or diag explain $set;
 
+# a swap with a replace: the node parked to break the cycle lies inside the
+# directory being replaced, so it is parked outside it (fix round 2, N1)
+for my $flag (0, 1) {
+  my $n = "R10$flag";
+  my $x = mk(D => { parentId => $home, name => $n }, f => { parentId => '#D', name => 'f.txt', blobId => 'f-y' },
+             s => { parentId => '#D', name => 's2' }, k => { parentId => '#s', name => 'k.txt', blobId => 'f-x' });
+  $set = set(onExists => 'replace', ($flag ? (onDestroyRemoveChildren => JSON::true) : ()),
+             update => { $x->{f} => { name => 's2' }, $x->{k} => { parentId => $x->{D}, name => 'f.txt' } })->[1];
+  my $how = $flag ? 'with onDestroyRemoveChildren' : 'without onDestroyRemoveChildren';
+  ok(exists $set->{updated}{$x->{f}} && exists $set->{updated}{$x->{k}}, "swap into a replaced directory, $how") or diag explain $set;
+  is_deeply($set->{destroyed}, [ $x->{s} ], 'only the replaced directory is destroyed');
+  is(content("$R/$n/f.txt"), '8:text/plain', 'k survives at D/f.txt');
+  is(content("$R/$n/s2"), '7:text/x-y', 'f is now named s2');
+  ok(!$tree{"$R/$n/s2/k.txt"} && !grep({ m{^\Q$R/$n/\E.*~tmp~} } keys %tree), 's2 is gone and no temporary name is left');
+  my $g = get(@$x{qw(f k)});
+  is($g->{$x->{k}}{name}, 'f.txt', 'the mirror agrees on k');
+  is($g->{$x->{f}}{name}, 's2', 'and on f');
+}
+
+my (undef, undef, undef, $lateNot) = $db->update_filenodes({}, sub { $_[0] }, { late_destroy => [ 'Lgonealready' ] });
+is_deeply($lateNot, { Lgonealready => { type => 'notFound' } }, 'a late destroy of a node already gone is notFound');
+
 ok(!$db->in_transaction(), 'no transaction left open');
 done_testing;

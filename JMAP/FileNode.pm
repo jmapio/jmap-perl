@@ -258,10 +258,13 @@ sub order_creates {
 # being moved into its own current subtree: such a move waits until the
 # node between them has moved away (the final tree is checked for cycles
 # by the caller).  $after ({ id => [ids] }) makes a move wait until those
-# ids have reached their destinations (a destroy that must follow them).
-# Returns [ [id, $temp_or_undef], ... ].
+# ids have left (a destroy that must follow them).  $park_in ({ id =>
+# dirid }) parks a node in that directory instead of its current one: a
+# node inside a directory that this call destroys must be parked outside
+# it, and once parked there it counts as having left (for $after).
+# Returns [ [id, $temp_or_undef, $parkdir_or_undef], ... ].
 sub order_moves {
-  my ($moves, $occupant, $parent, $after) = @_;
+  my ($moves, $occupant, $parent, $after, $park_in) = @_;
   my %pending = %$moves;
   my %held = %$occupant;
   my %par = %{ $parent || {} };
@@ -302,14 +305,18 @@ sub order_moves {
     # stuck: park the first node that waits on a name ...
     my ($id) = grep { $name_blocked->($_) } sort keys %pending;
     if (defined $id) {
-      # the parking spot is in the node's current directory, and free
+      # the parking spot is in the node's current directory (or the one
+      # the caller names, unless that lies inside the node), and free
       my ($cur) = grep { $held{$_} eq $id } keys %held;
       my $dir = defined $cur ? (split /\0/, $cur, 2)[0] : '';
+      my $elsewhere = $park_in && defined $park_in->{$id} && !$inside->($park_in->{$id}, $id);
+      $dir = $park_in->{$id} if $elsewhere;
       my %taken = map { (lc((split /\0/, $_, 2)[1]) => 1) } grep { /^\Q$dir\E\0/ } keys %held;
       my $temp = ".~tmp~$id";
       $temp = unique_name($temp, \%taken, 1) if $taken{ lc $temp };
-      push @steps, [$id, $temp];
+      push @steps, [$id, $temp, ($elsewhere ? $dir : undef)];
       $place->($id, "$dir\0$temp");
+      if ($elsewhere) { $par{$id} = $dir; delete $unfinished{$id} }
       push @parked, [$id, $pending{$id}];
       delete $pending{$id};
       next;

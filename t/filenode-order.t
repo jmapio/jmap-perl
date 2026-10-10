@@ -71,4 +71,10 @@ like($steps->[0][1], qr/^\.~tmp~[AB]\[2\]\z/, 'a free variant of it is');
 $steps = $om->({ A => "q\0a", B => "r\0b" }, { "p\0a" => 'A', "s\0b" => 'B' }, undef, { A => ['B'] });
 is_deeply([ map { $_->[0] } @$steps ], [ 'B', 'A' ], 'A waits for B');
 
+# $park_in: a node parked outside its directory has left it, for $after
+$steps = $om->({ F => "D\0s2", K => "D\0f.txt" }, { "D\0f.txt" => 'F', "D\0s2" => 'S', "S\0k.txt" => 'K' },
+               { F => 'D', K => 'S', S => 'D' }, { F => ['K'] }, { K => 'D' });
+is_deeply($steps, [ [ 'K', '.~tmp~K', 'D' ], [ 'F', undef ], [ 'K', undef ] ], 'parked in D, then F, then K')
+  or diag explain $steps;
+
 done_testing;

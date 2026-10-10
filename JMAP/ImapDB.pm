@@ -1900,7 +1900,10 @@ sub update_filenodes {
   my $curkey = sub { ($_[0]{parentid} // '') . "\0" . $key->($_[0]{name}) };
   my $destkey = sub { "$dest{$_[0]}[0]\0" . $key->($dest{$_[0]}[1]) };
   my %occupant = map { ($curkey->($_) => $_->{nodeid}) } values %byid;
-  my %late = map { ($_ => 1) } grep { defined && $byid{$_} } @{ $opts->{late_destroy} || [] };
+  my %late;
+  for my $d (grep { defined } @{ $opts->{late_destroy} || [] }) {
+    if ($byid{$d}) { $late{$d} = 1 } else { $notdestroyed{$d} = { type => 'notFound' } }
+  }
   my %claimed;
   for my $id (keys %dest) {   # a change of case only keeps its own name
     $claimed{ $destkey->($id) } = $id if $destkey->($id) eq $curkey->($byid{$id});
@@ -1973,6 +1976,25 @@ sub update_filenodes {
     my $h = $plan{$id}{destroy_first};
     $after{$id} = [ grep { $_ ne $id && $under->($_, $h) } keys %dest ];
   }
+  # A node that has to be parked (a swap, a rotation) while it lies inside
+  # a directory this call destroys is parked outside it -- in its
+  # destination directory, or else beside the outermost such directory --
+  # so the destroy does not take it along (R6).
+  my %doomed = (%late, map { ($plan{$_}{destroy_first} => 1) } grep { $plan{$_}{destroy_first} } keys %dest);
+  my %park_in;
+  if (%doomed) {
+    my $top_doomed = sub {   # the outermost doomed node that is $id or holds it
+      my $id = shift;
+      my ($top, %seen);
+      for (my $a = $id; defined $a && !$seen{$a}++; $a = $par{$a}) { $top = $a if $doomed{$a} }
+      return $top;
+    };
+    for my $id (keys %dest) {
+      my $top = $top_doomed->($par{$id} // '') // next;
+      my $to = $dest{$id}[0];
+      $park_in{$id} = defined $top_doomed->($to) ? $par{$top} : $to;
+    }
+  }
   my (%touched, %parked, %moved, %destroy_err);
   my $do_move = sub {   # MOVE $row into $dir as $name; the mirror follows
     my ($row, $dir, $name, $overwrite) = @_;
@@ -2035,12 +2057,18 @@ sub update_filenodes {
     }
     return $destroy_err{$h};
   };
-  for my $step (@{ JMAP::FileNode::order_moves(\%moves, \%occ, \%par, \%after) }) {
-    my ($id, $temp) = @$step;
+  for my $step (@{ JMAP::FileNode::order_moves(\%moves, \%occ, \%par, \%after, \%park_in) }) {
+    my ($id, $temp, $parkdir) = @$step;
     next unless $dest{$id};
     $Self->begin();
     my $row = $Self->filenode_row($id);
-    my $dir = $row ? $Self->filenode_row(defined $temp ? $row->{parentid} : $dest{$id}[0]) : undef;
+    my $dir = $row ? $Self->filenode_row(defined $temp ? ($parkdir // $row->{parentid}) : $dest{$id}[0]) : undef;
+    # where the node is now: a node parked outside a doomed directory has left it
+    my %anc;
+    for (my $a = $row ? $row->{parentid} : undef; defined $a && !$anc{$a}++; ) {
+      my $ar = $Self->filenode_row($a) or last;
+      $a = $ar->{parentid};
+    }
     $Self->commit();
     unless ($row && $dir) {
       $notupdated{$id} = { type => 'serverFail', description => 'the node or its new parent went away' };
@@ -2057,7 +2085,7 @@ sub update_filenodes {
     };
     if (!defined $temp && (my $h = $plan{$id}{destroy_first})) {
       # a node inside the one it displaces steps out of it first
-      if ($under->($id, $h)) {
+      if ($anc{$h}) {
         my ($st, $err) = $do_move->($row, $dir, $free_name->($dir->{nodeid}, ".~tmp~$id"));
         unless (defined $st && $st =~ /^2/) {
           $fail->(defined $st ? _filenode_http_error($st, 'MOVE') : { type => 'serverFail', description => "MOVE: $err" });
