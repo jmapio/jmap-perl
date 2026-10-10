@@ -1720,6 +1720,9 @@ sub _apply_file_plan {
     # values kept in the mirror (FileNode/set) are then the only copy, and
     # a listing must not wipe them (spec "Properties without a WebDAV home").
     $cols{deadprops} = $row->{deadprops} unless $features && $features->{deadProps};
+    # pins (JMAP::FileNode "Pins") are the mirror's own, carried over a
+    # listing and dropped once the server's value has moved on
+    $cols{deadprops} = JMAP::FileNode::pins_carry($row->{deadprops}, $cols{deadprops}, \%cols);
     my %diff = map { $_ => $cols{$_} } grep { ($row->{$_} // '') ne ($cols{$_} // '') } keys %cols;
     next unless %diff;
     # A node is only "changed" (new modseq, new "changed" time) when a
@@ -1865,6 +1868,10 @@ sub put_filenode_content {
   }
   # the PUT carried the type, so the server's getcontenttype holds it now
   $Self->_filenode_dead_set($new, { type => undef }) if exists $dead->{type};
+  # new content: the server's modified is the right one again, whatever a
+  # MOVE did before (a pin only hides the MOVE's reset; the re-listing has
+  # dropped it unless the PUT landed in the same second)
+  $Self->_filenode_pin_set($new, { modified => undef }) if exists $dead->{'_pin.modified'};
   return { status => 200, blobId => JMAP::FileNode::blob_id($new->{nodeid}, $new->{etag}), size => 0 + length($bytes), type => $type };
 }
 
@@ -1930,18 +1937,34 @@ sub _filenode_dead_set {
   my $cur = $Self->dgetfield('jfilenodes', { nodeid => $row->{nodeid} }, 'deadprops');
   $Self->commit();
   my $old = defined $cur ? (eval { decode_json($cur) } || {}) : {};
-  my %patch = (($fresh ? (map { $_ => undef } grep { !exists $dead->{$_} } keys %$old) : ()), %$dead);
+  # pins never go to the server (JMAP::FileNode "Pins")
+  my %patch = (($fresh ? (map { $_ => undef } grep { !exists $dead->{$_} && !/^_pin\./ } keys %$old) : ()), %$dead);
   my $ok = 1;
   $ok = $Self->backend_cmd('files_prop_patch', _filenode_path($row), \%patch)
     if %patch && $Self->filenode_features()->{deadProps};
   return 0 unless $ok;
   $Self->begin();
-  # a removed property (undef) is gone from the mirror too
+  # a removed property (undef) is gone from the mirror too; a client value
+  # supersedes a pin of the same property
   my %merged = $fresh ? %$dead : (%$old, %$dead);
+  delete $merged{"_pin.$_"} for grep { exists $dead->{$_} } qw(created modified);
   delete $merged{$_} for grep { !defined $merged{$_} } keys %merged;
   my $json = JMAP::FileNode::dead_json(\%merged);
   $Self->ddirty('jfilenodes', { deadprops => $json, changed => time() }, { nodeid => $row->{nodeid} })
     if ($json // '') ne ($cur // '');
+  $Self->commit();
+  return 1;
+}
+
+# Pin or drop (undef) pre-move timestamps in the mirror's deadprops (see
+# JMAP::FileNode "Pins"): $pins is key => [utc, server epoch].  Mirror only,
+# no PROPPATCH, no modseq: the node's visible values do not change by it.
+sub _filenode_pin_set {
+  my ($Self, $row, $pins) = @_;
+  $Self->begin();
+  my $cur = $Self->dgetfield('jfilenodes', { nodeid => $row->{nodeid} }, 'deadprops');
+  my $json = JMAP::FileNode::dead_json(JMAP::FileNode::dead_set_pins(JMAP::FileNode::dead_decode($cur), $pins));
+  $Self->dupdate('jfilenodes', { deadprops => $json }, { nodeid => $row->{nodeid} }) if ($json // '') ne ($cur // '');
   $Self->commit();
   return 1;
 }
@@ -1965,9 +1988,11 @@ sub destroy_filenodes {
   }
   $Self->commit();
   my $depth = sub { my $r = $row{$_[0]} or return -1; scalar(() = $r->{href} =~ m{/}g) };
+  my %failed;   # listed nodes still on the server after their own destroy failed
   for my $id (sort { $depth->($b) <=> $depth->($a) || $a cmp $b } @ids) {
     my $r = $row{$id};
     unless ($r) { $notdestroyed{$id} = { type => 'notFound' }; delete $destroying{$id}; next }
+    $failed{$id} = 1;   # until it goes
     unless (defined $r->{parentid}) {
       $notdestroyed{$id} = { type => 'forbidden', description => 'the home directory cannot be destroyed' };
       delete $destroying{$id};
@@ -1979,6 +2004,15 @@ sub destroy_filenodes {
     if (!$opts->{onDestroyRemoveChildren} && grep { !$destroying{$_->{nodeid}} } @$sub) {
       $notdestroyed{$id} = { type => 'nodeHasChildren' };
       delete $destroying{$id};   # so its parent is not destroyed over it
+      next;
+    }
+    # with the flag, a listed member whose own destroy failed (its content
+    # changed on the server, say) must not go with its directory: one id
+    # is never both destroyed and notDestroyed, and nothing changed is lost
+    if (my @stuck = grep { $failed{$_->{nodeid}} && $notdestroyed{$_->{nodeid}} } @$sub) {
+      $notdestroyed{$id} = { type => 'serverFail',
+                             description => 'a member changed on the server: ' . join(' ', sort map { $_->{nodeid} } @stuck) };
+      delete $destroying{$id};
       next;
     }
     # the mirror can be behind the server: a directory's members are
@@ -2020,6 +2054,7 @@ sub destroy_filenodes {
     $Self->ddirty('jfilenodes', { active => 0, changed => $now }, { nodeid => $id });
     push @destroyed, $id, $Self->_filenode_deactivate_subtree($id, $now);
     $Self->commit();
+    delete $failed{$id};
     $touched{ $parent_href{$id} } = 1 if defined $parent_href{$id};
   }
   # bring the parents' other children up to date too (spec "Writes")
@@ -2201,7 +2236,7 @@ sub create_filenodes {
     if ($clash) {
       my $mode = $opts->{onExists} // '';
       if ($mode eq 'newest') {
-        my $dead = defined $clash->{deadprops} ? (eval { decode_json($clash->{deadprops}) } || {}) : {};
+        my $dead = JMAP::FileNode::dead_effective(JMAP::FileNode::dead_decode($clash->{deadprops}), $clash);
         my $theirs = JMAP::FileNode::epoch($dead->{modified}) // $clash->{modified} // 0;
         my $ours = defined $v->{dead}{modified} ? JMAP::FileNode::epoch($v->{dead}{modified}) : time();
         $mode = $ours > $theirs ? 'replace' : '';
@@ -2376,8 +2411,9 @@ sub update_filenodes {
   my $up = sub { defined $_[0]{parentid} ? $byid{ $_[0]{parentid} } : undef };
   my $features = $Self->filenode_features();
   my $rights = sub { JMAP::FileNode::node_rights($_[0], $up, $features) };   # R7: effective privileges
-  my $deadof = sub { defined $_[0]{deadprops} ? (eval { decode_json($_[0]{deadprops}) } || {}) : {} };
-  my $modified_of = sub { JMAP::FileNode::epoch($deadof->($_[0])->{modified}) // $_[0]{modified} // 0 };
+  my $deadof = sub { JMAP::FileNode::dead_decode($_[0]{deadprops}) };                             # as stored (pins included)
+  my $effof  = sub { JMAP::FileNode::dead_effective($deadof->($_[0]), $_[0]) };                  # as clients see it
+  my $modified_of = sub { JMAP::FileNode::epoch($effof->($_[0])->{modified}) // $_[0]{modified} // 0 };
   my $now = time();
 
   # Every node the client asked to move or rename, whether or not that
@@ -2797,26 +2833,26 @@ sub update_filenodes {
   # its creationdate and getlastmodified on MOVE (Cyrus does, unless in the
   # same second).  A moved node whose server values moved, and which the
   # client has not set itself (now or before), gets its pre-move values
-  # pinned as client values (R4: the columns keep the server's).
+  # pinned (JMAP::FileNode "Pins": held only until the server's value
+  # moves again; R4: the columns keep the server's).
   for my $id (sort keys %moved) {
     my $was = $byid{$id} or next;
     $Self->begin();
     my $row = $Self->filenode_row($id);
     $Self->commit();
     next unless $row;
-    my $dead = $deadof->($row);
+    my $raw = $deadof->($row);
+    my $before = $effof->($was);   # what clients saw before the move: a client value or a live pin
     my $p = $plan{$id} ? $plan{$id}{patch} : {};
     my %pin;
     for my $k (qw(created modified)) {
-      next if defined $dead->{$k} || exists $p->{$k};
-      my $old = $was->{$k} // ($k eq 'created' ? $was->{modified} : undef);
-      my $new = $row->{$k} // ($k eq 'created' ? $row->{modified} : undef);
-      next unless defined $old && ($new // '') ne $old;
-      $pin{$k} = JMAP::FileNode::utc($old);
+      next if defined $raw->{$k} || exists $p->{$k};
+      my $old = defined $before->{$k} ? JMAP::FileNode::epoch($before->{$k}) : JMAP::FileNode::_server_time($was, $k);
+      my $new = JMAP::FileNode::_server_time($row, $k);
+      next unless defined $old && defined $new && $new != $old;
+      $pin{$k} = [ JMAP::FileNode::utc($old), $new ];
     }
-    next unless %pin;
-    $Self->_filenode_dead_set($row, \%pin)
-      or warn "update_filenodes: pinning @{[ sort keys %pin ]} of $row->{href} after its move failed\n";
+    $Self->_filenode_pin_set($row, \%pin) if %pin;
   }
 
   # 6. content, type and the client-set properties

@@ -318,9 +318,15 @@ Operations:
   does, unless in the same second); `created` and `modified` must not
   change (draft S3.1), so when the re-listing after the move shows the
   server's values moved and the client has not set them, the pre-move
-  values are pinned as client values (dead properties / the mirror's
-  `deadprops`; the columns keep the server's, per "Server values go in
-  columns").
+  values are pinned. A pin is not a client-set value: it is kept apart in
+  the mirror's `deadprops` (`_pin.<key>` = `<utc>@<server epoch at pin
+  time>`, never PROPPATCHed, never a property) and holds only while the
+  server's value is still the one the MOVE left. New content through the
+  proxy, or an edit another client made that a listing picks up, releases
+  it (and the listing drops it), so `modified` moves again; a `modified`
+  the client really set stays, as the draft requires. `onExists:
+  "newest"` compares the same effective value. The columns keep the
+  server's values throughout ("Server values go in columns").
 - Content change: PUT with `If-Match: <etag in the mirror>`. A 412 means the
   file changed underneath us: the update fails, and the next sync updates
   the mirror.

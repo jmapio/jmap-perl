@@ -487,6 +487,10 @@ Follow-ups:
       idle; the walk belongs in the background, the request should answer from the mirror
 - [ ] Quota ids contain `:` (`files:octets`), outside the RFC 8620 S1.2 Id alphabet
       (`A-Za-z0-9_-`); changing them makes clients refetch Quota
+- [ ] Files inside a directory the proxy moves are not re-listed after the MOVE, so their
+      `created`/`modified` are not pinned; this matters only on a server that resets the
+      timestamps of a collection's members on MOVE (Cyrus keeps a member's ETag; whether it
+      keeps the timestamps is unverified), where the next sync shows the server's new values
 - [ ] `begin_superlock` is held across `shareWith` propagation to every descendant directory
       (one ACL request each), so a big share blocks the account's other writes meanwhile
 - [ ] `sync-collection` with `sync-level: infinite` where a server supports it (one REPORT

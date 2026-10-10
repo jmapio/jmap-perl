@@ -375,6 +375,19 @@ isnt(get($staleid)->{$staleid}{blobId}, $stale_blob, 'the parent was re-listed: 
 $set = set(destroy => [ $staleid ])->[1];
 is_deeply($set->{destroyed}, [ $staleid ], 'destroyed once the mirror knows the ETag');
 ok(!$tree{"$R/stale.txt"}, 'and gone from the server');
+# with onDestroyRemoveChildren, a listed member whose destroy failed keeps
+# its directory too: an id is never both destroyed and notDestroyed
+$set = set(create => { d => { parentId => $home, name => 'sd' }, f => { parentId => '#d', name => 'f.txt', blobId => 'f-x' } })->[1];
+my ($sdid, $sfid) = ($set->{created}{d}{id}, $set->{created}{f}{id});
+$tree{"$R/sd/f.txt"}{etag} = 'rewritten';
+$set = set(onDestroyRemoveChildren => JSON::true, destroy => [ $sdid, $sfid ])->[1];
+is($set->{notDestroyed}{$sfid}{type}, 'serverFail', 'the changed file is not destroyed');
+is($set->{notDestroyed}{$sdid}{type}, 'serverFail', 'nor its directory, with the flag') or diag explain $set;
+like($set->{notDestroyed}{$sdid}{description}, qr/member changed on the server/, 'saying why');
+is($set->{destroyed}, undef, 'nothing destroyed');
+ok($tree{"$R/sd/f.txt"} && $tree{"$R/sd"}, 'both still on the server');
+$set = set(onDestroyRemoveChildren => JSON::true, destroy => [ $sdid, $sfid ])->[1];
+is_deeply([ sort @{ $set->{destroyed} || [] } ], [ sort $sdid, $sfid ], 'once the mirror knows the file: both go') or diag explain $set;
 
 # onExists replace of a directory checks the server too
 $set = set(create => { e => { parentId => $home, name => 'empty3' } })->[1];
@@ -1440,6 +1453,48 @@ sub files_under { my $p = shift; return [ sort grep { m{^\Q$p\E/} && !$tree{$_}{
   # a modified the client sets in the same call is the value
   $set = set(update => { $x->{f} => { name => 'h.txt', modified => '2021-01-01T00:00:00Z' } })->[1];
   is(get($x->{f})->{$x->{f}}{modified}, '2021-01-01T00:00:00Z', 'a modified set in the same update wins');
+  # a pin is not a client value: it only hides the MOVE's reset.  Any later
+  # change of the server's value releases it -- new content through the
+  # proxy, or an edit another client made that a sync picks up -- while a
+  # modified the client really set stays (draft S3.1)
+  my $y = mk(p => { parentId => $x->{P}, name => 'p.txt', blobId => 'f-x' },
+             q => { parentId => '#P', name => 'q.txt', blobId => 'f-x' },
+             r => { parentId => '#P', name => 'r.txt', blobId => 'f-x' },
+             n => { parentId => '#P', name => 'n.txt', blobId => 'f-x' });
+  set(update => { $y->{p} => { name => 'p2.txt' }, $y->{q} => { name => 'q2.txt' }, $y->{r} => { name => 'r2.txt', modified => '2022-02-02T02:02:02Z' },
+                  $y->{n} => { name => 'n2.txt' } });
+  like(rows()->{"$R/TS/p2.txt"}{deadprops}, qr/_pin\.modified/, 'the pin is in the mirror');
+  ok(!grep({ /_pin/ } keys %{ get($y->{p})->{$y->{p}} }), 'and never a property');
+  # rename, then new content through the proxy
+  set(update => { $y->{p} => { blobId => 'f-y' } });
+  is(get($y->{p})->{$y->{p}}{modified}, JMAP::FileNode::utc($tree{"$R/TS/p2.txt"}{modified}), 'new content: modified is the server\'s new value');
+  unlike(rows()->{"$R/TS/p2.txt"}{deadprops} // '', qr/_pin\.modified/, 'the pin is gone');
+  # rename, then an edit another client made, seen by a sync
+  $tree{"$R/TS/q2.txt"}{etag} = 'edited'; $tree{"$R/TS/q2.txt"}{modified} = $T0 + 50_000;
+  $db->sync_files();
+  is(get($y->{q})->{$y->{q}}{modified}, JMAP::FileNode::utc($T0 + 50_000), 'an external edit picked up by a sync: modified moves');
+  unlike(rows()->{"$R/TS/q2.txt"}{deadprops} // '', qr/_pin\.modified/, 'and the stale pin was cleaned up');
+  # a client-set modified, then new content: sticky
+  set(update => { $y->{r} => { blobId => 'f-y' } });
+  is(get($y->{r})->{$y->{r}}{modified}, '2022-02-02T02:02:02Z', 'a modified the client set stays through new content');
+  # "newest" after rename + external edit compares with the server's value, not the stale pin
+  $tree{"$R/TS/n2.txt"}{etag} = 'edited'; $tree{"$R/TS/n2.txt"}{modified} = $T0 + 50_000;
+  $db->sync_files();
+  $set = set(onExists => 'newest', create => { c => { parentId => $x->{P}, name => 'n2.txt', blobId => 'f-y', modified => JMAP::FileNode::utc($T0 + 40_000) } })->[1];
+  is($set->{notCreated}{c}{type}, 'alreadyExists', 'onExists newest: an older create does not replace the edited file') or diag explain $set;
+  is($tree{"$R/TS/n2.txt"}{etag}, 'edited', 'and the edit is kept');
+  $set = set(onExists => 'newest', update => { $y->{p} => { name => 'n2.txt', modified => JMAP::FileNode::utc($T0 + 40_000) } })->[1];
+  is($set->{notUpdated}{$y->{p}}{type}, 'alreadyExists', 'nor does an older move') or diag explain $set;
+  # a server that stores dead properties: the pin is the mirror's, kept across its listings
+  features(deadProps => 1); $deadprops_stored = 1;
+  my $z = mk(s => { parentId => $x->{P}, name => 's.txt', blobId => 'f-x' });
+  my $s0 = get($z->{s})->{$z->{s}};
+  @log = ();
+  set(update => { $z->{s} => { name => 's2.txt' } });
+  ok(!grep({ /^files_prop_patch/ } @log), 'a pin is never PROPPATCHed') or diag explain \@log;
+  $db->sync_files();
+  is(get($z->{s})->{$z->{s}}{modified}, $s0->{modified}, 'and survives a sync on a server that lists dead properties');
+  $deadprops_stored = 0;
   $move_resets_mtime = 0;
   # a server that keeps its timestamps across MOVE: nothing to pin, nothing written
   features(deadProps => 1);

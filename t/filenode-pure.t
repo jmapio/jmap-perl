@@ -211,6 +211,26 @@ is(JMAP::FileNode::utc(JMAP::FileNode::epoch('2009-02-13T23:31:30Z')), '2009-02-
   is(scalar @{ JMAP::FileNode::reconcile([$row], [ { %$e, sharewith => '{"u":{}}' } ])->{update} }, 1, 'shared now: an update');
 }
 
+# pins: held only while the server's value is the one recorded with them
+{
+  my $dead = { executable => '1', '_pin.modified' => '2020-01-01T00:00:00Z@1000', '_pin.created' => '2019-01-01T00:00:00Z@1000' };
+  is_deeply(JMAP::FileNode::pins_of($dead), { modified => ['2020-01-01T00:00:00Z', 1000], created => ['2019-01-01T00:00:00Z', 1000] }, 'pins_of');
+  is_deeply(JMAP::FileNode::dead_effective($dead, { modified => 1000 }),
+            { executable => '1', modified => '2020-01-01T00:00:00Z', created => '2019-01-01T00:00:00Z' }, 'live pins show, _pin keys do not');
+  is_deeply(JMAP::FileNode::dead_effective($dead, { modified => 1001 }), { executable => '1' }, 'the server moved on: no pin shows');
+  is_deeply(JMAP::FileNode::dead_effective({ %$dead, modified => '2021-01-01T00:00:00Z' }, { modified => 1000 })->{modified},
+            '2021-01-01T00:00:00Z', 'a client value wins over a pin');
+  is_deeply(JMAP::FileNode::dead_effective({ '_pin.modified' => 'garbage' }, { modified => 1000 }), {}, 'a malformed pin is ignored');
+  my $old = JMAP::FileNode::dead_json($dead);
+  like(JMAP::FileNode::pins_carry($old, undef, { modified => 1000 }), qr/_pin\.modified/, 'pins_carry keeps a live pin');
+  is(JMAP::FileNode::pins_carry($old, undef, { modified => 1001 }), undef, 'and drops stale ones');
+  unlike(JMAP::FileNode::pins_carry($old, JMAP::FileNode::dead_json({ modified => 'x' }), { modified => 1000 }), qr/_pin\.modified/,
+         'a client value in the new set supersedes the pin');
+  is(JMAP::FileNode::dead_json(JMAP::FileNode::dead_set_pins({ a => 1 }, { modified => ['2020-01-01T00:00:00Z', 7] })),
+     '{"_pin.modified":"2020-01-01T00:00:00Z@7","a":"1"}', 'dead_set_pins writes the flat form');
+  is(JMAP::FileNode::dead_json(JMAP::FileNode::dead_set_pins({ '_pin.modified' => 'x@1' }, { modified => undef })), undef, 'and undef drops it');
+}
+
 # the in-memory cap on one file's content (JMAP_FILES_MAX_BYTES)
 {
   local $ENV{JMAP_FILES_MAX_BYTES};

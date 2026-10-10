@@ -322,6 +322,64 @@ sub dead_json {
   return $CANON->encode({ map { ($_ => defined $d->{$_} ? "$d->{$_}" : undef) } keys %$d });
 }
 
+# Pins.  A MOVE must not change created or modified (draft S3.1), but a
+# server may reset them on MOVE (Cyrus); ImapDB::update_filenodes then pins
+# the pre-move value.  A pin is not a client-set value: it holds only while
+# the server's own value is still the one the MOVE left ("<utc>@<server
+# epoch at pin time>" under "_pin.<key>" in deadprops, never PROPPATCHed,
+# never a property).  Any later server change -- a PUT, an edit another
+# client made, picked up by a listing -- releases it, so an edit moves
+# modified again; a genuinely client-set value stays (the draft's rule).
+sub dead_decode { my $j = shift; return defined $j ? (eval { decode_json($j) } || {}) : {} }
+sub _server_time { my ($row, $k) = @_; return $row->{$k} // ($k eq 'created' ? $row->{modified} : undef) }
+# the pins in a decoded deadprops: key => [utc, server epoch]
+sub pins_of {
+  my $dead = shift;
+  my %p;
+  for my $k (grep { /^_pin\./ } keys %$dead) {
+    my ($name) = $k =~ /^_pin\.(\w+)\z/ or next;
+    my ($utc, $srv) = ($dead->{$k} // '') =~ /^(.+)\@(\d+)\z/ or next;
+    $p{$name} = [$utc, 0 + $srv];
+  }
+  return \%p;
+}
+sub pin_live { my ($pin, $row, $k) = @_; my $srv = _server_time($row, $k); return defined $srv && $srv == $pin->[1] ? 1 : 0 }
+# the client-visible dead values: the client's own, plus each pin that still
+# holds (the server column equals what it was when the pin was made)
+sub dead_effective {
+  my ($dead, $row) = @_;
+  my %eff = map { ($_ => $dead->{$_}) } grep { !/^_pin\./ } keys %$dead;
+  my $pins = pins_of($dead);
+  for my $k (keys %$pins) {
+    next if defined $eff{$k};
+    $eff{$k} = $pins->{$k}[0] if pin_live($pins->{$k}, $row, $k);
+  }
+  return \%eff;
+}
+# write pins into a decoded deadprops: key => [utc, server epoch], or undef to drop
+sub dead_set_pins {
+  my ($dead, $pins) = @_;
+  for my $k (keys %$pins) {
+    if (defined $pins->{$k}) { $dead->{"_pin.$k"} = "$pins->{$k}[0]\@$pins->{$k}[1]" } else { delete $dead->{"_pin.$k"} }
+  }
+  return $dead;
+}
+# the deadprops a listing leaves: $new (the listing's, or the mirror's kept
+# values) plus the pins of $old that still hold against the server values
+# in $cols, and none that a client value in $new supersedes; a stale pin
+# is dropped here, which is where the server's new value is first seen
+sub pins_carry {
+  my ($oldjson, $newjson, $cols) = @_;
+  my $new = dead_decode($newjson);
+  delete $new->{$_} for grep { /^_pin\./ } keys %$new;
+  my $pins = pins_of(dead_decode($oldjson));
+  for my $k (keys %$pins) {
+    next if defined $new->{$k} || !pin_live($pins->{$k}, $cols, $k);
+    $new->{"_pin.$k"} = "$pins->{$k}[0]\@$pins->{$k}[1]";
+  }
+  return dead_json($new);
+}
+
 sub utc { my $t = shift; return defined $t ? strftime('%Y-%m-%dT%H:%M:%SZ', gmtime($t)) : undef }
 
 # Always returns exactly one value (int or undef), never an empty list, so it

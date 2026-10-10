@@ -21,8 +21,10 @@ sub _filenode_object {
   my $up = sub { defined $_[0]{parentid} ? $byid->{$_[0]{parentid}} : undef };
   my $isfile = $row->{nodetype} eq 'file';
   # client-set values the server keeps as dead properties override the
-  # server's own (ImapDB::_filenode_cols keeps them apart)
-  my $dead = defined $row->{deadprops} ? (eval { decode_json($row->{deadprops}) } || {}) : {};
+  # server's own (ImapDB::_filenode_cols keeps them apart); a pin holds
+  # only while the server's value is the one the MOVE left (JMAP::FileNode
+  # "Pins"), and is never a property of its own
+  my $dead = JMAP::FileNode::dead_effective(JMAP::FileNode::dead_decode($row->{deadprops}), $row);
   my $dtime = sub { JMAP::FileNode::epoch($dead->{$_[0]}) };
   my $dbool = sub { defined $dead->{$_[0]} ? ($dead->{$_[0]} =~ /\A\s*(?:1|true)\s*\z/i ? 1 : 0) : undef };
   my $created  = $dtime->('created')  // $row->{created}  // $row->{modified} // $row->{changed};
