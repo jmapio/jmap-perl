@@ -59,6 +59,10 @@ Hard rules that are easy to violate:
   `i;unicode-casemap`) advertised in `collationAlgorithms`. Every string comparator in a
   `/query` sort goes through `JMAP::Collation::compare` with the Comparator's `collation`;
   a bare `cmp` there ignores it. Pure, like `Dispatch`; `t/collation.t` covers it.
+- `JMAP/FileNodeCopy.pm` — cross-account `FileNode/copy`, run in the parent: every request
+  goes through an injected `send` (the proxy's `send_backend_request`), so it never blocks and
+  `t/filenode-copy.t` drives it against a fake. Pages the source listing, stages a directory
+  copy under a temporary name when `onExists` would replace, rolls back by explicit ids.
 - `JMAP/API.pm` — JMAP request handler; dispatches to per-datatype method modules in
   `JMAP/API/` (`Email`, `Mailbox`, `Thread`, `Calendar`, `Contact`, `Submission`,
   `StorageNode`, `MDN`, `Quota`, `Preferences`, `Blob`). `JMAP/BlobConvert.pm` is the pure

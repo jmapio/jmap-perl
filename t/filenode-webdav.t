@@ -564,7 +564,27 @@ SKIP: {
   my $ost = $odav->Raw('PROPFIND', "$oroot/", undef, Depth => 0)->{status};
   skip "no drive for $other on the test server (HTTP $ost)", 1 unless $ost == 207;
   # registered the way bin/restart-test-proxy.sh registers the test user,
-  # in the test user's pool so one login sees both accounts
+  # in the test user's pool so one login sees both accounts; whatever an
+  # earlier run left goes first, and this one's goes however the block ends
+  $http->delete("$mgmt/api/accounts/$other");
+  my ($ojmap, $ohome, %src);
+  my $guard = bless sub {
+    eval {
+      if ($ohome) {
+        # Cyrus refuses (500) a second DELETE of one collection name within
+        # the same second (its delayed-delete names collide): once more, later
+        for my $try (1, 2) {
+          my ($oq) = @{ $ojmap->('FileNode/query', { filter => { parentId => $ohome->{id}, nameMatch => "$tag*" } }) };
+          my ($od) = @{ $ojmap->('FileNode/set', { onDestroyRemoveChildren => JSON::true, destroy => $oq->{ids} || [] }) };
+          last unless $od->{notDestroyed};
+          sleep 2;
+        }
+      }
+      jmap(['FileNode/set', { onDestroyRemoveChildren => JSON::true, destroy => [ grep { defined && get1($_) } @src{qw(one d)} ] }]);
+      1;
+    } or diag "tidying up: $@";
+    $http->delete("$mgmt/api/accounts/$other");
+  }, 'TestGuard';
   my $reg = $http->post("$mgmt/api/accounts", { headers => { 'Content-Type' => 'application/json' },
     content => encode_json({ accountid => $other, email => $other, type => 'imap', username => $other,
       password => 'password', imapHost => 'localhost', imapPort => ($ENV{CYRUS_IMAP_PORT} || 8143), imapSSL => 1,
@@ -573,9 +593,9 @@ SKIP: {
   skip "registering $other: HTTP $reg->{status} $reg->{content}", 1 unless $reg->{success};
   my $osess = decode_json($http->get("$ENV{JMAP_PROXY_URL}/.well-known/jmap", { headers => { Authorization => $auth } })->{content});
   ok($osess->{accounts}{$other}, "the session lists $other");
-  my $ojmap = sub { my ($m, $a) = @_; jmap([ $m, { accountId => $other, %$a } ]) };
+  $ojmap = sub { my ($m, $a) = @_; jmap([ $m, { accountId => $other, %$a } ]) };
   my ($oall) = @{ $ojmap->('FileNode/get', { ids => undef }) };
-  my ($ohome) = grep { !defined $_->{parentId} } @{ $oall->{list} || [] };
+  ($ohome) = grep { !defined $_->{parentId} } @{ $oall->{list} || [] };
   ok($ohome, "$other has a home directory") or diag explain $oall;
 
   # source: a directory with a file, a subdirectory and a file in that,
@@ -590,7 +610,7 @@ SKIP: {
     one => { parentId => $home->{id}, name => "$tag-one.sh", blobId => $exe->{blobId}, type => 'text/x-sh',
              executable => JSON::true, created => '2019-05-06T07:08:09Z', modified => '2020-01-02T03:04:05Z' } } }]) };
   is(scalar keys %{ $cs->{created} || {} }, 5, 'source tree created') or diag explain $cs;
-  my %src = map { ($_ => $cs->{created}{$_}{id}) } keys %{ $cs->{created} || {} };
+  %src = map { ($_ => $cs->{created}{$_}{id}) } keys %{ $cs->{created} || {} };
 
   # same account: the error every /copy gives for it
   my ($same) = @{ jmap(['FileNode/copy', { fromAccountId => $user, create => { x => { id => $src{one}, parentId => $home->{id} } } }]) };
@@ -635,6 +655,42 @@ SKIP: {
   ok($cr->{created}{c}{id} && $cr->{created}{c}{name} && $cr->{created}{c}{name} ne "$tag-src", 'onExists rename: a new name, returned')
     or diag explain $cr;
 
+  # onExists "replace" of a directory: the copy is staged under another name
+  # and renamed over the old one, so a failure never costs the old one
+  my $oldid = $cp->{created}{c}{id};
+  my ($rf) = @{ $ojmap->('FileNode/copy', { fromAccountId => $user, onExists => 'replace',
+                                            create => { c => { id => $src{d}, parentId => $ohome->{id} } } }) };
+  is($rf->{notCreated}{c}{type}, 'nodeHasChildren', 'replace of a directory with children, no onDestroyRemoveChildren: nodeHasChildren')
+    or diag explain $rf;
+  my ($kids) = @{ $ojmap->('FileNode/query', { filter => { parentId => $ohome->{id} } }) };
+  my ($kg) = @{ $ojmap->('FileNode/get', { ids => $kids->{ids}, properties => ['name'] }) };
+  ok((grep { $_->{id} eq $oldid && $_->{name} eq "$tag-src" } @{ $kg->{list} }), 'the old directory survives');
+  ok(!(grep { $_->{name} =~ /^\.jmap-copy-/ } @{ $kg->{list} }), 'and no staged copy is left') or diag explain $kg;
+  my ($rp) = @{ $ojmap->('FileNode/copy', { fromAccountId => $user, onExists => 'replace', onDestroyRemoveChildren => JSON::true,
+                                            create => { c => { id => $src{d}, parentId => $ohome->{id} } } }) };
+  ok($rp->{created}{c}{id}, 'replace with onDestroyRemoveChildren: copied') or diag explain $rp;
+  ok((grep { $_ eq $oldid } @{ $rp->{destroyed} || [] }), 'the old directory listed as destroyed');
+  is($odav->Raw('GET', "$oroot/$tag-src/sub/g.sh")->{content}, "#!/bin/sh\necho $tag\n", 'the copy is in its place');
+  ok(!(grep { $_->{href} =~ /\.jmap-copy-/ } @{ $odav->PropFind("$oroot/", 1) }), 'under its own name');
+
+  # the state checks, and a create without an id
+  my ($sm) = @{ $ojmap->('FileNode/copy', { fromAccountId => $user, ifFromInState => 'nosuchstate',
+                                            create => { c => { id => $src{one}, parentId => $ohome->{id} } } }) };
+  is($sm->{type}, 'stateMismatch', 'ifFromInState') or diag explain $sm;
+  my ($ni) = @{ $ojmap->('FileNode/copy', { fromAccountId => $user, create => { c => { parentId => $ohome->{id} } } }) };
+  is_deeply($ni->{notCreated}{c}, { type => 'invalidProperties', properties => ['id'] }, 'no id: invalidProperties') or diag explain $ni;
+  my $dres = $http->post("$ENV{JMAP_PROXY_URL}/jmap/", {
+    headers => { Authorization => $auth, 'Content-Type' => 'application/json' },
+    content => encode_json({ using => \@using, methodCalls => [
+      [ 'FileNode/copy', { accountId => $other, fromAccountId => $user, onSuccessDestroyOriginal => JSON::true,
+                           destroyFromIfInState => 'nosuchstate',
+                           create => { c => { id => $src{one}, parentId => $ohome->{id}, name => "$tag-dfs.sh" } } }, 'k' ] ] }) });
+  my $dm = decode_json($dres->{content})->{methodResponses};
+  is_deeply([ map { "$_->[0] $_->[2]" } @$dm ], [ 'FileNode/copy k', 'error k' ], 'destroyFromIfInState: the copy, then the set\'s error')
+    or diag explain $dm;
+  is($dm->[1][1]{type}, 'stateMismatch', 'stateMismatch');
+  ok(get1($src{one}), 'and the original stays');
+
   # the source changed behind the mirror's back (a 412 on its pinned blobId):
   # that item fails, as a whole and without leaving a partial copy; the rest
   # of the call goes ahead
@@ -666,11 +722,9 @@ SKIP: {
   is($dav->Raw('PROPFIND', "$root/$tag-src/", undef, Depth => 0)->{status}, 404, 'gone from the source drive');
   is($odav->Raw('GET', "$oroot/$tag-moved/sub/g.sh")->{content}, "changed\n", 'with its current content at the destination');
 
-  # tidy up: the copies, the source file, and the second account
-  my ($oq) = @{ $ojmap->('FileNode/query', { filter => { parentId => $ohome->{id}, nameMatch => "$tag*" } }) };
-  $ojmap->('FileNode/set', { onDestroyRemoveChildren => JSON::true, destroy => $oq->{ids} || [] });
-  jmap(['FileNode/set', { destroy => [ $src{one} ] }]);
-  $http->delete("$mgmt/api/accounts/$other");
+  # $guard tidies up: the copies, the source file, and the second account
 }
+
+package TestGuard { sub DESTROY { $_[0]->() } }
 
 done_testing;

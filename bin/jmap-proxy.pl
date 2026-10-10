@@ -41,6 +41,7 @@ use JMAP::OAuth::Fastmail;
 use JMAP::OAuth::PACC;
 use JMAP::OAuth::OIDC;
 use JMAP::Dispatch;
+use JMAP::FileNodeCopy;
 use JMAP::Collation;
 use JMAP::Capabilities qw(imap_account_capabilities);
 
@@ -1546,7 +1547,7 @@ sub do_session {
     }, sub {
       my $err = shift;
       $req->respond([500, 'error', { 'Content-Type' => 'application/json' },
-        JSON::XS::encode_json({ type => 'serverError', message => "$err" })]);
+        JSON::XS::encode_json({ type => 'serverFail', description => "$err" })]);
     });
   }, sub {
     _require_auth($req);
@@ -1717,11 +1718,18 @@ sub _do_jmap_request {
           }
           else { $responses[$pos] = $resp; }
           $resp_by_tag{ $responses[$pos][2] } = $responses[$pos];
+          # RFC 8620 S5.3: a /copy's creation ids are the request's too
+          my $made = $responses[$pos][0] =~ m{/copy\z} && ref $responses[$pos][1] eq 'HASH' ? $responses[$pos][1]{created} : undef;
+          if (ref $made eq 'HASH') {
+            for my $cid (keys %$made) {
+              $created_ids{$cid} = $made->{$cid}{id} if ref $made->{$cid} eq 'HASH' && defined $made->{$cid}{id};
+            }
+          }
           $next_batch->();
         }, sub {
-          $responses[$pos] = ['error', { type => 'serverError', message => "$_[0]" }, $call->[2]];
+          $responses[$pos] = ['error', { type => 'serverFail', description => "$_[0]" }, $call->[2]];
           $next_batch->();
-        });
+        }, \%created_ids);
         return;
       }
 
@@ -1772,7 +1780,7 @@ sub _do_jmap_request {
       }, sub {
         my $err = shift;
         for my $idx (0..$#calls) {
-          $responses[$positions[$idx]] = ['error', { type => 'serverError', message => "$err" }, $calls[$idx][2]];
+          $responses[$positions[$idx]] = ['error', { type => 'serverFail', description => "$err" }, $calls[$idx][2]];
         }
         $next_batch->();
       });
@@ -1781,7 +1789,7 @@ sub _do_jmap_request {
   }, sub {
     my $err = shift;
     $req->respond([200, 'ok', { 'Content-Type' => 'application/json' },
-      $json->encode({ methodResponses => [['error', { type => 'serverError', message => "$err" }, 'a']] })]);
+      $json->encode({ methodResponses => [['error', { type => 'serverFail', description => "$err" }, 'a']] })]);
   });
 }
 
@@ -1818,7 +1826,7 @@ sub _get_jmap_state {
 }
 
 sub _do_copy_call {
-  my ($method, $args, $tag, $auth_accountid, $cb, $errcb) = @_;
+  my ($method, $args, $tag, $auth_accountid, $cb, $errcb, $created_ids) = @_;
 
   my $from_aid = $args->{fromAccountId} // $auth_accountid;
   my $to_aid   = $args->{accountId}     // $auth_accountid;
@@ -1837,7 +1845,10 @@ sub _do_copy_call {
   elsif ($method eq 'Email/copy')        { _copy_emails($args, $from_aid, $to_aid, $tag, $cb, $errcb) }
   elsif ($method eq 'CalendarEvent/copy'){ _copy_objects('CalendarEvent', $args, $from_aid, $to_aid, $tag, $cb, $errcb) }
   elsif ($method eq 'ContactCard/copy')  { _copy_objects('ContactCard',   $args, $from_aid, $to_aid, $tag, $cb, $errcb) }
-  elsif ($method eq 'FileNode/copy')     { _copy_filenodes($args, $from_aid, $to_aid, $tag, $cb, $errcb) }
+  elsif ($method eq 'FileNode/copy')     {
+    JMAP::FileNodeCopy::copy(send => \&send_backend_request, args => $args, from => $from_aid, to => $to_aid,
+                             tag => $tag, cb => $cb, errcb => $errcb, created_ids => $created_ids);
+  }
 }
 
 sub _copy_blobs {
@@ -1968,7 +1979,7 @@ sub _copy_emails {
         }, sub {
           my $r = shift;
           my ($resp) = grep { $_->[2] eq 'i' } @{$r->{methodResponses} || []};
-          unless ($resp) { return $cb->(['error', { type => 'serverError' }, $tag]) }
+          unless ($resp) { return $cb->(['error', { type => 'serverFail' }, $tag]) }
           if ($resp->[0] eq 'error') { return $cb->(['error', $resp->[1], $tag]) }
 
           my $ir = $resp->[1];
@@ -2011,7 +2022,7 @@ sub _copy_emails {
           } else {
             $cb->($copy_resp);
           }
-        }, sub { $cb->(['error', { type => 'serverError', message => $_[0] }, $tag]) });
+        }, sub { $cb->(['error', { type => 'serverFail', description => $_[0] }, $tag]) });
       };
 
       my $store_next;
@@ -2039,251 +2050,6 @@ sub _copy_emails {
     }, $errcb);
   }
   else { $do_fetch->() }
-}
-
-# draft-ietf-jmap-filenode "FileNode/copy": a standard /copy (RFC 8620 S5.4)
-# that also takes FileNode/set's onExists and onDestroyRemoveChildren.
-#
-#  1. One request to the source: the nodes, and each one's descendants in
-#     tree order (FileNode/query ancestorId, sort "tree"; parents first).
-#  2. Every file's content: fetch_blobs from the source (d- blobIds are
-#     pinned to the ETag the mirror listed: a file changed since is a 412,
-#     so undef), store_blob into the destination.
-#  3. One FileNode/set in the destination, each directory's contents created
-#     under it with "#" references.  The copy keeps the source's own
-#     properties (name, type, executable, created, modified, accessed,
-#     isSubscribed) under whatever the client's create gives; not ids,
-#     blobId, myRights, role or shareWith, which are the destination's.
-#
-# Each create is all or nothing.  A node that cannot be read fails its whole
-# item before the destination is touched; a directory whose contents the
-# destination refuses in part is removed again and reported in notCreated,
-# naming what failed.  onSuccessDestroyOriginal destroys only items copied
-# whole, listing every node of each (so it never needs, nor uses,
-# onDestroyRemoveChildren: a node added to the source meanwhile makes its
-# directory nodeHasChildren rather than being lost).
-sub _copy_filenodes {
-  my ($args, $from_aid, $to_aid, $tag, $cb, $errcb) = @_;
-  my $using = ['urn:ietf:params:jmap:core', 'urn:ietf:params:jmap:filenode'];
-  my $create = $args->{create} // {};
-  return $cb->(['error', { type => 'invalidArguments', arguments => ['create'] }, $tag])
-    unless ref $create eq 'HASH';
-  my $fail = sub { $cb->(['error', { type => 'serverFail', description => "$_[0]" }, $tag]) };
-
-  my (%notcreated, %src_of);   # creation id => the source node's id
-  for my $cid (sort keys %$create) {
-    my $c = $create->{$cid};
-    if (ref $c ne 'HASH' || !defined $c->{id} || ref $c->{id}) {
-      $notcreated{$cid} = { type => 'invalidProperties', properties => ['id'] };
-      next;
-    }
-    # the destination's creation ids are the ones this copy makes up
-    if (defined $c->{parentId} && !ref $c->{parentId} && $c->{parentId} =~ /^#/) {
-      $notcreated{$cid} = { type => 'invalidProperties', properties => ['parentId'],
-                            description => 'a creation reference cannot be used in a cross-account copy' };
-      next;
-    }
-    $src_of{$cid} = $c->{id};
-  }
-  my @srcids = do { my %s; grep { !$s{$_}++ } map { $src_of{$_} } sort keys %src_of };
-
-  # 1. the source nodes and their subtrees
-  my @calls = (['FileNode/get', { accountId => $from_aid, ids => \@srcids }, 'g']);
-  for my $k (0 .. $#srcids) {
-    push @calls,
-      ['FileNode/query', { accountId => $from_aid, filter => { ancestorId => $srcids[$k] },
-                           sort => [ { property => 'tree' } ] }, "q$k"],
-      ['FileNode/get', { accountId => $from_aid,
-                         '#ids' => { resultOf => "q$k", name => 'FileNode/query', path => '/ids' } }, "s$k"];
-  }
-  send_backend_request($from_aid, 'jmap', { using => $using, methodCalls => \@calls }, sub {
-    my %r = map { ($_->[2] => $_) } @{ $_[0]{methodResponses} || [] };
-    my $g = $r{g} or return $fail->('no FileNode/get answer from the source account');
-    return $cb->(['error', $g->[1], $tag]) if $g->[0] eq 'error';
-    return $cb->(['error', { type => 'stateMismatch' }, $tag])
-      if defined $args->{ifFromInState} && $args->{ifFromInState} ne ($g->[1]{state} // '');
-    my %node = map { ($_->{id} => $_) } @{ $g->[1]{list} || [] };
-    my %subtree;   # source id => [ descendants, parents first ], or why not
-    for my $k (0 .. $#srcids) {
-      my ($q, $s) = ($r{"q$k"}, $r{"s$k"});
-      my %got = $s && $s->[0] eq 'FileNode/get' ? (map { ($_->{id} => $_) } @{ $s->[1]{list} || [] }) : ();
-      my $ids = $q && $q->[0] eq 'FileNode/query' ? $q->[1]{ids} || [] : undef;
-      $subtree{ $srcids[$k] } =
-          !$ids || !%got && @$ids               ? 'the source directory could not be listed'
-        : ($q->[1]{total} // 0) > @$ids         ? 'the source directory holds more nodes than one query returns'
-        : (grep { !$got{$_} } @$ids)            ? 'the source directory changed during the copy'
-        :                                         [ map { $got{$_} } @$ids ];
-    }
-
-    my (%plan, %need, %path);   # cid => [ top, descendants... ]; blobId => [ cids ]; node id => path for messages
-    for my $cid (sort keys %src_of) {
-      my $top = $node{ $src_of{$cid} } or do { $notcreated{$cid} = { type => 'notFound' }; next };
-      my $desc = ($top->{nodeType} // '') eq 'directory' ? $subtree{ $top->{id} } : [];
-      unless (ref $desc) { $notcreated{$cid} = { type => 'serverFail', description => $desc }; next }
-      $plan{$cid} = [ $top, @$desc ];
-      $path{ $top->{id} } = $top->{name};
-      $path{ $_->{id} } = ($path{ $_->{parentId} // '' } // '...') . "/$_->{name}" for @$desc;
-      my %once;
-      push @{ $need{ $_->{blobId} } }, $cid
-        for grep { ($_->{nodeType} // '') eq 'file' && defined $_->{blobId} && !$once{ $_->{blobId} }++ } @{ $plan{$cid} };
-    }
-    my $files_of = sub { grep { ($_->{nodeType} // '') eq 'file' && defined $_->{blobId} } @{ $plan{ $_[0] } } };
-    my $drop = sub {   # fail a whole item, naming the files whose blobs are in %$bad
-      my ($cid, $bad, $what) = @_;
-      my @names = sort map { $path{ $_->{id} } } grep { $bad->{ $_->{blobId} } } $files_of->($cid);
-      $notcreated{$cid} = { type => 'serverFail', description => "$what: @names" };
-      delete $plan{$cid};
-    };
-
-    # 2. the content
-    my @bids = sort keys %need;
-    my $after_fetch = sub {
-      my ($blobs) = @_;
-      my %unread = map { ($_ => 1) } grep { !$blobs->{$_} } @bids;
-      for my $cid (sort keys %plan) {
-        $drop->($cid, \%unread, 'the source content could not be read (changed or gone since it was listed)')
-          if grep { $unread{ $_->{blobId} } } $files_of->($cid);
-      }
-      my %live = map { ($_->{blobId} => 1) } map { $files_of->($_) } keys %plan;
-      for my $bid (grep { $blobs->{$_} && !$live{$_} } @bids) {
-        unlink $blobs->{$bid}{path} if $blobs->{$bid}{is_temp};
-      }
-      my @to_store = grep { $live{$_} } @bids;
-      my %newblob;
-
-      # 3. one FileNode/set in the destination
-      my $do_set = sub {
-        my %unstored = map { ($_ => 1) } grep { !defined $newblob{$_} } @to_store;
-        for my $cid (sort keys %plan) {
-          $drop->($cid, \%unstored, 'the content could not be stored in the destination account')
-            if grep { $unstored{ $_->{blobId} } } $files_of->($cid);
-        }
-        my $carry = sub {
-          my ($s) = @_;
-          my %o = (name => $s->{name}, nodeType => $s->{nodeType});
-          if (($s->{nodeType} // '') eq 'file') {
-            $o{blobId} = $newblob{ $s->{blobId} };
-            $o{type} = $s->{type} if defined $s->{type};
-          }
-          $o{target} = $s->{target} if defined $s->{target};
-          $o{$_} = $s->{$_} for grep { defined $s->{$_} } qw(created modified accessed executable isSubscribed);
-          return \%o;
-        };
-        my (%sets, %keys_of, %srcids_of, %parentkey, %path_of_key);
-        my $n = 0;
-        CID: for my $cid (sort keys %plan) {
-          my ($top, @desc) = @{ $plan{$cid} };
-          my $tk = 'n' . $n++;
-          my %key = ($top->{id} => $tk);
-          my %mine = ($tk => { %{ $carry->($top) }, map { ($_ => $create->{$cid}{$_}) } grep { $_ ne 'id' } keys %{ $create->{$cid} } });
-          $path_of_key{$tk} = $path{ $top->{id} };
-          for my $d (@desc) {
-            my $pk = $key{ $d->{parentId} // '' };
-            unless (defined $pk) {   # tree order puts parents first: the tree moved meanwhile
-              $notcreated{$cid} = { type => 'serverFail', description => 'the source directory changed during the copy' };
-              next CID;
-            }
-            my $k = 'n' . $n++;
-            $key{ $d->{id} } = $k;
-            $mine{$k} = { %{ $carry->($d) }, parentId => "#$pk" };
-            $parentkey{$k} = $pk;
-            $path_of_key{$k} = $path{ $d->{id} };
-          }
-          %sets = (%sets, %mine);
-          $keys_of{$cid} = [ $tk, map { $key{ $_->{id} } } @desc ];
-          $srcids_of{$cid} = [ $top->{id}, map { $_->{id} } @desc ];
-        }
-        my %set_args = (accountId => $to_aid, create => \%sets);
-        $set_args{$_} = $args->{$_}
-          for grep { defined $args->{$_} } qw(onExists onDestroyRemoveChildren compareCaseInsensitively ifInState);
-        send_backend_request($to_aid, 'jmap', { using => $using, methodCalls => [['FileNode/set', \%set_args, 's']] }, sub {
-          my ($sresp) = grep { $_->[2] eq 's' } @{ $_[0]{methodResponses} || [] };
-          return $fail->('no FileNode/set answer from the destination account') unless $sresp;
-          return $cb->(['error', $sresp->[1], $tag]) if $sresp->[0] eq 'error';
-          my $sr = $sresp->[1];
-          my ($ok, $nc) = ($sr->{created} || {}, $sr->{notCreated} || {});
-          my (%created, @rollback, %rollback_cid);
-          for my $cid (sort keys %keys_of) {
-            my ($tk, @rest) = @{ $keys_of{$cid} };
-            unless ($ok->{$tk}) {
-              $notcreated{$cid} = $nc->{$tk} || { type => 'serverFail', description => 'not created' };
-              next;
-            }
-            # the nodes that failed in their own right, not for want of a parent
-            my @bad = grep { !$ok->{$_} && $ok->{ $parentkey{$_} } } @rest;
-            unless (grep { !$ok->{$_} } @rest) { $created{$cid} = $ok->{$tk}; next }
-            $notcreated{$cid} = { type => 'serverFail',
-              description => 'the destination refused part of the directory, so none of it was kept: '
-                           . join('; ', map { "$path_of_key{$_}: " . (($nc->{$_} || {})->{type} // 'not created') } @bad) };
-            push @rollback, $ok->{$tk}{id};
-            $rollback_cid{ $ok->{$tk}{id} } = $cid;
-          }
-
-          my $finish = sub {
-            my ($newState) = @_;
-            my $copy = ['FileNode/copy', {
-              fromAccountId => $from_aid,
-              accountId     => $to_aid,
-              oldState      => $sr->{oldState},
-              newState      => $newState,
-              created       => %created    ? \%created    : undef,
-              notCreated    => %notcreated ? \%notcreated : undef,
-              # draft, onExists "replace": the replaced node's id is listed
-              # as destroyed; /copy has no such list, so it gets one
-              (ref $sr->{destroyed} eq 'ARRAY' && @{ $sr->{destroyed} } ? (destroyed => $sr->{destroyed}) : ()),
-            }, $tag];
-            return $cb->($copy) unless $args->{onSuccessDestroyOriginal} && %created;
-            # RFC 8620 S5.4: the implicit FileNode/set takes destroyFromIfInState
-            # as its ifInState, and answers with the /copy's call id
-            my %seen;
-            my @del = grep { !$seen{$_}++ } map { @{ $srcids_of{$_} } } sort keys %created;
-            my %d = (accountId => $from_aid, destroy => \@del);
-            $d{ifInState} = $args->{destroyFromIfInState} if defined $args->{destroyFromIfInState};
-            send_backend_request($from_aid, 'jmap', { using => $using, methodCalls => [['FileNode/set', \%d, 'd']] }, sub {
-              my ($dr) = grep { $_->[2] eq 'd' } @{ $_[0]{methodResponses} || [] };
-              $cb->($dr ? [$copy, [$dr->[0], $dr->[1], $tag]] : $copy);
-            }, sub { $cb->($copy) });
-          };
-          return $finish->($sr->{newState}) unless @rollback;
-          my $unremoved = sub {
-            for my $id (@_) {
-              my $cid = $rollback_cid{$id} or next;
-              $notcreated{$cid}{description} .= " (and the partial copy, $id, could not be removed)";
-            }
-          };
-          send_backend_request($to_aid, 'jmap', { using => $using, methodCalls => [['FileNode/set',
-            { accountId => $to_aid, onDestroyRemoveChildren => JSON::true, destroy => \@rollback }, 'r']] }, sub {
-            my ($rr) = grep { $_->[2] eq 'r' } @{ $_[0]{methodResponses} || [] };
-            if ($rr && $rr->[0] eq 'FileNode/set') {
-              $unremoved->(keys %{ $rr->[1]{notDestroyed} || {} });
-              return $finish->($rr->[1]{newState} // $sr->{newState});
-            }
-            $unremoved->(@rollback);
-            $finish->($sr->{newState});
-          }, sub { $unremoved->(@rollback); $finish->($sr->{newState}) });
-        }, sub { $cb->(['error', { type => 'serverFail', description => $_[0] }, $tag]) });
-      };
-
-      my @queue = @to_store;
-      my $store_next;
-      $store_next = sub {
-        return $do_set->() unless @queue;
-        my $bid = shift @queue;
-        my $info = $blobs->{$bid};
-        send_backend_request($to_aid, 'store_blob', $info, sub {
-          $newblob{$bid} = shift->{blobId};
-          $store_next->();
-        }, sub {
-          unlink $info->{path} if $info->{is_temp};
-          $newblob{$bid} = undef;
-          $store_next->();
-        });
-      };
-      $store_next->();
-    };
-    return $after_fetch->({}) unless @bids;
-    send_backend_request($from_aid, 'fetch_blobs', { ids => \@bids }, $after_fetch, $errcb);
-  }, $errcb);
 }
 
 sub _copy_objects {
@@ -2322,7 +2088,7 @@ sub _copy_objects {
       my $r = shift;
       my ($resp) = grep { $_->[2] eq 'g' } @{$r->{methodResponses} || []};
       unless ($resp && $resp->[0] eq "$type/get") {
-        return $cb->(['error', { type => 'serverError' }, $tag]);
+        return $cb->(['error', { type => 'serverFail' }, $tag]);
       }
 
       my %src_obj   = map { $_->{id} => $_ } @{$resp->[1]{list}     || []};
@@ -2365,7 +2131,7 @@ sub _copy_objects {
         }, sub {
           my $r = shift;
           my ($resp) = grep { $_->[2] eq 's' } @{$r->{methodResponses} || []};
-          unless ($resp) { return $cb->(['error', { type => 'serverError' }, $tag]) }
+          unless ($resp) { return $cb->(['error', { type => 'serverFail' }, $tag]) }
           if ($resp->[0] eq 'error') { return $cb->(['error', $resp->[1], $tag]) }
 
           my $sr = $resp->[1];
@@ -2399,7 +2165,7 @@ sub _copy_objects {
             return $cb->($copy_resp) unless $set_resp;
             $cb->([$copy_resp, [$set_resp->[0], $set_resp->[1], $tag]]);
           }, sub { $cb->($copy_resp) });
-        }, sub { $cb->(['error', { type => 'serverError', message => $_[0] }, $tag]) });
+        }, sub { $cb->(['error', { type => 'serverFail', description => $_[0] }, $tag]) });
       };
 
       # For ifInState: check toAccount state manually (CalendarEvent/set doesn't support it)

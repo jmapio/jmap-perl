@@ -2482,6 +2482,16 @@ sub update_filenodes {
     my $status = eval { $Self->backend_cmd('files_move', _filenode_path($row), $isdir ? "$to/" : $to, overwrite => $overwrite ? 1 : 0) };
     return (undef, $@) unless defined $status;
     return ($status) unless $status =~ /^2/;
+    # Cyrus answers the MOVE of a collection that holds collections with a
+    # 2xx and moves all of it, but leaves an empty collection behind at the
+    # old name: it goes, if it is still there and still empty
+    if ($isdir) {
+      my $left = eval { $Self->backend_cmd('files_prop_find', _filenode_path($row), 1) };
+      if (ref $left eq 'ARRAY' && @$left == 1) {
+        my $st = eval { $Self->backend_cmd('files_delete', _filenode_path($row)) } // '';
+        warn "update_filenodes: the empty collection a MOVE left at $row->{href}: DELETE $st\n" unless $st =~ /^2/;
+      }
+    }
     $Self->begin();
     my $t = time();
     my %cols = (href => $to, name => $name, parentid => $dir->{nodeid});
