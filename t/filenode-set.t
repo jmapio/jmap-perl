@@ -46,6 +46,7 @@ no warnings qw(redefine once);
     my ($bytes, %o) = @a;
     return { status => $fail{files_put} } if $fail{files_put};
     return { status => 412 } if $o{if_none_match} && $tree{$path};
+    return { status => 412 } if defined $o{if_match} && (!$tree{$path} || $tree{$path}{etag} ne $o{if_match});
     (my $p = $path) =~ s{/[^/]+\z}{};
     return { status => 409 } unless $tree{$p};
     # a PUT over an existing resource keeps its dead properties, as servers do
@@ -513,7 +514,7 @@ is_deeply($set->{notUpdated}{$id{c}}{properties}, ['parentId'], 'an unknown pare
 $set = set(update => { $home => { name => 'elsewhere' }, Lnosuch => { name => 'x' }, $id{a} => 'nope' })->[1];
 is_deeply($set->{notUpdated}{$home}{properties}, ['name'], 'the home cannot be renamed');
 is($set->{notUpdated}{Lnosuch}{type}, 'notFound', 'an unknown node');
-is($set->{notUpdated}{$id{a}}{type}, 'invalidProperties', 'a patch that is not an object');
+is($set->{notUpdated}{$id{a}}{type}, 'invalidPatch', 'a patch that is not an object is invalidPatch (RFC 8620 S5.3)');
 $set = set(update => { $id{a} => { parentId => undef } })->[1];
 is_deeply($set->{notUpdated}{$id{a}}{properties}, ['parentId'], 'no top-level nodes');
 
@@ -533,6 +534,102 @@ is($set->{notUpdated}{$bad_id}{type}, 'serverFail', 'the parked node\'s move fai
 ok(!grep({ /~tmp~/ } keys %tree), 'it is not left under its temporary name');
 $g = get(@id{qw(a b)});
 is(scalar(grep { $tree{"$R/U/$_"} } map { $_->{name} } values %$g), 2, 'the mirror names both as the server does');
+
+# --- fix round 1
+sub mk { my %c = @_; my $s = set(create => \%c)->[1]; die explain $s if $s->{notCreated}; return { map { $_ => $s->{created}{$_}{id} } keys %c } }
+# replace of an ancestor: the mover steps out before its old directory goes
+my $x = mk(R => { parentId => $home, name => 'R1' }, s => { parentId => '#R', name => 'sub' },
+           a => { parentId => '#s', name => 'a.txt', blobId => 'f-y' });
+$set = set(onExists => 'replace', onDestroyRemoveChildren => JSON::true,
+           update => { $x->{a} => { parentId => $x->{R}, name => 'sub' } })->[1];
+ok(exists $set->{updated}{$x->{a}}, 'a file replaces its own parent directory') or diag explain $set;
+is_deeply($set->{destroyed}, [ $x->{s} ], 'which is destroyed');
+is(content("$R/R1/sub"), '7:text/x-y', 'and the file survives, under the name') or diag explain [ grep { m{/R1} } keys %tree ];
+ok(!grep({ /~tmp~/ } keys %tree), 'no temporary name left');
+$x = mk(s => { parentId => $x->{R}, name => 'sub2' }, a => { parentId => '#s', name => 'a.txt', blobId => 'f-y' },
+        o => { parentId => '#s', name => 'other.txt', blobId => 'f-x' }, R => { parentId => $home, name => 'R2' });
+$set = set(onExists => 'replace', update => { $x->{a} => { parentId => $x->{R}, name => 'x' } })->[1];
+ok(exists $set->{updated}{$x->{a}}, 'a plain move first') or diag explain $set;
+$set = set(onExists => 'replace', update => { $x->{a} => { parentId => (rows()->{"$R/R1"}{nodeid}), name => 'sub2' } })->[1];
+is($set->{notUpdated}{$x->{a}}{type}, 'nodeHasChildren', 'replacing a directory that keeps a child needs the flag') or diag explain $set;
+ok($tree{"$R/R1/sub2/other.txt"} && $tree{"$R/R2/x"}, 'and nothing moved or went');
+# ... the ancestor case without the flag, where the mover was the only child
+$x = mk(s => { parentId => $home, name => 'R3' }, a => { parentId => '#s', name => 'only.txt', blobId => 'f-y' });
+$set = set(onExists => 'replace', update => { $x->{a} => { parentId => $home, name => 'R3' } })->[1];
+ok(exists $set->{updated}{$x->{a}}, 'the only child replaces its parent, without the flag') or diag explain $set;
+is(content("$R/R3"), '7:text/x-y', 'on the server');
+# ... and with another child that stays, without the flag: the mover goes back
+$x = mk(s => { parentId => $home, name => 'R4' }, a => { parentId => '#s', name => 'a.txt', blobId => 'f-y' },
+        o => { parentId => '#s', name => 'o.txt', blobId => 'f-x' });
+$set = set(onExists => 'replace', update => { $x->{a} => { parentId => $home, name => 'R4' } })->[1];
+is($set->{notUpdated}{$x->{a}}{type}, 'nodeHasChildren', 'an ancestor with another child') or diag explain $set;
+ok($tree{"$R/R4/a.txt"} && $tree{"$R/R4/o.txt"}, 'the mover is back where it was, nothing deleted') or diag explain [ grep { m{/R4} } keys %tree ];
+is(rows()->{"$R/R4/a.txt"}{nodeid}, $x->{a}, 'the mirror agrees');
+# a sibling leaving the replaced directory in the same call
+$x = mk(D => { parentId => $home, name => 'R5' }, s => { parentId => '#D', name => 's2' },
+        k => { parentId => '#s', name => 'k.txt', blobId => 'f-x' }, f => { parentId => '#D', name => 'f.txt', blobId => 'f-y' });
+$set = set(onExists => 'replace', update => { $x->{f} => { name => 's2' }, $x->{k} => { parentId => $x->{D}, name => 'k2.txt' } })->[1];
+ok(exists $set->{updated}{$x->{f}} && exists $set->{updated}{$x->{k}}, 'the child leaves before its directory is replaced') or diag explain $set;
+is_deeply($set->{destroyed}, [ $x->{s} ], 'without the flag');
+ok($tree{"$R/R5/k2.txt"} && content("$R/R5/s2") eq '7:text/x-y', 'on the server');
+
+# whole-object stripping keeps type and size beside new content
+$x = mk(f => { parentId => $home, name => 'typed.txt', blobId => 'f-x' });   # text/plain
+$set = set(update => { $x->{f} => { blobId => 'f-y', type => 'text/plain', size => 7 } })->[1];
+ok(exists $set->{updated}{$x->{f}}, 'new content with the current type and its size') or diag explain $set;
+is(content("$R/typed.txt"), '7:text/plain', 'the type sent is the one PUT, not the blob\'s');
+
+# R6: a late destroy's name is free for a create and for a move
+$x = mk(P => { parentId => $home, name => 'R6' }, D => { parentId => '#P', name => 'D' },
+        k => { parentId => '#D', name => 'k.txt', blobId => 'f-x' });
+$set = set(destroy => [ $x->{D} ], update => { $x->{k} => { parentId => $x->{P} } },
+           create => { n => { parentId => $x->{P}, name => 'D', blobId => 'f-y' } })->[1];
+is($set->{created}{n}{name}, undef, 'a create takes the name of a directory destroyed after its child moved out') or diag explain $set;
+ok($set->{created}{n}, 'created');
+is_deeply($set->{destroyed}, [ $x->{D} ], 'the directory is destroyed');
+is(content("$R/R6/D"), '7:text/x-y', 'on the server');
+$x = mk(D => { parentId => $x->{P}, name => 'D2' }, k => { parentId => '#D', name => 'k2.txt', blobId => 'f-x' },
+        m => { parentId => $x->{P}, name => 'm.txt', blobId => 'f-y' });
+my $P6 = rows()->{"$R/R6"}{nodeid};
+$set = set(destroy => [ $x->{D} ], update => { $x->{k} => { parentId => $P6 }, $x->{m} => { name => 'D2' } })->[1];
+ok(exists $set->{updated}{$x->{m}} && exists $set->{updated}{$x->{k}}, 'a move takes the name too') or diag explain $set;
+is_deeply($set->{destroyed}, [ $x->{D} ], 'after the destroy');
+is(content("$R/R6/D2"), '7:text/x-y', 'on the server');
+
+# new content for a file inside a directory that moves in the same call
+# (this fake changes descendants' ETags on a directory MOVE)
+$x = mk(Q => { parentId => $home, name => 'R7' }, f => { parentId => '#Q', name => 'f.txt', blobId => 'f-x' });
+$set = set(update => { $x->{Q} => { name => 'R7moved' }, $x->{f} => { blobId => 'f-y' } })->[1];
+is($set->{updated}{$x->{f}}{size}, 7, 'a directory move and new content inside it, in one call') or diag explain $set;
+is(content("$R/R7moved/f.txt"), '7:text/x-y', 'on the server');
+
+# the holder of a replaced name must be deletable
+$x = mk(L => { parentId => $home, name => 'R8' }, h => { parentId => '#L', name => 'h.txt', blobId => 'f-x' },
+        m => { parentId => $home, name => 'R8m.txt', blobId => 'f-y' });
+$tree{"$R/R8"}{privileges} = [ qw(read bind write-content) ];   # no unbind: its children cannot be deleted
+$db->sync_files();
+@log = ();
+$set = set(onExists => 'replace', update => { $x->{m} => { parentId => $x->{L}, name => 'h.txt' } })->[1];
+is($set->{notUpdated}{$x->{m}}{type}, 'forbidden', 'replace needs mayDelete on the node replaced') or diag explain $set;
+ok(!grep({ /files_move/ } @log), 'refused before anything is sent');
+delete $tree{"$R/R8"}{privileges};
+$db->sync_files();
+
+# a parked node that can be neither moved on nor put back says where it is
+$x = mk(Z => { parentId => $home, name => 'R9' }, a => { parentId => '#Z', name => 'a', blobId => 'f-x' },
+        b => { parentId => '#Z', name => 'b', blobId => 'f-y' });
+{
+  no warnings 'redefine';
+  my $orig = \&JMAP::ImapDB::backend_cmd;
+  local *JMAP::ImapDB::backend_cmd = sub {
+    return 500 if $_[1] eq 'files_move' && $_[2] =~ /~tmp~/;
+    goto &$orig;
+  };
+  $set = set(update => { $x->{a} => { name => 'b' }, $x->{b} => { name => 'a' } })->[1];
+}
+my ($bad) = keys %{ $set->{notUpdated} || {} };
+like($set->{notUpdated}{$bad // ''}{description} // '', qr{left at \Q$R\E/R9/\.~tmp~}, 'the error names where the node was left')
+  or diag explain $set;
 
 ok(!$db->in_transaction(), 'no transaction left open');
 done_testing;

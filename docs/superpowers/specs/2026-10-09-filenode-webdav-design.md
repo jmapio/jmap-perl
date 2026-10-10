@@ -236,7 +236,13 @@ A move's cycle check uses the final tree, so a child may move out of its
 parent while the parent moves under it; `order_moves` then never sends a
 directory into its own current subtree. A parked node whose final MOVE
 fails is given back its old name, or the nearest free one, never left
-under the temporary name.
+under the temporary name. A late destroy's name is free for creates and
+moves in the same call: those run after it. A node that `onExists:
+"replace"` displaces is likewise destroyed only once every node leaving it
+in this call has left (a node inside it first steps out under a temporary
+name in its destination directory), so the replace never deletes a node
+that is moving; the displaced node must allow `mayDelete`. `updated` and
+`notUpdated` are keyed by the resolved node id, also for a `#cid` key.
 
 Operations:
 

@@ -250,18 +250,24 @@ sub order_creates {
 # case-insensitive).  A move whose destination is held by another mover
 # waits for it to leave; a cycle of such waits (a swap, a rotation) is
 # broken by first parking one node under a temporary name in its current
-# directory -- [id, ".~tmp~id"] -- and moving it on, [id, undef], once the
-# others are done (as hm's _get_ordered_update_keys).  With $parent
-# ({ id => current parent id }), a directory is never moved into its own
-# current subtree: such a move waits until the node between them has moved
-# away (the final tree is checked for cycles by the caller).  Returns
-# [ [id, $temp_or_undef], ... ].
+# directory -- [id, ".~tmp~id"], or a free variant of it if that is taken
+# -- and moving it on, [id, undef], once the others are done (as hm's
+# _get_ordered_update_keys).
+#
+# Optional: $parent ({ id => current parent id }) keeps a directory from
+# being moved into its own current subtree: such a move waits until the
+# node between them has moved away (the final tree is checked for cycles
+# by the caller).  $after ({ id => [ids] }) makes a move wait until those
+# ids have reached their destinations (a destroy that must follow them).
+# Returns [ [id, $temp_or_undef], ... ].
 sub order_moves {
-  my ($moves, $occupant, $parent) = @_;
+  my ($moves, $occupant, $parent, $after) = @_;
   my %pending = %$moves;
   my %held = %$occupant;
   my %par = %{ $parent || {} };
-  my (@steps, @parked);
+  my %after = %{ $after || {} };
+  my (@steps, @parked, %unfinished);
+  %unfinished = map { $_ => 1 } keys %pending;
   my $place = sub {
     my ($id, $dest) = @_;
     delete $held{$_} for grep { $held{$_} eq $id } keys %held;
@@ -278,30 +284,37 @@ sub order_moves {
     my $holder = $held{ $pending{$id} };
     return defined $holder && $holder ne $id && exists $pending{$holder};
   };
+  my $waits = sub { my $id = shift; return grep { $_ ne $id && $unfinished{$_} } @{ $after{$id} || [] } };
   while (%pending) {
     my $progress = 0;
     for my $id (sort keys %pending) {
-      next if $name_blocked->($id);
+      next if $name_blocked->($id) || $waits->($id);
       my ($np) = split /\0/, $pending{$id}, 2;
       next if length $np && $inside->($np, $id);
       push @steps, [$id, undef];
       $place->($id, $pending{$id});
       $par{$id} = $np if length $np;
       delete $pending{$id};
+      delete $unfinished{$id};
       $progress = 1;
     }
     next if $progress;
     # stuck: park the first node that waits on a name ...
     my ($id) = grep { $name_blocked->($_) } sort keys %pending;
     if (defined $id) {
-      push @steps, [$id, ".~tmp~$id"];
-      $place->($id, undef);
+      # the parking spot is in the node's current directory, and free
+      my ($cur) = grep { $held{$_} eq $id } keys %held;
+      my $dir = defined $cur ? (split /\0/, $cur, 2)[0] : '';
+      my %taken = map { (lc((split /\0/, $_, 2)[1]) => 1) } grep { /^\Q$dir\E\0/ } keys %held;
+      my $temp = ".~tmp~$id";
+      $temp = unique_name($temp, \%taken, 1) if $taken{ lc $temp };
+      push @steps, [$id, $temp];
+      $place->($id, "$dir\0$temp");
       push @parked, [$id, $pending{$id}];
       delete $pending{$id};
       next;
     }
-    # ... or, with only tree waits left (the final tree has a cycle, which
-    # the caller should have refused), let the server judge them
+    # ... or, with only tree or $after waits left, let the server judge them
     push @steps, map { [$_, undef] } sort keys %pending;
     %pending = ();
   }

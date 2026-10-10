@@ -193,7 +193,10 @@ sub api_FileNode_set {
     my $row = $before{ $Self->idmap($uid) // $uid };
     if (ref $p eq 'HASH' && $row) {
       my $cur = $Self->_filenode_object($row, \%before);
-      $p = { map { ($_ => $p->{$_}) } grep { !exists $cur->{$_} || !$same->($p->{$_}, $cur->{$_}) } keys %$p };
+      # with new content, type and size describe the new blob, whatever
+      # the old ones were
+      my %keep = exists $p->{blobId} && !$same->($p->{blobId}, $cur->{blobId}) ? (type => 1, size => 1) : ();
+      $p = { map { ($_ => $p->{$_}) } grep { $keep{$_} || !exists $cur->{$_} || !$same->($p->{$_}, $cur->{$_}) } keys %$p };
     }
     $update{$uid} = $p;
   }
@@ -201,8 +204,10 @@ sub api_FileNode_set {
   # The set is judged by its final state (RFC 8620 S5.3; draft S3.2.3):
   # - a directory whose children an update moves out is destroyed after
   #   the moves, so it is empty by then (its server-side member check
-  #   still runs, and still guards against a stale mirror);
-  # - a create whose name a node is moving away from runs after the moves.
+  #   still runs, and still guards against a stale mirror) -- inside
+  #   update_filenodes, so a move into its name can follow it;
+  # - a create whose name a node is moving away from, or a late destroy
+  #   frees, runs after the moves.
   # Everything else: destroys first (freeing names), then creates (so a
   # move may go into a new directory), then updates.
   my (@early, @late, %late_create);
@@ -231,6 +236,9 @@ sub api_FileNode_set {
       }
       push @{ $moved_out ? \@late : \@early }, $did;
     }
+    for my $did (grep { defined && $before{$_} } @late) {
+      $from{ ($before{$did}{parentid} // '') . "\0" . $key->($before{$did}{name}) } = 1;
+    }
     my $create = $args->{create} || {};
     for my $cid (keys %$create) {
       my $c = $create->{$cid};
@@ -256,14 +264,11 @@ sub api_FileNode_set {
   my ($destroyed, $notDestroyed) = $Self->{db}->destroy_filenodes(\@early, \%opts);
   my ($created, $notCreated, $also) = $Self->{db}->create_filenodes(\%early_create, sub { $Self->idmap(shift) }, \%opts);
   $Self->setid($_, $created->{$_}{nodeid}) for keys %$created;
-  my ($updated, $notUpdated, $also2) = ({}, {}, []);
-  ($updated, $notUpdated, $also2) = $Self->{db}->update_filenodes(\%update, sub { $Self->idmap(shift) }, \%opts)
-    if %update;
-  if (@late) {
-    my ($d, $nd) = $Self->{db}->destroy_filenodes(\@late, \%opts);
-    push @$destroyed, @$d;
-    %$notDestroyed = (%$notDestroyed, %$nd);
-  }
+  my ($updated, $notUpdated, $also2, $nd) = ({}, {}, [], {});
+  ($updated, $notUpdated, $also2, $nd) = $Self->{db}->update_filenodes(\%update, sub { $Self->idmap(shift) },
+                                                                        { %opts, late_destroy => \@late })
+    if %update || @late;
+  %$notDestroyed = (%$notDestroyed, %$nd);
   if (%late_create_args) {
     my ($c, $nc, $a) = $Self->{db}->create_filenodes(\%late_create_args, sub { $Self->idmap(shift) }, \%opts);
     $Self->setid($_, $c->{$_}{nodeid}) for keys %$c;

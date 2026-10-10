@@ -342,4 +342,24 @@ ok(exists $u->{updated}{$id{a}}, 'and the child moved');
 
 jmap(['FileNode/set', { onDestroyRemoveChildren => JSON::true, destroy => [ $id{P} ] }]);
 
+# --- update, fix round 1: replace of an ancestor; content inside a moving directory
+my ($r1) = @{ jmap(['FileNode/set', { create => {
+  R => { parentId => $home->{id}, name => "$tag-R" },
+  s => { parentId => '#R', name => 'sub' },
+  a => { parentId => '#s', name => 'a.txt', blobId => $blob->{blobId} },
+} }]) };
+my %rid = map { $_ => $r1->{created}{$_}{id} } qw(R s a);
+($u) = @{ jmap(['FileNode/set', { onExists => 'replace', onDestroyRemoveChildren => JSON::true,
+                                  update => { $rid{a} => { parentId => $rid{R}, name => 'sub' } } }]) };
+ok(exists $u->{updated}{$rid{a}}, 'a file replaces its own parent directory') or diag explain $u;
+is_deeply($u->{destroyed}, [ $rid{s} ], 'the directory is destroyed');
+is(raw(get1($rid{a})->{blobId})->{content}, 'uploaded', 'and the file survives with its content');
+($u) = @{ jmap(['FileNode/set', { create => { d => { parentId => $rid{R}, name => 'd' },
+                                              f => { parentId => '#d', name => 'f.txt', blobId => $blob->{blobId} } } }]) };
+my ($dd, $ff) = ($u->{created}{d}{id}, $u->{created}{f}{id});
+($u) = @{ jmap(['FileNode/set', { update => { $dd => { name => 'd2' }, $ff => { blobId => $blob3->{blobId} } } }]) };
+is($u->{updated}{$ff}{size}, 7, 'move a directory and replace a file\'s content inside it, in one call') or diag explain $u;
+is(raw($u->{updated}{$ff}{blobId})->{content}, 'second!', 'the new content downloads');
+jmap(['FileNode/set', { onDestroyRemoveChildren => JSON::true, destroy => [ $rid{R} ] }]);
+
 done_testing;

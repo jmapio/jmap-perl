@@ -61,4 +61,14 @@ is_deeply(\%at, { "p\0a" => 'C', "p\0b" => 'A', "p\0c" => 'B', "q\0d" => 'D' }, 
 $steps = $om->({ A => "B\0A", B => "R\0B" }, { "R\0A" => 'A', "A\0B" => 'B' }, { A => 'R', B => 'A' });
 is_deeply([ map { $_->[0] } @$steps ], [ 'B', 'A' ], 'a node leaves a directory before that directory moves under it');
 
+# the parking spot is checked against what is already there
+$steps = $om->({ A => "p\0b", B => "p\0a" }, { "p\0a" => 'A', "p\0b" => 'B', "p\0.~tmp~A" => 'X', "p\0.~tmp~B" => 'Y' });
+ok(defined $steps->[0][1] && $steps->[0][1] ne ".~tmp~$steps->[0][0]", 'a taken temporary name is not reused')
+  or diag explain $steps;
+like($steps->[0][1], qr/^\.~tmp~[AB]\[2\]\z/, 'a free variant of it is');
+
+# $after: a move waits for the nodes it must follow
+$steps = $om->({ A => "q\0a", B => "r\0b" }, { "p\0a" => 'A', "s\0b" => 'B' }, undef, { A => ['B'] });
+is_deeply([ map { $_->[0] } @$steps ], [ 'B', 'A' ], 'A waits for B');
+
 done_testing;

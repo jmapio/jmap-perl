@@ -1781,12 +1781,21 @@ my %FILENODE_UPDATE_PROPS = map { $_ => 1 } qw(parentId name blobId type size cr
 # onExists.  Then each node's content and properties are written.  WebDAV
 # first, then the mirror; each item succeeds or fails on its own.
 #
-# Returns (\%updated, \%notUpdated, \@alsoDestroyed), keyed by node id;
-# updated holds what the server set or changed beyond what was asked
-# (blobId, size, type, a renamed name, a "now" timestamp) or undef.
+# $opts->{late_destroy} lists the call's destroys that must wait for the
+# moves (R6: a directory whose children move out).  They run here: each
+# as soon as the movers leaving it are done and before any move into its
+# name (its name counts as free), the rest after all the moves.  A node
+# onExists "replace" displaces is destroyed the same way, never before the
+# nodes leaving it have left.
+#
+# Returns (\%updated, \%notUpdated, \@alsoDestroyed, \%notDestroyed),
+# keyed by node id (a "#cid" key by the id it resolves to); updated holds
+# what the server set or changed beyond what was asked (blobId, size,
+# type, a renamed name, a "now" timestamp) or undef; notDestroyed is for
+# the late destroys.
 sub update_filenodes {
   my ($Self, $update, $idmap, $opts) = @_;
-  my (%updated, %notupdated, @alsodestroyed);
+  my (%updated, %notupdated, @alsodestroyed, %notdestroyed);
   my $ci = $opts->{ci};
   my $key = sub { my $n = $_[0]; return $n unless $ci; utf8::upgrade($n); return lc $n };   # Unicode lc
   $Self->begin();
@@ -1808,7 +1817,7 @@ sub update_filenodes {
   for my $uid (sort keys %$update) {
     my $id = $idmap->($uid) // $uid;
     my $p = $update->{$uid};
-    unless (ref $p eq 'HASH') { $notupdated{$id} = { type => 'invalidProperties', description => 'a patch must be an object' }; next }
+    unless (ref $p eq 'HASH') { $notupdated{$id} = { type => 'invalidPatch', description => 'a patch must be an object' }; next }
     my $row = $byid{$id} or do { $notupdated{$id} = { type => 'notFound' }; next };
     my $isfile = $row->{nodetype} eq 'file';
     my (@bad, %dead);
@@ -1891,6 +1900,7 @@ sub update_filenodes {
   my $curkey = sub { ($_[0]{parentid} // '') . "\0" . $key->($_[0]{name}) };
   my $destkey = sub { "$dest{$_[0]}[0]\0" . $key->($dest{$_[0]}[1]) };
   my %occupant = map { ($curkey->($_) => $_->{nodeid}) } values %byid;
+  my %late = map { ($_ => 1) } grep { defined && $byid{$_} } @{ $opts->{late_destroy} || [] };
   my %claimed;
   for my $id (keys %dest) {   # a change of case only keeps its own name
     $claimed{ $destkey->($id) } = $id if $destkey->($id) eq $curkey->($byid{$id});
@@ -1901,6 +1911,11 @@ sub update_filenodes {
     my $holder = $claimed{$k};
     $holder //= $occupant{$k} if defined $occupant{$k} && !$dest{ $occupant{$k} } && $occupant{$k} ne $id;
     unless (defined $holder) { $claimed{$k} = $id; next }
+    if ($late{$holder} && !$claimed{$k}) {   # destroyed in this call: its name is free once it is gone
+      $plan{$id}{destroy_first} = $holder;
+      $claimed{$k} = $id;
+      next;
+    }
     my ($np, $nn) = @{ $dest{$id} };
     my $mode = $dest{$holder} || $claimed{$k} ? '' : ($opts->{onExists} // '');   # never replace another mover
     if ($mode eq 'newest') {
@@ -1921,14 +1936,17 @@ sub update_filenodes {
     }
     elsif ($mode eq 'replace') {
       my $h = $byid{$holder};
+      unless ($rights->($h)->{mayDelete}) {
+        $notupdated{$id} = { type => 'forbidden', description => 'no mayDelete on the node it would replace' };
+        delete $dest{$id}; delete $plan{$id};
+        next;
+      }
       if ($byid{$id}{nodetype} eq 'file' && $h->{nodetype} eq 'file' && $h->{name} eq $nn) {
         $plan{$id}{overwrite} = $holder;   # one MOVE with Overwrite: T (draft: atomic)
       }
       else {
-        my ($gone, $not) = $Self->destroy_filenodes([ $holder ], $opts);
-        if (my $err = $not->{$holder}) { $notupdated{$id} = $err; delete $dest{$id}; delete $plan{$id}; next }
-        push @alsodestroyed, @$gone;
-        delete @byid{@$gone};
+        # destroyed just before this move, once anything leaving it has left
+        $plan{$id}{destroy_first} = $holder;
       }
       $claimed{$k} = $id;
     }
@@ -1942,7 +1960,20 @@ sub update_filenodes {
   my %moves = map { ($_ => $destkey->($_)) } keys %dest;
   my %occ = map { ($curkey->($_) => $_->{nodeid}) } values %byid;
   my %par = map { ($_->{nodeid} => $_->{parentid}) } grep { defined $_->{parentid} } values %byid;
-  my (%touched, %parked);
+  my $under = sub {   # is $id strictly inside $anc in the tree as it was?
+    my ($id, $anc) = @_;
+    my %seen;
+    for (my $a = $par{$id}; defined $a && !$seen{$a}++; $a = $par{$a}) { return 1 if $a eq $anc }
+    return 0;
+  };
+  # a node destroyed before a move into its name waits for every mover
+  # leaving it (R6): otherwise the destroy takes them with it
+  my %after;
+  for my $id (grep { $plan{$_}{destroy_first} } keys %dest) {
+    my $h = $plan{$id}{destroy_first};
+    $after{$id} = [ grep { $_ ne $id && $under->($_, $h) } keys %dest ];
+  }
+  my (%touched, %parked, %moved, %destroy_err);
   my $do_move = sub {   # MOVE $row into $dir as $name; the mirror follows
     my ($row, $dir, $name, $overwrite) = @_;
     my $to = "$dir->{href}/$name";
@@ -1964,9 +1995,47 @@ sub update_filenodes {
     $Self->ddirty('jfilenodes', { active => 0, changed => $t }, { nodeid => $overwrite }) if $overwrite;
     $Self->commit();
     $touched{ $row->{parentid} } = $touched{ $dir->{nodeid} } = 1;
+    $moved{ $row->{nodeid} } = 1;
     return ($status);
   };
-  for my $step (@{ JMAP::FileNode::order_moves(\%moves, \%occ, \%par) }) {
+  # a free name in directory $dirid: $name itself, or the nearest free variant
+  my $free_name = sub {
+    my ($dirid, $name) = @_;
+    $Self->begin();
+    my %taken = map { ($key->($_->{name}) => 1) } @{ $Self->filenode_get({ parentid => $dirid, active => 1 }) };
+    $Self->commit();
+    return $taken{ $key->($name) } ? JMAP::FileNode::unique_name($name, \%taken, $ci) : $name;
+  };
+  # A node that cannot reach its destination must not keep a temporary
+  # name: it goes to $name in $dirid (its old place), or the nearest free
+  # name there (in a cycle another node has taken the old one), as onExists
+  # "rename" does.  Returns '' when settled, else where it was left.
+  my $settle = sub {
+    my ($id, $dirid, $name) = @_;
+    $Self->begin();
+    my $row = $Self->filenode_row($id);
+    my $dir = $Self->filenode_row($dirid);
+    # its old directory is gone (it displaced it): it stays where it is
+    $dir ||= $Self->filenode_row($row->{parentid}) if $row;
+    $Self->commit();
+    return '' unless $row;
+    my ($st) = $dir ? $do_move->($row, $dir, $free_name->($dir->{nodeid}, $name)) : ();
+    return defined $st && $st =~ /^2/ ? '' : $row->{href};
+  };
+  # destroy $h (and the late destroys inside it, children first) at most once
+  my $run_destroy = sub {
+    my $h = shift;
+    return $destroy_err{$h} if exists $destroy_err{$h};
+    my @ids = ($h, grep { $late{$_} && !exists $destroy_err{$_} && $under->($_, $h) } keys %late);
+    my ($gone, $not) = $Self->destroy_filenodes(\@ids, $opts);
+    push @alsodestroyed, @$gone;
+    for my $d (@ids) {
+      $destroy_err{$d} = $not->{$d};
+      $notdestroyed{$d} = $not->{$d} if $late{$d} && $not->{$d};
+    }
+    return $destroy_err{$h};
+  };
+  for my $step (@{ JMAP::FileNode::order_moves(\%moves, \%occ, \%par, \%after) }) {
     my ($id, $temp) = @$step;
     next unless $dest{$id};
     $Self->begin();
@@ -1978,10 +2047,37 @@ sub update_filenodes {
       delete $dest{$id}; delete $plan{$id};
       next;
     }
+    my $fail = sub {
+      my $e = shift;
+      $notupdated{$id} = $e;
+      delete $dest{$id}; delete $plan{$id};
+      my $orig = delete $parked{$id} or return;
+      my $left = $settle->($id, $orig->{parentid}, $orig->{name});
+      $e->{description} = ($e->{description} // '') . "; the node is left at $left" if length $left;
+    };
+    if (!defined $temp && (my $h = $plan{$id}{destroy_first})) {
+      # a node inside the one it displaces steps out of it first
+      if ($under->($id, $h)) {
+        my ($st, $err) = $do_move->($row, $dir, $free_name->($dir->{nodeid}, ".~tmp~$id"));
+        unless (defined $st && $st =~ /^2/) {
+          $fail->(defined $st ? _filenode_http_error($st, 'MOVE') : { type => 'serverFail', description => "MOVE: $err" });
+          next;
+        }
+        $parked{$id} //= $byid{$id};
+      }
+      if (my $err = $run_destroy->($h)) {
+        $fail->($late{$h} ? { type => 'alreadyExists', existingId => "$h",
+                              description => 'the node holding the name was not destroyed' } : { %$err });
+        next;
+      }
+      $Self->begin();
+      $row = $Self->filenode_row($id);
+      $Self->commit();
+    }
     my $overwrite = defined $temp ? undef : $plan{$id}{overwrite};
     my ($status, $err) = $do_move->($row, $dir, $temp // $dest{$id}[1], $overwrite);
     if (defined $status && $status =~ /^2/) {
-      $parked{$id} = $byid{$id} if defined $temp;
+      if (defined $temp) { $parked{$id} = $byid{$id} } else { delete $parked{$id} }
       push @alsodestroyed, $overwrite if $overwrite;
       next;
     }
@@ -1992,19 +2088,11 @@ sub update_filenodes {
       my $there = $rows->{"$dir->{href}/$dest{$id}[1]"};
       $e = $there ? { %$e, existingId => "$there->{nodeid}" } : { type => 'serverFail', description => $e->{description} };
     }
-    $notupdated{$id} = $e;
-    delete $dest{$id}; delete $plan{$id};
-    # A parked node that cannot reach its destination must not keep its
-    # temporary name: it goes back to its old name, or (in a cycle another
-    # node has taken that) the nearest free one, as onExists "rename" does.
-    if (my $orig = delete $parked{$id}) {
-      $Self->begin();
-      my $dir0 = $Self->filenode_row($orig->{parentid});
-      my %taken = map { ($key->($_->{name}) => 1) } @{ $Self->filenode_get({ parentid => $orig->{parentid}, active => 1 }) };
-      $Self->commit();
-      my $name = $taken{ $key->($orig->{name}) } ? JMAP::FileNode::unique_name($orig->{name}, \%taken, $ci) : $orig->{name};
-      $do_move->($row, $dir0, $name) if $dir0;
-    }
+    $fail->($e);
+  }
+  # the late destroys no move was waiting for
+  for my $d (sort keys %late) {
+    $run_destroy->($d) unless exists $destroy_err{$d};
   }
 
   # 5. bring the directories the moves touched up to date (spec "Writes");
@@ -2030,6 +2118,20 @@ sub update_filenodes {
         $notupdated{$id} = { type => 'invalidProperties', properties => ['size'], description => 'size does not match the blob' };
         next;
       }
+      # Cyrus keeps a file's ETag when its directory moves, but a server
+      # need not: a file whose ancestor moved in this call is re-listed
+      # first, so the PUT's If-Match is current
+      $Self->begin();
+      my $row = $Self->filenode_row($id);
+      my ($anc_moved, %seen);
+      for (my $a = $row ? $row->{parentid} : undef; defined $a && !$seen{$a}++; ) {
+        if ($moved{$a}) { $anc_moved = 1; last }
+        my $ar = $Self->filenode_row($a) or last;
+        $a = $ar->{parentid};
+      }
+      my $prow = $anc_moved ? $Self->filenode_row($row->{parentid}) : undef;
+      $Self->commit();
+      eval { $Self->_files_refresh_dir($prow->{href}); 1 } or warn "update_filenodes: re-listing $prow->{href}: $@" if $prow;
       my $r = $Self->put_filenode_content($id, $bytes, $p->{type} // $ctype);
       unless ($r->{status} == 200) {
         $notupdated{$id} = $r->{status} == 412
@@ -2055,7 +2157,7 @@ sub update_filenodes {
     $updated{$id} = %out ? \%out : undef;
   }
 
-  return (\%updated, \%notupdated, \@alsodestroyed);
+  return (\%updated, \%notupdated, \@alsodestroyed, \%notdestroyed);
 }
 
 # Run a file sync, and never die.  A failure (or a sync that gave up because
