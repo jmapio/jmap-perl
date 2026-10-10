@@ -533,7 +533,7 @@ sub handle_request {
         @items = eval { $Self->$FuncRef($myargs, $tag) };
         if ($@) {
           warn "JMAP METHOD ERROR $command ($tag): $@\n";
-          @items = ['error', { type => "serverError", message => "$@" }];
+          @items = ['error', { type => "serverFail", description => "$@" }];
         }
         # RFC 8620 S5.5/S5.6: the response carries no echo of filter or sort,
         # and "total" only "if, and only if, calculateTotal" was true.

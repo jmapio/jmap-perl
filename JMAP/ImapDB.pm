@@ -3967,7 +3967,7 @@ sub update_mailboxes {
       $toupdate{$jid} = [$imapname, $ifolderid];
     }
     else {
-      $notchanged{$jid} = {type => 'serverError', description => $res->[2]};
+      $notchanged{$jid} = {type => 'serverFail', description => $res->[2]};
     }
   }
 
@@ -4058,7 +4058,7 @@ sub destroy_mailboxes {
       $toremove{$jid} = $ifolderid;
     }
     else {
-      $notdestroyed{$jid} = {type => 'serverError', description => $res->[2]};
+      $notdestroyed{$jid} = {type => 'serverFail', description => $res->[2]};
     }
   }
 
