@@ -32,6 +32,13 @@ Hard rules that are easy to violate:
   (separate fork, same DB). `run_backend_worker` strips a trailing `:[^:]+$` to recover
   the real accountid for DB lookup. The parent drives the loop via `prod_backfill($accountid)`.
   **Never call `$db->backfill()` inside the sync/jmap worker command handler.**
+- **Held EmailSubmissions (FUTURERELEASE) are sent by the worker, scheduled by the parent.**
+  `create_submissions` keeps a Bcc-stripped copy in the account's `outbox/` and marks the row
+  `undoStatus = 'pending'`; the worker then reports `['sendat', $epoch]` asynchronously, the
+  parent's `schedule_send` stores it in `accounts.nextsend` (schema v3) and arms a timer that
+  sends the worker `send_due`, which delivers what is due and answers the next time. Startup
+  re-arms from `accounts.nextsend`. Destroying a submission must not cancel its delivery
+  (RFC 8621 S7.5), so `send_due` ignores `active`; only `undoStatus: canceled` stops it.
 - **Never call `get_user()` outside a transaction** — Perl autovivification of
   `$Self->{t}{user}` leaves a phantom `$Self->{t}={}` and corrupts later transaction state.
   Cache values you need inside the transaction for use in closures.
@@ -48,6 +55,10 @@ Hard rules that are easy to violate:
   proxy never defaults it), `group_batches` (order-preserving same-upstream batching) and
   `resolve_pointer` (JSON Pointer with JMAP `*` semantics).
   No I/O, no DB — keep it that way; `t/dispatch-*.t` covers it.
+- `JMAP/Collation.pm` — the sort collations (`i;octet`, `i;ascii-casemap`, and the default
+  `i;unicode-casemap`) advertised in `collationAlgorithms`. Every string comparator in a
+  `/query` sort goes through `JMAP::Collation::compare` with the Comparator's `collation`;
+  a bare `cmp` there ignores it. Pure, like `Dispatch`; `t/collation.t` covers it.
 - `JMAP/API.pm` — JMAP request handler; dispatches to per-datatype method modules in
   `JMAP/API/` (`Email`, `Mailbox`, `Thread`, `Calendar`, `Contact`, `Submission`,
   `StorageNode`, `MDN`, `Quota`, `Preferences`, `Blob`). `JMAP/BlobConvert.pm` is the pure

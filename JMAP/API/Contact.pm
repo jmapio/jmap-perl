@@ -4,6 +4,7 @@ use warnings;
 
 use JSON::XS;
 use JSON;
+use JMAP::Collation;
 
 my $json = JSON::XS->new->utf8->canonical();
 
@@ -195,11 +196,13 @@ sub api_Contact_query {
           my $bcard = $storage{payloads}{$b->{contactuid}}
             //= ($Self->{db}->read_jcontact_payload($b->{contactuid}) // {});
           if ($prop eq 'name') {
-            $res = lc($acard->{name}{full} // '') cmp lc($bcard->{name}{full} // '');
+            $res = JMAP::Collation::compare($cmp->{collation}, $acard->{name}{full}, $bcard->{name}{full},
+                                            $storage{collation_keys} //= {});
           } else {
             my $kind = ($prop =~ s{^name/}{}r);
-            $res = lc(_contact_name_component($acard, $kind))
-                   cmp lc(_contact_name_component($bcard, $kind));
+            $res = JMAP::Collation::compare($cmp->{collation},
+                     _contact_name_component($acard, $kind), _contact_name_component($bcard, $kind),
+                     $storage{collation_keys} //= {});
           }
         }
         $res = -$res if defined($cmp->{isAscending}) && !$cmp->{isAscending};
@@ -848,11 +851,13 @@ sub api_ContactCard_queryChanges {
           my $bcard = $storage{payloads}{$b->{contactuid}}
             //= ($Self->{db}->read_jcontact_payload($b->{contactuid}) // {});
           if ($prop eq 'name') {
-            $res = lc($acard->{name}{full} // '') cmp lc($bcard->{name}{full} // '');
+            $res = JMAP::Collation::compare($cmp->{collation}, $acard->{name}{full}, $bcard->{name}{full},
+                                            $storage{collation_keys} //= {});
           } else {
             my $kind = ($prop =~ s{^name/}{}r);
-            $res = lc(_contact_name_component($acard, $kind))
-                   cmp lc(_contact_name_component($bcard, $kind));
+            $res = JMAP::Collation::compare($cmp->{collation},
+                     _contact_name_component($acard, $kind), _contact_name_component($bcard, $kind),
+                     $storage{collation_keys} //= {});
           }
         }
         $res = -$res if defined($cmp->{isAscending}) && !$cmp->{isAscending};

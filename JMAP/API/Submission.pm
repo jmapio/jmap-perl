@@ -36,7 +36,7 @@ sub _mk_submission_sort {
 }
 
 # Per-row predicate: returns 1 if row matches filter, 0 otherwise.
-# Row layout: [0]=jsubid [1]=thrid [2]=msgid [3]=sendat [4]=identity
+# Row layout: [0]=jsubid [1]=thrid [2]=msgid [3]=sendat [4]=identity [5]=undoStatus
 sub _submission_match {
   my ($Self, $row, $filter) = @_;
 
@@ -51,7 +51,7 @@ sub _submission_match {
     return 0 unless grep { $_ eq $row->[4] } @{$filter->{identityIds}};
   }
   if ($filter->{undoStatus}) {
-    return 0 unless $filter->{undoStatus} eq 'final';
+    return 0 unless ($row->[5] // 'final') eq $filter->{undoStatus};
   }
   if ($filter->{before}) {
     my $time = str2time($filter->{before});
@@ -157,13 +157,13 @@ sub api_EmailSubmission_queryChanges {
 
   my $index = 0;
   foreach my $item (@$data) {
-    if ($item->[5] <= $sinceQueryState) {    # [5]=jmodseq
-      $index++ if $item->[6];               # [6]=active
+    if ($item->[6] <= $sinceQueryState) {    # [6]=jmodseq
+      $index++ if $item->[7];               # [7]=active
       next;
     }
     # changed
     push @removed, "$item->[0]";
-    next unless $item->[6];                 # [6]=active
+    next unless $item->[7];                 # [7]=active
     push @added, { id => "$item->[0]", index => $index };
     $index++;
   }
@@ -222,8 +222,8 @@ sub api_EmailSubmission_get {
       emailId => $data->{msgid},
       threadId => $thrid,
       envelope => $data->{envelope} ? decode_json($data->{envelope}) : undef,
-      sendAt => Data::JSEmail::isodate($data->{sendat}),
-      undoStatus => $data->{status},
+      sendAt => Data::JSEmail::isodate($data->{sendAt} // $data->{sendat}),
+      undoStatus => $data->{undostatus} // $data->{undoStatus} // 'final',
       deliveryStatus => undef,
       dsnBlobIds => [],
       mdnBlobIds => [],
@@ -332,8 +332,6 @@ sub api_EmailSubmission_set {
   my ($created, $notCreated, $updated, $notUpdated, $destroyed, $notDestroyed);
   my ($oldState, $newState);
 
-  # TODO: need to support ifInState for this sucker
-
   my %updateEmails;
   my @destroyEmails;
 
@@ -346,6 +344,10 @@ sub api_EmailSubmission_set {
   my $user = $Self->{db}->get_user();
   $oldState = "$user->{jstateEmailSubmission}";
   $Self->{db}->commit();
+
+  # RFC 8620 S5.3
+  return ['error', {type => 'stateMismatch'}]
+    if defined $args->{ifInState} && $args->{ifInState} ne $oldState;
 
   ($created, $notCreated) = $Self->{db}->create_submissions($create, sub { $Self->idmap(shift) });
   $Self->setid($_, $created->{$_}{id}) for keys %$created;

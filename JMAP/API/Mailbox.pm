@@ -7,6 +7,7 @@ use JSON::XS;
 use JSON;
 use Carp;
 use Encode;
+use JMAP::Collation;
 
 my $json = JSON::XS->new->utf8->canonical();
 
@@ -26,7 +27,8 @@ sub _makefullnames {
       $item = $idmap{$item->{parentId}||''};
     }
 
-    $fullnames{$id} = join('\1E', @name);
+    # U+001E (RECORD SEPARATOR) sorts a parent before its children
+    $fullnames{$id} = join("\x{1E}", @name);
   }
 
   return \%fullnames;
@@ -48,7 +50,8 @@ sub _mailbox_sort {
       my $res = 0;
       my $field = $arg->{property};
       if ($field eq 'name') {
-        $res = $a->{name} cmp $b->{name};
+        $res = JMAP::Collation::compare($arg->{collation}, $a->{name}, $b->{name},
+                                        $storage->{collation_keys} //= {});
       }
       elsif ($field eq 'sortOrder') {
         $res = $a->{sortOrder} <=> $b->{sortOrder};
@@ -56,7 +59,9 @@ sub _mailbox_sort {
       elsif ($field eq 'parent/name') {
         # magic synthentic field...
         $storage->{fullnames} ||= _makefullnames($storage->{data});
-        $res = $storage->{fullnames}{$a->{jmailboxid}} cmp $storage->{fullnames}{$b->{jmailboxid}};
+        $res = JMAP::Collation::compare($arg->{collation},
+          $storage->{fullnames}{$a->{jmailboxid}}, $storage->{fullnames}{$b->{jmailboxid}},
+          $storage->{collation_keys} //= {});
       }
       else {
         die "unknown field $field";

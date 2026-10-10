@@ -56,6 +56,15 @@ sub _principal_state {
   return sha1_hex(join("\0", map { $principal->{$_} // '' } qw(id type name email)));
 }
 
+# Remember every state the principal is seen in (for the jqueries cache's
+# hour), so /changes can tell a real earlier state from a stranger's.
+sub _principal_remember {
+  my ($Self, $principal) = @_;
+  my $state = _principal_state($principal);
+  $Self->{db}->save_query('PrincipalState', {}, $state, [$principal->{id}]);
+  return $state;
+}
+
 sub api_Principal_get {
   my ($Self, $args) = @_;
   my ($user, $accountid) = $Self->_api_init($args);
@@ -80,7 +89,7 @@ sub api_Principal_get {
 
   return ['Principal/get', {
     accountId => $accountid,
-    state     => _principal_state($principal),
+    state     => _principal_remember($Self, $principal),
     list      => \@list,
     notFound  => \@not_found,
   }];
@@ -121,31 +130,46 @@ sub api_Principal_query {
     if ($args->{position} // 0) < 0;
 
   my @matched = _principal_matches($principal, $args->{filter}) ? ($principal) : ();
+  my $state = _principal_remember($Self, $principal);
+  $Self->{db}->save_query('Principal', { filter => $args->{filter}, sort => $args->{sort} },
+                          $state, [ map { $_->{id} } @matched ]);
 
   my ($start, $end) = $Self->_apply_window(\@matched, $args, sub { $_[0]{id} });
   return $Self->_transError(['error', {type => 'anchorNotFound'}]) unless defined $start;
 
   return ['Principal/query', {
     accountId           => $accountid,
-    queryState          => _principal_state($principal),
-    canCalculateChanges => JSON::false,
+    queryState          => $state,
+    canCalculateChanges => JSON::true,
     position            => $start + 0,
     total               => scalar(@matched) + 0,
     ids                 => [map { $matched[$_]{id} } $start .. $end],
   }];
 }
 
-# RFC 9670 S2.2/S2.5: a directory-backed implementation that cannot compute a
-# delta always answers cannotCalculateChanges. The principal here is derived
-# from the account row rather than a change log, so that is the honest answer.
+# The one principal is derived from the account; any earlier state of ours
+# that we remember means it has been updated since.
 sub api_Principal_changes {
   my ($Self, $args) = @_;
   my ($user, $accountid) = $Self->_api_init($args);
   return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
 
-  my $state = _principal_state($Self->_principal($user, $accountid));
+  my $principal = $Self->_principal($user, $accountid);
   $Self->commit();
-  return ['error', {type => 'cannotCalculateChanges', newState => $state}];
+  my $state = _principal_remember($Self, $principal);
+  my $since = $args->{sinceState} // '';
+  return ['error', {type => 'cannotCalculateChanges', newState => $state}]
+    unless $since eq $state || $Self->{db}->load_query('PrincipalState', {}, $since);
+
+  return ['Principal/changes', {
+    accountId      => $accountid,
+    oldState       => $since,
+    newState       => $state,
+    hasMoreChanges => JSON::false,
+    created        => [],
+    updated        => $since eq $state ? [] : [$principal->{id}],
+    destroyed      => [],
+  }];
 }
 
 sub api_Principal_queryChanges {
@@ -153,9 +177,31 @@ sub api_Principal_queryChanges {
   my ($user, $accountid) = $Self->_api_init($args);
   return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
 
-  my $state = _principal_state($Self->_principal($user, $accountid));
+  my $principal = $Self->_principal($user, $accountid);
   $Self->commit();
-  return ['error', {type => 'cannotCalculateChanges', newQueryState => $state}];
+  my $state  = _principal_remember($Self, $principal);
+  my $since  = $args->{sinceQueryState} // '';
+  my $params = { filter => $args->{filter}, sort => $args->{sort} };
+  my $old    = $Self->{db}->load_query('Principal', $params, $since);
+  return ['error', {type => 'cannotCalculateChanges', newQueryState => $state}] unless $old;
+
+  my @new = _principal_matches($principal, $args->{filter}) ? ($principal->{id}) : ();
+  $Self->{db}->save_query('Principal', $params, $state, \@new);
+
+  # RFC 8620 S5.6: name and email are mutable, so a principal that changed
+  # is removed and added back.
+  my $changed = $since ne $state;
+  my %old = map { $_ => 1 } @$old;
+  my %new = map { $_ => 1 } @new;
+  return ['Principal/queryChanges', {
+    accountId     => $accountid,
+    oldQueryState => $since,
+    newQueryState => $state,
+    removed       => [ grep { !$new{$_} || $changed } @$old ],
+    added         => [ map { { id => $new[$_], index => $_ } }
+                       grep { !$old{$new[$_]} || $changed } 0 .. $#new ],
+    total         => scalar(@new),
+  }];
 }
 
 # RFC 9670 S2.3: principals come from the backend account, not from clients.

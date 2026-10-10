@@ -19,6 +19,7 @@ use AnyEvent;
 use AnyEvent::Socket;
 use Date::Format;
 use Data::JSEmail;
+use Email::Simple;
 use Text::JSContact qw(vcard_to_jscontact jscontact_to_vcard);
 use Data::Dumper;
 use JMAP::Sync::Gmail;
@@ -3181,6 +3182,74 @@ sub update_contacts_jscontact {
   return (\%changed, \%notchanged);
 }
 
+# RFC 8621 S7: the envelope for a submission that gives none.
+sub _generate_envelope {
+  my $rfc822 = shift;
+  my $email = Email::Simple->new($rfc822 // '');
+  my $addrs = sub {
+    map { @{ Data::JSEmail::asAddresses($_) || [] } } $email->header_raw($_[0]);
+  };
+  my ($from) = ($addrs->('Sender'), $addrs->('From'));
+  my (%seen, @rcpt);
+  for my $addr (map { $addrs->($_) } qw(To Cc Bcc)) {
+    next unless defined $addr->{email} && !$seen{lc $addr->{email}}++;
+    push @rcpt, { email => $addr->{email}, parameters => undef };
+  }
+  return {
+    mailFrom => { email => ($from ? $from->{email} : ''), parameters => undef },
+    rcptTo   => \@rcpt,
+  };
+}
+
+# FUTURERELEASE (RFC 4865): the proxy holds the message itself and sends it
+# when due (see send_due), for up to maxDelayedSend.
+require JMAP::Capabilities;
+
+# The release time a mailFrom's parameters ask for: (undef) for none,
+# (epoch) for a hold, or (undef, $why) when the parameters are not ones we
+# support or hold too long.
+sub _release_time {
+  my ($params, $now) = @_;
+  return () unless defined $params;
+  return (undef, 'parameters must be an object') unless ref $params eq 'HASH';
+  my %p = map { uc($_) => $params->{$_} } keys %$params;
+  my @other = grep { !/^HOLD(?:FOR|UNTIL)$/ } keys %p;
+  return (undef, "unsupported MAIL FROM parameter @other") if @other;
+  return (undef, 'HOLDFOR and HOLDUNTIL together') if keys %p > 1;
+  my $when;
+  if (defined $p{HOLDFOR}) {
+    return (undef, 'bad HOLDFOR') unless ($p{HOLDFOR} // '') =~ /^[1-9]\d{0,8}$/;
+    $when = $now + $p{HOLDFOR};
+  }
+  elsif (defined $p{HOLDUNTIL}) {
+    $when = str2time($p{HOLDUNTIL});
+    return (undef, 'bad HOLDUNTIL') unless defined $when;
+  }
+  else {
+    return ();
+  }
+  return (undef, 'hold is longer than maxDelayedSend')
+    if $when > $now + $JMAP::Capabilities::MAX_DELAYED_SEND;
+  return ($when);
+}
+
+# RFC 8621 S7: "The server MUST remove any Bcc header field present on the
+# message during delivery."
+sub _strip_bcc {
+  my $rfc822 = shift;
+  my $email = Email::Simple->new($rfc822);
+  return $rfc822 unless defined $email->header_raw('Bcc');
+  $email->header_set('Bcc');
+  return $email->as_string;
+}
+
+# The envelope as given to SMTP: the hold parameters are ours, not the
+# submission server's.
+sub _smtp_envelope {
+  my $envelope = shift;
+  return { %$envelope, mailFrom => { %{$envelope->{mailFrom}}, parameters => undef } };
+}
+
 sub create_submissions {
   my $Self = shift;
   my $new = shift;
@@ -3190,55 +3259,101 @@ sub create_submissions {
 
   $Self->begin();
 
-  my %todo;
   my %createmap;
   my %notcreated;
+  my $now = time();
+  # Validate each submission and settle its envelope before anything is sent.
+  my %ready;   # cid => [msgid, thrid, envelope, release]
   foreach my $cid (sort keys %$new) {
     my $sub = $new->{$cid};
-
-    my $msgid = $idmap->($sub->{emailId});
-
-    unless ($msgid) {
-      $notcreated{$cid} = { error => "no msgid provided" };
-      next;
-    }
-
-    my $thrid = $Self->dgetfield('jmessages', { msgid => $msgid, active => 1 }, 'thrid');
+    my $msgid = $idmap->($sub->{emailId} // '');
+    my $thrid = $msgid && $Self->dgetfield('jmessages', { msgid => $msgid, active => 1 }, 'thrid');
     unless ($thrid) {
-      $notcreated{$cid} = { error => "message does not exist" };
+      $notcreated{$cid} = { type => 'invalidProperties', properties => ['emailId'],
+                            description => 'no such Email' };
       next;
     }
-
-    my $id = $Self->dmake('jsubmission', {
-      sendat   => $sub->{sendAt} ? str2time($sub->{sendAt}) : time(),
-      msgid    => $msgid,
-      thrid    => $thrid,
-      envelope => $sub->{envelope} ? $json->encode($sub->{envelope}) : undef,
-      identity => $sub->{identityId},
-    });
-
-    $createmap{$cid} = { id => $id };
-    $todo{$cid} = $msgid;
+    # RFC 8621 S7: sendAt and undoStatus are server-set on create
+    if (my @bad = grep { exists $sub->{$_} } qw(sendAt undoStatus deliveryStatus dsnBlobIds mdnBlobIds threadId)) {
+      $notcreated{$cid} = { type => 'invalidProperties', properties => \@bad };
+      next;
+    }
+    my $envelope = $sub->{envelope};
+    my $release;
+    if (defined $envelope) {
+      my @rcpt = ref $envelope eq 'HASH' && ref $envelope->{rcptTo} eq 'ARRAY' ? @{$envelope->{rcptTo}} : ();
+      my $from = ref $envelope eq 'HASH' ? $envelope->{mailFrom} : undef;
+      # The only parameters are RFC 4865's HOLDFOR/HOLDUNTIL on mailFrom,
+      # which the proxy honours itself (maxDelayedSend); no RCPT TO ones
+      my ($when, $why) = ref $from eq 'HASH' ? _release_time($from->{parameters}, $now) : (undef, 'no mailFrom');
+      if ($why || !ref $from || !defined $from->{email}
+          || grep { ref $_ ne 'HASH' || !defined $_->{email} || defined $_->{parameters} } @rcpt) {
+        $notcreated{$cid} = { type => 'invalidProperties', properties => ['envelope'],
+                              ($why ? (description => $why) : ()) };
+        next;
+      }
+      $release = $when;
+    }
+    $ready{$cid} = [$msgid, $thrid, $envelope, $release];
   }
-
-  $Self->dirty('jsubmission') if %createmap;
   $Self->commit();
 
-  foreach my $cid (sort keys %todo) {
-    my $sub = $new->{$cid};
-    my ($type, $rfc822) = $Self->get_raw_message($todo{$cid});
-    eval { $Self->backend_cmd('send_email', $rfc822, $sub->{envelope}) };
-    if ($@) {
-      my $err = "$@";
-      $err =~ s/\s+at \S+ line \d+.*//s;
-      warn "send_email failed for $cid: $err\n";
-      # Roll back the submission row we created
-      $Self->begin();
-      $Self->ddelete('jsubmission', { id => $createmap{$cid}{id} });
-      $Self->commit();
-      delete $createmap{$cid};
-      $notcreated{$cid} = { type => 'serverFail', description => $err };
+  my %message;
+  foreach my $cid (sort keys %ready) {
+    my ($msgid, $thrid, $envelope, $release) = @{$ready{$cid}};
+    my ($type, $rfc822) = $Self->get_raw_message($msgid);
+    # RFC 8621 S7: a null envelope is generated from the Email: mailFrom from
+    # Sender, else From; rcptTo the deduplicated To, Cc and Bcc addresses.
+    $envelope //= _generate_envelope($rfc822);
+    $ready{$cid}[2] = $envelope;
+    my @rcpt = map { $_->{email} } @{$envelope->{rcptTo} || []};
+    unless (@rcpt) {
+      $notcreated{$cid} = { type => 'noRecipients' };
+      next;
     }
+    if (my @bad = grep { !/^[^\s@]+@[^\s@]+$/ } @rcpt) {
+      $notcreated{$cid} = { type => 'invalidRecipients', invalidRecipients => \@bad };
+      next;
+    }
+    # what is sent is the message as it is now, whatever happens to the Email
+    $message{$cid} = _strip_bcc($rfc822);
+  }
+
+  foreach my $cid (sort keys %message) {
+    my ($msgid, $thrid, $envelope, $release) = @{$ready{$cid}};
+    my $held = defined $release && $release > $now;
+    my $sendat = $held ? $release : $now;
+
+    unless ($held) {
+      eval { $Self->backend_cmd('send_email', $message{$cid}, _smtp_envelope($envelope)) };
+      if ($@) {
+        (my $err = "$@") =~ s/\s+at \S+ line \d+.*//s;
+        warn "send_email failed for $cid: $err\n";
+        $notcreated{$cid} = { type => 'serverFail', description => $err };
+        next;
+      }
+    }
+
+    $Self->begin();
+    my $id = $Self->dmake('jsubmission', {
+      sendat     => $sendat,
+      msgid      => $msgid,
+      thrid      => $thrid,
+      envelope   => $json->encode($envelope),
+      identity   => $new->{$cid}{identityId},
+      undoStatus => $held ? 'pending' : 'final',
+    });
+    $Self->commit();
+    $Self->write_subdir('outbox', "$id.eml", $message{$cid}) if $held;
+    $Self->{_sendat_changed} = 1 if $held;
+
+    # RFC 8620 S5.3: created carries the server-set properties
+    $createmap{$cid} = {
+      id         => "$id",
+      sendAt     => Data::JSEmail::isodate($sendat),
+      undoStatus => $held ? 'pending' : 'final',
+      (defined $new->{$cid}{envelope} ? () : (envelope => $envelope)),
+    };
   }
 
   return (\%createmap, \%notcreated);
@@ -3249,7 +3364,38 @@ sub update_submissions {
   my $changed = shift;
   my $idmap = shift;
 
-  return ({}, { map { $_ => "change not supported" } keys %$changed });
+  my (%updated, %notupdated);
+  for my $id (sort keys %$changed) {
+    my $patch = $changed->{$id};
+    my $subid = $idmap->($id);
+    $Self->begin();
+    my $row = $Self->dgetone('jsubmission', { jsubid => $subid, active => 1 });
+    $Self->commit();
+    unless ($row) {
+      $notupdated{$id} = { type => 'notFound' };
+      next;
+    }
+    # RFC 8621 S7: undoStatus may be set to "canceled"; nothing else changes
+    my $status = $row->{undoStatus} // $row->{undostatus} // 'final';
+    if (my @bad = grep { $_ ne 'undoStatus' || ($patch->{$_} // '') !~ /^(?:canceled|\Q$status\E)$/ } keys %$patch) {
+      $notupdated{$id} = { type => 'invalidProperties', properties => \@bad };
+      next;
+    }
+    if (exists $patch->{undoStatus} && $patch->{undoStatus} ne $status) {
+      unless ($status eq 'pending') {
+        $notupdated{$id} = { type => 'cannotUnsend' };
+        next;
+      }
+      $Self->begin();
+      $Self->ddirty('jsubmission', { undoStatus => 'canceled' }, { jsubid => $subid });
+      $Self->commit();
+      $Self->unlink_subdir('outbox', "$subid.eml");
+      $Self->{_sendat_changed} = 1;
+    }
+    # keyed by the real id, even when the client named it "#creationId"
+    $updated{$subid} = undef;
+  }
+  return (\%updated, \%notupdated);
 }
 
 sub destroy_submissions {
@@ -3262,12 +3408,14 @@ sub destroy_submissions {
 
   my @destroyed;
   my %notdestroyed;
-  my %namemap;
   foreach my $subid (@$destroy) {
     my $active = $Self->dgetfield('jsubmission', { jsubid => $subid }, 'active');
     if ($active) {
       push @destroyed, $subid;
-      $Self->ddelete('jsubmission', { jsubid => $subid });
+      # RFC 8621 S7.5: destroying "MUST NOT affect the deliveries it
+      # represents" -- a held message still goes out; this only removes the
+      # record, and keeps the row so /changes can report it destroyed.
+      $Self->ddirty('jsubmission', { active => 0 }, { jsubid => $subid });
     }
     else {
       $notdestroyed{$subid} = {type => 'notFound', description => "submission not found"};
@@ -3277,6 +3425,49 @@ sub destroy_submissions {
   $Self->commit();
 
   return (\@destroyed, \%notdestroyed);
+}
+
+# The time the next held submission is due, or undef if none is pending.
+sub next_send_due {
+  my $Self = shift;
+  $Self->begin();
+  my ($when) = $Self->dbh->selectrow_array(
+    "SELECT MIN(sendat) FROM jsubmission WHERE undoStatus = 'pending'");
+  $Self->commit();
+  return $when;
+}
+
+# Send every held submission whose time has come; returns next_send_due.
+sub send_due {
+  my $Self = shift;
+  my $now = time();
+  $Self->begin();
+  my $due = $Self->dbh->selectall_arrayref(
+    "SELECT jsubid, envelope FROM jsubmission WHERE undoStatus = 'pending' AND sendat <= ?",
+    { Slice => {} }, $now);
+  $Self->commit();
+
+  for my $row (@$due) {
+    my $id = $row->{jsubid};
+    my $message = $Self->read_subdir('outbox', "$id.eml");
+    if (defined $message) {
+      eval { $Self->backend_cmd('send_email', $message, _smtp_envelope(decode_json($row->{envelope}))) };
+      if ($@) {
+        # leave it pending: the next send_due tries again
+        warn "send_due: submission $id failed, will retry: $@";
+        next;
+      }
+    }
+    else {
+      warn "send_due: submission $id has no held message\n";
+    }
+    $Self->begin();
+    $Self->ddirty('jsubmission', { undoStatus => 'final' }, { jsubid => $id });
+    $Self->commit();
+    $Self->unlink_subdir('outbox', "$id.eml");
+  }
+
+  return $Self->next_send_due();
 }
 
 sub _create_user_tables {

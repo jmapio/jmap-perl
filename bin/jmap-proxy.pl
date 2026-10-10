@@ -41,6 +41,7 @@ use JMAP::OAuth::Fastmail;
 use JMAP::OAuth::PACC;
 use JMAP::OAuth::OIDC;
 use JMAP::Dispatch;
+use JMAP::Collation;
 use JMAP::Capabilities qw(imap_account_capabilities);
 
 # Backend modules (loaded in child after fork)
@@ -164,6 +165,9 @@ sub mk_json {
     }
     elsif ($res->[0] eq 'synced') {
       $sync_times{$accountid} = $res->[1];
+    }
+    elsif ($res->[0] eq 'sendat') {
+      schedule_send($accountid, $res->[1]);
     }
     elsif ($res->[0] eq 'bye') {
       warn "Backend closing $accountid\n";
@@ -797,6 +801,12 @@ sub run_backend_worker {
           $result = $db->handle_jmap($args, $fwd, $rev);
         } else {
           $result = $api->handle_request($args);
+          # A held (FUTURERELEASE) submission was created or canceled: tell
+          # the parent when this account next needs a send_due.
+          if (delete $db->{_sendat_changed}) {
+            my $next = $db->next_send_due;
+            eval { $write_json->(['sendat', $next]) };
+          }
         }
         # Add sessionState: checksum of sorted accountIds in pool (RFC 8620)
         my $poolid = $dbh->selectrow_array(
@@ -823,6 +833,11 @@ sub run_backend_worker {
         return ['backfill', 0] if $db->can('handle_jmap');
         my $more = $db->backfill() ? 1 : 0;
         return ['backfill', $more];
+      }
+      if ($cmd eq 'send_due') {
+        # Send the held submissions whose time has come; answer the next due time.
+        return ['send_due', undef] unless $db->can('send_due');
+        return ['send_due', $db->send_due()];
       }
       if ($cmd eq 'davsync') {
         $db->sync_calendars();
@@ -944,7 +959,7 @@ sub run_backend_worker {
   }
 }
 
-my $ACCOUNTS_SCHEMA_VERSION = 2;
+my $ACCOUNTS_SCHEMA_VERSION = 3;
 
 sub _migrate_accounts_db {
   my ($dbh) = @_;
@@ -954,7 +969,7 @@ sub _migrate_accounts_db {
     # Fresh install — create full schema at version 1 (the baseline; no migration needed).
     $dbh->begin_work;
     eval {
-      $dbh->do("CREATE TABLE accounts (email TEXT PRIMARY KEY, accountid TEXT, type TEXT, poolid TEXT, needs_backfill INTEGER NOT NULL DEFAULT 1, cred_fingerprint TEXT)");
+      $dbh->do("CREATE TABLE accounts (email TEXT PRIMARY KEY, accountid TEXT, type TEXT, poolid TEXT, needs_backfill INTEGER NOT NULL DEFAULT 1, cred_fingerprint TEXT, nextsend INTEGER)");
       $dbh->do("CREATE TABLE tokens (token TEXT PRIMARY KEY, accountid TEXT NOT NULL, last_used INTEGER, last_ip TEXT)");
       $dbh->do("PRAGMA user_version = $ACCOUNTS_SCHEMA_VERSION");
       $dbh->commit;
@@ -975,6 +990,18 @@ sub _migrate_accounts_db {
     if ($@) { $dbh->rollback; die "migration to v2 failed: $@" }
     warn "accounts.sqlite3: migrated to schema version 2\n";
     $v = 2;
+  }
+  if ($v < 3) {
+    # nextsend: when the account's next held EmailSubmission is due
+    $dbh->begin_work;
+    eval {
+      $dbh->do("ALTER TABLE accounts ADD COLUMN nextsend INTEGER");
+      $dbh->do('PRAGMA user_version = 3');
+      $dbh->commit;
+    };
+    if ($@) { $dbh->rollback; die "migration to v3 failed: $@" }
+    warn "accounts.sqlite3: migrated to schema version 3\n";
+    $v = 3;
   }
 }
 
@@ -1191,6 +1218,16 @@ sub run_accounts_worker {
         return ['get_needs_backfill', $rows || []];
       }
 
+      if ($cmd eq 'set_nextsend') {
+        $dbh->do("UPDATE accounts SET nextsend = ? WHERE accountid = ?", {},
+                 $args->{nextsend}, $args->{accountid});
+        return ['set_nextsend', {}];
+      }
+      if ($cmd eq 'get_nextsends') {
+        my $rows = $dbh->selectall_arrayref(
+          "SELECT accountid, nextsend FROM accounts WHERE nextsend IS NOT NULL");
+        return ['get_nextsends', $rows || []];
+      }
       if ($cmd eq 'clear_backfill') {
         my $aid = $args->{accountid};
         $dbh->do("UPDATE accounts SET needs_backfill = 0 WHERE accountid = ?", {}, $aid);
@@ -1433,7 +1470,7 @@ sub do_session {
               maxCallsInRequest => 16,
               maxObjectsInGet => 4096,
               maxObjectsInSet => 4096,
-              collationAlgorithms => [],
+              collationAlgorithms => [JMAP::Collation::supported()],
             },
             %top_caps,
           },
@@ -4480,6 +4517,34 @@ sub prod_backfill {
   $do_backfill->();
 }
 
+# Held EmailSubmissions (FUTURERELEASE): each account with one pending has a
+# timer for its next due time.  The time is also kept in accounts.sqlite3
+# (nextsend) so a restart re-arms it.  The worker does the sending.
+my %send_timer;
+sub schedule_send {
+  my ($accountid, $when) = @_;
+  return if $accountid =~ /:/;
+  delete $send_timer{$accountid};
+  send_backend_request('__accounts__', 'set_nextsend',
+    { accountid => $accountid, nextsend => $when }, sub {}, sub {});
+  return unless defined $when;
+  my $after = $when - time();
+  $after = 0 if $after < 0;
+  $send_timer{$accountid} = AnyEvent->timer(after => $after, cb => sub {
+    delete $send_timer{$accountid};
+    send_backend_request($accountid, 'send_due', {}, sub {
+      my $next = shift;
+      # a send that is still due failed: retry in a minute, not at once
+      $next = time() + 60 if defined $next && $next <= time();
+      schedule_send($accountid, $next);
+    }, sub {
+      # the worker failed: try again in a minute
+      warn "send_due failed for $accountid: $_[0]\n";
+      schedule_send($accountid, time() + 60);
+    });
+  });
+}
+
 my $sync_timer = AnyEvent->timer(
   after    => $SYNC_INTERVAL,
   interval => $SYNC_INTERVAL,
@@ -4506,6 +4571,10 @@ $startup_backfill_timer = AnyEvent->timer(after => 5, cb => sub {
       prod_backfill($aid);
     }
   }, sub { warn "Failed to query needs_backfill: $_[0]\n" });
+  send_backend_request('__accounts__', 'get_nextsends', {}, sub {
+    my $rows = shift || [];
+    schedule_send($_->[0], $_->[1]) for @$rows;
+  }, sub { warn "Failed to query nextsends: $_[0]\n" });
 });
 
 #

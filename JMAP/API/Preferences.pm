@@ -533,6 +533,14 @@ sub getSavedSearches {
   }];
 }
 
+# Identity state: the modseq of the stored identity overrides ("i0" before
+# any), so Identity/set moves it and Identity/changes can report id1.
+sub _identity_state {
+  my $Self = shift;
+  my $modseq = $Self->{db}->dgetfield('juserprefs', { jprefid => 'identity/id1' }, 'jmodseq');
+  return 'i' . ($modseq // 0);
+}
+
 sub api_Identity_get {
   my $Self = shift;
   my $args = shift;
@@ -541,6 +549,7 @@ sub api_Identity_get {
   my $user = $Self->{db}->get_user();
   my $accountid = $Self->{db}->accountid();
   my $row = $Self->{db}->dgetone('juserprefs', { jprefid => 'identity/id1', active => 1 });
+  my $state = $Self->_identity_state();
   $Self->commit();
 
   my $prefs = ($row && $row->{payload}) ? $json->decode($row->{payload}) : {};
@@ -583,7 +592,7 @@ sub api_Identity_get {
 
   return ['Identity/get', {
     accountId => $accountid,
-    state     => 'dummy',
+    state     => $state,
     list      => \@list,
     notFound  => \@not_found,
   }];
@@ -595,18 +604,22 @@ sub api_Identity_changes {
 
   $Self->begin();
   my $accountid = $Self->{db}->accountid();
+  my $state = $Self->_identity_state();
   $Self->commit();
 
-  # Identity state is always 'dummy' — identities are derived from account settings
-  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => 'dummy'}])
-    unless ($args->{sinceState} // '') eq 'dummy';
+  # The one identity, id1, only ever changes; any older state of ours means
+  # it was updated since.
+  my ($since) = ($args->{sinceState} // '') =~ /^i(\d+)$/;
+  my ($now)   = $state =~ /^i(\d+)$/;
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $state}])
+    unless defined $since && $since <= $now;
 
   return ['Identity/changes', {
     accountId      => $accountid,
-    oldState       => 'dummy',
-    newState       => 'dummy',
+    oldState       => $args->{sinceState},
+    newState       => $state,
     created        => [],
-    updated        => [],
+    updated        => $since < $now ? ['id1'] : [],
     destroyed      => [],
     hasMoreChanges => JSON::false,
   }];
@@ -618,7 +631,12 @@ sub api_Identity_set {
 
   $Self->begin();
   my $accountid = $Self->{db}->accountid();
+  my $oldState = $Self->_identity_state();
   $Self->commit();
+
+  # RFC 8620 S5.3
+  return ['error', {type => 'stateMismatch'}]
+    if defined $args->{ifInState} && $args->{ifInState} ne $oldState;
 
   my $create  = $args->{create}  // {};
   my $update  = $args->{update}  // {};
@@ -650,10 +668,14 @@ sub api_Identity_set {
     $updated{$id} = {};
   }
 
+  $Self->begin();
+  my $newState = $Self->_identity_state();
+  $Self->commit();
+
   return ['Identity/set', {
     accountId    => $accountid,
-    oldState     => 'dummy',
-    newState     => 'dummy',
+    oldState     => $oldState,
+    newState     => $newState,
     created      => undef,
     notCreated   => _nullempty(\%notCreated),
     updated      => _nullempty(\%updated),

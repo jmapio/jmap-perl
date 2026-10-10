@@ -1,5 +1,6 @@
 package JMAP::API;
 use strict;
+use JMAP::Collation;
 use warnings;
 
 use JSON::XS;
@@ -645,7 +646,8 @@ sub api_CalendarEvent_query {
           $storage{$b->{eventuid}} //= $Self->{db}->read_jevent_payload($b->{eventuid}) // {};
           $res = ($storage{$a->{eventuid}}{start} // '') cmp ($storage{$b->{eventuid}}{start} // '');
         } elsif ($cmp->{property} eq 'uid') {
-          $res = $a->{eventuid} cmp $b->{eventuid};
+          $res = JMAP::Collation::compare($cmp->{collation}, $a->{eventuid}, $b->{eventuid},
+                                          $storage{"\0collation"} //= {});
         }
         $res = -$res if defined($cmp->{isAscending}) && !$cmp->{isAscending};
         last if $res;
@@ -916,7 +918,8 @@ sub api_CalendarEvent_queryChanges {
           $storage{$b->{eventuid}} //= $Self->{db}->read_jevent_payload($b->{eventuid}) // {};
           $res = ($storage{$a->{eventuid}}{start} // '') cmp ($storage{$b->{eventuid}}{start} // '');
         } elsif ($cmp->{property} eq 'uid') {
-          $res = $a->{eventuid} cmp $b->{eventuid};
+          $res = JMAP::Collation::compare($cmp->{collation}, $a->{eventuid}, $b->{eventuid},
+                                          $storage{"\0collation"} //= {});
         }
         $res = -$res if defined($cmp->{isAscending}) && !$cmp->{isAscending};
         last if $res;

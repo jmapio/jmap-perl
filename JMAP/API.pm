@@ -3,6 +3,7 @@
 package JMAP::API;
 
 use JMAP::Dispatch;
+use JMAP::Collation;
 use Carp;
 use JMAP::DB;
 use strict;
@@ -461,9 +462,10 @@ sub handle_request {
           }
         }
         # RFC 8620 S5.5: a collation not in the session's collationAlgorithms
-        # (which lists none) is "unsupportedSort".
+        # is "unsupportedSort".
         if ($command =~ m{/query(?:Changes)?$} && ref $myargs->{sort} eq 'ARRAY'
-            and my ($c) = grep { ref $_ eq 'HASH' && defined $_->{collation} } @{$myargs->{sort}}) {
+            and my ($c) = grep { ref $_ eq 'HASH' && defined $_->{collation}
+                                 && !JMAP::Collation::is_supported($_->{collation}) } @{$myargs->{sort}}) {
           $Self->push_results($tag, ['error', { type => 'unsupportedSort',
             description => "unsupported collation $c->{collation}" }]);
           next;

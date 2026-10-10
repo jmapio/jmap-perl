@@ -1201,15 +1201,16 @@ sub dgetcol {
 sub get_submissions {
   my ($Self, $sort) = @_;
   return $Self->dbh->selectall_arrayref(
-    "SELECT jsubid,thrid,msgid,sendat,identity FROM jsubmission WHERE active = 1 ORDER BY $sort");
+    "SELECT jsubid,thrid,msgid,sendat,identity,undoStatus FROM jsubmission WHERE active = 1 ORDER BY $sort");
 }
 
 # All submissions (including inactive) for EmailSubmission/queryChanges.
-# Columns: [0]=jsubid [1]=thrid [2]=msgid [3]=sendat [4]=identity [5]=jmodseq [6]=active
+# Columns: [0]=jsubid [1]=thrid [2]=msgid [3]=sendat [4]=identity [5]=undoStatus
+#          [6]=jmodseq [7]=active
 sub get_all_submissions {
   my ($Self, $sort) = @_;
   return $Self->dbh->selectall_arrayref(
-    "SELECT jsubid,thrid,msgid,sendat,identity,jmodseq,active FROM jsubmission ORDER BY $sort");
+    "SELECT jsubid,thrid,msgid,sendat,identity,undoStatus,jmodseq,active FROM jsubmission ORDER BY $sort");
 }
 
 # Changed submissions since $since_modseq for EmailSubmission/changes.
@@ -1220,7 +1221,7 @@ sub get_submission_changes {
     {}, $since_modseq);
 }
 
-my $USER_SCHEMA_VERSION = 10;
+my $USER_SCHEMA_VERSION = 11;
 
 sub save_query {
   my ($Self, $type, $params, $state, $ids) = @_;
@@ -1489,6 +1490,7 @@ CREATE TABLE IF NOT EXISTS jsubmission (
   envelope TEXT,
   sendAt INTEGER,
   identity TEXT,
+  undoStatus TEXT,
   jcreated INTEGER,
   jmodseq INTEGER,
   mtime DATE,
@@ -1675,6 +1677,20 @@ sub _initdb {
     };
     if ($@) { $dbh->rollback; die "user DB migration to v10 failed: $@" }
     $v = 10;
+  }
+
+  if ($v < 11) {
+    # jsubmission.undoStatus: "pending" while a FUTURERELEASE send is held,
+    # then "final" or "canceled".  Everything sent before this was final.
+    $dbh->begin_work;
+    eval {
+      $dbh->do("ALTER TABLE jsubmission ADD COLUMN undoStatus TEXT");
+      $dbh->do("UPDATE jsubmission SET undoStatus = 'final'");
+      $dbh->do('PRAGMA user_version = 11');
+      $dbh->commit;
+    };
+    if ($@) { $dbh->rollback; die "user DB migration to v11 failed: $@" }
+    $v = 11;
   }
 }
 

@@ -1,5 +1,6 @@
 package JMAP::API;
 use strict;
+use JMAP::Collation;
 use warnings;
 
 use JSON::XS;
@@ -39,7 +40,8 @@ sub _post_sort {
           $res = $a->{$map->[0]} <=> $b->{$map->[0]};
         }
         else {
-          $res = $a->{$map->[0]} cmp $b->{$map->[0]};
+          $res = JMAP::Collation::compare($arg->{collation}, $a->{$map->[0]}, $b->{$map->[0]},
+                                          $storage->{collation_keys} //= {});
         }
       }
       elsif ($field eq 'hasKeyword') {
