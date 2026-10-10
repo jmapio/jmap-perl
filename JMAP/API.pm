@@ -146,6 +146,30 @@ my %PARAM_SCHEMA = (
     sortAsTree         => 'bool?',
     filterAsTree       => 'bool?',
   },
+  # draft-ietf-jmap-filenode S3.2 (JMAP/API/FileNode.pm); the shapes inside
+  # create/update/destroy are checked per item by the handler (a bad item is
+  # its own SetError, RFC 8620 S5.3), onExists's values here (enum)
+  'FileNode/get' => {
+    accountId          => 'string?',
+    ids                => '[string]?',
+    properties         => '[string]?',
+    fetchParents       => 'bool?',
+  },
+  'FileNode/changes' => {
+    accountId          => 'string?',
+    sinceState         => 'string',
+    maxChanges         => 'uint?',
+  },
+  'FileNode/set' => {
+    accountId          => 'string?',
+    ifInState          => 'string?',
+    create             => '{object}?',
+    update             => '{object}?',
+    destroy            => '[string]?',
+    onExists           => 'enum(replace,rename,newest)?',
+    onDestroyRemoveChildren  => 'bool?',
+    compareCaseInsensitively => 'bool?',
+  },
   'FileNode/query' => {
     accountId          => 'string?',
     filter             => 'object?',
@@ -246,6 +270,12 @@ sub _validate_type {
   my $is_json_string = ref($value) && ref($value) =~ /String/;
   my $is_json_number = ref($value) && ref($value) =~ /Number/;
 
+  # enum(a,b,c): one of the listed strings
+  if ($type =~ /^enum\(([^)]*)\)\z/) {
+    my %ok = map { $_ => 1 } split /,/, $1;
+    return 0 if ref $value && !$is_json_string;
+    return $ok{"$value"} ? 1 : 0;
+  }
   if ($type eq 'string') {
     return 1 if $is_json_string;
     if (!ref($value)) {
