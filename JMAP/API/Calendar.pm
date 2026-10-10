@@ -569,8 +569,6 @@ sub api_CalendarEvent_query {
 
   my $data = $Self->{db}->dget('jevents', { active => 1 }, 'eventuid,jcalendarid');
 
-  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['position']}])
-    if ($args->{position} // 0) < 0;
 
   local $Self->{_query_tz} = $args->{timeZone} // 'Etc/UTC';
   return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['timeZone']}])

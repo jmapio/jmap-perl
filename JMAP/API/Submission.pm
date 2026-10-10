@@ -83,8 +83,6 @@ sub api_EmailSubmission_query {
 
   my $newQueryState = "$user->{jstateEmailSubmission}";
 
-  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['position']}])
-    if ($args->{position} // 0) < 0;
 
   my $sort = _mk_submission_sort($args->{sort});
   return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sort']}])

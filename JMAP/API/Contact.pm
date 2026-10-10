@@ -170,8 +170,6 @@ sub api_Contact_query {
   my %storage;
   $data = $Self->_contact_filter($data, $args->{filter}, \%storage) if $args->{filter};
 
-  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['position']}])
-    if ($args->{position} // 0) < 0;
 
   if ($args->{sort}) {
     for my $cmp (@{$args->{sort}}) {

@@ -126,8 +126,6 @@ sub api_Principal_query {
   my $principal = $Self->_principal($user, $accountid);
   $Self->commit();
 
-  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['position']}])
-    if ($args->{position} // 0) < 0;
 
   my @matched = _principal_matches($principal, $args->{filter}) ? ($principal) : ();
   my $state = _principal_remember($Self, $principal);

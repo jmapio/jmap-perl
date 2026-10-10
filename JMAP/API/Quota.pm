@@ -163,8 +163,6 @@ sub api_Quota_query {
   my ($user, $accountid) = $Self->_api_init($args);
   return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
 
-  return ['error', {type => 'invalidArguments', arguments => ['position']}]
-    if ($args->{position} // 0) < 0;
   if (my $bad = _quota_bad_sort($args)) {
     return ['error', {type => 'unsupportedSort', sort => $bad}];
   }

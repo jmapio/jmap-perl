@@ -69,7 +69,6 @@ is_deeply($s->([ { property => 'type', isAscending => JSON::false } ]), [qw(D R 
 is_deeply($q->({ operator => 'AND', conditions => [ { nodeType => 'file' }, { minSize => 100 } ] }), ['b'], 'AND');
 is_deeply($q->({ operator => 'OR', conditions => [ { name => 'Docs' }, { role => 'home' } ] }), [qw(R D)], 'OR with role');
 is_deeply($q->({ type => 'image/png' }), ['b'], 'type exact');
-is_deeply($q->({ modifiedBefore => '2026-03-02T00:00:00Z' }), [qw(R D b)], 'modifiedBefore') if 0;
 is_deeply($q->({ modifiedAfter => '2026-03-02T00:00:00Z' }), [qw(a b)], 'modifiedAfter inclusive');
 is_deeply($q->({ modifiedBefore => '2026-03-02T00:00:00Z' }), [qw(R D)], 'modifiedBefore exclusive');
 is_deeply($q->({ accessedAfter => '2026-03-03T00:00:00Z' }), [qw(a b)], 'accessedAfter');
@@ -77,7 +76,8 @@ is_deeply($q->({ accessedBefore => '2026-03-03T00:00:00Z' }), [qw(R D)], 'access
 is_deeply($q->({ createdBefore => '2026-03-01T00:00:00.5Z' }), [qw(R D a)], 'fractional seconds count');
 is_deeply($q->({ text => '*.t' }), ['a'], 'text: glob metacharacters');
 is_deeply($q->({ text => 'image/' }), ['b'], 'text matches type');
-is_deeply($q->({ nameMatch => 'apple.tx[t]' }), [], 'nameMatch is anchored at both ends') if 0;
+is_deeply($q->({ nameMatch => 'apple.tx' }), [], 'nameMatch is anchored: apple.tx does not match apple.TXT');
+is_deeply($q->({ nameMatch => 'apple.tx[t]' }), ['a'], 'a bracket set matches case-insensitively');
 ok(!JMAP::FileNode::filter_match({ name => "foo\n", id => 'n' }, { nameMatch => 'foo' }, {}), 'nameMatch: foo does not match "foo\n"');
 
 # depth widens parentId and isTopLevel through a top-level AND only
