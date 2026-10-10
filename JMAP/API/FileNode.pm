@@ -45,7 +45,7 @@ sub _filenode_object {
     target       => undef,
     size         => $isfile ? 0 + ($row->{size} // 0) : undef,
     name         => $row->{name},
-    type         => $isfile ? $row->{type} : undef,
+    type         => $isfile ? ($dead->{type} // $row->{type}) : undef,
     created      => JMAP::FileNode::utc($created),
     modified     => JMAP::FileNode::utc($modified),
     accessed     => JMAP::FileNode::utc($accessed),
@@ -149,10 +149,11 @@ sub api_FileNode_changes {
 }
 
 
-# draft S3.2.3.  Destroys run first, so a create (or, later, a move) may
-# take a name freed in the same call; then creates, ordered so "#cid"
-# parents resolve.  WebDAV has no transactions: each item succeeds or
-# fails on its own (spec "Writes").
+# draft S3.2.3.  Destroys run first, so a create or a move may take a name
+# freed in the same call; then creates, ordered so "#cid" parents resolve;
+# then updates (moves, content, properties); then the destroys and creates
+# that depend on those moves (see below).  WebDAV has no transactions: each
+# item succeeds or fails on its own (spec "Writes").
 sub api_FileNode_set {
   my ($Self, $args) = @_;
   my ($user, $accountid) = $Self->_filenode_init($args);
@@ -177,26 +178,103 @@ sub api_FileNode_set {
               ci => ($args->{compareCaseInsensitively} || $JMAP::FileNode::CAPS{caseInsensitiveNames}) ? 1 : 0);
 
   my $scoped_lock = $Self->{db}->begin_superlock();
-  my ($destroyed, $notDestroyed) = $Self->{db}->destroy_filenodes(
-    [ map { $Self->idmap($_) } @{ $args->{destroy} || [] } ], \%opts);
-  my ($created, $notCreated, $also) = $Self->{db}->create_filenodes(
-    $args->{create} || {}, sub { $Self->idmap(shift) }, \%opts);
+  my $canon = JSON->new->canonical->allow_nonref;
+  my $same = sub { $canon->encode($_[0]) eq $canon->encode($_[1]) };
+
+  $Self->begin();
+  my %before = map { $_->{nodeid} => $_ } @{ $Self->{db}->filenode_rows() };
+  $Self->commit();
+
+  # RFC 8620 S5.3: a patch may carry properties at their current values
+  # (a whole object sent back); those change nothing, so they go
+  my %update;
+  for my $uid (keys %{ $args->{update} || {} }) {
+    my $p = $args->{update}{$uid};
+    my $row = $before{ $Self->idmap($uid) // $uid };
+    if (ref $p eq 'HASH' && $row) {
+      my $cur = $Self->_filenode_object($row, \%before);
+      $p = { map { ($_ => $p->{$_}) } grep { !exists $cur->{$_} || !$same->($p->{$_}, $cur->{$_}) } keys %$p };
+    }
+    $update{$uid} = $p;
+  }
+
+  # The set is judged by its final state (RFC 8620 S5.3; draft S3.2.3):
+  # - a directory whose children an update moves out is destroyed after
+  #   the moves, so it is empty by then (its server-side member check
+  #   still runs, and still guards against a stale mirror);
+  # - a create whose name a node is moving away from runs after the moves.
+  # Everything else: destroys first (freeing names), then creates (so a
+  # move may go into a new directory), then updates.
+  my (@early, @late, %late_create);
+  {
+    my $ci = $opts{ci};
+    my $key = sub { my $n = $_[0]; return $n unless $ci; utf8::upgrade($n); return lc $n };
+    my %leaving;   # nodeid => 1 for each node an update moves or renames
+    my %from;      # "parent\0name" each of them leaves
+    for my $uid (keys %update) {
+      my $p = $update{$uid};
+      next unless ref $p eq 'HASH' && (exists $p->{parentId} || exists $p->{name});
+      my $row = $before{ $Self->idmap($uid) // $uid } or next;
+      $leaving{ $row->{nodeid} } = 1 if exists $p->{parentId};
+      $from{ ($row->{parentid} // '') . "\0" . $key->($row->{name}) } = 1;
+    }
+    for my $did (map { $Self->idmap($_) } @{ $args->{destroy} || [] }) {
+      my $moved_out = 0;
+      if (defined $did && %leaving) {
+        for my $id (keys %leaving) {
+          my %seen;
+          for (my $a = $before{$id}{parentid}; defined $a && !$seen{$a}++; $a = $before{$a} ? $before{$a}{parentid} : undef) {
+            if ($a eq $did) { $moved_out = 1; last }
+          }
+          last if $moved_out;
+        }
+      }
+      push @{ $moved_out ? \@late : \@early }, $did;
+    }
+    my $create = $args->{create} || {};
+    for my $cid (keys %$create) {
+      my $c = $create->{$cid};
+      next unless ref $c eq 'HASH' && defined $c->{parentId} && !ref $c->{parentId}
+               && defined $c->{name} && !ref $c->{name} && $c->{parentId} !~ /^#/;
+      $late_create{$cid} = 1 if $from{ ($Self->idmap($c->{parentId}) // '') . "\0" . $key->($c->{name}) };
+    }
+    # a create inside a late one is late too
+    my $more = 1;
+    while ($more) {
+      $more = 0;
+      for my $cid (grep { !$late_create{$_} } keys %$create) {
+        my $c = $create->{$cid};
+        next unless ref $c eq 'HASH' && ($c->{parentId} // '') =~ /^#(.+)\z/s && $late_create{$1};
+        $late_create{$cid} = $more = 1;
+      }
+    }
+  }
+  my $create = $args->{create} || {};
+  my %early_create = map { ($_ => $create->{$_}) } grep { !$late_create{$_} } keys %$create;
+  my %late_create_args = map { ($_ => $create->{$_}) } keys %late_create;
+
+  my ($destroyed, $notDestroyed) = $Self->{db}->destroy_filenodes(\@early, \%opts);
+  my ($created, $notCreated, $also) = $Self->{db}->create_filenodes(\%early_create, sub { $Self->idmap(shift) }, \%opts);
   $Self->setid($_, $created->{$_}{nodeid}) for keys %$created;
   my ($updated, $notUpdated, $also2) = ({}, {}, []);
-  if (%{ $args->{update} || {} }) {
-    if ($Self->{db}->can('update_filenodes')) {   # Task 8
-      ($updated, $notUpdated, $also2) = $Self->{db}->update_filenodes($args->{update}, sub { $Self->idmap(shift) }, \%opts);
-    }
-    else {
-      $notUpdated = { map { $_ => { type => 'serverFail', description => 'update not implemented yet' } } keys %{$args->{update}} };
-    }
+  ($updated, $notUpdated, $also2) = $Self->{db}->update_filenodes(\%update, sub { $Self->idmap(shift) }, \%opts)
+    if %update;
+  if (@late) {
+    my ($d, $nd) = $Self->{db}->destroy_filenodes(\@late, \%opts);
+    push @$destroyed, @$d;
+    %$notDestroyed = (%$notDestroyed, %$nd);
+  }
+  if (%late_create_args) {
+    my ($c, $nc, $a) = $Self->{db}->create_filenodes(\%late_create_args, sub { $Self->idmap(shift) }, \%opts);
+    $Self->setid($_, $c->{$_}{nodeid}) for keys %$c;
+    %$created = (%$created, %$c);
+    %$notCreated = (%$notCreated, %$nc);
+    push @$also, @$a;
   }
 
   # created: the id plus every property the server set or defaulted, or
   # changed from what the client sent -- a renamed name, a resolved
   # "#cid" parent, a rounded timestamp (RFC 8620 S5.3)
-  my $canon = JSON->new->canonical->allow_nonref;
-  my $same = sub { $canon->encode($_[0]) eq $canon->encode($_[1]) };
   $Self->begin();
   my (%createdOut, %byid);
   for my $cid (sort keys %$created) {

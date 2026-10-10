@@ -292,4 +292,54 @@ is($http->request('PUT', "$ENV{JMAP_PROXY_URL}/filenode/$user/$fid", { content =
 force_sync();
 jmap(['FileNode/set', { destroy => [ $fid, $cp->{created}{c}{id} ] }]);
 
+# --- update (Task 8)
+my ($u0) = @{ jmap(['FileNode/set', { create => {
+  P => { parentId => $home->{id}, name => "$tag-P" },
+  Q => { parentId => '#P', name => 'Q' },
+  a => { parentId => '#P', name => 'a.txt', blobId => $blob->{blobId} },
+  b => { parentId => '#P', name => 'b.txt', blobId => $blob->{blobId} },
+} }]) };
+my %id = map { $_ => $u0->{created}{$_}{id} } qw(P Q a b);
+
+my ($u) = @{ jmap(['FileNode/set', { update => { $id{a} => { name => 'b.txt' }, $id{b} => { name => 'a.txt' } } }]) };
+ok(exists $u->{updated}{$id{a}} && exists $u->{updated}{$id{b}}, 'swap two names in one /set') or diag explain $u;
+my ($ga) = @{ jmap(['FileNode/get', { ids => [ $id{a} ], properties => ['name'] }]) };
+is($ga->{list}[0]{name}, 'b.txt', 'a is now b.txt, same id');
+
+($u) = @{ jmap(['FileNode/set', { update => { $id{P} => { parentId => $id{Q} } } }]) };
+is($u->{notUpdated}{$id{P}}{type}, 'invalidProperties', 'moving a directory into its own child');
+is_deeply($u->{notUpdated}{$id{P}}{properties}, ['parentId'], 'on parentId');
+
+($u) = @{ jmap(['FileNode/set', { update => { $id{a} => { parentId => $id{Q}, name => "x y %#.txt" } } }]) };
+ok(exists $u->{updated}{$id{a}}, 'move and rename together') or diag explain $u;
+ok((grep { $_->{href} eq "$root/$tag-P/Q/x y %#.txt" } @{ $dav->PropFind("$root/$tag-P/Q/", 1) }), 'moved on the server');
+is(raw(get1($id{a})->{blobId})->{content}, 'uploaded', 'and its content downloads after the MOVE');
+
+($u) = @{ jmap(['FileNode/set', { update => { $id{a} => { executable => JSON::true, accessed => '2026-01-02T03:04:05Z' } } }]) };
+my ($gx) = @{ jmap(['FileNode/get', { ids => [ $id{a} ], properties => ['executable', 'accessed'] }]) };
+ok($gx->{list}[0]{executable}, 'executable round-trips even where dead props are not stored');
+is($gx->{list}[0]{accessed}, '2026-01-02T03:04:05Z', 'accessed round-trips');
+
+($u) = @{ jmap(['FileNode/set', { update => { $id{a} => { nodeType => 'directory' } } }]) };
+is($u->{notUpdated}{$id{a}}{type}, 'invalidProperties', 'nodeType is immutable');
+
+my $blob3 = upload("second!");
+($u) = @{ jmap(['FileNode/set', { update => { $id{b} => { blobId => $blob3->{blobId} } } }]) };
+is($u->{updated}{$id{b}}{size}, 7, 'content replaced; size reported') or diag explain $u;
+is(raw($u->{updated}{$id{b}}{blobId})->{content}, 'second!', 'the new content downloads');
+
+# a directory moves with what is in it
+($u) = @{ jmap(['FileNode/set', { update => { $id{Q} => { parentId => $home->{id}, name => "$tag-Q" } } }]) };
+ok(exists $u->{updated}{$id{Q}}, 'move a directory') or diag explain $u;
+is(raw(get1($id{a})->{blobId})->{content}, 'uploaded', 'a file inside it still downloads');
+force_sync();
+is(get1($id{a})->{parentId}, $id{Q}, 'and keeps its id and parent across a sync');
+
+# R6: a directory destroyed while its child moves out, in one call
+($u) = @{ jmap(['FileNode/set', { destroy => [ $id{Q} ], update => { $id{a} => { parentId => $id{P} } } }]) };
+is_deeply($u->{destroyed}, [ $id{Q} ], 'destroy a directory whose only child moves out') or diag explain $u;
+ok(exists $u->{updated}{$id{a}}, 'and the child moved');
+
+jmap(['FileNode/set', { onDestroyRemoveChildren => JSON::true, destroy => [ $id{P} ] }]);
+
 done_testing;

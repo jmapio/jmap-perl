@@ -82,7 +82,7 @@ my $PROPFIND_BODY = <<"XML";
     <D:resourcetype/><D:getetag/><D:getcontentlength/><D:getcontenttype/>
     <D:getlastmodified/><D:creationdate/><D:resource-id/><CS:getctag/>
     <D:current-user-privilege-set/><oc:fileid/><ME:sha1hex/>
-    <J:executable/><J:accessed/><J:created/><J:modified/><J:isSubscribed/><J:role/>
+    <J:executable/><J:accessed/><J:created/><J:modified/><J:isSubscribed/><J:role/><J:type/>
   </D:prop>
 </D:propfind>
 XML

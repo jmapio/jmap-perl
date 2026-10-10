@@ -25,4 +25,40 @@ is($un->('README', { 'README' => 1 }), 'README[2]', 'no extension');
 is($un->('x.tar.gz', { 'x.tar.gz' => 1 }), 'x.tar[2].gz', 'only the last extension');
 is($un->('A.TXT', { 'a.txt' => 1, 'a[2].txt' => 1 }, 1), 'A[3].TXT', 'case-insensitive: taken keys are lower case');
 
+my $om = \&JMAP::FileNode::order_moves;
+# swap a and b
+my $steps = $om->({ A => "p\0b", B => "p\0a" }, { "p\0a" => 'A', "p\0b" => 'B' });
+is(scalar @$steps, 3, 'a swap takes three steps');
+ok(defined $steps->[0][1] && $steps->[0][1] =~ /^\.~tmp~/, 'the first step parks one node under a temporary name');
+my $parked = $steps->[0][0];
+my ($other) = grep { $_ ne $parked } qw(A B);
+is_deeply([ map { [ $_->[0], $_->[1] ] } @$steps[1, 2] ], [ [ $other, undef ], [ $parked, undef ] ],
+  'then the other node moves, then the parked one moves to its real destination');
+# a chain: c -> where b is, b -> where a is
+$steps = $om->({ B => "p\0a", C => "p\0b" }, { "p\0a" => 'A', "p\0b" => 'B', "p\0c" => 'C' });
+is_deeply([ map { $_->[0] } @$steps ], [ 'B', 'C' ], 'B vacates b before C takes it');
+# (A is not moving, so B's own clash with A is not order_moves' business: update_filenodes
+# resolves clashes with non-moving nodes through onExists before ordering.)
+
+# a rotation of three, plus an independent move
+$steps = $om->({ A => "p\0b", B => "p\0c", C => "p\0a", D => "q\0d" },
+               { "p\0a" => 'A', "p\0b" => 'B', "p\0c" => 'C', "p\0d" => 'D' });
+is(scalar @$steps, 5, 'a rotation of three takes four steps, plus the free move');
+my %at = %{{ "p\0a" => 'A', "p\0b" => 'B', "p\0c" => 'C', "p\0d" => 'D' }};
+my %dest = (A => "p\0b", B => "p\0c", C => "p\0a", D => "q\0d");
+my $ok = 1;
+for my $s (@$steps) {
+  my ($id, $tmp) = @$s;
+  my $to = defined $tmp ? "p\0$tmp" : $dest{$id};
+  $ok = 0 if defined $at{$to} && $at{$to} ne $id;
+  delete $at{$_} for grep { $at{$_} eq $id } keys %at;
+  $at{$to} = $id;
+}
+ok($ok, 'no step lands on an occupied name');
+is_deeply(\%at, { "p\0a" => 'C', "p\0b" => 'A', "p\0c" => 'B', "q\0d" => 'D' }, 'and every node ends where it was sent');
+
+# tree order: B lives in A; A moves into B while B moves up to the root
+$steps = $om->({ A => "B\0A", B => "R\0B" }, { "R\0A" => 'A', "A\0B" => 'B' }, { A => 'R', B => 'A' });
+is_deeply([ map { $_->[0] } @$steps ], [ 'B', 'A' ], 'a node leaves a directory before that directory moves under it');
+
 done_testing;

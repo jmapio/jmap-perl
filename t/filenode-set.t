@@ -25,7 +25,7 @@ sub reset_tree {
 sub kids { my $p = shift; return sort grep { m{^\Q$p\E/[^/]+\z} } keys %tree }
 
 no warnings qw(redefine once);
-*JMAP::ImapDB::get_blob = sub { my ($Self, $id) = @_; return $id eq 'f-x' ? ('text/plain', 'uploaded') : () };
+*JMAP::ImapDB::get_blob = sub { my ($Self, $id) = @_; return $id eq 'f-x' ? ('text/plain', 'uploaded') : $id eq 'f-y' ? ('text/x-y', 'second!') : () };
 *JMAP::ImapDB::backend_cmd = sub {
   my ($Self, $cmd, $path, @a) = @_;
   die "in transaction\n" if $Self->in_transaction();
@@ -74,6 +74,25 @@ no warnings qw(redefine once);
     }
     delete $tree{$dir};
     return 204;
+  }
+  if ($cmd eq 'files_move') {
+    my ($to, %o) = @a;
+    $to =~ s{/\z}{};
+    return 404 unless $tree{$dir};
+    (my $tp = $to) =~ s{/[^/]+\z}{};
+    return 409 unless $tree{$tp} && $tree{$tp}{isCollection};
+    return 403 if index("$to/", "$dir/") == 0;   # into itself
+    my $existed = $tree{$to};
+    if ($existed) {
+      return 412 unless $o{overwrite};
+      delete $tree{$_} for grep { $_ eq $to || m{^\Q$to\E/} } keys %tree;
+    }
+    for my $h (grep { $_ eq $dir || m{^\Q$dir\E/} } keys %tree) {
+      my $n = $to . substr($h, length $dir);
+      $tree{$n} = { %{ delete $tree{$h} }, href => $n };
+      $tree{$n}{etag} = 'm' . ++$etag unless $tree{$n}{isCollection};   # Cyrus: a file's ETag changes on MOVE
+    }
+    return $existed ? 204 : 201;
   }
   if ($cmd eq 'files_prop_patch') {
     my ($props) = @a;
@@ -307,6 +326,213 @@ $set = set(create => { d => { parentId => $home, name => 'q' }, c => { parentId 
 is($set->{notDestroyed}{$c}{type}, 'forbidden', 'the child DELETE failed');
 is($set->{notDestroyed}{$p}{type}, 'nodeHasChildren', 'so the parent is not deleted over it');
 ok($tree{"$R/q/c"}, 'the child is still on the server');
+
+# --- updates (Task 8): moves, renames, content, properties
+sub get { my ($r) = $api->api_FileNode_get({ accountId => $db->accountid(), ids => [ @_ ] }); return { map { $_->{id} => $_ } @{ $r->[1]{list} } } }
+sub content { my $h = shift; return $tree{$h} ? "$tree{$h}{size}:$tree{$h}{type}" : undef }
+$set = set(create => {
+  U => { parentId => $home, name => 'U' },
+  V => { parentId => '#U', name => 'V' },
+  a => { parentId => '#U', name => 'a.txt', blobId => 'f-x' },
+  b => { parentId => '#U', name => 'b.txt', blobId => 'f-y' },
+  c => { parentId => '#U', name => 'c.txt', blobId => 'f-x', type => 'text/x-c' },
+})->[1];
+my %id = map { $_ => $set->{created}{$_}{id} } qw(U V a b c);
+ok(!grep({ !$id{$_} } keys %id), 'update fixture created') or diag explain $set;
+
+# a swap: unique names at every step, so one node is parked under a temporary name
+@log = ();
+$set = set(update => { $id{a} => { name => 'b.txt' }, $id{b} => { name => 'a.txt' } })->[1];
+is_deeply([ sort keys %{ $set->{updated} || {} } ], [ sort @id{qw(a b)} ], 'swap two names') or diag explain $set;
+is($set->{updated}{$id{a}}, undef, 'nothing to report beyond what was asked');
+my @moves = grep { /files_move/ } @log;
+is(scalar @moves, 3, 'three MOVEs');
+like($moves[2], qr{/\.~tmp~}, 'one node was parked under a temporary name, and moved on last') or diag explain \@moves;
+is(content("$R/U/a.txt"), '7:text/x-y', 'the server has b\'s content at a.txt');
+is(content("$R/U/b.txt"), '8:text/plain', 'and a\'s at b.txt');
+my $g = get(@id{qw(a b)});
+is($g->{$id{a}}{name}, 'b.txt', 'a keeps its id under its new name');
+is($g->{$id{b}}{name}, 'a.txt', 'and so does b');
+ok(!grep({ /~tmp~/ } keys %tree), 'no temporary name left behind');
+$db->sync_files();
+is(rows()->{"$R/U/b.txt"}{nodeid}, $id{a}, 'a sync agrees');
+
+# a rotation of three
+$set = set(update => { $id{a} => { name => 'c.txt' }, $id{c} => { name => 'a.txt' }, $id{b} => { name => 'b.txt' } })->[1];
+is(scalar keys %{ $set->{updated} || {} }, 3, 'a rotation of three') or diag explain $set;
+$g = get(@id{qw(a b c)});
+is_deeply([ map { $g->{$id{$_}}{name} } qw(a b c) ], [ 'c.txt', 'b.txt', 'a.txt' ], 'every node where it was sent');
+is(content("$R/U/c.txt"), '8:text/plain', 'content followed the nodes');
+
+# into a directory made in the same call
+$set = set(create => { W => { parentId => $id{U}, name => 'W' } },
+           update => { $id{c} => { parentId => '#W' } })->[1];
+ok($set->{created}{W} && exists $set->{updated}{$id{c}}, 'move into a directory created in the same call') or diag explain $set;
+ok($tree{"$R/U/W/a.txt"}, 'on the server');
+is(get($id{c})->{$id{c}}{parentId}, $set->{created}{W}{id}, 'and in the mirror');
+$id{W} = $set->{created}{W}{id};
+
+# a directory into its own child; then a reversal that is valid in the final tree
+@log = ();
+$set = set(update => { $id{U} => { parentId => $id{V} } })->[1];
+is($set->{notUpdated}{$id{U}}{type}, 'invalidProperties', 'a directory into its own child');
+is_deeply($set->{notUpdated}{$id{U}}{properties}, ['parentId'], 'on parentId');
+ok(!grep({ /files_move/ } @log), 'nothing sent');
+$set = set(update => { $id{U} => { parentId => $id{V} }, $id{V} => { parentId => $home } })->[1];
+ok(exists $set->{updated}{$id{U}} && exists $set->{updated}{$id{V}}, 'V moves out of U, then U into V') or diag explain $set;
+ok($tree{"$R/V/U/b.txt"} && $tree{"$R/V/U/W/a.txt"}, 'the server has the new tree');
+my $r = rows();
+is($r->{"$R/V/U/W/a.txt"}{nodeid}, $id{c}, 'descendants\' hrefs followed in the mirror');
+$db->sync_files();
+is(rows()->{"$R/V/U/W/a.txt"}{nodeid}, $id{c}, 'and a sync agrees');
+$set = set(update => { $id{V} => { parentId => $id{U} }, $id{U} => { parentId => $home } })->[1];
+ok(exists $set->{updated}{$id{U}} && exists $set->{updated}{$id{V}}, 'and back') or diag explain $set;
+ok($tree{"$R/U/V"} && $tree{"$R/U/b.txt"}, 'the server has the original tree again');
+
+# clashes with a node that stays
+$set = set(update => { $id{a} => { name => 'b.txt' } })->[1];
+is_deeply($set->{notUpdated}{$id{a}}, { type => 'alreadyExists', existingId => $id{b} }, 'alreadyExists with existingId');
+$set = set(compareCaseInsensitively => JSON::true, update => { $id{a} => { name => 'B.TXT' } })->[1];
+is($set->{notUpdated}{$id{a}}{existingId}, $id{b}, 'compareCaseInsensitively');
+$set = set(update => { $id{a} => { name => 'B.TXT' } })->[1];
+ok(exists $set->{updated}{$id{a}}, 'case-sensitive by default') or diag explain $set;
+$set = set(compareCaseInsensitively => JSON::true, update => { $id{a} => { name => 'c.txt' } })->[1];
+ok(exists $set->{updated}{$id{a}}, 'a change of case alone is no clash') or diag explain $set;
+$set = set(onExists => 'rename', update => { $id{a} => { name => 'b.txt' } })->[1];
+is($set->{updated}{$id{a}}{name}, 'b[2].txt', 'onExists rename reports the new name');
+is(get($id{a})->{$id{a}}{name}, 'b[2].txt', 'and uses it');
+@log = ();
+$set = set(onExists => 'replace', update => { $id{a} => { name => 'b.txt' } })->[1];
+ok(exists $set->{updated}{$id{a}}, 'onExists replace') or diag explain $set;
+is_deeply($set->{destroyed}, [ $id{b} ], 'the replaced node is destroyed');
+ok((grep { /files_move/ } @log) == 1 && !grep({ /files_delete/ } @log), 'a file over a file is one MOVE, no DELETE');
+is(content("$R/U/b.txt"), '8:text/plain', 'a\'s content now at b.txt');
+ok(!get($id{b})->{$id{b}}, 'b is gone');
+$set = set(create => { b => { parentId => $id{U}, name => 'b.txt', blobId => 'f-y' } }, update => { $id{a} => { name => 'a.txt' } })->[1];
+ok($set->{created}{b} && exists $set->{updated}{$id{a}}, 'a create takes the name a move leaves') or diag explain $set;
+$id{b} = $set->{created}{b}{id};
+$set = set(update => { $id{a} => { name => 'x.txt' } }, create => { a => { parentId => $id{U}, name => 'a.txt', blobId => 'f-y' } })->[1];
+ok($set->{created}{a} && exists $set->{updated}{$id{a}}, 'whatever order the client lists them in') or diag explain $set;
+my $newa = $set->{created}{a}{id};
+$set = set(update => { $id{a} => { name => 'a.txt' } }, destroy => [ $newa ])->[1];
+ok(exists $set->{updated}{$id{a}} && $set->{destroyed}, 'a move into the name a destroy frees') or diag explain $set;
+
+# R6: destroying a directory while its only child moves out
+$set = set(create => { D => { parentId => $home, name => 'D' }, k => { parentId => '#D', name => 'k.txt', blobId => 'f-x' } })->[1];
+my ($D, $k) = ($set->{created}{D}{id}, $set->{created}{k}{id});
+@log = ();
+$set = set(destroy => [ $D ], update => { $k => { parentId => $id{U} } })->[1];
+is_deeply($set->{destroyed}, [ $D ], 'the directory is destroyed') or diag explain $set;
+my @ops = grep { /files_move|files_delete/ } @log;
+like($ops[0] // '', qr/files_move/, 'the move runs before the DELETE') or diag explain \@ops;
+ok(exists $set->{updated}{$k}, 'after its child moved out');
+ok($tree{"$R/U/k.txt"} && !$tree{"$R/D"}, 'on the server');
+# ... but a child that fails to move keeps its directory
+$set = set(create => { D => { parentId => $home, name => 'D' }, k => { parentId => '#D', name => 'b.txt', blobId => 'f-x' } })->[1];
+($D, my $k2) = ($set->{created}{D}{id}, $set->{created}{k}{id});
+$set = set(destroy => [ $D ], update => { $k2 => { parentId => $id{U} } })->[1];
+is($set->{notUpdated}{$k2}{type}, 'alreadyExists', 'the move clashes');
+is($set->{notDestroyed}{$D}{type}, 'nodeHasChildren', 'so the directory stays');
+set(onDestroyRemoveChildren => JSON::true, destroy => [ $D ]);
+
+# content and properties
+@log = ();
+$set = set(update => { $id{a} => { name => 'moved.txt', blobId => 'f-y' } })->[1];
+my $u = $set->{updated}{$id{a}};
+is($u->{size}, 7, 'new content: size reported');
+is($u->{type}, 'text/x-y', 'type from the blob reported');
+like($u->{blobId} // '', qr/^d-\Q$id{a}\E-/, 'the new blobId');
+is(content("$R/U/moved.txt"), '7:text/x-y', 'a move and new content in one update (If-Match after the MOVE changed the ETag)')
+  or diag explain \@log;
+is(get($id{a})->{$id{a}}{blobId}, $u->{blobId}, 'the node carries the new blobId');
+$set = set(update => { $id{a} => { blobId => 'f-x', size => 3 } })->[1];
+is_deeply($set->{notUpdated}{$id{a}}{properties}, ['size'], 'a size that does not match the blob');
+$set = set(update => { $id{a} => { blobId => 'f-nosuch' } })->[1];
+is_deeply($set->{notUpdated}{$id{a}}{properties}, ['blobId'], 'an unknown blob');
+$set = set(update => { $id{U} => { blobId => 'f-x' } })->[1];
+is_deeply($set->{notUpdated}{$id{U}}{properties}, ['blobId'], 'a directory has no content');
+$set = set(update => { $id{a} => { blobId => undef } })->[1];
+is_deeply($set->{notUpdated}{$id{a}}{properties}, ['blobId'], 'a file cannot lose its content');
+
+$set = set(update => { $id{a} => { executable => JSON::true, accessed => '2026-01-02T03:04:05Z', modified => undef,
+                                    isSubscribed => JSON::false, created => '2020-01-01T00:00:00Z' } })->[1];
+$u = $set->{updated}{$id{a}};
+ok($u && $u->{modified}, 'a null modified is set to now, and reported') or diag explain $set;
+ok(!exists $u->{accessed}, 'a value the client gave is not');
+$g = get($id{a})->{$id{a}};
+is($g->{executable}, JSON::true, 'executable');
+is($g->{isSubscribed}, JSON::false, 'isSubscribed');
+is($g->{accessed}, '2026-01-02T03:04:05Z', 'accessed');
+is($g->{created}, '2020-01-01T00:00:00Z', 'created');
+is($g->{modified}, $u->{modified}, 'modified');
+is(rows()->{"$R/U/moved.txt"}{modified}, $tree{"$R/U/moved.txt"}{modified}, 'the columns keep the server values (R4)');
+$set = set(update => { $id{a} => { executable => undef } })->[1];
+is(get($id{a})->{$id{a}}{executable}, JSON::false, 'a null executable is its default, false');
+
+$set = set(update => { $id{a} => { type => 'text/markdown; charset=utf-8' } })->[1];
+ok(exists $set->{updated}{$id{a}}, 'a new type without new content') or diag explain $set;
+is(get($id{a})->{$id{a}}{type}, 'text/markdown', 'is served');
+is_deeply(decode_json(rows()->{"$R/U/moved.txt"}{deadprops})->{type}, 'text/markdown', 'from the dead properties');
+$db->sync_files();
+is(get($id{a})->{$id{a}}{type}, 'text/markdown', 'and survives a sync');
+$set = set(update => { $id{a} => { blobId => 'f-x' } })->[1];
+is($set->{updated}{$id{a}}{type}, 'text/plain', 'new content brings the blob\'s type');
+ok(!exists decode_json(rows()->{"$R/U/moved.txt"}{deadprops})->{type}, 'and drops the client-set one');
+is(content("$R/U/moved.txt"), '8:text/plain', 'on the server');
+$set = set(update => { $id{a} => { type => 'nonsense' } })->[1];
+is_deeply($set->{notUpdated}{$id{a}}{properties}, ['type'], 'a type that is not a media type');
+$set = set(update => { $id{U} => { type => 'text/plain' } })->[1];
+is_deeply($set->{notUpdated}{$id{U}}{properties}, ['type'], 'a directory has no type');
+
+# dead properties go to a server that stores them; a directory at "$href/"
+features(deadProps => 1);
+$deadprops_stored = 1;
+@log = ();
+$set = set(update => { $id{U} => { isSubscribed => JSON::false } })->[1];
+ok(exists $set->{updated}{$id{U}}, 'a dead property on a directory');
+ok((grep { $_ eq "files_prop_patch $R/U/" } @log), 'PROPPATCHed with a trailing slash') or diag explain \@log;
+is($tree{"$R/U"}{dead}{isSubscribed}, '0', 'stored');
+features();
+$deadprops_stored = 0;
+
+# immutable and server-set properties; whole objects sent back
+my $whole = get($id{a})->{$id{a}};
+$set = set(update => { $id{a} => { %$whole, name => 'whole.txt' } })->[1];
+ok(exists $set->{updated}{$id{a}}, 'a whole object with one change') or diag explain $set;
+is(get($id{a})->{$id{a}}{name}, 'whole.txt', 'applied');
+$set = set(update => { $id{a} => { nodeType => 'directory' } })->[1];
+is_deeply($set->{notUpdated}{$id{a}}{properties}, ['nodeType'], 'nodeType is immutable');
+$set = set(update => { $id{a} => { id => 'Lother', size => 1, myRights => {} } })->[1];
+is_deeply($set->{notUpdated}{$id{a}}{properties}, [ qw(id myRights size) ], 'server-set properties');
+$set = set(update => { $id{a} => { shareWith => { u2 => {} } } })->[1];
+is_deeply($set->{notUpdated}{$id{a}}{properties}, ['shareWith'], 'shareWith: not yet');
+$set = set(update => { $id{a} => { name => 'x/y' }, $id{b} => { parentId => $id{a} }, $id{c} => { parentId => 'Lnosuch' } })->[1];
+is_deeply($set->{notUpdated}{$id{a}}{properties}, ['name'], 'a bad name');
+is_deeply($set->{notUpdated}{$id{b}}{properties}, ['parentId'], 'a file is no parent');
+is_deeply($set->{notUpdated}{$id{c}}{properties}, ['parentId'], 'an unknown parent');
+$set = set(update => { $home => { name => 'elsewhere' }, Lnosuch => { name => 'x' }, $id{a} => 'nope' })->[1];
+is_deeply($set->{notUpdated}{$home}{properties}, ['name'], 'the home cannot be renamed');
+is($set->{notUpdated}{Lnosuch}{type}, 'notFound', 'an unknown node');
+is($set->{notUpdated}{$id{a}}{type}, 'invalidProperties', 'a patch that is not an object');
+$set = set(update => { $id{a} => { parentId => undef } })->[1];
+is_deeply($set->{notUpdated}{$id{a}}{properties}, ['parentId'], 'no top-level nodes');
+
+# a parked node whose final MOVE fails does not keep its temporary name
+{
+  no warnings 'redefine';
+  my $orig = \&JMAP::ImapDB::backend_cmd;
+  my $n = 0;
+  local *JMAP::ImapDB::backend_cmd = sub {
+    return 500 if $_[1] eq 'files_move' && $_[2] =~ /~tmp~/ && !$n++;
+    goto &$orig;
+  };
+  $set = set(update => { $id{a} => { name => 'b.txt' }, $id{b} => { name => 'whole.txt' } })->[1];
+}
+my ($ok_id, $bad_id) = exists $set->{updated}{$id{a}} ? ($id{a}, $id{b}) : ($id{b}, $id{a});
+is($set->{notUpdated}{$bad_id}{type}, 'serverFail', 'the parked node\'s move fails') or diag explain $set;
+ok(!grep({ /~tmp~/ } keys %tree), 'it is not left under its temporary name');
+$g = get(@id{qw(a b)});
+is(scalar(grep { $tree{"$R/U/$_"} } map { $_->{name} } values %$g), 2, 'the mirror names both as the server does');
 
 ok(!$db->in_transaction(), 'no transaction left open');
 done_testing;

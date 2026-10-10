@@ -244,6 +244,71 @@ sub order_creates {
   return [ @order, @todo ];
 }
 
+# draft S3.2.3: sibling names must stay unique at every step of a /set.
+# $moves is { id => "newparent\0newname" }, $occupant { "parent\0name" => id }
+# for the current tree (names folded by the caller when matching is
+# case-insensitive).  A move whose destination is held by another mover
+# waits for it to leave; a cycle of such waits (a swap, a rotation) is
+# broken by first parking one node under a temporary name in its current
+# directory -- [id, ".~tmp~id"] -- and moving it on, [id, undef], once the
+# others are done (as hm's _get_ordered_update_keys).  With $parent
+# ({ id => current parent id }), a directory is never moved into its own
+# current subtree: such a move waits until the node between them has moved
+# away (the final tree is checked for cycles by the caller).  Returns
+# [ [id, $temp_or_undef], ... ].
+sub order_moves {
+  my ($moves, $occupant, $parent) = @_;
+  my %pending = %$moves;
+  my %held = %$occupant;
+  my %par = %{ $parent || {} };
+  my (@steps, @parked);
+  my $place = sub {
+    my ($id, $dest) = @_;
+    delete $held{$_} for grep { $held{$_} eq $id } keys %held;
+    $held{$dest} = $id if defined $dest;
+  };
+  my $inside = sub {   # is $dir $id itself or one of its current descendants?
+    my ($dir, $id) = @_;
+    my %seen;
+    for (my $a = $dir; defined $a && !$seen{$a}++; $a = $par{$a}) { return 1 if $a eq $id }
+    return 0;
+  };
+  my $name_blocked = sub {
+    my $id = shift;
+    my $holder = $held{ $pending{$id} };
+    return defined $holder && $holder ne $id && exists $pending{$holder};
+  };
+  while (%pending) {
+    my $progress = 0;
+    for my $id (sort keys %pending) {
+      next if $name_blocked->($id);
+      my ($np) = split /\0/, $pending{$id}, 2;
+      next if length $np && $inside->($np, $id);
+      push @steps, [$id, undef];
+      $place->($id, $pending{$id});
+      $par{$id} = $np if length $np;
+      delete $pending{$id};
+      $progress = 1;
+    }
+    next if $progress;
+    # stuck: park the first node that waits on a name ...
+    my ($id) = grep { $name_blocked->($_) } sort keys %pending;
+    if (defined $id) {
+      push @steps, [$id, ".~tmp~$id"];
+      $place->($id, undef);
+      push @parked, [$id, $pending{$id}];
+      delete $pending{$id};
+      next;
+    }
+    # ... or, with only tree waits left (the final tree has a cycle, which
+    # the caller should have refused), let the server judge them
+    push @steps, map { [$_, undef] } sort keys %pending;
+    %pending = ();
+  }
+  push @steps, map { [$_->[0], undef] } @parked;
+  return \@steps;
+}
+
 # draft S3.2.3 onExists "rename": name[2].ext, name[3].ext, ... -- the
 # extension is the part after the last "." unless that "." starts the name.
 # $taken holds the sibling names, lower-cased when $ci is true.

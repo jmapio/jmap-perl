@@ -132,8 +132,10 @@ and `parentId: null`. `mayCreateTopLevelFileNode` is false.
 
 ## Properties without a WebDAV home
 
-`accessed`, `executable`, `isSubscribed`, `role` and client-set
-`created`/`modified` are stored as dead properties in a proxy namespace
+`accessed`, `executable`, `isSubscribed`, `role`, client-set
+`created`/`modified`, and a `type` set without new content
+(`getcontenttype` is a live property; new content, which carries its
+type in the PUT, drops it) are stored as dead properties in a proxy namespace
 (`https://jmap.io/ns/filenode`) where the server allows PROPPATCH, so other
 proxies on the same server see them. Without PROPPATCH they live only in
 the mirror. `created`/`modified` are otherwise read from `creationdate` and
@@ -223,6 +225,18 @@ names stay unique at every step (as the draft requires):
    references resolve; swaps and cycles are broken with a temporary name
    (as `hm`'s `_get_ordered_update_keys` does);
 3. everything else.
+
+The set is judged by its final state (RFC 8620 S5.3; the draft: "only
+check this constraint on the final state"). In practice: destroys, then
+creates, then updates (moves, content, properties), then the destroys and
+creates that depend on those moves -- a directory whose children an update
+moves out is destroyed after the moves (its server-side member check still
+runs), and a create whose name a moving node leaves runs after the moves.
+A move's cycle check uses the final tree, so a child may move out of its
+parent while the parent moves under it; `order_moves` then never sends a
+directory into its own current subtree. A parked node whose final MOVE
+fails is given back its old name, or the nearest free one, never left
+under the temporary name.
 
 Operations:
 

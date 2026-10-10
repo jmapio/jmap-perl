@@ -1418,13 +1418,19 @@ sub put_filenode_content {
   my $peff = $parent ? JMAP::FileNode::effective_privs($parent, $up) : undef;
   $Self->commit();
   return { status => 403 } unless JMAP::FileNode::rights($eff, $peff)->{mayModifyContent};
-  $type = $row->{type} unless defined $type && length $type;
+  # the node's type as clients see it: a client-set type (FileNode/set
+  # without new content) is a dead property over the server's
+  my $dead = defined $row->{deadprops} ? (eval { decode_json($row->{deadprops}) } || {}) : {};
+  $type = $dead->{type} // $row->{type} unless defined $type && length $type;
   $type //= 'application/octet-stream';
   $type =~ s/\s*;.*$//;
   my $res = $Self->backend_cmd('files_put', $row->{href}, $bytes, type => $type, if_match => $row->{etag});
-  return { status => ($res->{status} == 412 ? 412 : $res->{status} == 403 ? 403 : 409) } unless $res->{status} =~ /^2/;
+  return { status => ($res->{status} == 412 ? 412 : $res->{status} == 403 ? 403 : $res->{status} == 507 ? 507 : 409) }
+    unless $res->{status} =~ /^2/;
   my $rows = $parent ? $Self->_files_refresh_dir($parent->{href}) : {};
   my $new = $rows->{$row->{href}} or return { status => 409 };
+  # the PUT carried the type, so the server's getcontenttype holds it now
+  $Self->_filenode_dead_set($new, { type => undef }) if exists $dead->{type};
   return { status => 200, blobId => JMAP::FileNode::blob_id($new->{nodeid}, $new->{etag}), size => 0 + length($bytes), type => $type };
 }
 
@@ -1471,7 +1477,10 @@ sub _filenode_dead_set {
     if %patch && $Self->filenode_features()->{deadProps};
   return 0 unless $ok;
   $Self->begin();
-  my $json = JMAP::FileNode::dead_json($fresh ? $dead : { %$old, %$dead });
+  # a removed property (undef) is gone from the mirror too
+  my %merged = $fresh ? %$dead : (%$old, %$dead);
+  delete $merged{$_} for grep { !defined $merged{$_} } keys %merged;
+  my $json = JMAP::FileNode::dead_json(\%merged);
   $Self->ddirty('jfilenodes', { deadprops => $json, changed => time() }, { nodeid => $row->{nodeid} })
     if ($json // '') ne ($cur // '');
   $Self->commit();
@@ -1755,6 +1764,298 @@ sub create_filenodes {
     $created{$cid} = $row;
   }
   return (\%created, \%notcreated, \@alsodestroyed);
+}
+
+my %FILENODE_UPDATE_PROPS = map { $_ => 1 } qw(parentId name blobId type size created modified
+  accessed executable isSubscribed shareWith);
+
+# Update nodes (draft S3.2.3): moves and renames, content (blobId), type and
+# the client-set properties.  $update is the client's { id => patch }, with
+# any property equal to its current value already taken out (RFC 8620 S5.3
+# lets a client send whole objects back; FileNode/set strips them).
+#
+# The set is judged by its final state: a move may go to a name another
+# node in this call leaves, and swaps and rotations are broken with a
+# temporary name (order_moves), so sibling names stay unique on the server
+# at every step.  A clash with a node that is not moving goes through
+# onExists.  Then each node's content and properties are written.  WebDAV
+# first, then the mirror; each item succeeds or fails on its own.
+#
+# Returns (\%updated, \%notUpdated, \@alsoDestroyed), keyed by node id;
+# updated holds what the server set or changed beyond what was asked
+# (blobId, size, type, a renamed name, a "now" timestamp) or undef.
+sub update_filenodes {
+  my ($Self, $update, $idmap, $opts) = @_;
+  my (%updated, %notupdated, @alsodestroyed);
+  my $ci = $opts->{ci};
+  my $key = sub { my $n = $_[0]; return $n unless $ci; utf8::upgrade($n); return lc $n };   # Unicode lc
+  $Self->begin();
+  my %byid = map { $_->{nodeid} => $_ } @{ $Self->filenode_rows() };
+  $Self->commit();
+  my $up = sub { defined $_[0]{parentid} ? $byid{ $_[0]{parentid} } : undef };
+  my $rights = sub {   # R7: effective privileges
+    my $r = shift;
+    my $p = $up->($r);
+    return JMAP::FileNode::rights(JMAP::FileNode::effective_privs($r, $up),
+                                  $p ? JMAP::FileNode::effective_privs($p, $up) : undef);
+  };
+  my $deadof = sub { defined $_[0]{deadprops} ? (eval { decode_json($_[0]{deadprops}) } || {}) : {} };
+  my $modified_of = sub { JMAP::FileNode::epoch($deadof->($_[0])->{modified}) // $_[0]{modified} // 0 };
+  my $now = time();
+
+  # 1. each update on its own
+  my (%plan, %dest);   # id => { uid, patch, dead }; id => [newparentid, newname] for a move
+  for my $uid (sort keys %$update) {
+    my $id = $idmap->($uid) // $uid;
+    my $p = $update->{$uid};
+    unless (ref $p eq 'HASH') { $notupdated{$id} = { type => 'invalidProperties', description => 'a patch must be an object' }; next }
+    my $row = $byid{$id} or do { $notupdated{$id} = { type => 'notFound' }; next };
+    my $isfile = $row->{nodetype} eq 'file';
+    my (@bad, %dead);
+    push @bad, grep { !$FILENODE_UPDATE_PROPS{$_} } keys %$p;   # server-set or immutable, and changed
+    push @bad, 'shareWith' if exists $p->{shareWith};             # sharing: a later task
+    push @bad, 'name' if exists $p->{name} && JMAP::FileNode::name_problem($p->{name});
+    my $newparent = $row->{parentid};
+    if (exists $p->{parentId}) {
+      my $pid = $p->{parentId};
+      $newparent = defined $pid && !ref $pid ? ($idmap->($pid) // $pid) : undef;
+      push @bad, 'parentId' unless defined $newparent && $byid{$newparent} && $byid{$newparent}{nodetype} eq 'directory';
+    }
+    push @bad, 'blobId' if exists $p->{blobId} && (!$isfile || !defined $p->{blobId} || ref $p->{blobId});
+    push @bad, 'size' if exists $p->{size} && (!exists $p->{blobId} || !defined $p->{size} || ref $p->{size} || $p->{size} !~ /^\d+\z/);
+    push @bad, 'type' if exists $p->{type} && (!$isfile || !defined $p->{type} || ref $p->{type} || $p->{type} !~ $MEDIA_TYPE);
+    for my $k (qw(created modified accessed)) {
+      next unless exists $p->{$k};
+      # draft S3.1: a null modified/accessed means "now"; created is not nullable
+      if (!defined $p->{$k}) { if ($k eq 'created') { push @bad, $k } else { $dead{$k} = JMAP::FileNode::utc($now) } next }
+      my $t = ref $p->{$k} ? undef : JMAP::FileNode::epoch($p->{$k});
+      if (defined $t) { $dead{$k} = JMAP::FileNode::utc($t) } else { push @bad, $k }
+    }
+    for my $k (qw(executable isSubscribed)) {
+      next unless exists $p->{$k};
+      # a null patch value is the property's default (RFC 8620 S5.3)
+      if (!defined $p->{$k}) { $dead{$k} = $k eq 'isSubscribed' ? 1 : 0 }
+      elsif (JSON::is_bool($p->{$k})) { $dead{$k} = $p->{$k} ? 1 : 0 }
+      else { push @bad, $k }
+    }
+    # a type without new content has no WebDAV home (getcontenttype is live)
+    $dead{type} = ($p->{type} =~ s/\s*;.*$//sr) if exists $p->{type} && !exists $p->{blobId} && !grep { $_ eq 'type' } @bad;
+    my $newname = exists $p->{name} && !ref $p->{name} ? $p->{name} : $row->{name};
+    if ((exists $p->{parentId} || exists $p->{name}) && !@bad
+        && (($newparent // '') ne ($row->{parentid} // '') || $newname ne $row->{name})) {
+      if (defined $row->{parentid}) { $dest{$id} = [$newparent, $newname] }
+      else { push @bad, grep { exists $p->{$_} } qw(parentId name) }   # the home stays where it is
+    }
+    if (@bad) {
+      my %u;
+      $notupdated{$id} = { type => 'invalidProperties', properties => [ grep { !$u{$_}++ } sort @bad ] };
+      delete $dest{$id};
+      next;
+    }
+    my $r = $rights->($row);
+    my $why = $dest{$id} && !$r->{mayRename} ? 'mayRename'
+            : $dest{$id} && $dest{$id}[0] ne $row->{parentid} && !$rights->($byid{ $dest{$id}[0] })->{mayAddChildren} ? 'mayAddChildren on the new parent'
+            : (grep { exists $p->{$_} } qw(blobId type modified accessed executable)) && !$r->{mayModifyContent} ? 'mayModifyContent'
+            : undef;
+    if ($why) {
+      $notupdated{$id} = { type => 'forbidden', description => "no $why" };
+      delete $dest{$id};
+      next;
+    }
+    $plan{$id} = { uid => $uid, patch => $p, dead => \%dead };
+  }
+
+  # 2. draft S3.2.3: no node may end up inside itself -- checked on the
+  # final tree, so a child may move out of the way of its parent
+  my $again = 1;
+  while ($again) {
+    $again = 0;
+    my $final = sub { $dest{$_[0]} ? $dest{$_[0]}[0] : $byid{$_[0]}{parentid} };
+    for my $id (sort keys %dest) {
+      my %seen;
+      for (my $a = $dest{$id}[0]; defined $a && !$seen{$a}++; $a = $final->($a)) {
+        next unless $a eq $id;
+        $notupdated{$id} = { type => 'invalidProperties', properties => ['parentId'],
+                             description => 'a node cannot be moved inside itself' };
+        delete $dest{$id};
+        delete $plan{$id};
+        $again = 1;
+        last;
+      }
+      last if $again;
+    }
+  }
+
+  # 3. clashes at the destinations.  A node that is moving away frees its
+  # name; a name two movers want, or a non-moving node's, is a clash.
+  my $curkey = sub { ($_[0]{parentid} // '') . "\0" . $key->($_[0]{name}) };
+  my $destkey = sub { "$dest{$_[0]}[0]\0" . $key->($dest{$_[0]}[1]) };
+  my %occupant = map { ($curkey->($_) => $_->{nodeid}) } values %byid;
+  my %claimed;
+  for my $id (keys %dest) {   # a change of case only keeps its own name
+    $claimed{ $destkey->($id) } = $id if $destkey->($id) eq $curkey->($byid{$id});
+  }
+  for my $id (sort keys %dest) {
+    my $k = $destkey->($id);
+    next if ($claimed{$k} // '') eq $id;
+    my $holder = $claimed{$k};
+    $holder //= $occupant{$k} if defined $occupant{$k} && !$dest{ $occupant{$k} } && $occupant{$k} ne $id;
+    unless (defined $holder) { $claimed{$k} = $id; next }
+    my ($np, $nn) = @{ $dest{$id} };
+    my $mode = $dest{$holder} || $claimed{$k} ? '' : ($opts->{onExists} // '');   # never replace another mover
+    if ($mode eq 'newest') {
+      my $ours = exists $plan{$id}{dead}{modified} ? JMAP::FileNode::epoch($plan{$id}{dead}{modified}) : $modified_of->($byid{$id});
+      $mode = $ours > $modified_of->($byid{$holder}) ? 'replace' : '';
+    }
+    if ($mode eq 'rename') {
+      my %taken = map { ($key->($_->{name}) => 1) } grep { ($_->{parentid} // '') eq $np } values %byid;
+      $taken{ (split /\0/, $_, 2)[1] } = 1 for grep { /^\Q$np\E\0/ } keys %claimed;
+      my $name = JMAP::FileNode::unique_name($nn, \%taken, $ci);
+      if (JMAP::FileNode::name_problem($name)) {
+        $notupdated{$id} = { type => 'alreadyExists', existingId => "$holder", description => 'no free name within maxSizeFileNodeName' };
+        delete $dest{$id}; delete $plan{$id};
+        next;
+      }
+      $dest{$id}[1] = $plan{$id}{renamed} = $name;
+      $claimed{ $destkey->($id) } = $id;
+    }
+    elsif ($mode eq 'replace') {
+      my $h = $byid{$holder};
+      if ($byid{$id}{nodetype} eq 'file' && $h->{nodetype} eq 'file' && $h->{name} eq $nn) {
+        $plan{$id}{overwrite} = $holder;   # one MOVE with Overwrite: T (draft: atomic)
+      }
+      else {
+        my ($gone, $not) = $Self->destroy_filenodes([ $holder ], $opts);
+        if (my $err = $not->{$holder}) { $notupdated{$id} = $err; delete $dest{$id}; delete $plan{$id}; next }
+        push @alsodestroyed, @$gone;
+        delete @byid{@$gone};
+      }
+      $claimed{$k} = $id;
+    }
+    else {
+      $notupdated{$id} = { type => 'alreadyExists', existingId => "$holder" };
+      delete $dest{$id}; delete $plan{$id};
+    }
+  }
+
+  # 4. the moves, in an order that keeps sibling names unique
+  my %moves = map { ($_ => $destkey->($_)) } keys %dest;
+  my %occ = map { ($curkey->($_) => $_->{nodeid}) } values %byid;
+  my %par = map { ($_->{nodeid} => $_->{parentid}) } grep { defined $_->{parentid} } values %byid;
+  my (%touched, %parked);
+  my $do_move = sub {   # MOVE $row into $dir as $name; the mirror follows
+    my ($row, $dir, $name, $overwrite) = @_;
+    my $to = "$dir->{href}/$name";
+    my $isdir = $row->{nodetype} eq 'directory';
+    my $status = eval { $Self->backend_cmd('files_move', _filenode_path($row), $isdir ? "$to/" : $to, overwrite => $overwrite ? 1 : 0) };
+    return (undef, $@) unless defined $status;
+    return ($status) unless $status =~ /^2/;
+    $Self->begin();
+    my $t = time();
+    my %cols = (href => $to, name => $name, parentid => $dir->{nodeid});
+    utf8::upgrade($_) for @cols{qw(href name)};   # stored as UTF-8 (see _filenode_decode)
+    # descendants' hrefs move with a directory (not a property: no modseq)
+    for my $d (@{ $Self->_filenode_subtree($row->{nodeid}) }) {
+      (my $h = $d->{href}) =~ s{^\Q$row->{href}\E/}{$to/};
+      utf8::upgrade($h);
+      $Self->dupdate('jfilenodes', { href => $h }, { nodeid => $d->{nodeid} });
+    }
+    $Self->ddirty('jfilenodes', { %cols, changed => $t }, { nodeid => $row->{nodeid} });
+    $Self->ddirty('jfilenodes', { active => 0, changed => $t }, { nodeid => $overwrite }) if $overwrite;
+    $Self->commit();
+    $touched{ $row->{parentid} } = $touched{ $dir->{nodeid} } = 1;
+    return ($status);
+  };
+  for my $step (@{ JMAP::FileNode::order_moves(\%moves, \%occ, \%par) }) {
+    my ($id, $temp) = @$step;
+    next unless $dest{$id};
+    $Self->begin();
+    my $row = $Self->filenode_row($id);
+    my $dir = $row ? $Self->filenode_row(defined $temp ? $row->{parentid} : $dest{$id}[0]) : undef;
+    $Self->commit();
+    unless ($row && $dir) {
+      $notupdated{$id} = { type => 'serverFail', description => 'the node or its new parent went away' };
+      delete $dest{$id}; delete $plan{$id};
+      next;
+    }
+    my $overwrite = defined $temp ? undef : $plan{$id}{overwrite};
+    my ($status, $err) = $do_move->($row, $dir, $temp // $dest{$id}[1], $overwrite);
+    if (defined $status && $status =~ /^2/) {
+      $parked{$id} = $byid{$id} if defined $temp;
+      push @alsodestroyed, $overwrite if $overwrite;
+      next;
+    }
+    my $e = defined $status ? _filenode_http_error($status, 'MOVE') : { type => 'serverFail', description => "MOVE: $err" };
+    if ($e->{type} eq 'alreadyExists') {
+      # the mirror was behind the server: catch up, and name the node
+      my $rows = eval { $Self->_files_refresh_dir($dir->{href}) } || {};
+      my $there = $rows->{"$dir->{href}/$dest{$id}[1]"};
+      $e = $there ? { %$e, existingId => "$there->{nodeid}" } : { type => 'serverFail', description => $e->{description} };
+    }
+    $notupdated{$id} = $e;
+    delete $dest{$id}; delete $plan{$id};
+    # A parked node that cannot reach its destination must not keep its
+    # temporary name: it goes back to its old name, or (in a cycle another
+    # node has taken that) the nearest free one, as onExists "rename" does.
+    if (my $orig = delete $parked{$id}) {
+      $Self->begin();
+      my $dir0 = $Self->filenode_row($orig->{parentid});
+      my %taken = map { ($key->($_->{name}) => 1) } @{ $Self->filenode_get({ parentid => $orig->{parentid}, active => 1 }) };
+      $Self->commit();
+      my $name = $taken{ $key->($orig->{name}) } ? JMAP::FileNode::unique_name($orig->{name}, \%taken, $ci) : $orig->{name};
+      $do_move->($row, $dir0, $name) if $dir0;
+    }
+  }
+
+  # 5. bring the directories the moves touched up to date (spec "Writes");
+  # this also picks up the new ETags (Cyrus changes a file's on MOVE), which
+  # a content PUT below needs for its If-Match
+  $Self->begin();
+  my @dirs = map { $_->{href} } grep { $_ } map { $Self->filenode_row($_) } sort grep { defined && length } keys %touched;
+  $Self->commit();
+  for my $dir (@dirs) {
+    eval { $Self->_files_refresh_dir($dir); 1 } or warn "update_filenodes: re-listing $dir: $@";
+  }
+  # 6. content, type and the client-set properties
+  for my $id (sort keys %plan) {
+    my ($uid, $p, $dead) = @{ $plan{$id} }{qw(uid patch dead)};
+    my %out;
+    if (exists $p->{blobId}) {
+      my ($ctype, $bytes) = eval { $Self->get_blob($p->{blobId}) };
+      unless (defined $bytes) {
+        $notupdated{$id} = { type => 'invalidProperties', properties => ['blobId'], description => 'blob not found' };
+        next;
+      }
+      if (defined $p->{size} && $p->{size} != length $bytes) {
+        $notupdated{$id} = { type => 'invalidProperties', properties => ['size'], description => 'size does not match the blob' };
+        next;
+      }
+      my $r = $Self->put_filenode_content($id, $bytes, $p->{type} // $ctype);
+      unless ($r->{status} == 200) {
+        $notupdated{$id} = $r->{status} == 412
+          ? { type => 'serverFail', description => 'PUT: HTTP 412 (the file changed on the server; the next sync will show it)' }
+          : _filenode_http_error($r->{status}, 'PUT');
+        next;
+      }
+      $out{blobId} = $r->{blobId};
+      $out{size} = $r->{size} unless exists $p->{size};
+      $out{type} = $r->{type} unless exists $p->{type} && $p->{type} eq $r->{type};
+    }
+    if (%$dead) {
+      $Self->begin();
+      my $row = $Self->filenode_row($id);
+      $Self->commit();
+      unless ($row && $Self->_filenode_dead_set($row, $dead)) {
+        $notupdated{$id} = { type => 'serverFail', description => 'PROPPATCH of dead properties failed' };
+        next;
+      }
+      $out{$_} = $dead->{$_} for grep { exists $p->{$_} && !defined $p->{$_} } qw(modified accessed);
+    }
+    $out{name} = $plan{$id}{renamed} if defined $plan{$id}{renamed};
+    $updated{$id} = %out ? \%out : undef;
+  }
+
+  return (\%updated, \%notupdated, \@alsodestroyed);
 }
 
 # Run a file sync, and never die.  A failure (or a sync that gave up because
