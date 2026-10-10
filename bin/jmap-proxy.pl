@@ -829,7 +829,7 @@ sub run_backend_worker {
         # tick only runs it every 300s (spec "Sync"); an explicit sync from
         # the management API ({force => 1}) always does.
         if ($db->can('sync_files')) {
-          if ($args->{force}) { eval { $db->sync_files(); 1 } or do { $db->reset(); warn "sync_files: $@" } }
+          if ($args->{force}) { $db->sync_files_safely() }
           else                { $db->sync_files_if_due(300) }
         }
         eval { $write_json->(['synced', time()]) };
@@ -840,6 +840,10 @@ sub run_backend_worker {
       if ($cmd eq 'backfill') {
         # JMAP passthrough accounts have no backfill
         return ['backfill', 0] if $db->can('handle_jmap');
+        # The account's first full WebDAV walk runs here, not in firstsync, so
+        # signup never waits for it (spec "Sync"); a no-op once any file sync
+        # has run.  Accounts with no backfill pending sync on demand instead.
+        $db->first_files_sync() if $db->can('first_files_sync');
         my $more = $db->backfill() ? 1 : 0;
         return ['backfill', $more];
       }

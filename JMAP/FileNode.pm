@@ -97,6 +97,11 @@ sub rights {
   };
 }
 
+# The mirror's deadprops column: an entry's J: dead properties as canonical
+# JSON (so equal sets compare equal), or undef when there are none.
+my $CANON = JSON->new->canonical->utf8;   # bytes, as DBD::SQLite hands them back
+sub dead_json { my $d = shift; return $d && %$d ? $CANON->encode($d) : undef }
+
 sub utc { my $t = shift; return defined $t ? strftime('%Y-%m-%dT%H:%M:%SZ', gmtime($t)) : undef }
 
 # Always returns exactly one value (int or undef), never an empty list, so it
@@ -125,6 +130,8 @@ sub reconcile {
     my ($row, $e) = @_;
     my $eprivs = defined $e->{privileges} ? join(' ', @{$e->{privileges}}) : undef;
     return 1 if ($row->{privs} // '') ne ($eprivs // '');
+    # client-set values kept as dead properties change the object too
+    return 1 if ($row->{deadprops} // '') ne (dead_json($e->{dead}) // '');
     return scalar grep { ($row->{$_} // '') ne ($e->{$_} // '') } qw(href etag size modified type);
   };
   my $pair = sub {

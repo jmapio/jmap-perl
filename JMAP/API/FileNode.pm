@@ -22,6 +22,16 @@ sub _filenode_object {
   my $privs  = defined $row->{privs} ? [ split ' ', $row->{privs} ] : undef;
   my $pprivs = $parent && defined $parent->{privs} ? [ split ' ', $parent->{privs} ] : undef;
   my $isfile = $row->{nodetype} eq 'file';
+  # client-set values the server keeps as dead properties override the
+  # server's own (ImapDB::_filenode_cols keeps them apart)
+  my $dead = defined $row->{deadprops} ? (eval { decode_json($row->{deadprops}) } || {}) : {};
+  my $dtime = sub { JMAP::FileNode::epoch($dead->{$_[0]}) };
+  my $dbool = sub { defined $dead->{$_[0]} ? ($dead->{$_[0]} =~ /\A\s*(?:1|true)\s*\z/i ? 1 : 0) : undef };
+  my $created  = $dtime->('created')  // $row->{created}  // $row->{modified} // $row->{changed};
+  my $modified = $dtime->('modified') // $row->{modified} // $row->{changed};
+  my $accessed = $dtime->('accessed') // $row->{accessed} // $modified;
+  my $executable   = $dbool->('executable')   // $row->{executable};
+  my $isSubscribed = $dbool->('isSubscribed') // $row->{isSubscribed} // 1;
   my $rights = JMAP::FileNode::rights($privs, $pprivs);
   # the home collection is the account's single top-level node: it cannot
   # be renamed, moved or destroyed (mayCreateTopLevelFileNode is false)
@@ -35,12 +45,12 @@ sub _filenode_object {
     size         => $isfile ? 0 + ($row->{size} // 0) : undef,
     name         => $row->{name},
     type         => $isfile ? $row->{type} : undef,
-    created      => JMAP::FileNode::utc($row->{created} // $row->{modified} // $row->{changed}),
-    modified     => JMAP::FileNode::utc($row->{modified} // $row->{changed}),
-    accessed     => JMAP::FileNode::utc($row->{accessed} // $row->{modified} // $row->{changed}),
+    created      => JMAP::FileNode::utc($created),
+    modified     => JMAP::FileNode::utc($modified),
+    accessed     => JMAP::FileNode::utc($accessed),
     changed      => JMAP::FileNode::utc($row->{changed}),
-    executable   => $row->{executable} ? JSON::true : JSON::false,
-    isSubscribed => (($row->{isSubscribed} // 1) ? JSON::true : JSON::false),
+    executable   => $executable ? JSON::true : JSON::false,
+    isSubscribed => $isSubscribed ? JSON::true : JSON::false,
     myRights     => $rights,
     shareWith    => undef,
     role         => $row->{role},
@@ -82,11 +92,12 @@ sub api_FileNode_get {
   }
   # draft S3.2.1 fetchParents: every ancestor, once
   if ($args->{fetchParents}) {
-    for my $row (@list) {
+    my @requested = @list;   # walk a copy: the ancestors are appended to @list
+    for my $row (@requested) {
       my $p = $row->{parentid};
       while (defined $p && !$seen{$p}++) {
         my $prow = $byid{$p} or last;
-        push @list, $prow;   # appended: this loop visits it too, harmlessly
+        push @list, $prow;
         $p = $prow->{parentid};
       }
     }
