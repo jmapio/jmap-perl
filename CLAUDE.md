@@ -101,7 +101,9 @@ their **metadata only**: every method reads the mirror, every write goes to WebD
   other facts are learnt on first use (`moveLeavesEmpty`, `principalBase`, `privileges`).
   An account probed before a key existed lacks it, so code must treat a missing key as
   "unknown", not "no". Nor its status codes: a PUT is checked against the size the server
-  then lists. Each defence replays a canned bad answer (`t/webdavtalk-canned.t`,
+  then lists — so a server that alters bytes on PUT (line-ending normalisation, transcoding)
+  is refused outright. A server without WebDAV at `webdavURL` fails the Probe, and FileNode
+  is advertised only once a Probe has worked (`JMAP::Capabilities::filenode_ok`). Each defence replays a canned bad answer (`t/webdavtalk-canned.t`,
   `t/filenode-set.t`).
 - **`FileNode/set` is judged by its final state**: destroys, creates and moves are ordered
   (temporary names break swaps and cycles) so sibling names stay unique at every step. A

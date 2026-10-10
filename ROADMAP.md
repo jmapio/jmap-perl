@@ -463,8 +463,8 @@ files live on the WebDAV server (Cyrus `#drive` in the test stack) and a metadat
 serves every method. Design: `docs/superpowers/specs/2026-10-09-filenode-webdav-design.md`.
 Replaces the fake `StorageNode` data.
 
-- [x] `FileNode/get` (`fetchParents`), `/changes`, `/query` (every filter but `body`, `depth`,
-      the `tree` sort), `/queryChanges`
+- [x] `FileNode/get` (`fetchParents`), `/changes`, `/query` (every filter except `body`;
+      `depth`; the `tree` sort), `/queryChanges`
 - [x] `FileNode/set`: create, move/rename (swaps, cycles), content, destroy with
       `onDestroyRemoveChildren`, `onExists` `replace`/`rename`/`newest`, `compareCaseInsensitively`
 - [x] `FileNode/copy` across accounts (in the parent, like the other `/copy` orchestration)
