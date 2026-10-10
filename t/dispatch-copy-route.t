@@ -42,7 +42,7 @@ is($b5->[1]{key}, 'orchestrate', 'second is a separate orchestrate batch');
 # EVERY copy method the parent can orchestrate must be routed. This is the
 # regression guard: the classifier and _do_copy_call's dispatch table are two
 # lists that have already drifted apart once.
-my @expected = qw(Blob/copy Email/copy CalendarEvent/copy ContactCard/copy);
+my @expected = qw(Blob/copy Email/copy CalendarEvent/copy ContactCard/copy FileNode/copy);
 is_deeply([JMAP::Dispatch::copy_methods()], [sort @expected],
           'copy_methods covers exactly the methods _do_copy_call implements');
 
@@ -54,6 +54,18 @@ for my $method (@expected) {
   my $n = JMAP::Dispatch::group_batches(
     [[$method, {fromAccountId=>'A', accountId=>'B'}, '0']], \%key, 'A', $route);
   is($n->[0]{key}, 'fp:1', "$method same-upstream is native-forwarded");
+}
+
+# ... and the other way round: every routed method has its branch in
+# _do_copy_call, or an orchestrated call would get no answer at all.
+{
+  open my $fh, '<', 'bin/jmap-proxy.pl' or die "bin/jmap-proxy.pl: $!";
+  my $src = do { local $/; <$fh> };
+  my ($body) = $src =~ /^sub _do_copy_call \{(.*?)^\}/ms;
+  ok($body, 'found _do_copy_call');
+  for my $method (@expected) {
+    like($body // '', qr/\$method eq '\Q$method\E'/, "_do_copy_call handles $method");
+  }
 }
 
 # A method that merely looks like a copy is NOT diverted to orchestration —

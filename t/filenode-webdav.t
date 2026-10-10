@@ -546,4 +546,131 @@ SKIP: {
   jmap(['FileNode/set', { onDestroyRemoveChildren => JSON::true, destroy => [ $sid ] }]);
 }
 
+# --- FileNode/copy across accounts (Task 11).  RFC 8620 S5.4: fromAccountId
+# and accountId differ; the parent orchestrates it (fetch_blobs/store_blob,
+# then one FileNode/set in the destination).  A second proxy account with a
+# drive, in this account's pool.
+SKIP: {
+  my $other = $ENV{CYRUS_OTHER_USER} || ($user eq 'user2' ? 'user1' : 'user2');
+  my $odav = JMAP::Sync::WebDAVTalk->new(user => $other, password => 'x', url => "$ENV{CYRUS_URL}/dav/drive/user/$other/");
+  my $oroot = "/dav/drive/user/$other";
+  if ($odav->Raw('PROPFIND', "$oroot/", undef, Depth => 0)->{status} == 404
+      && $odav->Raw('PROPFIND', "/dav/principals/user/$other/", undef, Depth => 0)->{status} == 404) {
+    my $cmgmt = ($ENV{CYRUS_MGMT_URL} || 'http://localhost:8001') =~ s{/\z}{}r;
+    $http->put("$cmgmt/api/$other", { headers => { 'Content-Type' => 'application/json' },
+      content => encode_json({ mailboxes => [ { name => 'INBOX', subscribed => JSON::true } ], quota_kb => 102400 }) });
+    $odav->Raw('PROPFIND', "/dav/principals/user/$other/", undef, Depth => 0);
+  }
+  my $ost = $odav->Raw('PROPFIND', "$oroot/", undef, Depth => 0)->{status};
+  skip "no drive for $other on the test server (HTTP $ost)", 1 unless $ost == 207;
+  # registered the way bin/restart-test-proxy.sh registers the test user,
+  # in the test user's pool so one login sees both accounts
+  my $reg = $http->post("$mgmt/api/accounts", { headers => { 'Content-Type' => 'application/json' },
+    content => encode_json({ accountid => $other, email => $other, type => 'imap', username => $other,
+      password => 'password', imapHost => 'localhost', imapPort => ($ENV{CYRUS_IMAP_PORT} || 8143), imapSSL => 1,
+      smtpHost => 'localhost', smtpPort => 25, smtpSSL => 1, caldavURL => $ENV{CYRUS_URL}, carddavURL => $ENV{CYRUS_URL},
+      webdavURL => "$ENV{CYRUS_URL}/dav/drive/user/$other/", poolid => $user }) });
+  skip "registering $other: HTTP $reg->{status} $reg->{content}", 1 unless $reg->{success};
+  my $osess = decode_json($http->get("$ENV{JMAP_PROXY_URL}/.well-known/jmap", { headers => { Authorization => $auth } })->{content});
+  ok($osess->{accounts}{$other}, "the session lists $other");
+  my $ojmap = sub { my ($m, $a) = @_; jmap([ $m, { accountId => $other, %$a } ]) };
+  my ($oall) = @{ $ojmap->('FileNode/get', { ids => undef }) };
+  my ($ohome) = grep { !defined $_->{parentId} } @{ $oall->{list} || [] };
+  ok($ohome, "$other has a home directory") or diag explain $oall;
+
+  # source: a directory with a file, a subdirectory and a file in that,
+  # and a lone file with client-set properties
+  my $exe = upload("#!/bin/sh\necho $tag\n");
+  my ($cs) = @{ jmap(['FileNode/set', { create => {
+    d   => { parentId => $home->{id}, name => "$tag-src" },
+    f   => { parentId => '#d', name => 'f.txt', blobId => $blob->{blobId}, type => 'text/plain' },
+    sub => { parentId => '#d', name => 'sub' },
+    g   => { parentId => '#sub', name => 'g.sh', blobId => $exe->{blobId}, type => 'text/x-sh',
+             executable => JSON::true, modified => '2020-01-02T03:04:05Z' },
+    one => { parentId => $home->{id}, name => "$tag-one.sh", blobId => $exe->{blobId}, type => 'text/x-sh',
+             executable => JSON::true, created => '2019-05-06T07:08:09Z', modified => '2020-01-02T03:04:05Z' } } }]) };
+  is(scalar keys %{ $cs->{created} || {} }, 5, 'source tree created') or diag explain $cs;
+  my %src = map { ($_ => $cs->{created}{$_}{id}) } keys %{ $cs->{created} || {} };
+
+  # same account: the error every /copy gives for it
+  my ($same) = @{ jmap(['FileNode/copy', { fromAccountId => $user, create => { x => { id => $src{one}, parentId => $home->{id} } } }]) };
+  is($same->{type}, 'invalidArguments', 'fromAccountId = accountId: invalidArguments, as for every /copy') or diag explain $same;
+
+  my ($cp) = @{ $ojmap->('FileNode/copy', { fromAccountId => $user, create => {
+    c   => { id => $src{d}, parentId => $ohome->{id} },
+    o   => { id => $src{one}, parentId => $ohome->{id}, name => "$tag-renamed.sh" },
+    nf  => { id => 'Lnosuchnode', parentId => $ohome->{id} },
+    np  => { id => $src{one}, parentId => 'Lnosuchparent', name => "$tag-np.sh" } } }) };
+  ok($cp->{created}{c}{id}, 'a directory copied') or diag explain $cp;
+  ok($cp->{created}{o}{id}, 'a file copied under a new name') or diag explain $cp;
+  isnt($cp->{created}{c}{id}, $src{d}, 'a new id');
+  is($cp->{fromAccountId}, $user, 'fromAccountId');
+  is($cp->{accountId}, $other, 'accountId');
+  ok(defined $cp->{oldState} && defined $cp->{newState} && $cp->{oldState} ne $cp->{newState}, 'the destination state moved');
+  is($cp->{notCreated}{nf}{type}, 'notFound', 'an unknown source: notFound') or diag explain $cp;
+  is($cp->{notCreated}{np}{type}, 'invalidProperties', 'an unknown destination parent: invalidProperties');
+  my @dest = map { $_->{href} } @{ $odav->PropFind("$oroot/$tag-src/sub/", 1) }, @{ $odav->PropFind("$oroot/$tag-src/", 1) };
+  ok((grep { $_ eq "$oroot/$tag-src/f.txt" } @dest), 'the file in the directory copied on the server') or diag explain \@dest;
+  ok((grep { $_ eq "$oroot/$tag-src/sub/g.sh" } @dest), 'and the one in the subdirectory') or diag explain \@dest;
+  is($odav->Raw('GET', "$oroot/$tag-src/sub/g.sh")->{content}, "#!/bin/sh\necho $tag\n", 'with its content');
+  my ($q) = @{ $ojmap->('FileNode/query', { filter => { ancestorId => $cp->{created}{c}{id} }, sort => [ { property => 'tree' } ] }) };
+  my ($qg) = @{ $ojmap->('FileNode/get', { ids => [ @{ $q->{ids} || [] }, $cp->{created}{o}{id} ] }) };
+  my %byname = map { ($_->{name} => $_) } @{ $qg->{list} || [] };
+  is_deeply([ sort keys %byname ], [ sort 'f.txt', 'sub', 'g.sh', "$tag-renamed.sh" ], 'the copied nodes, by FileNode/query') or diag explain $qg;
+  is($byname{'g.sh'}{parentId}, $byname{sub}{id}, 'the hierarchy is kept');
+  is($byname{'g.sh'}{executable}, JSON::true, 'executable carried');
+  is($byname{'g.sh'}{type}, 'text/x-sh', 'type carried');
+  is($byname{'g.sh'}{modified}, '2020-01-02T03:04:05Z', 'modified carried');
+  is($byname{"$tag-renamed.sh"}{created}, '2019-05-06T07:08:09Z', 'created carried');
+  is($byname{"$tag-renamed.sh"}{size}, length("#!/bin/sh\necho $tag\n"), 'size');
+  is($byname{"$tag-renamed.sh"}{shareWith}, undef, 'no sharing carried');
+  ok(scalar(grep { $_->{href} eq "$root/$tag-src/f.txt" } @{ $dav->PropFind("$root/$tag-src/", 1) }), 'the source is untouched');
+
+  # a name taken in the destination: alreadyExists, or onExists "rename"
+  my ($cx) = @{ $ojmap->('FileNode/copy', { fromAccountId => $user, create => { c => { id => $src{d}, parentId => $ohome->{id} } } }) };
+  is($cx->{notCreated}{c}{type}, 'alreadyExists', 'a clash: alreadyExists') or diag explain $cx;
+  is($cx->{notCreated}{c}{existingId}, $cp->{created}{c}{id}, 'naming the node in the way');
+  my ($cr) = @{ $ojmap->('FileNode/copy', { fromAccountId => $user, onExists => 'rename',
+                                            create => { c => { id => $src{d}, parentId => $ohome->{id} } } }) };
+  ok($cr->{created}{c}{id} && $cr->{created}{c}{name} && $cr->{created}{c}{name} ne "$tag-src", 'onExists rename: a new name, returned')
+    or diag explain $cr;
+
+  # the source changed behind the mirror's back (a 412 on its pinned blobId):
+  # that item fails, as a whole and without leaving a partial copy; the rest
+  # of the call goes ahead
+  force_sync();
+  $dav->Put("$root/$tag-src/sub/g.sh", "changed\n", type => 'text/x-sh');
+  my ($c412) = @{ $ojmap->('FileNode/copy', { fromAccountId => $user, create => {
+    c => { id => $src{d}, parentId => $ohome->{id}, name => "$tag-412" },
+    o => { id => $src{f}, parentId => $ohome->{id}, name => "$tag-ok.txt" } } }) };
+  ok($c412->{notCreated}{c}, 'a directory whose file changed underneath is not created') or diag explain $c412;
+  like($c412->{notCreated}{c}{description} // '', qr/g\.sh/, 'the error names the file');
+  ok($c412->{created}{o}{id}, 'the other item is copied');
+  is($odav->Raw('PROPFIND', "$oroot/$tag-412/", undef, Depth => 0)->{status}, 404, 'no partial directory left behind');
+  force_sync();
+
+  # onSuccessDestroyOriginal: a move between accounts; the implicit
+  # FileNode/set answers with the /copy's call id, after the /copy
+  my $res = $http->post("$ENV{JMAP_PROXY_URL}/jmap/", {
+    headers => { Authorization => $auth, 'Content-Type' => 'application/json' },
+    content => encode_json({ using => \@using, methodCalls => [
+      [ 'FileNode/copy', { accountId => $other, fromAccountId => $user, onSuccessDestroyOriginal => JSON::true,
+                           create => { m => { id => $src{d}, parentId => $ohome->{id}, name => "$tag-moved" } } }, 'mv' ],
+      [ 'Core/echo', { hello => 1 }, 'e' ] ] }) });
+  my $mr = decode_json($res->{content})->{methodResponses};
+  is_deeply([ map { "$_->[0] $_->[2]" } @$mr ], [ 'FileNode/copy mv', 'Core/echo e', 'FileNode/set mv' ],
+            'the implicit FileNode/set is appended, with the /copy call id') or diag explain $mr;
+  my ($mset) = map { $_->[1] } grep { $_->[0] eq 'FileNode/set' } @$mr;
+  is_deeply([ sort @{ $mset->{destroyed} || [] } ], [ sort @src{qw(d f sub g)} ], 'the source directory and all it held destroyed')
+    or diag explain $mr;
+  is($dav->Raw('PROPFIND', "$root/$tag-src/", undef, Depth => 0)->{status}, 404, 'gone from the source drive');
+  is($odav->Raw('GET', "$oroot/$tag-moved/sub/g.sh")->{content}, "changed\n", 'with its current content at the destination');
+
+  # tidy up: the copies, the source file, and the second account
+  my ($oq) = @{ $ojmap->('FileNode/query', { filter => { parentId => $ohome->{id}, nameMatch => "$tag*" } }) };
+  $ojmap->('FileNode/set', { onDestroyRemoveChildren => JSON::true, destroy => $oq->{ids} || [] });
+  jmap(['FileNode/set', { destroy => [ $src{one} ] }]);
+  $http->delete("$mgmt/api/accounts/$other");
+}
+
 done_testing;
