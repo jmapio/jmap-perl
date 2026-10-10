@@ -1995,7 +1995,8 @@ sub update_filenodes {
       $park_in{$id} = defined $top_doomed->($to) ? $par{$top} : $to;
     }
   }
-  my (%touched, %parked, %moved, %destroy_err);
+  my (%touched, %parked, %moved, %destroy_err, %arrived);
+  my %mover = map { ($_ => 1) } keys %dest;   # every node this call moves
   my $do_move = sub {   # MOVE $row into $dir as $name; the mirror follows
     my ($row, $dir, $name, $overwrite) = @_;
     my $to = "$dir->{href}/$name";
@@ -2049,6 +2050,21 @@ sub update_filenodes {
     my $h = shift;
     return $destroy_err{$h} if exists $destroy_err{$h};
     my @ids = ($h, grep { $late{$_} && !exists $destroy_err{$_} && $under->($_, $h) } keys %late);
+    # Safety net: never delete a node the client asked to move and that has
+    # not reached its destination.  If one is still inside what is about to
+    # go (some ordering this code did not foresee), the destroy is refused --
+    # refusing a valid set is acceptable, losing data is not.
+    $Self->begin();
+    my @stuck = grep { $mover{$_} && !$arrived{$_} } $h, map { $_->{nodeid} } map { @{ $Self->_filenode_subtree($_) } } @ids;
+    $Self->commit();
+    if (@stuck) {
+      for my $d (@ids) {
+        $destroy_err{$d} = { type => 'nodeHasChildren',
+                             description => 'a node moving in this call is still inside it: ' . join(' ', sort @stuck) };
+        $notdestroyed{$d} = $destroy_err{$d} if $late{$d};
+      }
+      return $destroy_err{$h};
+    }
     my ($gone, $not) = $Self->destroy_filenodes(\@ids, $opts);
     push @alsodestroyed, @$gone;
     for my $d (@ids) {
@@ -2105,7 +2121,7 @@ sub update_filenodes {
     my $overwrite = defined $temp ? undef : $plan{$id}{overwrite};
     my ($status, $err) = $do_move->($row, $dir, $temp // $dest{$id}[1], $overwrite);
     if (defined $status && $status =~ /^2/) {
-      if (defined $temp) { $parked{$id} = $byid{$id} } else { delete $parked{$id} }
+      if (defined $temp) { $parked{$id} = $byid{$id} } else { delete $parked{$id}; $arrived{$id} = 1 }
       push @alsodestroyed, $overwrite if $overwrite;
       next;
     }

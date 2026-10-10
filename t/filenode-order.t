@@ -77,4 +77,12 @@ $steps = $om->({ F => "D\0s2", K => "D\0f.txt" }, { "D\0f.txt" => 'F', "D\0s2" =
 is_deeply($steps, [ [ 'K', '.~tmp~K', 'D' ], [ 'F', undef ], [ 'K', undef ] ], 'parked in D, then F, then K')
   or diag explain $steps;
 
+# $after waits on each other (two replaces, each of the other's directory):
+# the waited-on nodes are parked outside, then all moves complete
+$steps = $om->({ A => "P\0h1", B => "P\0h2" }, { "P\0h1" => 'H1', "P\0h2" => 'H2', "H1\0b" => 'B', "H2\0a" => 'A' },
+               { A => 'H2', B => 'H1', H1 => 'P', H2 => 'P' }, { A => ['B'], B => ['A'] }, { A => 'P', B => 'P' });
+is_deeply([ map { [ $_->[0], defined $_->[1] ? 'tmp' : undef, $_->[2] ] } @$steps ],
+          [ [ 'A', 'tmp', 'P' ], [ 'B', 'tmp', 'P' ], [ 'A', undef, undef ], [ 'B', undef, undef ] ],
+          'both parked outside their doomed directories, then moved on') or diag explain $steps;
+
 done_testing;

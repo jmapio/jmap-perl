@@ -302,9 +302,8 @@ sub order_moves {
       $progress = 1;
     }
     next if $progress;
-    # stuck: park the first node that waits on a name ...
-    my ($id) = grep { $name_blocked->($_) } sort keys %pending;
-    if (defined $id) {
+    my $park = sub {
+      my $id = shift;
       # the parking spot is in the node's current directory (or the one
       # the caller names, unless that lies inside the node), and free
       my ($cur) = grep { $held{$_} eq $id } keys %held;
@@ -319,8 +318,17 @@ sub order_moves {
       if ($elsewhere) { $par{$id} = $dir; delete $unfinished{$id} }
       push @parked, [$id, $pending{$id}];
       delete $pending{$id};
-      next;
-    }
+    };
+    # stuck: park the first node that waits on a name ...
+    my ($id) = grep { $name_blocked->($_) } sort keys %pending;
+    if (defined $id) { $park->($id); next }
+    # ... or, if moves wait on each other through $after (two replaces each
+    # displacing the other's directory), park the ones waited on outside
+    # their doomed directories: parked there they have left ...
+    my %waited = map { ($_ => 1) } map { $waits->($_) } keys %pending;
+    my @out = grep { $pending{$_} && $park_in && defined $park_in->{$_} && !$inside->($park_in->{$_}, $_) }
+              sort keys %waited;
+    if (@out) { $park->($_) for @out; next }
     # ... or, with only tree or $after waits left, let the server judge them
     push @steps, map { [$_, undef] } sort keys %pending;
     %pending = ();

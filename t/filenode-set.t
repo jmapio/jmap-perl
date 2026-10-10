@@ -653,5 +653,41 @@ for my $flag (0, 1) {
 my (undef, undef, undef, $lateNot) = $db->update_filenodes({}, sub { $_[0] }, { late_destroy => [ 'Lgonealready' ] });
 is_deeply($lateNot, { Lgonealready => { type => 'notFound' } }, 'a late destroy of a node already gone is notFound');
 
+# two replaces, each displacing the other's directory (fix round 3, N2)
+for my $flag (0, 1) {
+  my $n = "R11$flag";
+  my $x = mk(P => { parentId => $home, name => $n }, h1 => { parentId => '#P', name => 'h1' }, h2 => { parentId => '#P', name => 'h2' },
+             B => { parentId => '#h1', name => 'b.txt', blobId => 'f-x' }, A => { parentId => '#h2', name => 'a.txt', blobId => 'f-y' });
+  $set = set(onExists => 'replace', ($flag ? (onDestroyRemoveChildren => JSON::true) : ()),
+             update => { $x->{A} => { parentId => $x->{P}, name => 'h1' }, $x->{B} => { parentId => $x->{P}, name => 'h2' } })->[1];
+  my $how = $flag ? 'with onDestroyRemoveChildren' : 'without onDestroyRemoveChildren';
+  ok(exists $set->{updated}{$x->{A}} && exists $set->{updated}{$x->{B}}, "two replaces of each other's directory, $how") or diag explain $set;
+  is_deeply([ sort @{ $set->{destroyed} || [] } ], [ sort @$x{qw(h1 h2)} ], 'the two directories are destroyed');
+  is(content("$R/$n/h1"), '7:text/x-y', 'A is at h1');
+  is(content("$R/$n/h2"), '8:text/plain', 'B is at h2');
+  ok(!grep({ m{^\Q$R/$n/\E.*~tmp~} } keys %tree), 'no temporary name is left');
+  my $g = get(@$x{qw(A B)});
+  is_deeply([ map { $g->{$x->{$_}}{name} } qw(A B) ], [ 'h1', 'h2' ], 'the mirror agrees');
+}
+
+# the safety net: whatever order the moves come in, a destroy never takes a
+# node that is still to move (order_moves forced to emit them as they come)
+{
+  no warnings 'redefine';
+  local *JMAP::FileNode::order_moves = sub { my ($m) = @_; return [ map { [$_, undef] } sort keys %$m ] };
+  my $x = mk(P => { parentId => $home, name => 'R12' }, h1 => { parentId => '#P', name => 'h1' }, h2 => { parentId => '#P', name => 'h2' },
+             B => { parentId => '#h1', name => 'b.txt', blobId => 'f-x' }, A => { parentId => '#h2', name => 'a.txt', blobId => 'f-y' });
+  @log = ();
+  $set = set(onExists => 'replace', onDestroyRemoveChildren => JSON::true,
+             update => { $x->{A} => { parentId => $x->{P}, name => 'h1' }, $x->{B} => { parentId => $x->{P}, name => 'h2' } })->[1];
+  my ($first) = sort @$x{qw(A B)};
+  is($set->{notUpdated}{$first}{type}, 'nodeHasChildren', 'the safety net refuses the first replace') or diag explain $set;
+  my @files = sort map { content($_) } grep { m{^\Q$R/R12/\E} && !$tree{$_}{isCollection} } keys %tree;
+  is_deeply(\@files, [ '7:text/x-y', '8:text/plain' ], 'neither A nor B is lost');
+  is(scalar(grep { m{^\Q$R/R12/\E.*\.txt\z|^\Q$R/R12/h[12]\z} && !$tree{$_}{isCollection} } keys %tree), 2, 'both files still exist')
+    or diag explain [ grep { m{R12} } keys %tree ];
+  ok(!grep({ m{^\Q$R/R12/\E.*~tmp~} } keys %tree), 'no temporary name is left');
+}
+
 ok(!$db->in_transaction(), 'no transaction left open');
 done_testing;
