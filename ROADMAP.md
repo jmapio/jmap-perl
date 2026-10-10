@@ -493,6 +493,23 @@ Follow-ups:
       keeps the timestamps is unverified), where the next sync shows the server's new values
 - [ ] `begin_superlock` is held across `shareWith` propagation to every descendant directory
       (one ACL request each), so a big share blocks the account's other writes meanwhile
+- [ ] Close the remaining check-then-write windows: send an RFC 4918 `If: <dest> (["etag"])`
+      on the `Overwrite: T` MOVE of a replace (a re-list happens first, but a holder can still
+      become a collection in between); and on servers with weak or no ETags, PROPFIND a file
+      before an unconditional DELETE or overwrite PUT (Cyrus's ETags are strong, so not hit there)
+- [ ] A replacing create whose holder vanished since the last listing gets `serverFail`;
+      retry once with `If-None-Match: *`
+- [ ] A pinned `modified` hides an external edit made in the same second as the rename;
+      also record the post-move ETag in the pin for files
+- [ ] Probe's `moveLeavesEmpty` step is not wrapped in `eval` (a dying user agent leaves its
+      scratch collections behind on each probe), and a failed Probe is not negative-cached
+      (one PROPFIND per Quota call or sync on an account whose `webdavURL` is not WebDAV)
+- [ ] ACL changes are read-modify-write with no precondition (Cyrus collection ETags don't
+      move on an ACL change): two concurrent editors can lose a grant; it is logged when seen
+- [ ] On Cyrus every ACL rewrite loses the owner's IMAP `s`/`p` rights (and the allowlisted
+      `admin` ACE)
+- [ ] Live-test `FileNode/copy` with a passthrough source or destination (only the routing is
+      tested today)
 - [ ] `sync-collection` with `sync-level: infinite` where a server supports it (one REPORT
       instead of one PROPFIND per collection)
 - [ ] Upstream a Net::DAVTalk XML parser fix for `xml:lang` (WebDAVTalk strips `xml:*`
