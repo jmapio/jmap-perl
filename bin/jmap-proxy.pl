@@ -674,6 +674,13 @@ sub run_backend_worker {
         my ($r) = $api->uploadFile($aid || $accountid, $utype, { file => $file });
         return ['upload', $r];
       }
+      if ($cmd eq 'filenode_put') {
+        my $file = $args->{file};
+        return ['filenode_put', { status => 404 }] unless $db->can('put_filenode_content');
+        my $bytes = do { local $/; open my $fh, '<:raw', $file or die "$file: $!"; <$fh> };
+        unlink $file;
+        return ['filenode_put', $db->put_filenode_content($args->{id}, $bytes, $args->{type})];
+      }
       if ($cmd eq 'download') {
         if ($db->can('proxy_blob')) {
           my ($dtype, $content) = $db->proxy_blob(
@@ -2161,6 +2168,56 @@ sub _copy_objects {
   else { $do_get->(undef) }
 }
 
+# Write a request body to a tempfile to avoid passing binary through the JSON
+# socketpair; the worker reads and unlinks it.
+sub _spool_body_to_temp {
+  my ($req) = @_;
+  my $tmp = File::Temp->new(DIR => "$datadir/tmp", UNLINK => 0);
+  binmode $tmp;
+  print $tmp $req->content;
+  close $tmp;
+  return $tmp->filename;
+}
+
+# draft-ietf-jmap-filenode S4: direct HTTP write of a file's content.
+sub do_filenode_write {
+  my ($httpd, $req) = @_;
+  my ($accountid, $id) = $req->url->path =~ m{^/filenode/([^/]+)/([^/]+)/?$}
+    or return invalid_request($req);
+  return $req->respond([415, 'unsupported media type', {}, 'PATCH is not supported'])
+    if uc $req->method eq 'PATCH';
+  return $req->respond([405, 'method not allowed', { Allow => 'PUT' }, 'method not allowed'])
+    unless uc $req->method eq 'PUT';
+
+  my $ctype = $req->headers->{'content-type'};
+  my $tmpfile = _spool_body_to_temp($req);
+
+  $httpd->stop_request();
+  _authenticate($req, $httpd, sub {
+    my ($auth_aid) = @_;
+    _check_account_access($auth_aid, $accountid, sub {
+      send_backend_request($accountid, 'filenode_put', { id => $id, file => $tmpfile, type => $ctype }, sub {
+        my $r = shift;
+        unlink $tmpfile;
+        return $req->respond([200, 'ok', { 'Content-Type' => 'application/json' },
+          $json->encode({ blobId => $r->{blobId}, size => $r->{size}, type => $r->{type} })])
+          if ref $r eq 'HASH' && ($r->{status} // 0) == 200;
+        my $st = ref $r eq 'HASH' ? ($r->{status} // 500) : 500;
+        $req->respond([$st, 'error', {}, "error $st"]);
+      }, sub {
+        unlink $tmpfile;
+        $req->respond([500, 'error', {}, 'write failed']);
+      });
+    }, sub {
+      unlink $tmpfile;
+      $req->respond([403, 'forbidden', {}, 'Forbidden']);
+    });
+  }, sub {
+    unlink $tmpfile;
+    _require_auth($req);
+  });
+}
+
 sub do_upload {
   my ($httpd, $req) = @_;
 
@@ -2170,13 +2227,7 @@ sub do_upload {
   return invalid_request($req) unless lc $req->method eq 'post';
 
   my $type    = $req->headers->{'content-type'} || 'application/octet-stream';
-  my $content = $req->content;
-
-  # Write upload content to tempfile to avoid passing binary through JSON socketpair
-  my $tmp = File::Temp->new(DIR => "$datadir/tmp", UNLINK => 0);
-  print $tmp $content;
-  close $tmp;
-  my $tmpfile = $tmp->filename;
+  my $tmpfile = _spool_body_to_temp($req);
 
   $httpd->stop_request();
   _authenticate($req, $httpd, sub {
@@ -4017,7 +4068,7 @@ sub do_oidc_userinfo {
 #
 
 my $port = $ENV{JMAP_PORT} || 9000;
-my $httpd = AnyEvent::HTTPD->new(port => $port);
+my $httpd = AnyEvent::HTTPD->new(port => $port, allowed_methods => [qw(GET HEAD POST PUT PATCH)]);
 
 $httpd->reg_cb(request => sub { $stat{http_requests}++ });
 
@@ -4028,6 +4079,7 @@ $httpd->reg_cb(
   '/jmap'             => \&do_jmap,
   '/upload'           => \&do_upload,
   '/raw'              => \&do_raw,
+  '/filenode'         => \&do_filenode_write,
   '/pdpa'             => \&do_pdpa,
   '/discover'         => \&do_discover,
   '/cb/oauth'         => \&do_cb_oauth,

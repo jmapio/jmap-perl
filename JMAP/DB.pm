@@ -413,6 +413,10 @@ sub get_blob {
   my $Self = shift;
   my $blobId = shift;
 
+  if ($blobId =~ /^d-/) {
+    return $Self->can('get_filenode_blob') ? $Self->get_filenode_blob($blobId) : ();
+  }
+
   return () unless $blobId =~ m/^([mf])-([^-]+)(?:-(.*))?/;
   my $source = $1;
   my $id = $2;

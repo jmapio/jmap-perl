@@ -249,4 +249,41 @@ ok($set->{created}{a2}, 'destroy-then-create of the same name in one /set') or d
 is_deeply($set->{destroyed}, [ $mk->{created}{a}{id} ], 'and the destroy is reported');
 jmap(['FileNode/set', { destroy => [ $set->{created}{a2}{id} ] }]);
 
+# --- downloads and direct writes (Task 7)
+my ($mkf) = @{ jmap(['FileNode/set', { create => { f => { parentId => $home->{id}, name => "$tag-dl.txt", blobId => $blob->{blobId} } } }]) };
+my $fid = $mkf->{created}{f}{id};
+my $fb = get1($fid)->{blobId};
+sub raw { $http->get("$ENV{JMAP_PROXY_URL}/raw/$user/$_[0]/x.txt?type=text/plain", { headers => { Authorization => $auth } }) }
+is(raw($fb)->{content}, 'uploaded', 'download a FileNode blob');
+
+my ($cp) = @{ jmap(['FileNode/set', { create => { c => { parentId => $home->{id}, name => "$tag-copy.txt", blobId => $fb } } }]) };
+ok($cp->{created}{c}, 'create a file from another FileNode blob') or diag explain $cp;
+is(raw(get1($cp->{created}{c}{id})->{blobId})->{content}, 'uploaded', 'with the same content');
+
+my $put = $http->request('PUT', "$ENV{JMAP_PROXY_URL}/filenode/$user/$fid",
+  { headers => { Authorization => $auth, 'Content-Type' => 'text/markdown; charset=utf-8' }, content => '# new' });
+is($put->{status}, 200, 'direct PUT') or diag $put->{content};
+my $pj = decode_json($put->{content});
+is($pj->{size}, 5, 'size');
+is($pj->{type}, 'text/markdown', 'type without parameters');
+isnt($pj->{blobId}, $fb, 'new blobId');
+is(get1($fid)->{blobId}, $pj->{blobId}, 'the node carries the new blobId');
+is(raw($pj->{blobId})->{content}, '# new', 'new content downloads');
+is(raw($fb)->{status}, 404, 'the old blob no longer exists');
+$dav->Put("$root/$tag-dl.txt", "behind", type => 'text/plain');
+is($http->request('PUT', "$ENV{JMAP_PROXY_URL}/filenode/$user/$fid", { headers => { Authorization => $auth }, content => 'x' })->{status}, 412,
+   'a change behind the mirror is 412');
+is($http->request('PUT', "$ENV{JMAP_PROXY_URL}/filenode/$user/$home->{id}", { headers => { Authorization => $auth }, content => 'x' })->{status}, 400,
+   'PUT to a directory is 400');
+is($http->request('PUT', "$ENV{JMAP_PROXY_URL}/filenode/$user/Lnosuchnode", { headers => { Authorization => $auth }, content => 'x' })->{status}, 404,
+   'PUT to an unknown id is 404');
+is($http->request('PATCH', "$ENV{JMAP_PROXY_URL}/filenode/$user/$fid", { headers => { Authorization => $auth }, content => 'x' })->{status}, 415,
+   'PATCH is 415');
+my $gp = $http->request('GET', "$ENV{JMAP_PROXY_URL}/filenode/$user/$fid", { headers => { Authorization => $auth } });
+is($gp->{status}, 405, 'GET is 405');
+is($gp->{headers}{allow}, 'PUT', 'with Allow: PUT');
+is($http->request('PUT', "$ENV{JMAP_PROXY_URL}/filenode/$user/$fid", { content => 'x' })->{status}, 401, 'unauthenticated is 401');
+force_sync();
+jmap(['FileNode/set', { destroy => [ $fid, $cp->{created}{c}{id} ] }]);
+
 done_testing;

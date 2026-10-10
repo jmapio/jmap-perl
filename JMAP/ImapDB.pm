@@ -1383,6 +1383,51 @@ sub _files_refresh_dir {
   return \%out;
 }
 
+# A FileNode "d-" blob: the file's content at the etag the blob id names.
+# Once the file changes the old id is gone (RFC 8620 blobs are immutable, so
+# it is a 404 rather than the new content).
+sub get_filenode_blob {
+  my ($Self, $blobId) = @_;
+  my ($nodeid, $etaghash) = JMAP::FileNode::parse_blob_id($blobId);
+  return () unless defined $nodeid;
+  $Self->begin();
+  my $row = $Self->filenode_row($nodeid);
+  $Self->commit();
+  return () unless $row && $row->{nodetype} eq 'file'
+                && JMAP::FileNode::blob_id($nodeid, $row->{etag}) eq $blobId;
+  my $res = $Self->backend_cmd('files_get', $row->{href}, if_match => $row->{etag});
+  return () unless $res->{status} == 200;   # 412: changed since -- that blob is gone
+  return ($row->{type} || $res->{type} || 'application/octet-stream', $res->{content});
+}
+
+# draft S4.1: a direct HTTP PUT replaces a file's content.  If-Match makes a
+# change made behind the mirror's back a 412 (the next sync updates the mirror).
+sub put_filenode_content {
+  my ($Self, $nodeid, $bytes, $type) = @_;
+  $Self->begin();
+  my $row = $Self->filenode_row($nodeid);
+  my $parent = $row && defined $row->{parentid} ? $Self->filenode_row($row->{parentid}) : undef;
+  $Self->commit();
+  return { status => 404 } unless $row;
+  return { status => 400 } unless $row->{nodetype} eq 'file';
+  # Cyrus lists a file with an empty privilege set (it reports none for
+  # members), which says nothing: only a non-empty set is enforced here, and
+  # otherwise the server decides (its 403 comes back as 403).
+  if (defined $row->{privs} && length $row->{privs}) {
+    my $r = JMAP::FileNode::rights([split ' ', $row->{privs}],
+                                   $parent && defined $parent->{privs} ? [split ' ', $parent->{privs}] : undef);
+    return { status => 403 } unless $r->{mayModifyContent};
+  }
+  $type = $row->{type} unless defined $type && length $type;
+  $type //= 'application/octet-stream';
+  $type =~ s/\s*;.*$//;
+  my $res = $Self->backend_cmd('files_put', $row->{href}, $bytes, type => $type, if_match => $row->{etag});
+  return { status => ($res->{status} == 412 ? 412 : $res->{status} == 403 ? 403 : 409) } unless $res->{status} =~ /^2/;
+  my $rows = $parent ? $Self->_files_refresh_dir($parent->{href}) : {};
+  my $new = $rows->{$row->{href}} or return { status => 409 };
+  return { status => 200, blobId => JMAP::FileNode::blob_id($new->{nodeid}, $new->{etag}), size => 0 + length($bytes), type => $type };
+}
+
 # --- FileNode/set writes (spec "Writes").  Every write goes to WebDAV
 # first and only then to the mirror, through dmake/ddirty so the change gets
 # a modseq: FileNode/changes sees it, and sync_files throws away a walk that
