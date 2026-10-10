@@ -62,7 +62,7 @@ sub parse_multistatus {
       my $prop = $ps->{"${D}prop"} || {};
       for my $key (keys %$prop) {
         my $val = $prop->{$key};
-        if    ($key eq "${D}getetag")            { ($e{etag} = _text($val) // '') =~ s/^(?:W\/)?"|"$//g }
+        if    ($key eq "${D}getetag")            { $e{etag} = _etag(_text($val)) }
         elsif ($key eq '{http://calendarserver.org/ns/}getctag') { $e{ctag} = _text($val) }
         elsif ($key eq "${D}getcontentlength")   { my $t = _text($val); $e{size} = (defined $t && length $t) ? $t + 0 : undef }
         elsif ($key eq "${D}getcontenttype")     { my $t = _text($val); $e{type} = (defined $t && length $t) ? $t : undef }
@@ -163,28 +163,41 @@ sub SyncCollection {
   return { entries => parse_multistatus($res->{content}), token => $tok };
 }
 
+# An entity tag as the mirror keeps it: unquoted, and a weak one keeps its
+# W/ prefix (RFC 7232 S2.3), so a conditional request can tell them apart.
+sub _etag {
+  my $raw = shift // '';
+  my ($weak, $tag) = $raw =~ m{^\s*(W/)?"(.*)"\s*\z}s ? ($1 // '', $2) : ('', $raw);
+  return length $tag ? "$weak$tag" : undef;
+}
+sub etag_is_weak { return (shift // '') =~ m{^W/} ? 1 : 0 }
+# If-Match uses the strong comparison (RFC 7232 S3.1), so a weak tag could
+# never match: such a request goes out unconditional rather than 412.
+sub _if_match {
+  my $etag = shift;
+  return () unless defined $etag && length $etag && !etag_is_weak($etag);
+  return ('If-Match' => qq{"$etag"});
+}
+
 sub Get {
   my ($Self, $path, %o) = @_;
-  my $res = $Self->Raw('GET', $path, undef, ($o{if_match} ? ('If-Match' => qq{"$o{if_match}"}) : ()));
-  (my $etag = $res->{headers}{etag} // '') =~ s/^(?:W\/)?"|"$//g;
+  my $res = $Self->Raw('GET', $path, undef, _if_match($o{if_match}));
   return { status => $res->{status}, content => $res->{content},
-           type => $res->{headers}{'content-type'}, etag => $etag || undef };
+           type => $res->{headers}{'content-type'}, etag => _etag($res->{headers}{etag}) };
 }
 
 sub Put {
   my ($Self, $path, $bytes, %o) = @_;
-  my %h = ('Content-Type' => $o{type} || 'application/octet-stream');
-  $h{'If-Match'} = qq{"$o{if_match}"} if $o{if_match};
+  my %h = ('Content-Type' => $o{type} || 'application/octet-stream', _if_match($o{if_match}));
   $h{'If-None-Match'} = '*' if $o{if_none_match};
   my $res = $Self->Raw('PUT', $path, $bytes, %h);
-  (my $etag = $res->{headers}{etag} // '') =~ s/^(?:W\/)?"|"$//g;
-  return { status => $res->{status}, etag => $etag || undef };
+  return { status => $res->{status}, etag => _etag($res->{headers}{etag}) };
 }
 
 sub Mkcol  { $_[0]->Raw('MKCOL', "$_[1]/")->{status} }
 sub Delete {
   my ($Self, $path, %o) = @_;
-  return $Self->Raw('DELETE', $path, undef, ($o{if_match} ? ('If-Match' => qq{"$o{if_match}"}) : ()))->{status};
+  return $Self->Raw('DELETE', $path, undef, _if_match($o{if_match}))->{status};
 }
 sub _url   { my ($Self, $path) = @_; return $Self->request_url(encode_utf8($path)) }
 sub _dest  { my ($Self, $path) = @_; return $Self->_url($path) }

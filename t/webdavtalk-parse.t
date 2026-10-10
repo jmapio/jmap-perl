@@ -58,6 +58,25 @@ is($e->[1]{type}, 'text/plain', 'type');
 is($e->[1]{modified}, 1791596731, 'getlastmodified parsed');
 is_deeply([ sort @{ $e->[1]{privileges} } ], [qw(bind read write-content)], 'privileges');
 ok($e->[2]{missing}, 'top-level 404 status is a removal');
+
+# RFC 7232 S2.3: a weak entity tag keeps its W/ mark, so a conditional
+# request can tell it from a strong one; a strong one is unquoted
+is(JMAP::Sync::WebDAVTalk::_etag('"abc"'), 'abc', 'a strong ETag is unquoted');
+is(JMAP::Sync::WebDAVTalk::_etag('W/"abc"'), 'W/abc', 'a weak ETag keeps its mark');
+is(JMAP::Sync::WebDAVTalk::_etag(''), undef, 'an empty ETag is none');
+is(JMAP::Sync::WebDAVTalk::_etag(undef), undef, 'a missing ETag is none');
+ok(JMAP::Sync::WebDAVTalk::etag_is_weak('W/abc'), 'etag_is_weak');
+ok(!JMAP::Sync::WebDAVTalk::etag_is_weak('abc'), 'a strong one is not');
+my $weak = $parse->(<<'XML');
+<?xml version="1.0"?>
+<D:multistatus xmlns:D="DAV:">
+  <D:response>
+    <D:href>/dav/drive/user/user1/w.txt</D:href>
+    <D:propstat><D:prop><D:getetag>W/"wk"</D:getetag></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat>
+  </D:response>
+</D:multistatus>
+XML
+is($weak->[0]{etag}, 'W/wk', 'a listing keeps the weak mark');
 is($e->[2]{href}, "/dav/drive/user/user1/docs/caf\x{e9}.txt", 'UTF-8 percent-escapes decode to characters');
 
 # Cyrus answers a Depth-0 PROPFIND on a file with an empty multistatus.

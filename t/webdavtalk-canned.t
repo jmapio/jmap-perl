@@ -100,6 +100,25 @@ is($ok->{token}, 'tok1', 'sync 207 gives a token');
   ok((grep { /^DELETE \Q$d->{name}\E$/ } @{ $d->{log} }), 'scratch file still DELETEd');
 }
 
+# If-Match goes out only for a strong ETag (RFC 7232 S3.1: the strong
+# comparison, which a weak tag never passes), on GET, PUT and DELETE alike
+{
+  my %sent;
+  my $d = bless { log => [] }, 'Stub';
+  $d->{script} = sub { my ($m, $p, $b, %h) = @_; $sent{$m} = $h{'If-Match'}; return { status => 200, headers => { etag => 'W/"new"' }, content => '' } };
+  $d->Get('/f', if_match => 'abc');
+  $d->Put('/f', 'x', if_match => 'abc');
+  $d->Delete('/f', if_match => 'abc');
+  is_deeply(\%sent, { GET => '"abc"', PUT => '"abc"', DELETE => '"abc"' }, 'a strong ETag: If-Match on each');
+  %sent = ();
+  is($d->Get('/f', if_match => 'W/abc')->{etag}, 'W/new', 'a weak ETag in the answer keeps its mark');
+  $d->Put('/f', 'x', if_match => 'W/abc');
+  $d->Delete('/f', if_match => 'W/abc');
+  is_deeply(\%sent, { GET => undef, PUT => undef, DELETE => undef }, 'a weak ETag: no If-Match at all');
+  $d->Delete('/f');
+  is($sent{DELETE}, undef, 'no ETag: none');
+}
+
 # request URLs are UTF-8 percent-encoded
 {
   my $d = JMAP::Sync::WebDAVTalk->new(url => 'http://h/dav/');

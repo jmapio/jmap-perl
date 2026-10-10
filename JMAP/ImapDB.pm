@@ -1891,7 +1891,8 @@ sub _filenode_put_mismatch {
 }
 
 # DELETE the file a bad PUT left (If-Match: the ETag just listed, so a
-# file someone else wrote since is kept).  Cyrus answers a second DELETE
+# file someone else wrote since is kept; WebDAVTalk sends no If-Match for
+# a weak ETag, which could never match).  Cyrus answers a second DELETE
 # of the same name within a second 500, so a 500 is tried once more after
 # a pause.  Returns the status (0 if the request died); warns unless 2xx.
 sub _files_delete_bad_put {
@@ -1977,12 +1978,15 @@ sub destroy_filenodes {
       next;
     }
     # the mirror can be behind the server: a directory's members are
-    # checked again against the server's own listing before anything goes
+    # checked again against the server's own listing before anything goes,
+    # and a file is deleted only as the mirror knows it (If-Match: its
+    # ETag; WebDAVTalk sends none for a weak one), so content written
+    # since is kept and reported
     my $status = eval {
       $r->{nodetype} eq 'directory'
         ? $Self->_files_delete_collection($r->{href}, 0,
             $opts->{onDestroyRemoveChildren} ? undef : { map { $_->{href} => 1 } grep { $destroying{$_->{nodeid}} } values %row })
-        : $Self->backend_cmd('files_delete', $r->{href});
+        : $Self->backend_cmd('files_delete', $r->{href}, if_match => $r->{etag});
     };
     unless (defined $status) {
       $notdestroyed{$id} = { type => 'serverFail', description => "DELETE: $@" };
@@ -1993,6 +1997,13 @@ sub destroy_filenodes {
       $notdestroyed{$id} = { type => 'nodeHasChildren', description => 'the server lists children the mirror did not have' };
       delete $destroying{$id};
       eval { $Self->_files_refresh_dir($r->{href}); 1 } or warn "destroy_filenodes: re-listing $r->{href}: $@";
+      next;
+    }
+    if ($status == 412) {   # the file is not what the mirror knows: show what it is
+      $notdestroyed{$id} = { type => 'serverFail', description => 'the file changed on the server since it was listed; the mirror now shows it' };
+      delete $destroying{$id};
+      eval { $Self->_files_refresh_dir($parent_href{$id}); 1 } or warn "destroy_filenodes: re-listing $parent_href{$id}: $@"
+        if defined $parent_href{$id};
       next;
     }
     unless ($status =~ /^2/ || $status == 404) {   # 404: already gone

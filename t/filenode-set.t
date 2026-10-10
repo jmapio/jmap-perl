@@ -358,6 +358,20 @@ $tree{"$R/empty2/unseen"} = { href => "$R/empty2/unseen", isCollection => 0, eta
 $set = set(onDestroyRemoveChildren => JSON::true, destroy => [ $emptyid ])->[1];
 is_deeply($set->{destroyed}, [ $emptyid ], 'an unseen child is deleted with its directory, and has no id to list');
 ok(!$tree{"$R/empty2/unseen"}, 'it is gone from the server');
+# a file is deleted as the mirror knows it: one written since (a new ETag) stays
+$set = set(create => { s => { parentId => $home, name => 'stale.txt', blobId => 'f-x' } })->[1];
+my $staleid = $set->{created}{s}{id};
+my $stale_blob = get($staleid)->{$staleid}{blobId};
+$tree{"$R/stale.txt"}{etag} = 'rewritten';
+$set = set(destroy => [ $staleid ])->[1];
+is($set->{notDestroyed}{$staleid}{type}, 'serverFail', 'a file changed since it was listed is not destroyed');
+like($set->{notDestroyed}{$staleid}{description}, qr/changed on the server/, 'and the error says so');
+ok($tree{"$R/stale.txt"}, 'the new content is still on the server');
+isnt(get($staleid)->{$staleid}{blobId}, $stale_blob, 'the parent was re-listed: the node carries the new blobId');
+$set = set(destroy => [ $staleid ])->[1];
+is_deeply($set->{destroyed}, [ $staleid ], 'destroyed once the mirror knows the ETag');
+ok(!$tree{"$R/stale.txt"}, 'and gone from the server');
+
 # onExists replace of a directory checks the server too
 $set = set(create => { e => { parentId => $home, name => 'empty3' } })->[1];
 $emptyid = $set->{created}{e}{id};
