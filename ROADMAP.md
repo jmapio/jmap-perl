@@ -481,6 +481,14 @@ Follow-ups:
 - [ ] PATCH writes on the direct-write URL (415 today)
 - [ ] Stream large blobs (download, PUT, cross-account copy) instead of holding them in memory;
       until then `JMAP_FILES_MAX_BYTES` (256 MiB) refuses bigger ones with a clear error
+- [ ] Serve the mirror immediately once it has been synced, and move the periodic file walk
+      to the backfill worker: today a FileNode request on a mirror older than 60 s walks the
+      whole tree before answering (one PROPFIND per collection), a cliff on a big drive after
+      idle; the walk belongs in the background, the request should answer from the mirror
+- [ ] Quota ids contain `:` (`files:octets`), outside the RFC 8620 S1.2 Id alphabet
+      (`A-Za-z0-9_-`); changing them makes clients refetch Quota
+- [ ] `begin_superlock` is held across `shareWith` propagation to every descendant directory
+      (one ACL request each), so a big share blocks the account's other writes meanwhile
 - [ ] `sync-collection` with `sync-level: infinite` where a server supports it (one REPORT
       instead of one PROPFIND per collection)
 - [ ] Upstream a Net::DAVTalk XML parser fix for `xml:lang` (WebDAVTalk strips `xml:*`

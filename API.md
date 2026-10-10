@@ -126,7 +126,8 @@ Creates and initialises a new account.
   "smtpPort":   587,
   "smtpSSL":    3,
   "caldavURL":  "https://dav.example.com",
-  "carddavURL": "https://dav.example.com"
+  "carddavURL": "https://dav.example.com",
+  "webdavURL":  "https://dav.example.com/dav/drive/user/alice/"
 }
 ```
 
@@ -145,6 +146,7 @@ Creates and initialises a new account.
 | `smtpSSL` | no | `0`=plain, `2`=TLS, `3`=STARTTLS. Default `3`. |
 | `caldavURL` | no | CalDAV base URL for calendar sync. |
 | `carddavURL` | no | CardDAV base URL for contacts sync. |
+| `webdavURL` | no | The account's WebDAV file home (a collection URL, e.g. Cyrus `#drive`: `https://host/dav/drive/user/alice/`). With it the account advertises `urn:ietf:params:jmap:filenode` once a probe of the server has worked; the first file walk runs in the background. |
 
 **Response 201**
 ```json
@@ -410,6 +412,7 @@ These endpoints handle the web-based sign-up and OAuth2 flows. They live on
 | Path | Description |
 |---|---|
 | `GET /` | Landing page and self-service sign-up form |
+| `POST /signup` | The sign-up form's target (form fields: `username`, `password`, `imapHost`, `imapPort`, `imapSSL`, `smtpHost`, `smtpPort`, `smtpSSL`, `caldavURL`, `carddavURL`, `webdavURL`, `force`); `webdavURL` is the WebDAV file home, as for `POST /api/accounts` |
 | `GET /accounts` | Authenticated account management page (add, edit, detach, delete accounts; manage tokens) |
 | `GET /cb/oauth` | OAuth2 callback — receives `code` from Google/Fastmail after authorisation |
 | `GET /.well-known/oauth-authorization-server` | RFC 8414 OAuth2 server metadata (for OIDC clients) |
