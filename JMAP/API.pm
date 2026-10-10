@@ -161,6 +161,49 @@ my %PARAM_SCHEMA = (
   },
 );
 
+# The properties a /get may ask for, for types whose property set is fixed by
+# its specification. RFC 8620 S5.1: "If an invalid property is requested, the
+# call MUST be rejected with an invalidArguments error."
+my %GET_PROPERTIES = (
+  'Mailbox/get' => [qw(id name parentId role sortOrder totalEmails unreadEmails
+                       totalThreads unreadThreads myRights isSubscribed)],
+  'Thread/get'  => [qw(id emailIds)],
+  'VacationResponse/get' => [qw(id isEnabled fromDate toDate subject textBody htmlBody)],
+  'Quota/get'   => [qw(id resourceType used hardLimit scope name types
+                       warnLimit softLimit description)],
+);
+
+# The FilterCondition properties each /query understands. RFC 8620 S5.5: a
+# filter the server cannot process is rejected with "unsupportedFilter".
+my @EMAIL_FILTER = qw(inMailbox inMailboxOtherThan before after minSize maxSize
+  allInThreadHaveKeyword someInThreadHaveKeyword noneInThreadHaveKeyword
+  hasKeyword notKeyword hasAttachment text from to cc bcc subject body header);
+my @MAILBOX_FILTER = qw(parentId name role hasAnyRole isSubscribed);
+my %FILTER_CONDITIONS = (
+  'Email/query'          => \@EMAIL_FILTER,
+  'Email/queryChanges'   => \@EMAIL_FILTER,
+  'SearchSnippet/get'    => \@EMAIL_FILTER,
+  'Mailbox/query'        => \@MAILBOX_FILTER,
+  'Mailbox/queryChanges' => \@MAILBOX_FILTER,
+);
+
+# Returns a description of the first problem in a filter tree, or undef.
+sub _filter_problem {
+  my ($filter, $known) = @_;
+  return "a filter must be an object" unless ref $filter eq 'HASH';
+  if (exists $filter->{operator}) {
+    return "unknown operator" unless ($filter->{operator} // '') =~ /^(?:AND|OR|NOT)$/;
+    return "conditions must be an array" unless ref $filter->{conditions} eq 'ARRAY';
+    for my $c (@{$filter->{conditions}}) {
+      my $why = _filter_problem($c, $known);
+      return $why if $why;
+    }
+    return undef;
+  }
+  my @unknown = grep { !$known->{$_} } sort keys %$filter;
+  return @unknown ? "unknown filter condition: @unknown" : undef;
+}
+
 # Validate a single value against a type spec
 sub _validate_type {
   my ($value, $type) = @_;
@@ -244,9 +287,15 @@ sub _validate_type {
 sub _validate_args {
   my ($command, $args) = @_;
   my $schema = $PARAM_SCHEMA{$command};
-  return () unless $schema; # no schema = no validation
+
+  # RFC 8620 S5.2/S5.6: a maxChanges the client gives "MUST be a positive
+  # integer greater than 0", for every /changes and /queryChanges.
+  if ($command =~ m{/(?:changes|queryChanges)$} && defined $args->{maxChanges}) {
+    return ('maxChanges') unless _validate_type($args->{maxChanges}, 'posint');
+  }
 
   my @bad;
+  return @bad unless $schema;
   for my $param (keys %$schema) {
     my $type = $schema->{$param};
     next if $type =~ /[\?!]$/ && !exists $args->{$param};
@@ -405,7 +454,36 @@ sub handle_request {
           $Self->push_results($tag, @items);
           next;
         }
-        if ($myargs->{ids}) {
+        if (my $conds = $FILTER_CONDITIONS{$command} and defined $myargs->{filter}) {
+          if (my $why = _filter_problem($myargs->{filter}, { map { $_ => 1 } @$conds })) {
+            $Self->push_results($tag, ['error', { type => 'unsupportedFilter', description => $why }]);
+            next;
+          }
+        }
+        # RFC 8620 S5.5: a collation not in the session's collationAlgorithms
+        # (which lists none) is "unsupportedSort".
+        if ($command =~ m{/query(?:Changes)?$} && ref $myargs->{sort} eq 'ARRAY'
+            and my ($c) = grep { ref $_ eq 'HASH' && defined $_->{collation} } @{$myargs->{sort}}) {
+          $Self->push_results($tag, ['error', { type => 'unsupportedSort',
+            description => "unsupported collation $c->{collation}" }]);
+          next;
+        }
+        if (my $known = $GET_PROPERTIES{$command} and ref $myargs->{properties} eq 'ARRAY') {
+          my %known = map { $_ => 1 } @$known;
+          if (my @unknown = grep { !$known{$_} } @{$myargs->{properties}}) {
+            $Self->push_results($tag, ['error', {
+              type => 'invalidArguments', arguments => ['properties'],
+              description => 'unknown properties: ' . join(', ', @unknown),
+            }]);
+            next;
+          }
+        }
+        # RFC 8620 S5.1: a /get's ids is "Id[]|null"
+        if ($command =~ m{/get$} && defined $myargs->{ids} && ref $myargs->{ids} ne 'ARRAY') {
+          $Self->push_results($tag, ['error', { type => 'invalidArguments', arguments => ['ids'] }]);
+          next;
+        }
+        if (ref $myargs->{ids} eq 'ARRAY') {
           my @list = @{$myargs->{ids}};
           if (@list > 4) {
             my $len = @list;
@@ -414,7 +492,7 @@ sub handle_request {
           }
           $logbit .= " [" . join(",", @list) . "]";
         }
-        if ($myargs->{properties}) {
+        if (ref $myargs->{properties} eq 'ARRAY') {
           my @list = @{$myargs->{properties}};
           if (@list > 4) {
             my $len = @list;
@@ -428,6 +506,14 @@ sub handle_request {
         if ($@) {
           warn "JMAP METHOD ERROR $command ($tag): $@\n";
           @items = ['error', { type => "serverError", message => "$@" }];
+        }
+        # RFC 8620 S5.5/S5.6: the response carries no echo of filter or sort,
+        # and "total" only "if, and only if, calculateTotal" was true.
+        for my $item (@items) {
+          next unless ref $item eq 'ARRAY' && ($item->[0] // '') =~ m{/query(?:Changes)?$}
+                      && ref $item->[1] eq 'HASH';
+          delete @{$item->[1]}{qw(filter sort collapseThreads)};
+          delete $item->[1]{total} unless $myargs->{calculateTotal};
         }
         if ($Self->{db}->in_transaction()) {
           warn "JMAP STALE TRANSACTION after $command ($tag) - rolling back\n";

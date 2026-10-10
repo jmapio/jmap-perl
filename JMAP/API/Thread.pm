@@ -36,9 +36,14 @@ sub api_Thread_get {
       next;
     }
     my $jdata = $json->decode($data);
+    # RFC 8621 S3: "sorted by the receivedAt date of the Email, oldest first",
+    # ties broken stably (by id).
+    my %date = map { $_->{msgid} => $_->{internaldate} // 0 }
+               @{$Self->{db}->dget('jmessages', { thrid => $thrid, active => 1 }, 'msgid,internaldate')};
+    my @ids = sort { ($date{$a} // 0) <=> ($date{$b} // 0) || $a cmp $b } @$jdata;
     push @list, {
       id => "$thrid",
-      emailIds => [ map { "$_" } @$jdata ],
+      emailIds => [ map { "$_" } @ids ],
     };
   }
 

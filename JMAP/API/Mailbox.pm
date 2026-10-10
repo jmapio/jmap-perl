@@ -1,5 +1,6 @@
 package JMAP::API;
 use strict;
+use feature qw(fc);
 use warnings;
 
 use JSON::XS;
@@ -19,7 +20,8 @@ sub _makefullnames {
   foreach my $id (keys %idmap) {
     my $item = $idmap{$id};
     my @name;
-    while ($item) {
+    my %seen;
+    while ($item && !$seen{$item->{jmailboxid}}++) {
       unshift @name, $item->{name};
       $item = $idmap{$item->{parentId}||''};
     }
@@ -132,8 +134,10 @@ sub _mailbox_match {
   }
 
   if (exists $filter->{name}) {
+    # RFC 8621 S2.3: "The Mailbox name contains the given string"
     return 0 unless defined $item->{name};
-    return 0 unless lc($item->{name}) eq lc($filter->{name});
+    my $name = eval { Encode::decode_utf8($item->{name}) } // $item->{name};
+    return 0 unless index(fc($name), fc($filter->{name} // '')) >= 0;
   }
 
   if (exists $filter->{role}) {
@@ -155,17 +159,19 @@ sub _mailbox_filter {
   my @matched = grep { $Self->_mailbox_match($_, $filter) } @$data;
   return \@matched unless $filter_as_tree;
 
-  # Include all ancestors of matched mailboxes
-  my %idmap  = map { $_->{jmailboxid} => $_ } @$data;
-  my %wanted = map { $_->{jmailboxid} => 1 } @matched;
-  for my $item (@matched) {
-    my $pid = $item->{parentId};
-    while ($pid && !$wanted{$pid} && $idmap{$pid}) {
-      $wanted{$pid} = 1;
-      $pid = $idmap{$pid}{parentId};
+  # RFC 8621 S2.3: "a Mailbox is only included in the query if all its
+  # ancestors are also included in the query according to the filter."
+  my %idmap   = map { $_->{jmailboxid} => $_ } @$data;
+  my %matched = map { $_->{jmailboxid} => 1 } @matched;
+  my @result;
+  ITEM: for my $item (@matched) {
+    my %seen;
+    for (my $pid = $item->{parentId}; $pid && !$seen{$pid}++; $pid = $idmap{$pid}{parentId}) {
+      next ITEM unless $matched{$pid} && $idmap{$pid};
     }
+    push @result, $item;
   }
-  return [ grep { $wanted{$_->{jmailboxid}} } @$data ];
+  return \@result;
 }
 
 # Re-order a flat sorted list so each parent appears immediately before its children
@@ -524,6 +530,39 @@ sub api_Mailbox_queryChanges {
   }];
 }
 
+# RFC 8621 S2: a role is a use attribute from the IANA "IMAP Mailbox Name
+# Attributes" registry, lowercased, or "inbox".
+my %MAILBOX_ROLES = map { $_ => 1 } qw(
+  inbox all archive drafts flagged important junk sent trash snoozed scheduled memos
+);
+
+# The invalid properties of a Mailbox create or update; $roles maps each role
+# in use to the mailbox holding it.
+sub _mailbox_bad_props {
+  my ($mailbox, $jid, $roles) = @_;
+  my @bad;
+  if (exists $mailbox->{name} || !defined $jid) {
+    my $name = $mailbox->{name};
+    # "at least 1 character", and maxSizeMailboxName (490) is in octets
+    push @bad, 'name' unless defined $name && !ref $name && length $name
+                             && length(Encode::encode_utf8($name)) <= 490;
+  }
+  if (exists $mailbox->{sortOrder}) {
+    my $so = $mailbox->{sortOrder};
+    # "0 <= sortOrder < 2^31"
+    push @bad, 'sortOrder'
+      unless defined $so && !ref $so && "$so" =~ /^\d+$/ && $so < 2**31;
+  }
+  if (defined $mailbox->{role}) {
+    my $role = $mailbox->{role};
+    # a registered role, and "no two Mailboxes ... with the same role"
+    push @bad, 'role'
+      if ref $role || !$MAILBOX_ROLES{$role}
+         || ($roles->{$role} && (!defined $jid || $roles->{$role} ne $jid));
+  }
+  return @bad;
+}
+
 sub api_Mailbox_set {
   my $Self = shift;
   my $args = shift;
@@ -557,11 +596,83 @@ sub api_Mailbox_set {
   return $Self->_transError(['error', {type => 'stateMismatch', oldState => $oldState, newState => $oldState}])
     if defined $args->{ifInState} and $args->{ifInState} ne $oldState;
 
+  # Reject invalid name, sortOrder and role before anything reaches IMAP.
+  $Self->begin();
+  my $existing = $Self->{db}->dget('jmailboxes', { active => 1 }, 'jmailboxid,role,name,parentId');
+  $Self->commit();
+  my %roles = map { $_->{role} => $_->{jmailboxid} } grep { $_->{role} } @$existing;
+  my %byid  = map { $_->{jmailboxid} => $_ } @$existing;
+  # RFC 8621 S2: "There MUST NOT be two sibling Mailboxes with both the same
+  # parent and the same name."  Names are stored as UTF-8 octets.
+  my %sibling;
+  $sibling{$_->{parentId} // ''}{$_->{name} // ''} = $_->{jmailboxid} for @$existing;
+  my $sibling_clash = sub {
+    my ($jid, $name, $parent) = @_;
+    my $holder = $sibling{$parent // ''}{Encode::encode_utf8($name)};
+    return $holder && (!defined $jid || $holder ne $jid);
+  };
+  my (%badCreate, %badUpdate);
+  $create = { %$create };
+  for my $cid (sort keys %$create) {
+    next unless ref $create->{$cid} eq 'HASH';
+    my @bad = _mailbox_bad_props($create->{$cid}, undef, \%roles);
+    push @bad, 'name' if !grep({ $_ eq 'name' } @bad)
+      && $sibling_clash->(undef, $create->{$cid}{name}, $Self->idmap($create->{$cid}{parentId}));
+    if (@bad) {
+      $badCreate{$cid} = { type => 'invalidProperties', properties => \@bad };
+      delete $create->{$cid};
+    }
+    elsif (defined $create->{$cid}{role}) {
+      $roles{$create->{$cid}{role}} = "#$cid";
+    }
+  }
+
   ($created, $notCreated) = $Self->{db}->create_mailboxes($create, sub { $Self->idmap(shift) });
   $Self->setid($_, $created->{$_}{id}) for keys %$created;
+  for my $cid (keys %$created) {
+    my $role = $create->{$cid}{role} // next;
+    $roles{$role} = $created->{$cid}{id};
+  }
+
   $Self->_resolve_patch($update, 'api_Mailbox_get');
+  $update = { %$update };
+  for my $jid (sort keys %$update) {
+    next unless ref $update->{$jid} eq 'HASH';
+    my $id = $Self->idmap($jid);
+    my @bad = _mailbox_bad_props($update->{$jid}, $id, \%roles);
+    my $patch = $update->{$jid};
+    if (($byid{$id} && (exists $patch->{name} || exists $patch->{parentId}))
+        && !grep { $_ eq 'name' } @bad) {
+      my $name   = exists $patch->{name} ? $patch->{name}
+                 : Encode::decode_utf8($byid{$id}{name} // '');
+      my $parent = exists $patch->{parentId} ? $Self->idmap($patch->{parentId})
+                 : $byid{$id}{parentId};
+      push @bad, 'name' if $sibling_clash->($id, $name, $parent);
+    }
+    if (@bad) {
+      $badUpdate{$jid} = { type => 'invalidProperties', properties => \@bad };
+      delete $update->{$jid};
+    }
+  }
+
   ($updated, $notUpdated) = $Self->{db}->update_mailboxes($update, sub { $Self->idmap(shift) });
   ($destroyed, $notDestroyed) = $Self->{db}->destroy_mailboxes($destroy, $args->{onDestroyRemoveEmails});
+  $notCreated = { %{$notCreated || {}}, %badCreate };
+  $notUpdated = { %{$notUpdated || {}}, %badUpdate };
+
+  # RFC 8620 S5.3: created carries every property the server set or
+  # defaulted, which here is everything the client did not send.
+  if ($created && %$created) {
+    my ($get) = $Self->api_Mailbox_get({ ids => [ map { $_->{id} } values %$created ] });
+    my %byid = map { $_->{id} => $_ } @{$get->[1]{list} || []};
+    for my $cid (keys %$created) {
+      my $full = $byid{$created->{$cid}{id}} or next;
+      for my $prop (keys %$full) {
+        $created->{$cid}{$prop} = $full->{$prop}
+          unless exists $create->{$cid}{$prop} && $prop ne 'id';
+      }
+    }
+  }
 
   $Self->begin();
   $user = $Self->{db}->get_user();

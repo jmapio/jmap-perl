@@ -256,18 +256,18 @@ sub get_backend {
 sub _make_json_io {
   my ($sock) = @_;
   my $jenc = JSON::XS->new->utf8->canonical;
-  my $buf = '';
 
+  # incr_parse keeps its own buffer: feed it each chunk exactly once (void
+  # context appends without parsing), then pull one object at a time. A
+  # message bigger than one read used to be appended twice, fail to parse
+  # inside an eval, and leave the worker reading forever.
   my $read_json = sub {
     while (1) {
-      my $obj = eval { $jenc->incr_parse($buf) };
-      if ($obj) {
-        $buf = $jenc->incr_text // '';
-        $jenc->incr_reset;
-        return $obj;
-      }
-      my $n = sysread($sock, $buf, 65536, length($buf));
+      my $obj = $jenc->incr_parse;
+      return $obj if defined $obj;
+      my $n = sysread($sock, my $chunk, 65536);
       return undef unless $n;
+      $jenc->incr_parse($chunk);
     }
   };
 
@@ -1837,13 +1837,21 @@ sub _copy_emails {
     }, $tag]);
   }
 
-  my %cid_to_src = map { $_ => $create->{$_}{id} } keys %$create;
+  # RFC 8621 S4.7: besides the id, only mailboxIds, keywords and receivedAt
+  # may be set on a copy; anything else is invalidProperties.
+  my %bad_create;
+  for my $cid (keys %$create) {
+    my @bad = grep { !/^(?:id|mailboxIds|keywords|receivedAt)$/ } keys %{$create->{$cid} || {}};
+    $bad_create{$cid} = { type => 'invalidProperties', properties => [sort @bad] } if @bad;
+  }
+  my %cid_to_src = map { $_ => $create->{$_}{id} } grep { !$bad_create{$_} } keys %$create;
 
   my $do_fetch = sub {
     my @blob_ids = map { "m-$_" } values %cid_to_src;
     send_backend_request($from_aid, 'fetch_blobs', { ids => \@blob_ids }, sub {
       my $blob_map = shift;
       my (%not_created, %cid_blob);
+      %not_created = %bad_create;
 
       for my $cid (keys %cid_to_src) {
         my $bid = "m-$cid_to_src{$cid}";
@@ -1905,8 +1913,13 @@ sub _copy_emails {
 
           if ($args->{onSuccessDestroyOriginal} && %created) {
             my @del = map { $cid_to_src{$_} } keys %created;
+            # RFC 8620 S5.4: the implicit Foo/set gets destroyFromIfInState as
+            # its ifInState, and its response carries the /copy's call id.
+            my %set_args = (accountId => $from_aid, destroy => \@del);
+            $set_args{ifInState} = $args->{destroyFromIfInState}
+              if defined $args->{destroyFromIfInState};
             send_backend_request($from_aid, 'jmap', {
-              methodCalls => [['Email/set', { destroy => \@del }, 'd']],
+              methodCalls => [['Email/set', \%set_args, 'd']],
               using       => ['urn:ietf:params:jmap:core', 'urn:ietf:params:jmap:mail'],
             }, sub {
               my $r = shift;
@@ -1917,7 +1930,8 @@ sub _copy_emails {
                 newState    => undef,
                 destroyed   => [],
                 notDestroyed => {},
-              }, "#$tag"];
+              }];
+              $set_resp = [$set_resp->[0], $set_resp->[1], $tag];
               $cb->([$copy_resp, $set_resp]);
             }, sub { $cb->([$copy_resp]) });
           } else {
@@ -2040,22 +2054,32 @@ sub _copy_objects {
           $created{$_}    = $sr->{created}{$_}    for keys %{$sr->{created}    || {}};
           $not_created{$_} = $sr->{notCreated}{$_} for keys %{$sr->{notCreated} || {}};
 
-          if ($args->{onSuccessDestroyOriginal} && %created) {
-            my @del = map { $cid_to_src_id{$_} } keys %created;
-            send_backend_request($from_aid, 'jmap', {
-              methodCalls => [["$type/set", { destroy => \@del }, 'd']],
-              using       => ['urn:ietf:params:jmap:core', $cap],
-            }, sub {1}, sub {1});
-          }
-
-          $cb->([$type . '/copy', {
+          my $copy_resp = [$type . '/copy', {
             fromAccountId => $from_aid,
             accountId     => $to_aid,
             oldState      => $pre_set_state // $old_state // $sr->{oldState},
             newState      => $sr->{newState},
             created       => %created     ? \%created     : undef,
             notCreated    => %not_created ? \%not_created : undef,
-          }, $tag]);
+          }, $tag];
+
+          return $cb->($copy_resp)
+            unless $args->{onSuccessDestroyOriginal} && %created;
+
+          # RFC 8620 S5.4: the implicit Foo/set is answered too, with the
+          # /copy's call id, and takes destroyFromIfInState as its ifInState.
+          my @del = map { $cid_to_src_id{$_} } keys %created;
+          my %set_args = (accountId => $from_aid, destroy => \@del);
+          $set_args{ifInState} = $args->{destroyFromIfInState}
+            if defined $args->{destroyFromIfInState};
+          send_backend_request($from_aid, 'jmap', {
+            methodCalls => [["$type/set", \%set_args, 'd']],
+            using       => ['urn:ietf:params:jmap:core', $cap],
+          }, sub {
+            my ($set_resp) = grep { $_->[2] eq 'd' } @{$_[0]{methodResponses} || []};
+            return $cb->($copy_resp) unless $set_resp;
+            $cb->([$copy_resp, [$set_resp->[0], $set_resp->[1], $tag]]);
+          }, sub { $cb->($copy_resp) });
         }, sub { $cb->(['error', { type => 'serverError', message => $_[0] }, $tag]) });
       };
 
@@ -2136,6 +2160,9 @@ sub do_raw {
     _check_account_access($auth_aid, $accountid, sub {
       send_backend_request($accountid, 'download', { blobId => $blobid, name => $name, type => $type }, sub {
         my $result = shift;
+        # RFC 8620 S6.2: no blob, no data -- that is not a 200.
+        return $req->respond([404, 'not found', {}, 'not found'])
+          unless ref $result eq 'ARRAY' && defined $result->[1];
         my $ct = $result->[0] || 'application/octet-stream';
         (my $enc_name = $name) =~ s/([^\w.\-])/sprintf('%%%02X', ord($1))/ge;
         $req->respond([200, 'ok', {

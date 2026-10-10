@@ -6,6 +6,7 @@ use warnings;
 package JMAP::Sync::Common;
 
 use Data::UUID::LibUUID;
+use JSON ();
 use Mail::IMAPTalk;
 use Email::Simple;
 use Email::Sender::Simple qw(sendmail);
@@ -292,7 +293,9 @@ sub update_event_occurrence {
     }
     $overrides{$recurrenceId} = \%override;
   } else {
-    $overrides{$recurrenceId} = undef;  # exclude this occurrence (iCal EXDATE)
+    # exclude this occurrence (iCal EXDATE).  jscalendarbis writes that as
+    # {excluded: true}; an undef override was serialized as an RDATE.
+    $overrides{$recurrenceId} = { excluded => JSON::true };
   }
 
   my %args = (recurrenceOverrides => \%overrides);

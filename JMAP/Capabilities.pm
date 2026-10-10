@@ -40,14 +40,17 @@ sub imap_account_capabilities {
       maxCalendarsPerEvent     => 1,
       minDateTime              => '1970-01-01T00:00:00Z',
       maxDateTime              => '2099-12-31T23:59:59Z',
-      maxExpandedQueryDuration => 'P2Y',
+      # a JSCalendar Duration has no year unit (RFC 8984 S1.4.6)
+      maxExpandedQueryDuration => 'P730D',
       maxParticipantsPerEvent  => undef,
       mayCreateCalendar        => JSON::true,
     },
     'urn:ietf:params:jmap:principals' => {
       currentUserPrincipalId => 'me',
     },
-    'urn:ietf:params:jmap:principals:availability' => {}) : ()),
+    'urn:ietf:params:jmap:principals:availability' => {
+      maxAvailabilityDuration => 'P366D',
+    }) : ()),
     ($conf->{carddavURL} ? ('urn:ietf:params:jmap:contacts' => {
       maxAddressBooksPerCard => 1,
       mayCreateAddressBook   => JSON::true,

@@ -476,8 +476,9 @@ sub api_VacationResponse_set {
   my $update  = $args->{update}  // {};
   my $destroy = $args->{destroy} // [];
 
-  my %notCreated   = map { $_ => { type => 'forbidden' } } keys %$create;
-  my %notDestroyed = map { $_ => { type => 'forbidden' } } @$destroy;
+  # RFC 8620 S5.3: "singleton" -- there is exactly one VacationResponse.
+  my %notCreated   = map { $_ => { type => 'singleton' } } keys %$create;
+  my %notDestroyed = map { $_ => { type => 'singleton' } } @$destroy;
   my (%updated, %notUpdated);
 
   if (my $patch = $update->{singleton}) {

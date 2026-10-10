@@ -374,15 +374,9 @@ sub api_Email_query {
 
   my $newQueryState = "$user->{jstateEmail}";
 
-  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['position', 'anchor']}])
-    if (exists $args->{position} and exists $args->{anchor});
-  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['anchor', 'anchorOffset']}])
-    if (exists $args->{anchor} and not exists $args->{anchorOffset});
-  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['anchor', 'anchorOffset']}])
-    if (not exists $args->{anchor} and exists $args->{anchorOffset});
-
+  # RFC 8620 S5.5: with an anchor, position "MUST be ignored" and anchorOffset
+  # defaults to 0; without one, anchorOffset is ignored.
   my $start = $args->{position} || 0;
-  return $Self->_transError(['error', {type => 'invalidArguments',  arguments => ['position']}]) if $start < 0;
 
   my %valid_sort = map { $_ => 1 } qw(
     id receivedAt sentAt size subject from to
@@ -410,18 +404,17 @@ sub api_Email_query {
     collapseThreads => $args->{collapseThreads} ? 1 : 0,
   }, $newQueryState, [map { $_->{msgid} } @$data]);
 
-  if ($args->{anchor}) {
-    # need to calculate the position
-    for (0..$#$data) {
-      next unless $data->[$_]{msgid} eq $args->{anchor};
-      $start = $_ + $args->{anchorOffset};
-      $start = 0 if $start < 0;
-      goto gotit;
-    }
-    return $Self->_transError(['error', {type => 'anchorNotFound'}]);
+  if (defined $args->{anchor}) {
+    my ($index) = grep { $data->[$_]{msgid} eq $args->{anchor} } 0..$#$data;
+    return $Self->_transError(['error', {type => 'anchorNotFound'}]) unless defined $index;
+    $start = $index + ($args->{anchorOffset} // 0);
+    $start = 0 if $start < 0;
   }
-
-gotit:
+  elsif ($start < 0) {
+    # a negative position counts back from the end, clamped to 0
+    $start += @$data;
+    $start = 0 if $start < 0;
+  }
 
   my $end = $args->{limit} ? $start + $args->{limit} - 1 : $#$data;
   $end = $#$data if $end > $#$data;
@@ -442,6 +435,24 @@ gotit:
   }];
 
   return @res;
+}
+
+# Whether an Email query's filter or sort depends on a property a message can
+# change in place (keywords, mailboxIds).
+my %MUTABLE_EMAIL_CONDITION = map { $_ => 1 } qw(
+  inMailbox inMailboxOtherThan hasKeyword notKeyword allInThreadHaveKeyword
+  someInThreadHaveKeyword noneInThreadHaveKeyword
+);
+sub _query_uses_mutable {
+  my ($filter, $sort) = @_;
+  return 1 if grep { ref $_ eq 'HASH' && ($_->{property} // '') =~ /Keyword$/ } @{$sort || []};
+  my @todo = ($filter);
+  while (my $f = shift @todo) {
+    next unless ref $f eq 'HASH';
+    push @todo, @{$f->{conditions} || []} if exists $f->{operator};
+    return 1 if grep { $MUTABLE_EMAIL_CONDITION{$_} } keys %$f;
+  }
+  return 0;
 }
 
 sub api_Email_queryChanges {
@@ -482,16 +493,26 @@ sub api_Email_queryChanges {
   my %new_idx;
   $new_idx{$new_ids[$_]} = $_ for 0..$#new_ids;
 
-  my @removed = grep { !exists $new_idx{$_} } @$old_ids;
+  # RFC 8620 S5.6: "If the filter or sort includes a mutable property, the
+  # server MUST include all objects in the current results for which this
+  # property may have changed" -- in removed, and so reinserted by added.
+  my %changed;
+  if (_query_uses_mutable($args->{filter}, $args->{sort})) {
+    %changed = map { $_->{msgid} => 1 }
+               grep { ($_->{jmodseq} // 0) > $args->{sinceQueryState} } @$data;
+  }
+
   my %old_set  = map { $_ => 1 } @$old_ids;
+  my @removed = grep { !exists $new_idx{$_} } @$old_ids;
+  push @removed, grep { $changed{$_} } @new_ids;
   my @added;
   for my $i (0..$#new_ids) {
     push @added, { id => "$new_ids[$i]", index => $i }
-      unless exists $old_set{$new_ids[$i]};
+      if !exists $old_set{$new_ids[$i]} || $changed{$new_ids[$i]};
   }
 
   if ($args->{maxChanges} and (@removed + @added) > $args->{maxChanges}) {
-    return $Self->_transError(['error', {type => 'cannotCalculateChanges', newQueryState => $newQueryState}]);
+    return $Self->_transError(['error', {type => 'tooManyChanges', newQueryState => $newQueryState}]);
   }
 
   $Self->{db}->save_query('Email', $qparams, $newQueryState, \@new_ids);
@@ -527,6 +548,12 @@ sub api_Email_get {
     messageId inReplyTo references sender from to cc bcc replyTo
     subject sentAt hasAttachment preview bodyValues textBody htmlBody attachments
   );
+
+  # RFC 8621 S4.2: a header form forbidden for its field is invalidArguments.
+  if (my @bad = _bad_email_props($args)) {
+    return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['properties'],
+      description => "unknown or invalid properties: @bad"}]);
+  }
 
   # If properties not specified, use defaults
   unless ($args->{properties}) {
@@ -651,69 +678,8 @@ sub api_Email_get {
         $item->{headers} = $data->{headers};
       }
       elsif ($args->{properties}) {
-        my %wanted;
-        foreach my $prop (@{$args->{properties}}) {
-          next unless $prop =~ m/^header:([^:]+)(.*)/;
-          my $headername = lc $1;
-          my $rest = $2;
-
-          # Validate suffix format: optional :as{Type} then optional :all
-          if ($rest ne '' && $rest !~ /^(:(asText|asAddresses|asGroupedAddresses|asMessageIds|asDate|asURLs|asRaw))?(:(all))?$/) {
-            return $Self->_transError(['error', { type => 'invalidArguments', arguments => [$prop] }]);
-          }
-
-          my @values = map { $_->{value} // $_->{Value} } grep { lc($_->{name} // $_->{Name} // '') eq $headername } @{$data->{headers}||[]};
-          unless (@values) {
-            # :all returns empty array, non-:all returns null
-            $item->{$prop} = ($rest =~ /:all/) ? [] : undef;
-            next;
-          }
-          if ($rest =~ s/:all$//) {
-            if ($rest eq ':asText') {
-              $item->{$prop} = [map { Data::JSEmail::asText($_) } @values ];
-            }
-            elsif ($rest eq ':asAddresses') {
-              $item->{$prop} = [map { Data::JSEmail::asAddresses($_) } @values ];
-            }
-            elsif ($rest eq ':asGroupedAddresses') {
-              $item->{$prop} = [map { Data::JSEmail::asGroupedAddresses($_) } @values ];
-            }
-            elsif ($rest eq ':asMessageIds') {
-              $item->{$prop} = [map { Data::JSEmail::asMessageIds($_) } @values ];
-            }
-            elsif ($rest eq ':asDate') {
-              $item->{$prop} = [map { Data::JSEmail::asDate($_) } @values ];
-            }
-            elsif ($rest eq ':asURLs') {
-              $item->{$prop} = [map { Data::JSEmail::asURLs($_) } @values ];
-            }
-            else {  # :asRaw or nothing
-              $item->{$prop} = \@values;
-            }
-          }
-          else {
-            if ($rest eq ':asText') {
-              $item->{$prop} = Data::JSEmail::asText($values[-1]);
-            }
-            elsif ($rest eq ':asAddresses') {
-              $item->{$prop} = Data::JSEmail::asAddresses($values[-1]);
-            }
-            elsif ($rest eq ':asGroupedAddresses') {
-              $item->{$prop} = Data::JSEmail::asGroupedAddresses($values[-1]);
-            }
-            elsif ($rest eq ':asMessageIds') {
-              $item->{$prop} = Data::JSEmail::asMessageIds($values[-1]);
-            }
-            elsif ($rest eq ':asDate') {
-              $item->{$prop} = Data::JSEmail::asDate($values[-1]);
-            }
-            elsif ($rest eq ':asURLs') {
-              $item->{$prop} = Data::JSEmail::asURLs($values[-1]);
-            }
-            else {  # :asRaw or nothing
-              $item->{$prop} = $values[-1];
-            }
-          }
+        for my $prop (grep { /^header:/ } @{$args->{properties}}) {
+          $item->{$prop} = _header_prop_value($data->{headers}, $prop);
         }
       }
       if (_prop_wanted($args, 'attachments')) {
@@ -816,6 +782,75 @@ sub getRawBlob {
 
 # or this
 # Filter a single body part to only include requested properties
+# RFC 8621 S4.1.2: the header fields each parsed form may be used on. Any
+# field not defined in RFC 5322 or RFC 2369 may use every form.
+my %HEADER_FORM_FIELDS = (
+  asText             => [qw(subject comments keywords list-id)],
+  asAddresses        => [qw(from sender reply-to to cc bcc resent-from resent-sender
+                            resent-reply-to resent-to resent-cc resent-bcc)],
+  asMessageIds       => [qw(message-id in-reply-to references resent-message-id)],
+  asDate             => [qw(date resent-date)],
+  asURLs             => [qw(list-help list-unsubscribe list-subscribe list-post
+                            list-owner list-archive)],
+);
+$HEADER_FORM_FIELDS{asGroupedAddresses} = $HEADER_FORM_FIELDS{asAddresses};
+my %HEADER_DEFINED = map { $_ => 1 } qw(
+  date from sender reply-to to cc bcc message-id in-reply-to references subject
+  comments keywords resent-date resent-from resent-sender resent-to resent-cc
+  resent-bcc resent-message-id return-path received
+  list-help list-unsubscribe list-subscribe list-post list-owner list-archive
+);
+
+# Returns undef if a header:{name}[:as{form}][:all] property is valid.
+sub _header_prop_problem {
+  my $prop = shift;
+  return "bad header property"
+    unless $prop =~ /^header:([^:]+)(?::(as[A-Za-z]+))?(?::all)?$/;
+  my ($name, $form) = (lc $1, $2);
+  return undef if !defined $form || $form eq 'asRaw';
+  my $fields = $HEADER_FORM_FIELDS{$form} or return "unknown form $form";
+  return undef unless $HEADER_DEFINED{$name};
+  return undef if grep { $_ eq $name } @$fields;
+  return "$form is not allowed for $name";
+}
+
+# The value of a header:... property over a list of {name, value} headers.
+sub _header_prop_value {
+  my ($headers, $prop) = @_;
+  my (undef, $name, @mods) = split /:/, $prop;
+  my $all = @mods && $mods[-1] eq 'all';
+  pop @mods if $all;
+  my $form = $mods[0] // 'asRaw';
+  my @values = map { $_->{value} // $_->{Value} }
+               grep { lc($_->{name} // $_->{Name} // '') eq lc $name } @{$headers || []};
+  my $conv = $form eq 'asRaw' ? sub { $_[0] } : Data::JSEmail->can($form);
+  return [ map { $conv->($_) } @values ] if $all;
+  return @values ? $conv->($values[-1]) : undef;
+}
+
+# RFC 8621 S4.1 and S4.1.4: the Email and EmailBodyPart properties, besides
+# the header:{name} forms.
+my %EMAIL_PROPERTIES = map { $_ => 1 } qw(
+  id blobId threadId mailboxIds keywords size receivedAt headers messageId
+  inReplyTo references sender from to cc bcc replyTo subject sentAt
+  bodyStructure bodyValues textBody htmlBody attachments hasAttachment preview
+);
+my %BODY_PROPERTIES = map { $_ => 1 } qw(
+  partId blobId size headers name type charset disposition cid language
+  location subParts
+);
+
+# The requested properties and bodyProperties that are invalid (RFC 8620 S5.1).
+sub _bad_email_props {
+  my $args = shift;
+  my $bad = sub {
+    my ($known, $p) = @_;
+    return $p =~ /^header:/ ? _header_prop_problem($p) : !$known->{$p};
+  };
+  return (grep({ $bad->(\%EMAIL_PROPERTIES, $_) } @{$args->{properties} || []}),
+          grep({ $bad->(\%BODY_PROPERTIES, $_) } @{$args->{bodyProperties} || []}));
+}
+
 sub _filterBodyPart {
   my $data = shift;
   my $props = shift;
@@ -823,7 +858,13 @@ sub _filterBodyPart {
   my %res;
   my %want = map { $_ => 1 } @$props;
   for my $prop (@$props) {
-    $res{$prop} = $data->{$prop} if exists $data->{$prop};
+    if ($prop =~ /^header:/) {
+      # RFC 8621 S4.1.4: same syntax and semantics as on the Email
+      $res{$prop} = _header_prop_value($data->{headers}, $prop);
+    }
+    elsif (exists $data->{$prop}) {
+      $res{$prop} = $data->{$prop};
+    }
   }
   # subParts: array for multipart, null for leaf parts
   if ($want{subParts}) {
@@ -904,6 +945,25 @@ sub api_Email_changes {
   return @res;
 }
 
+# RFC 8621 S4.1.1: a keyword is 1-255 characters of %x21-%x7e, none of
+# ( ) { ] % * " \ -- and in the keywords object every value MUST be true.
+sub _keyword_ok {
+  my $k = shift;
+  return defined $k && $k =~ /^[\x21-\x7e]{1,255}$/ && $k !~ /[(){\]%*"\\]/;
+}
+sub _is_true {
+  my $v = shift;
+  return JSON::is_bool($v) && $v;
+}
+sub _keywords_ok {
+  my $kw = shift;
+  return 0 unless ref $kw eq 'HASH';
+  for my $k (keys %$kw) {
+    return 0 unless _keyword_ok($k) && _is_true($kw->{$k});
+  }
+  return 1;
+}
+
 sub api_Email_set {
   my $Self = shift;
   my $args = shift;
@@ -936,10 +996,35 @@ sub api_Email_set {
   return $Self->_transError(['error', {type => 'stateMismatch', oldState => $oldState, newState => $oldState}])
     if defined $args->{ifInState} and $args->{ifInState} ne $oldState;
 
+  # RFC 8621 S4.1.1: reject bad keywords before anything reaches the backend.
+  my (%badCreate, %badUpdate);
+  for my $cid (keys %$create) {
+    next unless ref $create->{$cid} eq 'HASH' && exists $create->{$cid}{keywords};
+    $badCreate{$cid} = delete $create->{$cid}
+      unless _keywords_ok($create->{$cid}{keywords});
+  }
+  for my $id (keys %$update) {
+    my $patch = $update->{$id};
+    next unless ref $patch eq 'HASH';
+    my $ok = 1;
+    for my $key (keys %$patch) {
+      if ($key eq 'keywords') {
+        $ok = 0 unless _keywords_ok($patch->{$key});
+      }
+      elsif ($key =~ m{^keywords/(.*)$}s) {
+        $ok = 0 unless _keyword_ok($1)
+                    && (!defined $patch->{$key} || _is_true($patch->{$key}));
+      }
+    }
+    $badUpdate{$id} = delete $update->{$id} unless $ok;
+  }
+
   ($created, $notCreated) = $Self->{db}->create_messages($create, sub { $Self->idmap(shift) });
   $Self->setid($_, $created->{$_}{id}) for keys %$created;
   $Self->_resolve_patch($update, 'api_Email_get');
   ($updated, $notUpdated) = $Self->{db}->update_messages($update, sub { $Self->idmap(shift) });
+  $notCreated->{$_} = { type => 'invalidProperties', properties => ['keywords'] } for keys %badCreate;
+  $notUpdated->{$_} = { type => 'invalidProperties', properties => ['keywords'] } for keys %badUpdate;
   ($destroyed, $notDestroyed) = $Self->{db}->destroy_messages($destroy);
 
   # XXX - cheap dumb racy version
@@ -969,6 +1054,30 @@ sub api_Email_set {
   }];
 
   return @res;
+}
+
+# The unfolded header section of a raw message.
+sub _raw_headers {
+  my $raw = shift;
+  my ($head) = split /\r?\n\r?\n/, $raw, 2;
+  $head =~ s/\r?\n(?=[ \t])//g;
+  return split /\r?\n/, $head;
+}
+
+# The time of the first (most recent) Received header field, if any.
+sub _received_time {
+  my $raw = shift;
+  my ($received) = grep { /^Received:/i } _raw_headers($raw);
+  return undef unless $received && $received =~ /;\s*([^;]+?)\s*$/;
+  return str2time($1);
+}
+
+# The message's Message-ID, with its angle brackets, if it has one.
+sub _message_id {
+  my $raw = shift;
+  my ($line) = grep { /^Message-ID:/i } _raw_headers($raw);
+  return unless $line && $line =~ /(<[^<>\s]+>)/;
+  return $1;
 }
 
 sub api_Email_import {
@@ -1006,8 +1115,8 @@ sub api_Email_import {
     my @ids;
     my @bad;
 
-    my $date = $message->{receivedAt} ? str2time($message->{receivedAt}) : time();
-    unless (defined $date) {
+    my $date = $message->{receivedAt} ? str2time($message->{receivedAt}) : undef;
+    if ($message->{receivedAt} && !defined $date) {
       push @bad, 'receivedAt';
     }
 
@@ -1015,30 +1124,55 @@ sub api_Email_import {
       push @bad, 'keywords';
     }
 
+    # RFC 8621 S4.1.1: "An Email in the mail store MUST belong to one or more
+    # Mailboxes at all times".
     if (not $message->{mailboxIds} or ref($message->{mailboxIds}) ne 'HASH') {
       push @bad, 'mailboxIds';
     }
     else {
       @ids = map { $Self->idmap($_) } keys %{$message->{mailboxIds}};
-      if (grep { not $validids{$_} } @ids) {
+      if (!@ids || grep { not $validids{$_} } @ids) {
         push @bad, 'mailboxIds';
       }
     }
 
     my ($type, $file);
-    if (not defined $message->{blobId} or $message->{blobId} eq '') {
+    if (not defined $message->{blobId} or $message->{blobId} eq '' or ref $message->{blobId}) {
       push @bad, 'blobId';
-    }
-    else {
-      ($type, $file) = $Self->{db}->get_blob($message->{blobId});
-      unless ($file and $type eq 'message/rfc822') {
-        push @bad, 'blobId';
-      }
     }
 
     if (@bad) {
       $notcreated{$id} = { type => 'invalidProperties', properties => [sort @bad] };
       next;
+    }
+
+    ($type, $file) = $Self->{db}->get_blob($message->{blobId});
+    unless (defined $file) {
+      # RFC 8621 S4.8: an invalid blobId, "id not found" included, is invalidProperties
+      $notcreated{$id} = { type => 'invalidProperties', properties => ['blobId'] };
+      next;
+    }
+    # RFC 8621 S4.8: the blob must be an RFC 5322 message -- whatever its
+    # upload type, it has to start with a header field.
+    unless ($file =~ /\A[\x21-\x39\x3b-\x7e]+:/) {
+      $notcreated{$id} = { type => 'invalidEmail', description => 'the blob is not an RFC 5322 message' };
+      next;
+    }
+
+    # RFC 8621 S4.8: receivedAt defaults to "the time of the most recent
+    # Received header field", else the time of import.
+    $date //= _received_time($file) // time();
+
+    # Email ids are derived from the message, so this server forbids
+    # duplicates: one with the same Message-ID is "alreadyExists" (S4.8).
+    if (my ($mid) = _message_id($file)) {
+      $Self->begin();
+      my $existing = $Self->{db}->dgetfield('jmessages', { msgmessageid => $mid, active => 1 }, 'msgid');
+      $Self->commit();
+      if ($existing) {
+        $notcreated{$id} = { type => 'alreadyExists', existingId => "$existing" };
+        next;
+      }
     }
 
     my ($msgid, $thrid, $size) = eval { $Self->{db}->import_message($file, \@ids, $message->{keywords}, $date) };
@@ -1101,6 +1235,10 @@ sub api_Email_parse {
 
   return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['blobIds']}])
     unless $args->{blobIds} && ref($args->{blobIds}) eq 'ARRAY';
+  if (my @bad = _bad_email_props($args)) {
+    return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['properties'],
+      description => "unknown or invalid properties: @bad"}]);
+  }
 
   # RFC 8621 §4.9 default properties for Email/parse
   my @PARSE_DEFAULT_PROPERTIES = qw(
@@ -1172,38 +1310,8 @@ sub api_Email_parse {
       $item{headers} = $data->{headers};
     }
     elsif ($args->{properties}) {
-      for my $prop (@{$args->{properties}}) {
-        next unless $prop =~ m/^header:([^:]+)(.*)/;
-        my $headername = lc $1;
-        my $rest = $2;
-
-        if ($rest ne '' && $rest !~ /^(:(asText|asAddresses|asGroupedAddresses|asMessageIds|asDate|asURLs|asRaw))?(:(all))?$/) {
-          return $Self->_transError(['error', { type => 'invalidArguments', arguments => [$prop] }]);
-        }
-
-        my @values = map { $_->{value} // $_->{Value} } grep { lc($_->{name} // $_->{Name} // '') eq $headername } @{$data->{headers}||[]};
-        unless (@values) {
-          $item{$prop} = ($rest =~ /:all/) ? [] : undef;
-          next;
-        }
-        if ($rest =~ s/:all$//) {
-          if ($rest eq ':asText') { $item{$prop} = [map { Data::JSEmail::asText($_) } @values] }
-          elsif ($rest eq ':asAddresses') { $item{$prop} = [map { Data::JSEmail::asAddresses($_) } @values] }
-          elsif ($rest eq ':asGroupedAddresses') { $item{$prop} = [map { Data::JSEmail::asGroupedAddresses($_) } @values] }
-          elsif ($rest eq ':asMessageIds') { $item{$prop} = [map { Data::JSEmail::asMessageIds($_) } @values] }
-          elsif ($rest eq ':asDate') { $item{$prop} = [map { Data::JSEmail::asDate($_) } @values] }
-          elsif ($rest eq ':asURLs') { $item{$prop} = [map { Data::JSEmail::asURLs($_) } @values] }
-          else { $item{$prop} = \@values }
-        }
-        else {
-          if ($rest eq ':asText') { $item{$prop} = Data::JSEmail::asText($values[-1]) }
-          elsif ($rest eq ':asAddresses') { $item{$prop} = Data::JSEmail::asAddresses($values[-1]) }
-          elsif ($rest eq ':asGroupedAddresses') { $item{$prop} = Data::JSEmail::asGroupedAddresses($values[-1]) }
-          elsif ($rest eq ':asMessageIds') { $item{$prop} = Data::JSEmail::asMessageIds($values[-1]) }
-          elsif ($rest eq ':asDate') { $item{$prop} = Data::JSEmail::asDate($values[-1]) }
-          elsif ($rest eq ':asURLs') { $item{$prop} = Data::JSEmail::asURLs($values[-1]) }
-          else { $item{$prop} = $values[-1] }
-        }
+      for my $prop (grep { /^header:/ } @{$args->{properties}}) {
+        $item{$prop} = _header_prop_value($data->{headers}, $prop);
       }
     }
     if (_prop_wanted($args, 'textBody')) {

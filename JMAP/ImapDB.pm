@@ -1147,6 +1147,13 @@ sub firstsync {
   }
 
   $Self->sync_jmap();
+
+  # Know the account's calendars and address books from the start, so the
+  # first /get reports what the server already has and a later /changes does
+  # not present pre-existing collections as newly created.
+  for my $sync (qw(sync_calendars sync_addressbooks)) {
+    eval { $Self->$sync(); 1 } or warn "firstsync: $sync failed: $@";
+  }
 }
 
 sub _trimh {
@@ -2072,6 +2079,13 @@ sub create_mailboxes {
         jmailboxid => $jmailboxid,
         sortOrder => $mailbox->{sortOrder} // 0,
         parentId => $parentid,
+        role => $mailbox->{role},
+        # RFC 8621 S2: isSubscribed has no default; a new mailbox the
+        # client did not ask about is subscribed, as sync treats them.
+        isSubscribed => (!exists $mailbox->{isSubscribed} || $mailbox->{isSubscribed}) ? 1 : 0,
+        (map { $_ => 1 } qw(mayReadItems mayAddItems mayRemoveItems maySetSeen
+                            maySetKeywords mayCreateChild mayRename mayDelete
+                            maySubmit mayAdmin)),
       }, 'jnoncountsmodseq');
 
       $Self->commit();
@@ -2098,6 +2112,7 @@ sub update_mailboxes {
   my %changed;
   my %notchanged;
   my %namemap;
+  my %newparent;
   # XXX - reorder the crap out of this if renaming multiple mailboxes due to deep rename
   foreach my $jid (keys %$update) {
     my $mailbox = $update->{$jid};
@@ -2172,7 +2187,22 @@ sub update_mailboxes {
       $parentid = $idmap->($parentid);
       my $parent = $Self->dgetone('ifolders', { jmailboxid => $parentid }, 'imapname,sep');
       warn "PARENT: " . Dumper($parent, $parentid, $data);
-      if ($parent) {
+      # RFC 8621 S2: "There MUST NOT be a loop" -- the new parent may not be
+      # this mailbox or any of its descendants, counting earlier updates in
+      # this same request.
+      my %seen;
+      for (my $pid = $parentid; $pid && !$seen{$pid}++;
+           $pid = exists $newparent{$pid} ? $newparent{$pid}
+                : $Self->dgetfield('jmailboxes', { jmailboxid => $pid }, 'parentId')) {
+        if ($pid eq $jid) {
+          $bad{parentId} = 1;
+          last;
+        }
+      }
+      if ($bad{parentId}) {
+        # already rejected
+      }
+      elsif ($parent) {
         $namemap{$old->{imapname}} = [$parent->{imapname} . $parent->{sep} . $encname, $jid, $old->{ifolderid}];
       }
       else {
@@ -2187,6 +2217,9 @@ sub update_mailboxes {
 
     if (%bad) {
       $notchanged{$jid} = { type => 'invalidProperties', properties => [sort keys %bad] };
+    }
+    elsif (exists $mailbox->{parentId}) {
+      $newparent{$jid} = $parentid;
     }
   }
 
@@ -2357,8 +2390,14 @@ sub create_calendar_events {
   my %todo;
   my %createmap;
   my %notcreated;
+  my $user_email = lc($Self->get_user()->{email} // '');
   foreach my $cid (sort keys %$new) {
     my $calendar = $new->{$cid};
+    # draft-ietf-jmap-calendars S5.9: "The method property MUST NOT be set."
+    if (exists $calendar->{method}) {
+      $notcreated{$cid} = { type => 'invalidProperties', properties => ['method'] };
+      next;
+    }
     my @cal_ids = grep { ($calendar->{calendarIds} || {})->{$_} }
                        keys %{$calendar->{calendarIds} || {}};
     if (@cal_ids > 1) {
@@ -2380,8 +2419,21 @@ sub create_calendar_events {
     my %ev = (%$calendar, uid => $uid);
     delete $ev{calendarIds};
     delete $ev{calendarId};
-    $ev{created} //= $now;
-    $ev{updated} //= $now;
+    # S5.9: if omitted the server sets @type, uid and created; on an event
+    # this server originates, updated is always the server's time, and a
+    # client created later than that is reset with it.
+    my %server_set;
+    $server_set{uid} = $uid unless defined $calendar->{uid};
+    $server_set{'@type'} = $ev{'@type'} = 'Event' unless defined $ev{'@type'};
+    $server_set{created} = $ev{created} = $now unless defined $ev{created};
+    my $organizer = lc($ev{organizerCalendarAddress} // '') =~ s{^mailto:}{}r;
+    if (!defined $ev{organizerCalendarAddress} || $organizer eq $user_email) {
+      $server_set{updated} = $ev{updated} = $now;
+      $server_set{created} = $ev{created} = $now if $ev{created} gt $now;
+    }
+    else {
+      $ev{updated} //= $now;
+    }
     my $no_sched = defined $ev{sendSchedulingMessages} ? !$ev{sendSchedulingMessages} : 0;
     delete $ev{sendSchedulingMessages};
     if ($no_sched) {
@@ -2390,7 +2442,8 @@ sub create_calendar_events {
     }
     $todo{$cid} = [$href, \%ev];
 
-    $createmap{$cid} = { id => $uid };
+    # RFC 8620 S5.3: created reports what the server set or defaulted
+    $createmap{$cid} = { id => $uid, %server_set };
   }
 
   $Self->commit();
@@ -2422,6 +2475,11 @@ sub update_calendar_events {
   my %notchanged;
   foreach my $uid (keys %$update) {
     my $calendar = $update->{$uid};
+
+    if (exists $calendar->{method}) {
+      $notchanged{$uid} = { type => 'invalidProperties', properties => ['method'] };
+      next;
+    }
 
     if ($uid =~ m{^([^/]+)/(.+)$}) {
       my ($master_uid, $recurrence_id) = ($1, $2);
@@ -2887,6 +2945,14 @@ sub update_contacts {
   return (\%changed, \%notchanged);
 }
 
+# A ContactCard id is its uid without any urn:uuid: prefix (see set_card);
+# icards keeps the uid as the vCard has it.
+sub _icard_for {
+  my ($Self, $id, $fields) = @_;
+  return $Self->dgetone('icards', { uid => $id }, $fields)
+      // $Self->dgetone('icards', { uid => "urn:uuid:$id" }, $fields);
+}
+
 sub destroy_contacts {
   my $Self = shift;
   my $destroy = shift;
@@ -2898,7 +2964,7 @@ sub destroy_contacts {
   my %notdestroyed;
   foreach my $carduid (@$destroy) {
     $Self->begin();
-    my $old = $Self->dgetone('icards', { uid => $carduid }, 'href,iaddressbookid');
+    my $old = $Self->_icard_for($carduid, 'href,iaddressbookid');
     unless ($old) {
       $Self->commit();
       $notdestroyed{$carduid} = {type => 'notFound', description => "No such card on server"};
@@ -2934,13 +3000,22 @@ sub create_contacts_jscontact {
 
   my %createmap;
   my %notcreated;
+  my %seen_uid;
 
   for my $cid (sort keys %$new) {
     my $card = { %{ $new->{$cid} } };  # shallow copy so we don't modify caller's data
 
     # Resolve addressBookIds to a CardDAV href
     my $abookhref = $default_href;
-    if (my $abids = delete $card->{addressBookIds}) {
+    if (exists $card->{addressBookIds}) {
+      my $abids = delete $card->{addressBookIds};
+      # RFC 9610 S3: each value "MUST be true", a card "MUST belong to at
+      # least one AddressBook", and an unknown id is invalid (RFC 8620 S5.3).
+      unless (ref $abids eq 'HASH' && %$abids
+              && !grep { !(JSON::is_bool($abids->{$_}) && $abids->{$_}) || !$href_by_jab{$_} } keys %$abids) {
+        $notcreated{$cid} = { type => 'invalidProperties', properties => ['addressBookIds'] };
+        next;
+      }
       my @active = grep { $abids->{$_} } keys %$abids;
       if (@active > 1) {
         $notcreated{$cid} = { type => 'invalidProperties',
@@ -2968,6 +3043,21 @@ sub create_contacts_jscontact {
         description => 'version must be a registered JSContact version ("1.0" or "2.0")' };
       next;
     }
+    my $client_uid = defined $card->{uid};
+    # RFC 9610 S3: "there MUST NOT be more than one ContactCard with the
+    # same uid in an Account".
+    if ($client_uid) {
+      my $bare = $card->{uid} =~ s/^urn:uuid://r;
+      $Self->begin();
+      my $taken = $Self->dgetfield('jcontacts', { contactuid => $bare, active => 1 }, 'contactuid')
+               // $Self->_icard_for($bare, 'href');
+      $Self->commit();
+      if ($taken || $seen_uid{$bare}++) {
+        $notcreated{$cid} = { type => 'invalidProperties', properties => ['uid'],
+          description => 'a ContactCard with this uid already exists' };
+        next;
+      }
+    }
     my $uid = $card->{uid} // new_uuid_string();
     $card->{uid} = $uid;
     eval { $Self->backend_cmd('new_card', $abookhref, $card) };
@@ -2975,7 +3065,10 @@ sub create_contacts_jscontact {
       $notcreated{$cid} = { type => 'serverFail', description => "$@" };
       next;
     }
-    $createmap{$cid} = { id => $uid };
+    # The id is the uid without its urn:uuid: prefix, as set_card stores it
+    # and ContactCard/get, /set and /changes report it.
+    $createmap{$cid} = { id => ($uid =~ s/^urn:uuid://r) };
+    $createmap{$cid}{uid} = $uid unless $client_uid;
   }
 
   return (\%createmap, \%notcreated);
@@ -3001,7 +3094,7 @@ sub update_contacts_jscontact {
     my $patch = { %{ $changes->{$carduid} } };  # shallow copy
 
     $Self->begin();
-    my $icard = $Self->dgetone('icards', { uid => $carduid }, 'href,iaddressbookid');
+    my $icard = $Self->_icard_for($carduid, 'href,iaddressbookid');
     my $jcontact = $Self->dgetone('jcontacts', { contactuid => $carduid }, 'jaddressbookid');
     $Self->commit();
 
@@ -3013,6 +3106,11 @@ sub update_contacts_jscontact {
     # Handle addressBookIds change: MOVE card to new collection
     if (exists $patch->{addressBookIds}) {
       my $abids = delete $patch->{addressBookIds};
+      unless (ref $abids eq 'HASH' && %$abids
+              && !grep { !(JSON::is_bool($abids->{$_}) && $abids->{$_}) || !$href_by_jab{$_} } keys %$abids) {
+        $notchanged{$carduid} = { type => 'invalidProperties', properties => ['addressBookIds'] };
+        next;
+      }
       my @active = $abids ? grep { $abids->{$_} } keys %$abids : ();
       if (@active > 1) {
         $notchanged{$carduid} = { type => 'invalidProperties',
@@ -3052,7 +3150,9 @@ sub update_contacts_jscontact {
 
     if (%$patch) {
       # Parse existing vCard to JSContact, apply remaining patch fields, write back
-      my $raw_vcf = $Self->read_card_vcf($carduid) // '';
+      # the vCard is filed under its uid, which may carry urn:uuid:
+      my $raw_vcf = $Self->read_card_vcf($carduid)
+                 // $Self->read_card_vcf("urn:uuid:$carduid") // '';
       my $card = vcard_to_jscontact($raw_vcf);
       unless ($card) {
         $notchanged{$carduid} = { type => 'serverFail', description => 'Could not parse existing card' };

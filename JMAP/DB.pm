@@ -199,9 +199,9 @@ sub commit {
       my %update;
       # re-calculate all the counts.  In theory we could do something clever with delta updates, but this will work
       ($update{totalEmails}) = $Self->dbh->selectrow_array("SELECT COUNT(DISTINCT msgid) FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmailboxid = ? AND jmessages.active = 1 AND jmessagemap.active = 1", {}, $jmailboxid);
-      ($update{unreadEmails}) = $Self->dbh->selectrow_array("SELECT COUNT(DISTINCT msgid) FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmailboxid = ? AND jmessages.isUnread = 1 AND jmessages.active = 1 AND jmessagemap.active = 1", {}, $jmailboxid);
+      ($update{unreadEmails}) = $Self->dbh->selectrow_array("SELECT COUNT(DISTINCT msgid) FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmailboxid = ? AND jmessages.isUnread = 1 AND NOT jmessages.isDraft AND jmessages.active = 1 AND jmessagemap.active = 1", {}, $jmailboxid);
       ($update{totalThreads}) = $Self->dbh->selectrow_array("SELECT COUNT(DISTINCT thrid) FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmailboxid = ? AND jmessages.active = 1 AND jmessagemap.active = 1", {}, $jmailboxid);
-      ($update{unreadThreads}) = $Self->dbh->selectrow_array("SELECT COUNT(DISTINCT thrid) FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmailboxid = ? AND jmessages.active = 1 AND jmessagemap.active = 1 AND thrid IN (SELECT thrid FROM jmessages JOIN jmessagemap USING (msgid) WHERE isUnread = 1 AND jmessages.active = 1 AND jmessagemap.active = 1)", {}, $jmailboxid);
+      ($update{unreadThreads}) = $Self->dbh->selectrow_array("SELECT COUNT(DISTINCT thrid) FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmailboxid = ? AND jmessages.active = 1 AND jmessagemap.active = 1 AND thrid IN (SELECT thrid FROM jmessages JOIN jmessagemap USING (msgid) WHERE isUnread = 1 AND NOT isDraft AND jmessages.active = 1 AND jmessagemap.active = 1)", {}, $jmailboxid);
 
       $update{$_} += 0 for keys %update;  # make sure they're numeric
 
@@ -889,15 +889,15 @@ sub set_card {
   my $carduid = $card->{uid} // '';
   $carduid =~ s/^urn:uuid://;
   my $kind = $card->{kind} // 'individual';
-  if ($kind ne 'group') {
-    $Self->write_jcontact_payload($carduid, $card);
-    if ($Self->dgetfield('jcontacts', { contactuid => $carduid }, 'contactuid')) {
-      $Self->ddirty('jcontacts', { active => 1, jaddressbookid => $jaddressbookid }, { contactuid => $carduid });
-    } else {
-      $Self->dmake('jcontacts', { contactuid => $carduid, jaddressbookid => $jaddressbookid });
-    }
+  # RFC 9610: every card, a group (kind "group") included, is a ContactCard.
+  $Self->write_jcontact_payload($carduid, $card);
+  if ($Self->dgetfield('jcontacts', { contactuid => $carduid }, 'contactuid')) {
+    $Self->ddirty('jcontacts', { active => 1, jaddressbookid => $jaddressbookid }, { contactuid => $carduid });
+  } else {
+    $Self->dmake('jcontacts', { contactuid => $carduid, jaddressbookid => $jaddressbookid });
   }
-  else {
+  # Groups are also kept for the pre-RFC ContactGroup API.
+  if ($kind eq 'group') {
     my $name = $card->{name}{full} // '';
     if ($Self->dgetfield('jcontactgroups', { groupuid => $carduid }, 'groupuid')) {
       $Self->ddirty('jcontactgroups', { active => 1, jaddressbookid => $jaddressbookid, name => $name }, { groupuid => $carduid });
@@ -921,11 +921,10 @@ sub delete_card {
   my $jaddressbookid = shift; # doesn't matter
   my $carduid = shift;
   my $kind = shift;
-  if ($kind eq 'contact') {
-    $Self->unlink_jcontact_payload($carduid);
-    $Self->dmaybedirty('jcontacts', {active => 0}, {contactuid => $carduid, jaddressbookid => $jaddressbookid});
-  }
-  else {
+  # every card is a ContactCard (see set_card); a group is also a ContactGroup
+  $Self->unlink_jcontact_payload($carduid);
+  $Self->dmaybedirty('jcontacts', {active => 0}, {contactuid => $carduid, jaddressbookid => $jaddressbookid});
+  if ($kind ne 'contact') {
     $Self->dmaybedirty('jcontactgroups', {active => 0}, {groupuid => $carduid, jaddressbookid => $jaddressbookid});
   }
 }

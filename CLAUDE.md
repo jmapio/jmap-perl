@@ -168,19 +168,25 @@ a bare PUT dies `need data` in `Cyrus::AccountSync` and returns 500.
 Reading the suite results: the raw failure count drifts as the Cyrus container is recreated,
 so the meaningful gate is a **same-session passthrough-vs-`--direct` diff** — a failure that
 also fails `--direct` is Cyrus's, not the proxy's.
-`t/AddressBook/changes` and `t/Calendar/changes` are occasionally flaky under full-suite
-load; re-run them in isolation before believing a failure.
+`t/AddressBook/changes` and `t/Calendar/changes` used to look flaky: they failed on the
+first run after a `clean` and passed on every rerun. That was a real bug — `firstsync`
+never synced DAV, so a fresh account's pre-existing collections first appeared in
+`/changes` as created. A failure that only happens on a fresh account is a bug, not a flake.
 
 `run-jmap-tests.sh` with no arguments runs **all of `t/`**. It used to run a hand-picked
 directory list, which silently skipped `t/core/`, `t/Blob/` and the top-level `t/*.t` for
 months and hid five real proxy bugs (ResultReference validation, dropped error responses,
 Blob/copy arguments, downloadUrl `{type}`, unknown-mailbox moves). Never narrow it again.
 
-On the full suite (166 files, 2026-09-07) IMAP mode is **166/166 against the proxy** and
-154/166 `--direct`: the five Cyrus bugs in the `testsuite-fixes` branch plus the
-unimplemented `Identity/set`, and seven accountId tests (`t/core/accountId-required.t` and
-six `foreign-account.t`) where Cyrus accepts a missing accountId, accepts a foreign
-`fromAccountId` on an empty `/copy`, or lacks the method. So the diff is clean.
+On the suite's `spec-correctness` branch (296 files, 2026-10-09, image
+`cyrus-test-server:suite-fixes-20261002b`) IMAP mode fails **45 against the proxy and 63
+`--direct`, with no proxy-only failure**: every proxy failure also fails `--direct`, and 18
+files fail only `--direct`. The shared 45 are gaps both servers have against the stricter
+tests (AddressBook/Calendar `/set` properties, Email body values, ContactCard media and
+members, `foreign-account` wrappers, ...), plus a few environmental ones: `MDN/send` needs
+an identity with a real address (the IMAP test user's is `user1`), and
+`t/Mailbox/set/sibling-names.t` has a test bug (its "cousin" case collides with the
+"mover" mailbox an earlier subtest left under the same parent).
 
 **Every `api_*` method lives in exactly one module.** `JMAP::API::*` all declare
 `package JMAP::API`, so two files defining the same sub is legal Perl — the last

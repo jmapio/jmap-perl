@@ -70,6 +70,9 @@ my %METHOD_CAPABILITIES;
       CalendarEvent/queryChanges CalendarEvent/set CalendarEvent/copy
       ParticipantIdentity/get ParticipantIdentity/changes ParticipantIdentity/set
       CalendarPreferences/get CalendarPreferences/set
+      CalendarEventNotification/get CalendarEventNotification/changes
+      CalendarEventNotification/set CalendarEventNotification/query
+      CalendarEventNotification/queryChanges
     )],
     'urn:ietf:params:jmap:calendars:parse' => [qw(CalendarEvent/parse)],
     # RFC 9610; Contact, ContactGroup and Addressbook are the pre-RFC forms of

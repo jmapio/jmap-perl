@@ -453,12 +453,19 @@ sub _event_match {
       my $start      = $payload->{start} // '';
       my $is_recur   = $payload->{recurrenceRule};
       unless ($is_recur) {
-        (my $before_cmp = $condition->{before} // '') =~ s/Z$//;
-        (my $after_cmp  = $condition->{after}  // '') =~ s/Z$//;
-        return 0 if $before_cmp && $start ge $before_cmp;
-        if ($after_cmp) {
-          my $end = _event_end_dt($start, $payload->{duration}) // $start;
-          return 0 if $end le $after_cmp;
+        # draft-ietf-jmap-calendars S5.10: before/after are local date-times
+        # in the query's timeZone (default Etc/UTC); compare as instants,
+        # the event in its own time zone (a floating one in the query's).
+        my $qtz = $Self->{_query_tz} // 'Etc/UTC';
+        my $ev_start = _parse_jscal_dt($start, $payload->{timeZone} // $qtz);
+        my $ev_end   = $ev_start && (_dt_add_duration($ev_start, $payload->{duration} // 'PT0S') // $ev_start);
+        if (my $bound = $condition->{before} and $ev_start) {
+          my $bdt = _parse_jscal_dt($bound =~ s/Z$//r, $qtz);
+          return 0 if $bdt && DateTime->compare($ev_start, $bdt) >= 0;
+        }
+        if (my $bound = $condition->{after} and $ev_end) {
+          my $adt = _parse_jscal_dt($bound =~ s/Z$//r, $qtz);
+          return 0 if $adt && DateTime->compare($ev_end, $adt) <= 0;
         }
       }
     }
@@ -563,6 +570,10 @@ sub api_CalendarEvent_query {
 
   return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['position']}])
     if ($args->{position} // 0) < 0;
+
+  local $Self->{_query_tz} = $args->{timeZone} // 'Etc/UTC';
+  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['timeZone']}])
+    unless _parse_jscal_dt('2000-01-01T00:00:00', $Self->{_query_tz});
 
   if ($args->{expandRecurrences}) {
     my $filter  = $args->{filter} // {};
@@ -690,6 +701,43 @@ sub _expand_occurrence {
   return \%item;
 }
 
+# draft-ietf-jmap-calendars S5.7: with reduceParticipants, "only participants
+# with the owner role or corresponding to the user's participant identities
+# will be returned" -- in the event and in its recurrence overrides.
+sub _reduce_participants {
+  my ($item, $mine) = @_;
+  my %gone;
+  my $keep = sub {
+    my $p = shift;
+    return 0 unless ref $p eq 'HASH';
+    return 1 if ref $p->{roles} eq 'HASH' && $p->{roles}{owner};
+    return $mine->{lc($p->{calendarAddress} // '')} ? 1 : 0;
+  };
+  my $reduce = sub {
+    my $parts = shift;
+    return unless ref $parts eq 'HASH';
+    for my $id (keys %$parts) {
+      next if $keep->($parts->{$id});
+      delete $parts->{$id};
+      $gone{$id} = 1;
+    }
+  };
+  $reduce->($item->{participants});
+  if (ref $item->{recurrenceOverrides} eq 'HASH') {
+    for my $override (values %{$item->{recurrenceOverrides}}) {
+      next unless ref $override eq 'HASH';
+      $reduce->($override->{participants});
+    }
+    for my $override (values %{$item->{recurrenceOverrides}}) {
+      next unless ref $override eq 'HASH';
+      for my $key (keys %$override) {
+        delete $override->{$key}
+          if $key =~ m{^participants/([^/]+)} && ($gone{$1} || !exists $item->{participants}{$1});
+      }
+    }
+  }
+}
+
 sub api_CalendarEvent_get {
   my $Self = shift;
   my $args = shift;
@@ -705,6 +753,8 @@ sub api_CalendarEvent_get {
   my %seenids;
   my %missingids;
   my @list;
+  # the user's participant identities (see ParticipantIdentity/get)
+  my $mine = { map { lc("mailto:$_") => 1 } grep { length } $user->{email} // '' };
   foreach my $eventuid (map { $Self->idmap($_) } @{$args->{ids}}) {
     next if $seenids{$eventuid};
     $seenids{$eventuid} = 1;
@@ -732,6 +782,7 @@ sub api_CalendarEvent_get {
       }
 
       my $organizer = $item->{organizerCalendarAddress};
+      _reduce_participants($item, $mine) if $args->{reduceParticipants};
       foreach my $key (keys %$item) {
         delete $item->{$key} unless _prop_wanted($args, $key);
       }
@@ -761,6 +812,8 @@ sub api_CalendarEvent_get {
     }
 
     my $organizer = $item->{organizerCalendarAddress};
+    $item->{uid} //= $eventuid;
+    _reduce_participants($item, $mine) if $args->{reduceParticipants};
     foreach my $key (keys %$item) {
       delete $item->{$key} unless _prop_wanted($args, $key);
     }
@@ -980,6 +1033,15 @@ sub api_Principal_getAvailability {
   my $utc_start    = $args->{utcStart};
   my $utc_end      = $args->{utcEnd};
   my $show_details = $args->{showDetails} // 0;
+
+  # maxAvailabilityDuration (P366D) bounds the range: "tooLarge" beyond it.
+  {
+    my ($s, $e) = map { Date::Parse::str2time($_) } $utc_start, $utc_end;
+    return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['utcStart', 'utcEnd']}])
+      unless defined $s && defined $e && $e >= $s;
+    return $Self->_transError(['error', {type => 'tooLarge'}])
+      if $e - $s > 366 * 86400;
+  }
   my $event_props  = $args->{eventProperties};
 
   (my $range_start = $utc_start) =~ s/Z$//;
@@ -1049,7 +1111,32 @@ sub api_Principal_getAvailability {
     }
   }
 
-  @busy = sort { $a->{utcStart} cmp $b->{utcStart} } @busy;
+  # "the server MUST merge and split BusyPeriod objects where the event
+  # property is null, such that none of them overlap and either there is a
+  # gap ... or those objects have a different busyStatus", choosing
+  # "confirmed > unavailable > tentative" where they overlap.
+  my @detailed = grep { ref $_->{event} } @busy;
+  my @plain    = grep { !ref $_->{event} } @busy;
+  my %rank = (confirmed => 3, unavailable => 2, tentative => 1);
+  my %points = map { $_ => 1 } map { ($_->{utcStart}, $_->{utcEnd}) } @plain;
+  my @points = sort keys %points;
+  my @merged;
+  for my $i (0 .. $#points - 1) {
+    my ($from, $to) = @points[$i, $i + 1];
+    my ($status) = sort { $rank{$b} <=> $rank{$a} }
+                   map { $_->{busyStatus} // 'unavailable' }
+                   grep { $_->{utcStart} le $from && $_->{utcEnd} ge $to } @plain;
+    next unless $status;
+    if (@merged && $merged[-1]{utcEnd} eq $from && $merged[-1]{busyStatus} eq $status) {
+      $merged[-1]{utcEnd} = $to;
+    }
+    else {
+      push @merged, { utcStart => $from, utcEnd => $to, busyStatus => $status,
+                      event => JSON::null, accountId => JSON::null };
+    }
+  }
+
+  @busy = sort { $a->{utcStart} cmp $b->{utcStart} } @detailed, @merged;
 
   return ['Principal/getAvailability', {
     accountId => $accountid,
@@ -1188,6 +1275,80 @@ sub api_ParticipantIdentity_set {
     notUpdated   => _nullempty(\%notUpdated),
     destroyed    => undef,
     notDestroyed => _nullempty(\%notDestroyed),
+  }];
+}
+
+# draft-ietf-jmap-calendars S7: a CalendarEventNotification records a change
+# another user made to an event the user can see.  The proxy has no calendar
+# sharing, so nobody else ever changes this account's events: the set is
+# always empty and its state never moves.
+sub api_CalendarEventNotification_get {
+  my ($Self, $args) = @_;
+  my ($user, $accountid) = $Self->_api_init($args);
+  $Self->commit();
+  return ['CalendarEventNotification/get', {
+    accountId => $accountid,
+    state     => '0',
+    list      => [],
+    notFound  => [ map { "$_" } @{$args->{ids} || []} ],
+  }];
+}
+
+sub api_CalendarEventNotification_changes {
+  my ($Self, $args) = @_;
+  my ($user, $accountid) = $Self->_api_init($args);
+  $Self->commit();
+  return ['error', { type => 'cannotCalculateChanges' }]
+    unless ($args->{sinceState} // '') eq '0';
+  return ['CalendarEventNotification/changes', {
+    accountId => $accountid, oldState => '0', newState => '0',
+    hasMoreChanges => JSON::false, created => [], updated => [], destroyed => [],
+  }];
+}
+
+sub api_CalendarEventNotification_set {
+  my ($Self, $args) = @_;
+  my ($user, $accountid) = $Self->_api_init($args);
+  $Self->commit();
+  return ['error', { type => 'stateMismatch' }]
+    if defined $args->{ifInState} && $args->{ifInState} ne '0';
+  # S7.3: "Only destroy is supported; any attempt to create/update MUST be
+  # rejected with a forbidden SetError."
+  my %notCreated   = map { $_ => { type => 'forbidden' } } keys %{$args->{create} || {}};
+  my %notUpdated   = map { $_ => { type => 'forbidden' } } keys %{$args->{update} || {}};
+  my %notDestroyed = map { $_ => { type => 'notFound' } } @{$args->{destroy} || []};
+  return ['CalendarEventNotification/set', {
+    accountId    => $accountid,
+    oldState     => '0',
+    newState     => '0',
+    created      => undef,
+    updated      => undef,
+    destroyed    => undef,
+    notCreated   => %notCreated   ? \%notCreated   : undef,
+    notUpdated   => %notUpdated   ? \%notUpdated   : undef,
+    notDestroyed => %notDestroyed ? \%notDestroyed : undef,
+  }];
+}
+
+sub api_CalendarEventNotification_query {
+  my ($Self, $args) = @_;
+  my ($user, $accountid) = $Self->_api_init($args);
+  $Self->commit();
+  return ['CalendarEventNotification/query', {
+    accountId => $accountid, queryState => '0', canCalculateChanges => JSON::true,
+    position => 0, ids => [], total => 0,
+  }];
+}
+
+sub api_CalendarEventNotification_queryChanges {
+  my ($Self, $args) = @_;
+  my ($user, $accountid) = $Self->_api_init($args);
+  $Self->commit();
+  return ['error', { type => 'cannotCalculateChanges' }]
+    unless ($args->{sinceQueryState} // '') eq '0';
+  return ['CalendarEventNotification/queryChanges', {
+    accountId => $accountid, oldQueryState => '0', newQueryState => '0',
+    removed => [], added => [], total => 0,
   }];
 }
 

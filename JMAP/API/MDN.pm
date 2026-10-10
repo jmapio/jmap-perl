@@ -75,7 +75,10 @@ sub api_MDN_send {
       next;
     }
 
-    my $final_recipient = $mdn->{finalRecipient} // $from_email;
+    # RFC 9007 (and RFC 8098 S3.2.4): finalRecipient keeps its address type,
+    # e.g. "rfc822; john@example.com".
+    my $final_recipient = $mdn->{finalRecipient} // "rfc822; $from_email";
+    $final_recipient = "rfc822; $final_recipient" unless $final_recipient =~ /;/;
     my $disp         = $mdn->{disposition} || {};
     my $action_mode  = $disp->{actionMode}  // 'manual-action';
     my $sending_mode = $disp->{sendingMode} // 'mdn-sent-manually';
@@ -93,7 +96,7 @@ sub api_MDN_send {
       . (($from_email =~ /@(.+)$/)[0] // 'localhost') . '>';
 
     my $mdn_headers = "Reporting-UA: $reporting_ua\r\n"
-      . "Final-Recipient: rfc822;$final_recipient\r\n"
+      . "Final-Recipient: $final_recipient\r\n"
       . ($orig_msgid ? "Original-Message-ID: $orig_msgid\r\n" : '')
       . "Disposition: $action_mode/$sending_mode;$disp_type\r\n";
 
@@ -184,11 +187,9 @@ sub _parse_mdn_from_mime {
     }
   }
 
+  # RFC 9007: the recipient fields are returned with their address type.
   my $final_recipient = $h{'final-recipient'} // '';
-  $final_recipient =~ s/^rfc822;\s*//i;
-
-  my $orig_recipient = $h{'original-recipient'} // '';
-  $orig_recipient =~ s/^rfc822;\s*//i;
+  my $orig_recipient  = $h{'original-recipient'} // '';
 
   my $disp_raw = $h{'disposition'} // '';
   my ($modes, $dtype) = split /\s*;\s*/, $disp_raw, 2;

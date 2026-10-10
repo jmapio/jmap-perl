@@ -18,6 +18,10 @@ sub _contact_text_blob {
   my ($card) = @_;
   my @parts;
   push @parts, $card->{name}{full} if $card->{name}{full};
+  push @parts, map { $_->{value} // () } @{$card->{name}{components} // []};
+  push @parts, map { $_->{note}    // () } values %{$card->{notes}         // {}};
+  push @parts, map { ($_->{service} // (), $_->{uri} // (), $_->{user} // ()) }
+                   values %{$card->{onlineServices} // {}};
   push @parts, map { $_->{name}    // () } values %{$card->{nicknames}     // {}};
   push @parts, map { $_->{name}    // () } values %{$card->{organizations} // {}};
   push @parts, map { $_->{address} // () } values %{$card->{emails}        // {}};
@@ -32,63 +36,95 @@ sub _contact_match {
   my $Self = shift;
   my ($item, $condition, $storage) = @_;
 
+  # RFC 8620 S5.5: a FilterOperator combines its conditions
+  if (exists $condition->{operator}) {
+    my @conds = @{$condition->{conditions} || []};
+    my $op = $condition->{operator} // '';
+    if ($op eq 'AND') {
+      $Self->_contact_match($item, $_, $storage) || return 0 for @conds;
+      return 1;
+    }
+    if ($op eq 'OR') {
+      $Self->_contact_match($item, $_, $storage) && return 1 for @conds;
+      return 0;
+    }
+    if ($op eq 'NOT') {
+      $Self->_contact_match($item, $_, $storage) && return 0 for @conds;
+      return 1;
+    }
+    return 0;
+  }
+
+  # RFC 9610 S3.3.1
   if (defined $condition->{inAddressBook}) {
     return 0 unless "$item->{jaddressbookid}" eq "$condition->{inAddressBook}";
   }
 
+  return 1 unless grep { $_ ne 'inAddressBook' } keys %$condition;
+
+  my $card = $storage->{payloads}{$item->{contactuid}}
+    //= ($Self->{db}->read_jcontact_payload($item->{contactuid}) // {});
+  my $has = sub {
+    my ($needle, @values) = @_;
+    $needle = lc $needle;
+    return scalar grep { defined $_ && index(lc $_, $needle) >= 0 } @values;
+  };
+
   if (defined $condition->{uid}) {
-    return 0 unless $item->{contactuid} eq $condition->{uid};
+    # "this string exactly as its uid"
+    return 0 unless ($card->{uid} // $item->{contactuid}) eq $condition->{uid};
   }
-
-  my @text_keys = qw(text name name/given name/surname name/surname2
-                     nickname organization email phone address);
-  if (grep { defined $condition->{$_} } @text_keys) {
-    my $card = $storage->{payloads}{$item->{contactuid}}
-      //= ($Self->{db}->read_jcontact_payload($item->{contactuid}) // {});
-
-    if (defined $condition->{text}) {
-      return 0 unless index(lc _contact_text_blob($card), lc $condition->{text}) >= 0;
+  if (defined $condition->{hasMember}) {
+    # Apple-style vCard groups (X-ADDRESSBOOKSERVER-MEMBER) carry members as
+    # urn:uuid: URIs whatever the member's uid, so compare without the prefix.
+    my $want = $condition->{hasMember} =~ s/^urn:uuid://r;
+    return 0 unless ref $card->{members} eq 'HASH'
+      && grep { $card->{members}{$_} && s/^urn:uuid://r eq $want } keys %{$card->{members}};
+  }
+  if (defined $condition->{kind}) {
+    return 0 unless ($card->{kind} // 'individual') eq $condition->{kind};
+  }
+  # "before" is strictly earlier; "after" is the same or later
+  for my $prop (qw(created updated)) {
+    my $value = $card->{$prop};
+    if (defined(my $before = $condition->{"${prop}Before"})) {
+      return 0 unless defined $value && $value lt $before;
     }
-    if (defined $condition->{name}) {
-      return 0 unless index(lc($card->{name}{full} // ''), lc $condition->{name}) >= 0;
+    if (defined(my $after = $condition->{"${prop}After"})) {
+      return 0 unless defined $value && $value ge $after;
     }
-    if (defined $condition->{'name/given'}) {
-      return 0 unless index(lc _contact_name_component($card, 'given'), lc $condition->{'name/given'}) >= 0;
-    }
-    if (defined $condition->{'name/surname'}) {
-      return 0 unless index(lc _contact_name_component($card, 'surname'), lc $condition->{'name/surname'}) >= 0;
-    }
-    if (defined $condition->{'name/surname2'}) {
-      return 0 unless index(lc _contact_name_component($card, 'surname2'), lc $condition->{'name/surname2'}) >= 0;
-    }
-    if (defined $condition->{nickname}) {
-      my $needle = lc $condition->{nickname};
-      return 0 unless grep { index(lc($_->{name} // ''), $needle) >= 0 }
-                           values %{$card->{nicknames} // {}};
-    }
-    if (defined $condition->{organization}) {
-      my $needle = lc $condition->{organization};
-      return 0 unless grep { index(lc($_->{name} // ''), $needle) >= 0 }
-                           values %{$card->{organizations} // {}};
-    }
-    if (defined $condition->{email}) {
-      my $needle = lc $condition->{email};
-      return 0 unless grep { index(lc($_->{address} // ''), $needle) >= 0 }
-                           values %{$card->{emails} // {}};
-    }
-    if (defined $condition->{phone}) {
-      my $needle = lc $condition->{phone};
-      return 0 unless grep { index(lc($_->{number} // ''), $needle) >= 0 }
-                           values %{$card->{phones} // {}};
-    }
-    if (defined $condition->{address}) {
-      my $needle = lc $condition->{address};
-      return 0 unless grep {
-        index(lc(join(' ', $_->{full} // '',
-                      map { $_->{value} // '' } @{$_->{components} // []})),
-              $needle) >= 0
-      } values %{$card->{addresses} // {}};
-    }
+  }
+  if (defined $condition->{text}) {
+    return 0 unless $has->($condition->{text}, _contact_text_blob($card));
+  }
+  if (defined $condition->{name}) {
+    return 0 unless $has->($condition->{name}, $card->{name}{full},
+                           map { $_->{value} } @{$card->{name}{components} || []});
+  }
+  for my $kind (qw(given surname surname2)) {
+    next unless defined $condition->{"name/$kind"};
+    return 0 unless $has->($condition->{"name/$kind"},
+                           map { $_->{value} } grep { ($_->{kind} // '') eq $kind }
+                           @{$card->{name}{components} || []});
+  }
+  my %fields = (
+    nickname      => [ nicknames      => qw(name) ],
+    organization  => [ organizations  => qw(name) ],
+    email         => [ emails         => qw(address label) ],
+    phone         => [ phones         => qw(number label) ],
+    onlineService => [ onlineServices => qw(service uri user label) ],
+    note          => [ notes          => qw(note) ],
+  );
+  for my $cond (sort keys %fields) {
+    next unless defined $condition->{$cond};
+    my ($prop, @keys) = @{$fields{$cond}};
+    my @values = map { my $v = $_; map { $v->{$_} } @keys } values %{$card->{$prop} || {}};
+    return 0 unless $has->($condition->{$cond}, @values);
+  }
+  if (defined $condition->{address}) {
+    return 0 unless $has->($condition->{address},
+      map { ($_->{full}, map { $_->{value} } @{$_->{components} || []}) }
+      values %{$card->{addresses} || {}});
   }
 
   return 1;
@@ -109,8 +145,10 @@ my %CONTACT_SORT_PROPS = map { $_ => 1 }
   qw(created updated name name/given name/surname name/surname2);
 
 my %CONTACT_FILTER_PROPS = map { $_ => 1 }
-  qw(inAddressBook uid text name name/given name/surname name/surname2
-     nickname organization email phone address);
+  qw(inAddressBook uid hasMember kind createdBefore createdAfter
+     updatedBefore updatedAfter text name name/given name/surname
+     name/surname2 nickname organization email phone onlineService
+     address note);
 
 sub api_Contact_query {
   my $Self = shift;
@@ -143,10 +181,13 @@ sub api_Contact_query {
       my $res = 0;
       for my $cmp (@{$args->{sort}}) {
         my $prop = $cmp->{property};
-        if ($prop eq 'created') {
-          $res = ($a->{jcreated} // 0) <=> ($b->{jcreated} // 0);
-        } elsif ($prop eq 'updated') {
-          $res = ($a->{jmodseq} // 0) <=> ($b->{jmodseq} // 0);
+        if ($prop eq 'created' || $prop eq 'updated') {
+          # RFC 9610 S3.3.2: the Card's own created/updated (UTCDateTime)
+          my $acard = $storage{payloads}{$a->{contactuid}}
+            //= ($Self->{db}->read_jcontact_payload($a->{contactuid}) // {});
+          my $bcard = $storage{payloads}{$b->{contactuid}}
+            //= ($Self->{db}->read_jcontact_payload($b->{contactuid}) // {});
+          $res = ($acard->{$prop} // '') cmp ($bcard->{$prop} // '');
         } else {
           # name/* sort: load payload
           my $acard = $storage{payloads}{$a->{contactuid}}
@@ -654,7 +695,19 @@ sub api_AddressBook_set {
   # succeeded. An id the server does not know is ignored without an error.
   if (defined(my $osis = $args->{onSuccessSetIsDefault})) {
     unless (%$notCreated or %$notUpdated or %$notDestroyed) {
+      # A change made "MUST be reported in updated": every address book
+      # whose isDefault flipped, with its new value.
+      my $defaults = sub {
+        my ($r) = $Self->api_AddressBook_get({ properties => ['isDefault'] });
+        return { map { $_->{id} => ($_->{isDefault} ? 1 : 0) } @{$r->[1]{list} || []} };
+      };
+      my $before = $defaults->();
       $Self->{db}->set_default_addressbook($Self->idmap($osis));
+      my $after = $defaults->();
+      for my $id (keys %$after) {
+        next if ($before->{$id} // 0) == $after->{$id};
+        $updated->{$id}{isDefault} = $after->{$id} ? JSON::true : JSON::false;
+      }
     }
   }
 
@@ -782,10 +835,13 @@ sub api_ContactCard_queryChanges {
       my $res = 0;
       for my $cmp (@{$args->{sort}}) {
         my $prop = $cmp->{property};
-        if ($prop eq 'created') {
-          $res = ($a->{jcreated} // 0) <=> ($b->{jcreated} // 0);
-        } elsif ($prop eq 'updated') {
-          $res = ($a->{jmodseq} // 0) <=> ($b->{jmodseq} // 0);
+        if ($prop eq 'created' || $prop eq 'updated') {
+          # RFC 9610 S3.3.2: the Card's own created/updated (UTCDateTime)
+          my $acard = $storage{payloads}{$a->{contactuid}}
+            //= ($Self->{db}->read_jcontact_payload($a->{contactuid}) // {});
+          my $bcard = $storage{payloads}{$b->{contactuid}}
+            //= ($Self->{db}->read_jcontact_payload($b->{contactuid}) // {});
+          $res = ($acard->{$prop} // '') cmp ($bcard->{$prop} // '');
         } else {
           my $acard = $storage{payloads}{$a->{contactuid}}
             //= ($Self->{db}->read_jcontact_payload($a->{contactuid}) // {});
