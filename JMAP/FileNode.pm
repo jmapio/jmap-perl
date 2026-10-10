@@ -230,7 +230,9 @@ sub unique_name {
   my ($base, $ext) = $name =~ /^(.+)(\.[^.]+)\z/s ? ($1, $2) : ($name, '');
   for my $n (2 .. 100_000) {
     my $try = "$base\[$n\]$ext";
-    return $try unless $taken->{ $ci ? lc $try : $try };
+    my $k = $try;
+    if ($ci) { utf8::upgrade($k); $k = lc $k }   # Unicode lc, whatever the representation
+    return $try unless $taken->{$k};
   }
   die "no free name for $name\n";
 }

@@ -147,4 +147,80 @@ sub api_FileNode_changes {
   }];
 }
 
+
+# draft S3.2.3.  Destroys run first, so a create (or, later, a move) may
+# take a name freed in the same call; then creates, ordered so "#cid"
+# parents resolve.  WebDAV has no transactions: each item succeeds or
+# fails on its own (spec "Writes").
+sub api_FileNode_set {
+  my ($Self, $args) = @_;
+  my ($user, $accountid) = $Self->_filenode_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
+  my $oldState = "$user->{jstateFileNode}";
+  $Self->commit();
+  return ['error', { type => 'stateMismatch' }]
+    if defined $args->{ifInState} && $args->{ifInState} ne $oldState;
+  my $onExists = $args->{onExists};
+  # "unchanged" needs JMAP-CONDITIONAL, which the proxy does not offer
+  return ['error', { type => 'invalidArguments', arguments => ['onExists'],
+                     description => 'onExists must be null, "replace", "rename" or "newest"' }]
+    if defined $onExists && (ref $onExists || $onExists !~ /^(?:replace|rename|newest)\z/);
+  for my $arg (qw(create update)) {
+    return ['error', { type => 'invalidArguments', arguments => [$arg] }]
+      if defined $args->{$arg} && ref $args->{$arg} ne 'HASH';
+  }
+  return ['error', { type => 'invalidArguments', arguments => ['destroy'] }]
+    if defined $args->{destroy} && ref $args->{destroy} ne 'ARRAY';
+  my %opts = (onExists => $onExists,
+              onDestroyRemoveChildren => $args->{onDestroyRemoveChildren} ? 1 : 0,
+              ci => ($args->{compareCaseInsensitively} || $JMAP::FileNode::CAPS{caseInsensitiveNames}) ? 1 : 0);
+
+  my $scoped_lock = $Self->{db}->begin_superlock();
+  my ($destroyed, $notDestroyed) = $Self->{db}->destroy_filenodes(
+    [ map { $Self->idmap($_) } @{ $args->{destroy} || [] } ], \%opts);
+  my ($created, $notCreated, $also) = $Self->{db}->create_filenodes(
+    $args->{create} || {}, sub { $Self->idmap(shift) }, \%opts);
+  $Self->setid($_, $created->{$_}{nodeid}) for keys %$created;
+  my ($updated, $notUpdated, $also2) = ({}, {}, []);
+  if (%{ $args->{update} || {} }) {
+    if ($Self->{db}->can('update_filenodes')) {   # Task 8
+      ($updated, $notUpdated, $also2) = $Self->{db}->update_filenodes($args->{update}, sub { $Self->idmap(shift) }, \%opts);
+    }
+    else {
+      $notUpdated = { map { $_ => { type => 'serverFail', description => 'update not implemented yet' } } keys %{$args->{update}} };
+    }
+  }
+
+  # created: the id plus every property the server set or defaulted, or
+  # changed from what the client sent -- a renamed name, a resolved
+  # "#cid" parent, a rounded timestamp (RFC 8620 S5.3)
+  my $canon = JSON->new->canonical->allow_nonref;
+  my $same = sub { $canon->encode($_[0]) eq $canon->encode($_[1]) };
+  $Self->begin();
+  my (%createdOut, %byid);
+  for my $cid (sort keys %$created) {
+    my $row = $Self->{db}->filenode_row($created->{$cid}{nodeid}) or next;
+    $byid{$row->{nodeid}} = $row;
+    $byid{$row->{parentid}} //= $Self->{db}->filenode_row($row->{parentid}) if defined $row->{parentid};
+    $createdOut{$cid} = $row;
+  }
+  $user = $Self->{db}->get_user();
+  my $newState = "$user->{jstateFileNode}";
+  $Self->commit();
+  for my $cid (keys %createdOut) {
+    my $full = $Self->_filenode_object($createdOut{$cid}, \%byid);
+    my $sent = $args->{create}{$cid};
+    $createdOut{$cid} = { map { ($_ => $full->{$_}) }
+                          grep { $_ eq 'id' || !exists $sent->{$_} || !$same->($sent->{$_}, $full->{$_}) } keys %$full };
+  }
+  my %d;
+  return ['FileNode/set', {
+    accountId => "$accountid", oldState => $oldState, newState => $newState,
+    created => _nullempty(\%createdOut), notCreated => _nullempty($notCreated),
+    updated => _nullempty($updated), notUpdated => _nullempty($notUpdated),
+    destroyed => _nullempty([ grep { !$d{$_}++ } map { "$_" } @$destroyed, @$also, @$also2 ]),
+    notDestroyed => _nullempty($notDestroyed),
+  }];
+}
+
 1;

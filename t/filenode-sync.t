@@ -52,7 +52,7 @@ my $db = JMAP::ImapDB->new('synctest');
 $db->{change_cb} = sub {};
 $db->begin();
 $db->dinsert('iserver', { username => 'u', webdavURL => "http://dav.example$R/",
-                          webdavFeatures => encode_json({ etagIsContent => 0 }) });
+                          webdavFeatures => encode_json({ etagIsContent => 0, deadProps => 1 }) });   # the fake lists J: properties back
 $db->commit();
 my $api = JMAP::API->new($db);
 
@@ -193,5 +193,21 @@ $during_walk = sub {
 $during_walk = undef;
 $db->begin(); $last = $db->dgetfield('iserver', {}, 'lastfilesync'); $db->commit();
 ok(time() - $last < 5, 'the attempt is recorded for back-off');
+
+# --- a server that does not store dead properties (Cyrus): the client
+# values FileNode/set keeps in the mirror's deadprops are the only copy, and
+# a listing (which has none) must not wipe them
+$db->begin();
+$db->dupdate('iserver', { webdavFeatures => encode_json({ etagIsContent => 0, deadProps => 0 }) });
+my $bid = $db->dgetfield('jfilenodes', { href => "$R/d/b.txt", active => 1 }, 'nodeid');
+$db->ddirty('jfilenodes', { deadprops => JMAP::FileNode::dead_json({ executable => 1 }) }, { nodeid => $bid });
+$db->commit();
+delete $db->{_filefeatures};
+$tree{"$R/d/b.txt"}{dead} = {};
+$seq = rows()->{"$R/d/b.txt"}{jmodseq};
+is($db->sync_files(), 1, 'sync against a server without dead properties');
+is_deeply(decode_json(rows()->{"$R/d/b.txt"}{deadprops} // 'null'), { executable => 1 }, 'mirror-only dead properties survive');
+is(rows()->{"$R/d/b.txt"}{jmodseq}, $seq, 'and the sync is idle');
+ok(obj("$R/d/b.txt")->{executable}, 'the object still shows them');
 
 done_testing;

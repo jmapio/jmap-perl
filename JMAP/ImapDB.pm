@@ -1113,16 +1113,40 @@ sub filenode_features {
   return $Self->{_filefeatures} = $f;
 }
 
+# DBD::SQLite (without sqlite_unicode) hands text back as UTF-8 bytes,
+# while listings carry character strings: every jfilenodes read goes
+# through these, so a non-ASCII href or name compares (and is served) as
+# the characters it is.  Writes store characters as UTF-8 (_filenode_cols
+# upgrades them), and lookups by href bind the encoded bytes.
+sub _filenode_decode {
+  for my $r (grep { $_ } @_) {
+    for my $k (qw(href name)) {
+      $r->{$k} = Encode::decode_utf8($r->{$k}) if defined $r->{$k} && !utf8::is_utf8($r->{$k});
+    }
+  }
+  return $_[0];
+}
+
+# call in transaction
+sub filenode_get {
+  my ($Self, $filter) = @_;
+  my %f = %$filter;
+  $f{href} = Encode::encode_utf8($f{href}) if defined $f{href};
+  my $rows = $Self->dget('jfilenodes', \%f);
+  _filenode_decode(@$rows);
+  return $rows;
+}
+
 # call in transaction
 sub filenode_rows {
   my $Self = shift;
-  return $Self->dget('jfilenodes', { active => 1 });
+  return $Self->filenode_get({ active => 1 });
 }
 
 # call in transaction
 sub filenode_row {
   my ($Self, $nodeid) = @_;
-  return $Self->dgetone('jfilenodes', { nodeid => $nodeid, active => 1 });
+  return _filenode_decode($Self->dgetone('jfilenodes', { nodeid => $nodeid, active => 1 }));
 }
 
 # One mirror row's columns from a listing entry.  The columns hold only what
@@ -1134,10 +1158,12 @@ sub filenode_row {
 sub _filenode_cols {
   my ($e) = @_;
   my $name = $e->{href} =~ m{([^/]+)$} ? $1 : $e->{href};
+  my $href = $e->{href};
+  utf8::upgrade($_) for $name, $href;   # stored as UTF-8 (see _filenode_decode)
   my $dir = $e->{isCollection};
   my $dead = $e->{dead} || {};
   return (
-    href        => $e->{href},
+    href        => $href,
     name        => $name,
     nodetype    => $dir ? 'directory' : 'file',
     etag        => $e->{etag},
@@ -1220,12 +1246,30 @@ sub _apply_file_listing {
   my ($Self, $root, $listing, $features) = @_;
   my $mirror = $Self->filenode_rows();
   my $plan = JMAP::FileNode::reconcile($mirror, $listing, $features);
+  $Self->_apply_file_plan($plan, $mirror, $root, $features);
+  $Self->dupdate('iserver', { lastfilesync => time() });
+}
+
+# call in transaction: apply a reconcile plan.  $mirror is the set of rows
+# the plan was made from, $root the href of the home (undef when the plan
+# covers one directory's children, as in _files_refresh_dir, where
+# $parentid is that directory's nodeid).
+sub _apply_file_plan {
+  my ($Self, $plan, $mirror, $root, $features, $parentid) = @_;
+  # reconcile only knows the rows it was given: an S id still held by any
+  # row, even a destroyed one, goes to a local id instead (ids are never
+  # reused, and dinsert would silently overwrite the old row)
+  for my $e (@{$plan->{create}}) {
+    $e->{nodeid} = JMAP::FileNode::local_id()
+      if $e->{nodeid} =~ /^S/ && $Self->dcount('jfilenodes', { nodeid => $e->{nodeid} });
+  }
   my %id_by_href = map { $_->{href} => $_->{nodeid} } @$mirror;
   delete $id_by_href{ $_->{href} } for @{$plan->{destroy}};
   $id_by_href{ $_->[1]{href} } = $_->[0]{nodeid} for @{$plan->{update}};
   $id_by_href{ $_->{href} } = $_->{nodeid} for @{$plan->{create}};
   my $parent_of = sub {
     my $href = shift;
+    return $parentid unless defined $root;
     return undef if $href eq $root;
     (my $p = $href) =~ s{/[^/]+$}{};
     return $id_by_href{$p};
@@ -1237,7 +1281,7 @@ sub _apply_file_listing {
       _filenode_cols($e),
       nodeid => $e->{nodeid}, parentid => $parent_of->($e->{href}),
       changed => $now,
-      role => ($e->{href} eq $root ? 'home' : undef),
+      role => (defined $root && $e->{href} eq $root ? 'home' : undef),
     });
   }
   my %privs_changed;
@@ -1247,6 +1291,10 @@ sub _apply_file_listing {
     # Only what really differs: reconcile also counts fields the mirror
     # stores normalised (a directory's type, a missing size).
     my %cols = (parentid => $parent_of->($e->{href}), _filenode_cols($e));
+    # A server that does not store dead properties lists none: the client
+    # values kept in the mirror (FileNode/set) are then the only copy, and
+    # a listing must not wipe them (spec "Properties without a WebDAV home").
+    $cols{deadprops} = $row->{deadprops} unless $features && $features->{deadProps};
     my %diff = map { $_ => $cols{$_} } grep { ($row->{$_} // '') ne ($cols{$_} // '') } keys %cols;
     next unless %diff;
     # A node is only "changed" (new modseq, new "changed" time) when a
@@ -1273,8 +1321,361 @@ sub _apply_file_listing {
   }
   for my $row (@{$plan->{destroy}}) {
     $Self->ddirty('jfilenodes', { active => 0, changed => $now }, { nodeid => $row->{nodeid} });
+    # a one-directory plan does not list grandchildren: a vanished
+    # directory takes its whole subtree with it
+    $Self->_filenode_deactivate_subtree($row->{nodeid}, $now)
+      if !defined $root && $row->{nodetype} eq 'directory';
   }
-  $Self->dupdate('iserver', { lastfilesync => $now });
+}
+
+# call in transaction
+sub _filenode_deactivate_subtree {
+  my ($Self, $nodeid, $now) = @_;
+  my @gone;
+  for my $row (@{ $Self->_filenode_subtree($nodeid) }) {
+    $Self->ddirty('jfilenodes', { active => 0, changed => $now // time() }, { nodeid => $row->{nodeid} });
+    push @gone, $row->{nodeid};
+  }
+  return @gone;
+}
+
+# call in transaction: every active descendant of a node, parents first
+sub _filenode_subtree {
+  my ($Self, $nodeid) = @_;
+  my @all;
+  my @todo = ($nodeid);
+  while (defined(my $id = shift @todo)) {
+    for my $c (@{ $Self->filenode_get({ parentid => $id, active => 1 }) }) {
+      push @all, $c;
+      push @todo, $c->{nodeid} if $c->{nodetype} eq 'directory';
+    }
+  }
+  return \@all;
+}
+
+# Re-list one directory (PROPFIND Depth 1) and bring its children's rows
+# in line with the listing -- create, update, destroy, within that
+# directory only -- through the same reconcile + apply as a full sync.
+# Used after every write: a Depth-0 PROPFIND on a file is unreliable
+# (Cyrus answers it with an empty multistatus), so a file is always
+# refreshed through its parent.  Returns { href => row } for the children.
+sub _files_refresh_dir {
+  my ($Self, $dirhref) = @_;
+  my $features = $Self->filenode_features();
+  $Self->begin();
+  my $known = $Self->dcount('jfilenodes', { href => Encode::encode_utf8($dirhref), active => 1, nodetype => 'directory' });
+  $Self->commit();
+  return {} unless $known;   # destroyed in this call, or never seen: nothing to refresh
+  my $entries = $Self->backend_cmd('files_prop_find', "$dirhref/", 1);
+  my %seen;
+  my @listing = grep {
+    !$_->{missing} && $_->{href} =~ m{^\Q$dirhref\E/[^/]+\z}
+      && $_->{href} !~ m{/\.jmap-probe-[^/]*\z} && !$seen{$_->{href}}++
+  } @$entries;
+  $Self->begin();
+  my ($dir) = @{ $Self->filenode_get({ href => $dirhref, active => 1, nodetype => 'directory' }) };
+  unless ($dir) { $Self->commit(); return {} }
+  my $mirror = $Self->filenode_get({ parentid => $dir->{nodeid}, active => 1 });
+  my $plan = JMAP::FileNode::reconcile($mirror, \@listing, $features);
+  $Self->_apply_file_plan($plan, $mirror, undef, $features, $dir->{nodeid});
+  my %out = map { $_->{href} => $_ } @{ $Self->filenode_get({ parentid => $dir->{nodeid}, active => 1 }) };
+  $Self->commit();
+  return \%out;
+}
+
+# --- FileNode/set writes (spec "Writes").  Every write goes to WebDAV
+# first and only then to the mirror, through dmake/ddirty so the change gets
+# a modseq: FileNode/changes sees it, and sync_files throws away a walk that
+# raced it.  backend_cmd is never called inside a transaction.
+
+# draft S3.2.3 setError for a failed WebDAV write.
+sub _filenode_http_error {
+  my ($status, $what) = @_;
+  my $type = $status == 403 ? 'forbidden'
+           : $status == 507 ? 'overQuota'
+           : $status == 412 || $status == 405 ? 'alreadyExists'
+           : 'serverFail';
+  return { type => $type, description => "$what: HTTP $status" };
+}
+
+# WebDAV path of a node: collections end in "/" (Delete, Move and PropPatch
+# take the path as given).
+sub _filenode_path { my $row = shift; return $row->{nodetype} eq 'directory' ? "$row->{href}/" : $row->{href} }
+
+# Client-set values WebDAV has no slot for (spec "Properties without a
+# WebDAV home"): $dead holds them as the J: dead properties carry them --
+# UTC strings and 1/0.  They go to the server as dead properties where the
+# Probe showed it really stores them, and always into the mirror's
+# deadprops (merged), since a server without dead properties lists none
+# back.  Returns 0 if the server refused the PROPPATCH.
+sub _filenode_dead_set {
+  my ($Self, $row, $dead) = @_;
+  return 1 unless %$dead;
+  my $ok = 1;
+  $ok = $Self->backend_cmd('files_prop_patch', _filenode_path($row), $dead)
+    if $Self->filenode_features()->{deadProps};
+  return 0 unless $ok;
+  $Self->begin();
+  my $cur = $Self->dgetfield('jfilenodes', { nodeid => $row->{nodeid} }, 'deadprops');
+  my $old = defined $cur ? (eval { decode_json($cur) } || {}) : {};
+  my $json = JMAP::FileNode::dead_json({ %$old, %$dead });
+  $Self->ddirty('jfilenodes', { deadprops => $json, changed => time() }, { nodeid => $row->{nodeid} })
+    if ($json // '') ne ($cur // '');
+  $Self->commit();
+  return 1;
+}
+
+# Destroy nodes (draft S3.2.3).  Children go before their parents, so a
+# directory whose children are all being destroyed in this call is not
+# nodeHasChildren; with onDestroyRemoveChildren every descendant destroyed
+# is listed.  Each touched parent is re-listed once at the end.
+sub destroy_filenodes {
+  my ($Self, $ids, $opts) = @_;
+  my (@destroyed, %notdestroyed, %touched);
+  my %seen;
+  my @ids = grep { defined $_ && !$seen{$_}++ } @$ids;
+  my %destroying = map { $_ => 1 } @ids;
+  $Self->begin();
+  my %row = map { $_ => $Self->filenode_row($_) } @ids;
+  my %parent_href;
+  for my $r (grep { $_ && defined $_->{parentid} } values %row) {
+    my $p = $Self->filenode_row($r->{parentid});
+    $parent_href{$r->{nodeid}} = $p->{href} if $p;
+  }
+  $Self->commit();
+  my $depth = sub { my $r = $row{$_[0]} or return -1; scalar(() = $r->{href} =~ m{/}g) };
+  for my $id (sort { $depth->($b) <=> $depth->($a) || $a cmp $b } @ids) {
+    my $r = $row{$id};
+    unless ($r) { $notdestroyed{$id} = { type => 'notFound' }; delete $destroying{$id}; next }
+    unless (defined $r->{parentid}) {
+      $notdestroyed{$id} = { type => 'forbidden', description => 'the home directory cannot be destroyed' };
+      delete $destroying{$id};
+      next;
+    }
+    $Self->begin();
+    my $sub = $Self->_filenode_subtree($id);
+    $Self->commit();
+    if (!$opts->{onDestroyRemoveChildren} && grep { !$destroying{$_->{nodeid}} } @$sub) {
+      $notdestroyed{$id} = { type => 'nodeHasChildren' };
+      delete $destroying{$id};   # so its parent is not destroyed over it
+      next;
+    }
+    my $status = $r->{nodetype} eq 'directory' ? $Self->_files_delete_collection($r->{href})
+                                               : $Self->backend_cmd('files_delete', $r->{href});
+    unless ($status =~ /^2/ || $status == 404) {   # 404: already gone
+      $notdestroyed{$id} = _filenode_http_error($status, 'DELETE');
+      delete $destroying{$id};
+      next;
+    }
+    $Self->begin();
+    my $now = time();
+    $Self->ddirty('jfilenodes', { active => 0, changed => $now }, { nodeid => $id });
+    push @destroyed, $id, $Self->_filenode_deactivate_subtree($id, $now);
+    $Self->commit();
+    $touched{ $parent_href{$id} } = 1 if defined $parent_href{$id};
+  }
+  # bring the parents' other children up to date too (spec "Writes")
+  for my $dir (sort keys %touched) {
+    eval { $Self->_files_refresh_dir($dir); 1 } or warn "destroy_filenodes: re-listing $dir: $@";
+  }
+  return (\@destroyed, \%notdestroyed);
+}
+
+# DELETE a collection and make sure it is gone.  Cyrus answers 204 to a
+# DELETE of a collection that has subcollections, yet removes only its
+# files, keeps the collection and every subcollection -- and after that
+# answers 500 to any DELETE of the collection.  So subcollections are
+# deleted first, deepest first (each found with a Depth-1 listing, not
+# from the mirror, which may be behind), and a 2xx is not trusted: the
+# collection is looked up again at Depth 0 (spec "Defending against bogus
+# servers").  Returns an HTTP status; 404 counts as gone.
+sub _files_delete_collection {
+  my ($Self, $href, $depth) = @_;
+  $depth //= 0;
+  return 508 if $depth > 256;   # a bogus listing that never ends
+  my $entries = eval { $Self->backend_cmd('files_prop_find', "$href/", 1) };
+  return 404 if !$entries && $@ =~ /HTTP 404/;
+  my %seen;
+  for my $e (grep { !$_->{missing} && $_->{isCollection} && $_->{href} =~ m{^\Q$href\E/[^/]+\z} && !$seen{$_->{href}}++ }
+             @{ $entries || [] }) {
+    my $s = $Self->_files_delete_collection($e->{href}, $depth + 1);
+    return $s unless $s =~ /^2/ || $s == 404;
+  }
+  my $status = $Self->backend_cmd('files_delete', "$href/");
+  return $status unless $status =~ /^2/;
+  return $Self->backend_cmd('files_raw', 'PROPFIND', "$href/", undef, Depth => 0)->{status} == 404 ? $status : 500;
+}
+
+my %FILENODE_CREATE_PROPS = map { $_ => 1 } qw(parentId nodeType blobId target size name type
+  created modified accessed executable isSubscribed role shareWith);
+my %FILENODE_SERVER_SET = map { $_ => 1 } qw(id changed myRights);
+# RFC 6838 S4.2, with optional parameters
+my $MEDIA_TYPE = qr{^[A-Za-z0-9][A-Za-z0-9!#\$&^_.+-]{0,126}/[A-Za-z0-9][A-Za-z0-9!#\$&^_.+-]{0,126}(?:\s*;.*)?\z}s;
+
+# Validate one create; returns (\@badprops, \%clean) where %clean holds
+# nodetype and the dead-property values in the J: form.
+sub _filenode_check_create {
+  my ($c) = @_;
+  my (@bad, %v);
+  push @bad, grep { !$FILENODE_CREATE_PROPS{$_} } keys %$c;
+  push @bad, 'role' if defined $c->{role};
+  push @bad, 'shareWith' if defined $c->{shareWith};   # sharing: a later task
+  my $nodetype = $c->{nodeType} // (defined $c->{blobId} ? 'file' : defined $c->{target} ? 'symlink' : 'directory');
+  if (ref $nodetype || $nodetype !~ /^(?:file|directory)\z/) {
+    push @bad, 'nodeType';   # no symlinks over WebDAV
+    $nodetype = '';
+  }
+  push @bad, 'target' if defined $c->{target} && $nodetype;
+  push @bad, 'blobId' if $nodetype eq 'file' && (!defined $c->{blobId} || ref $c->{blobId});
+  push @bad, 'blobId' if $nodetype eq 'directory' && defined $c->{blobId};
+  push @bad, 'size' if defined $c->{size} && ($nodetype ne 'file' || ref $c->{size} || $c->{size} !~ /^\d+\z/);
+  push @bad, 'type' if defined $c->{type} && ($nodetype ne 'file' || ref $c->{type} || $c->{type} !~ $MEDIA_TYPE);
+  push @bad, 'name' if JMAP::FileNode::name_problem($c->{name});
+  push @bad, 'parentId' if !defined $c->{parentId} || ref $c->{parentId};
+  my %dead;
+  for my $k (qw(created modified accessed)) {
+    next unless exists $c->{$k};
+    # draft S3.1: a null modified/accessed means "now", which is the
+    # server's own value; created is not nullable
+    if (!defined $c->{$k}) { push @bad, $k if $k eq 'created'; next }
+    my $t = ref $c->{$k} ? undef : JMAP::FileNode::epoch($c->{$k});
+    if (defined $t) { $dead{$k} = JMAP::FileNode::utc($t) } else { push @bad, $k }
+  }
+  for my $k (qw(executable isSubscribed)) {
+    next unless exists $c->{$k};
+    if (JSON::is_bool($c->{$k})) { $dead{$k} = $c->{$k} ? 1 : 0 } else { push @bad, $k }
+  }
+  my %u;
+  return ([ grep { !$u{$_}++ } sort @bad ], { nodetype => $nodetype, dead => \%dead });
+}
+
+# Create nodes (draft S3.2.3).  $idmap resolves ids from earlier method
+# calls; "#cid" references to creations in this call resolve here, and
+# order_creates puts a creation after the one its parentId names.
+# Returns (\%created, \%notCreated, \@alsoDestroyed): created maps the
+# creation id to the node's mirror row; alsoDestroyed lists the nodes that
+# onExists "replace"/"newest" destroyed.
+sub create_filenodes {
+  my ($Self, $create, $idmap, $opts) = @_;
+  my (%created, %notcreated, @alsodestroyed);
+  my $ci = $opts->{ci};
+  my $key = sub { my $n = $_[0]; return $n unless $ci; utf8::upgrade($n); return lc $n };   # Unicode lc
+  for my $cid (@{ JMAP::FileNode::order_creates($create) }) {
+    my $c = $create->{$cid};
+    unless (ref $c eq 'HASH') { $notcreated{$cid} = { type => 'invalidArguments' }; next }
+    if (my @srv = grep { $FILENODE_SERVER_SET{$_} } keys %$c) {
+      $notcreated{$cid} = { type => 'invalidProperties', properties => [ sort @srv ],
+                            description => 'server-set properties' };
+      next;
+    }
+    my ($bad, $v) = _filenode_check_create($c);
+    my $nodetype = $v->{nodetype};
+
+    my $pid = $c->{parentId};
+    if (defined $pid && !ref $pid && $pid =~ /^#(.+)\z/s) {
+      $pid = $created{$1} ? $created{$1}{nodeid} : $idmap->($pid);
+    }
+    elsif (defined $pid && !ref $pid) { $pid = $idmap->($pid) }
+    $Self->begin();
+    my $parent = defined $pid && !ref $pid ? $Self->filenode_row($pid) : undef;
+    my $siblings = $parent ? $Self->filenode_get({ parentid => $parent->{nodeid}, active => 1 }) : [];
+    $Self->commit();
+    push @$bad, 'parentId' unless ($parent && $parent->{nodetype} eq 'directory') || grep { $_ eq 'parentId' } @$bad;
+    if (@$bad) {
+      $notcreated{$cid} = { type => 'invalidProperties', properties => [ sort @$bad ] };
+      next;
+    }
+
+    my ($content, $ctype);
+    if ($nodetype eq 'file') {
+      ($ctype, $content) = eval { $Self->get_blob($c->{blobId}) };
+      unless (defined $content) {
+        $notcreated{$cid} = { type => 'invalidProperties', properties => ['blobId'], description => 'blob not found' };
+        next;
+      }
+      if (defined $c->{size} && $c->{size} != length $content) {
+        $notcreated{$cid} = { type => 'invalidProperties', properties => ['size'],
+                              description => 'size does not match the blob' };
+        next;
+      }
+    }
+
+    # sibling names stay unique (draft S3.2.3 onExists)
+    my $name = $c->{name};
+    my ($clash) = grep { $key->($_->{name}) eq $key->($name) } @$siblings;
+    my $overwrite;   # a file replacing a file of the same name: one atomic PUT
+    if ($clash) {
+      my $mode = $opts->{onExists} // '';
+      if ($mode eq 'newest') {
+        my $dead = defined $clash->{deadprops} ? (eval { decode_json($clash->{deadprops}) } || {}) : {};
+        my $theirs = JMAP::FileNode::epoch($dead->{modified}) // $clash->{modified} // 0;
+        my $ours = defined $v->{dead}{modified} ? JMAP::FileNode::epoch($v->{dead}{modified}) : time();
+        $mode = $ours > $theirs ? 'replace' : '';
+      }
+      if ($mode eq 'rename') {
+        $name = JMAP::FileNode::unique_name($name, { map { ($key->($_->{name}) => 1) } @$siblings }, $ci);
+        if (JMAP::FileNode::name_problem($name)) {
+          $notcreated{$cid} = { type => 'alreadyExists', existingId => "$clash->{nodeid}",
+                                description => 'no free name within maxSizeFileNodeName' };
+          next;
+        }
+      }
+      elsif ($mode eq 'replace') {
+        if ($nodetype eq 'file' && $clash->{nodetype} eq 'file' && $clash->{name} eq $name) {
+          $overwrite = $clash;
+        }
+        else {
+          my ($gone, $not) = $Self->destroy_filenodes([ $clash->{nodeid} ], $opts);
+          if (my $err = $not->{ $clash->{nodeid} }) { $notcreated{$cid} = $err; next }
+          push @alsodestroyed, @$gone;
+        }
+      }
+      else {
+        $notcreated{$cid} = { type => 'alreadyExists', existingId => "$clash->{nodeid}" };
+        next;
+      }
+    }
+
+    # WebDAV first ...
+    my $href = "$parent->{href}/$name";
+    my $status = $nodetype eq 'directory'
+      ? $Self->backend_cmd('files_mkcol', $href)
+      : $Self->backend_cmd('files_put', $href, $content, type => ($c->{type} // $ctype // 'application/octet-stream'),
+                           ($overwrite ? () : (if_none_match => 1)))->{status};
+    unless ($status =~ /^2/) {
+      my $err = _filenode_http_error($status, $nodetype eq 'directory' ? 'MKCOL' : 'PUT');
+      if ($err->{type} eq 'alreadyExists') {
+        # the mirror was behind the server: catch up, and name the node
+        my $rows = eval { $Self->_files_refresh_dir($parent->{href}) } || {};
+        if (my $there = $rows->{$href}) { $err->{existingId} = "$there->{nodeid}" }
+        else { $err = { type => 'serverFail', description => $err->{description} } }
+      }
+      $notcreated{$cid} = $err;
+      next;
+    }
+    # ... then the mirror.  The node an overwrite replaced is destroyed (the
+    # draft lists it in "destroyed"), so the refresh makes a new node.
+    if ($overwrite) {
+      $Self->begin();
+      $Self->ddirty('jfilenodes', { active => 0, changed => time() }, { nodeid => $overwrite->{nodeid} });
+      $Self->commit();
+      push @alsodestroyed, $overwrite->{nodeid};
+    }
+    my $rows = eval { $Self->_files_refresh_dir($parent->{href}) } || {};
+    my $row = $rows->{$href};
+    unless ($row && $row->{nodetype} eq $nodetype) {
+      $notcreated{$cid} = { type => 'serverFail', description => 'the new node is not in its parent\'s listing' };
+      next;
+    }
+    unless ($Self->_filenode_dead_set($row, $v->{dead})) {
+      # created on the server, but not all of it: report it, and let the
+      # mirror keep what the server has (spec "Writes")
+      $notcreated{$cid} = { type => 'serverFail', description => 'PROPPATCH of dead properties failed' };
+      next;
+    }
+    $created{$cid} = $row;
+  }
+  return (\%created, \%notcreated, \@alsodestroyed);
 }
 
 # Run a file sync, and never die.  A failure (or a sync that gave up because

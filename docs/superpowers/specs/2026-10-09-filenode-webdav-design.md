@@ -181,6 +181,9 @@ unit test that replays a canned bad response:
 - Collection ETags can fail to reflect deep changes: never prune on them.
 - PROPPATCH of live properties (`getlastmodified`) is usually forbidden:
   client timestamps go to dead properties or the mirror.
+- A DELETE of a collection can answer 2xx yet leave it (Cyrus, when it
+  has subcollections): subcollections are deleted deepest first, and a
+  collection's DELETE is confirmed with a Depth-0 PROPFIND (404).
 
 ## Cyrus #drive findings (probe, 2026-10-09)
 
@@ -202,6 +205,10 @@ Enabling `webdav` in `httpmodules` serves `/dav/drive/user/<user>/`.
 - Dead-property PROPPATCH on a file answers 200 but nothing is stored.
 - A Depth-0 PROPFIND on a file returns an empty multistatus.
 - PROPPATCH of `getlastmodified` is 403.
+- DELETE of a collection that has subcollections answers 204 but removes
+  only its files, keeping itself and every subcollection; from then on a
+  DELETE of it answers 500. A collection without subcollections deletes
+  cleanly, files and all.
 - Restarting the test container breaks its authentication; WebDAV is
   enabled by building a derived image whose `/srv/testserver/imapd.conf`
   template has `webdav` in `httpmodules`.

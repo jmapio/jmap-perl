@@ -51,6 +51,7 @@ my $acap = $sess->{accounts}{$user}{accountCapabilities}{'urn:ietf:params:jmap:f
 is($acap->{maxSizeFileNodeName}, 255, 'account capability');
 
 # the root (FileNode/query arrives in a later task: find it with a full /get)
+force_sync();   # whatever else changed on the drive is in the mirror before $state is taken
 my ($all) = @{ jmap(['FileNode/get', { ids => undef }]) };
 my @top = grep { !defined $_->{parentId} } @{$all->{list}};
 is(scalar @top, 1, 'one top-level node');
@@ -103,5 +104,139 @@ $dav->Raw('DELETE', "$root/$tag/");
 force_sync();
 ($c) = @{ jmap(['FileNode/changes', { sinceState => $state }]) };
 is_deeply([ sort @{$c->{destroyed}} ], [ sort $file->{id}, $dir->{id} ], 'external DELETE destroys both') or diag explain $c;
+
+# --- FileNode/set create and destroy (Task 6)
+sub upload {
+  my $res = $http->post("$ENV{JMAP_PROXY_URL}/upload/$user/", {
+    headers => { Authorization => $auth, 'Content-Type' => 'text/plain' }, content => shift });
+  die "upload: HTTP $res->{status}" unless $res->{success};
+  return decode_json($res->{content});
+}
+sub get1 { my ($g) = @{ jmap(['FileNode/get', { ids => [ shift ] }]) }; return $g->{list}[0] }
+my $blob = upload('uploaded');
+my $tag2 = "$tag-set";
+
+my ($set) = @{ jmap(['FileNode/set', { create => { top => { parentId => $home->{id}, name => $tag2 } } }]) };
+my $top = $set->{created}{top};
+ok($top && $top->{id}, 'directory created') or diag explain $set;
+is($top->{nodeType}, 'directory', 'inferred nodeType returned');
+is($top->{blobId}, undef, 'a directory has a null blobId');
+is($top->{name}, undef, 'name was sent, so it is not echoed');
+ok(exists $top->{created} && exists $top->{changed} && exists $top->{myRights}, 'server-set and defaulted properties returned');
+is($top->{executable}, JSON::false, 'executable defaults to false');
+is($top->{isSubscribed}, JSON::true, 'isSubscribed defaults to true');
+is($set->{newState} ne $set->{oldState}, 1, 'the state moved');
+my $s0 = $set->{newState};
+
+($set) = @{ jmap(['FileNode/set', { create => {
+  sub => { parentId => '#d', name => "caf\x{e9} [2] %#?.txt", blobId => $blob->{blobId}, type => 'text/plain' },
+  d   => { parentId => $top->{id}, name => 'made dir' },
+} }]) };
+ok($set->{created}{d}{id} && $set->{created}{sub}{id}, 'directory and file (with a #ref parent) created') or diag explain $set;
+my $l = $dav->PropFind("$root/$tag2/made dir/", 1);
+ok((grep { $_->{href} eq "$root/$tag2/made dir/caf\x{e9} [2] %#?.txt" } @$l), 'on the server, escaped exactly once') or diag explain $l;
+is($set->{created}{sub}{size}, 8, 'server-set size returned');
+like($set->{created}{sub}{blobId}, qr/^d-/, 'and a blobId of its own');
+is($dav->Get("$root/$tag2/made dir/caf\x{e9} [2] %#?.txt")->{content}, 'uploaded', 'content stored');
+my $subid = $set->{created}{sub}{id};
+my $madeid = $set->{created}{d}{id};
+is(get1($subid)->{parentId}, $madeid, 'the #ref resolved to the new directory');
+is(get1($subid)->{name}, "caf\x{e9} [2] %#?.txt", 'a non-ASCII name comes back as sent');
+force_sync();
+is(get1($subid)->{name}, "caf\x{e9} [2] %#?.txt", 'and a sync keeps the node (and its id)');
+
+my ($ch) = @{ jmap(['FileNode/changes', { sinceState => $s0 }]) };
+is_deeply([ sort @{$ch->{created}} ], [ sort $subid, $madeid ], '/changes sees the creations') or diag explain $ch;
+
+($set) = @{ jmap(['FileNode/set', { create => { again => { parentId => $madeid, name => "caf\x{e9} [2] %#?.txt", blobId => $blob->{blobId} } } }]) };
+is($set->{notCreated}{again}{type}, 'alreadyExists', 'name clash is alreadyExists');
+is($set->{notCreated}{again}{existingId}, $subid, 'with existingId');
+
+($set) = @{ jmap(['FileNode/set', { compareCaseInsensitively => JSON::true,
+  create => { again => { parentId => $madeid, name => "CAF\x{c9} [2] %#?.TXT", blobId => $blob->{blobId} } } }]) };
+is($set->{notCreated}{again}{type}, 'alreadyExists', 'compareCaseInsensitively finds the clash');
+
+($set) = @{ jmap(['FileNode/set', { onExists => 'rename', create => { r => { parentId => $madeid, name => "caf\x{e9} [2] %#?.txt", blobId => $blob->{blobId} } } }]) };
+is($set->{created}{r}{name}, "caf\x{e9} [2] %#?[2].txt", 'onExists rename returns the new name') or diag explain $set;
+
+($set) = @{ jmap(['FileNode/set', { onExists => 'unchanged', create => { u => { parentId => $madeid, name => 'u', blobId => $blob->{blobId} } } }]) };
+is($set->{type}, 'invalidArguments', 'onExists unchanged needs JMAP-CONDITIONAL: invalidArguments');
+($set) = @{ jmap(['FileNode/set', { onExists => 'bogus', create => {} }]) };
+is($set->{type}, 'invalidArguments', 'unknown onExists');
+
+my $blob2 = upload('replacement');
+($set) = @{ jmap(['FileNode/set', { onExists => 'replace', create => { rep => { parentId => $madeid, name => "caf\x{e9} [2] %#?.txt", blobId => $blob2->{blobId} } } }]) };
+ok($set->{created}{rep}{id}, 'onExists replace creates') or diag explain $set;
+isnt($set->{created}{rep}{id}, $subid, 'a new node');
+ok((grep { $_ eq $subid } @{ $set->{destroyed} || [] }), 'the replaced node is listed as destroyed');
+is($dav->Get("$root/$tag2/made dir/caf\x{e9} [2] %#?.txt")->{content}, 'replacement', 'new content on the server');
+$subid = $set->{created}{rep}{id};
+
+($set) = @{ jmap(['FileNode/set', { create => {
+  bad   => { parentId => $madeid, name => 'a/b' },
+  dot   => { parentId => $madeid, name => '..' },
+  noname => { parentId => $madeid },
+  nopar => { name => 'orphan' },
+  sym   => { parentId => $madeid, name => 'l', target => ['x'] },
+  fdir  => { parentId => $madeid, name => 'x', nodeType => 'file' },
+  srv   => { parentId => $madeid, name => 'y', id => 'Lx' },
+  size  => { parentId => $madeid, name => 'z', blobId => $blob->{blobId}, size => 3 },
+  mt    => { parentId => $madeid, name => 'w', blobId => $blob->{blobId}, type => 'not a type' },
+  role  => { parentId => $madeid, name => 'v', role => 'trash' },
+  infile => { parentId => $subid, name => 'v' },
+} }]) };
+my %want = (bad => 'name', dot => 'name', noname => 'name', nopar => 'parentId', sym => 'nodeType',
+            fdir => 'blobId', srv => 'id', size => 'size', mt => 'type', role => 'role', infile => 'parentId');
+for my $k (sort keys %want) {
+  is($set->{notCreated}{$k}{type}, 'invalidProperties', "$k: invalidProperties");
+  ok((grep { $_ eq $want{$k} } @{ $set->{notCreated}{$k}{properties} || [] }), "$k: names $want{$k}")
+    or diag explain $set->{notCreated}{$k};
+}
+
+# client-set values the server cannot store live in the mirror (R4) and survive a sync
+($set) = @{ jmap(['FileNode/set', { create => { dp => { parentId => $madeid, name => 'dp.txt', blobId => $blob->{blobId},
+  modified => '2001-02-03T04:05:06Z', created => '2000-01-01T00:00:00Z', executable => JSON::true, isSubscribed => JSON::false } } }]) };
+my $dp = $set->{created}{dp};
+ok($dp && $dp->{id}, 'created with client-set properties') or diag explain $set;
+ok(!exists $dp->{modified} && !exists $dp->{executable}, 'values the client sent are not echoed');
+force_sync();
+my $dpg = get1($dp->{id});
+is($dpg->{modified}, '2001-02-03T04:05:06Z', 'modified kept across a sync');
+is($dpg->{created}, '2000-01-01T00:00:00Z', 'created kept');
+is($dpg->{executable}, JSON::true, 'executable kept');
+is($dpg->{isSubscribed}, JSON::false, 'isSubscribed kept');
+is($dpg->{size}, 8, 'the server size is still the server size');
+
+($set) = @{ jmap(['FileNode/set', { destroy => [ $top->{id} ] }]) };
+is($set->{notDestroyed}{ $top->{id} }{type}, 'nodeHasChildren', 'non-empty directory without onDestroyRemoveChildren');
+($set) = @{ jmap(['FileNode/set', { destroy => [ $home->{id}, 'Lnosuchnode' ] }]) };
+is($set->{notDestroyed}{ $home->{id} }{type}, 'forbidden', 'the home cannot be destroyed');
+is($set->{notDestroyed}{Lnosuchnode}{type}, 'notFound', 'unknown id');
+
+# destroying a directory together with all its contents needs no flag
+my ($kids) = @{ jmap(['FileNode/get', { ids => undef }]) };
+my @under = map { $_->{id} } grep { ($_->{parentId} // '') eq $madeid } @{$kids->{list}};
+($set) = @{ jmap(['FileNode/set', { destroy => [ $madeid, @under ] }]) };
+is_deeply([ sort @{ $set->{destroyed} || [] } ], [ sort $madeid, @under ], 'directory plus every child, in one call') or diag explain $set;
+
+# and with onDestroyRemoveChildren every descendant is listed
+($set) = @{ jmap(['FileNode/set', { create => {
+  d1 => { parentId => $top->{id}, name => 'd1' }, d2 => { parentId => '#d1', name => 'd2' },
+  f  => { parentId => '#d2', name => 'f', blobId => $blob->{blobId} } } }]) };
+my @made = map { $set->{created}{$_}{id} } qw(d1 d2 f);
+($set) = @{ jmap(['FileNode/set', { onDestroyRemoveChildren => JSON::true, destroy => [ $top->{id} ] }]) };
+is_deeply([ sort @{ $set->{destroyed} || [] } ], [ sort $top->{id}, @made ], 'destroyed with all its descendants listed') or diag explain $set;
+is($dav->Raw('PROPFIND', "$root/$tag2/", undef, Depth => 0)->{status}, 404, 'gone from the server');
+force_sync();
+my ($gone) = @{ jmap(['FileNode/get', { ids => [ $top->{id}, @made ] }]) };
+is(scalar @{$gone->{list}}, 0, 'and stays gone after a sync');
+
+# destroy a and create a in one call: the name is free at the end
+my ($mk) = @{ jmap(['FileNode/set', { create => { a => { parentId => $home->{id}, name => "$tag-a", blobId => $blob->{blobId} } } }]) };
+($set) = @{ jmap(['FileNode/set', { destroy => [ $mk->{created}{a}{id} ],
+  create => { a2 => { parentId => $home->{id}, name => "$tag-a", blobId => $blob->{blobId} } } }]) };
+ok($set->{created}{a2}, 'destroy-then-create of the same name in one /set') or diag explain $set;
+is_deeply($set->{destroyed}, [ $mk->{created}{a}{id} ], 'and the destroy is reported');
+jmap(['FileNode/set', { destroy => [ $set->{created}{a2}{id} ] }]);
 
 done_testing;
