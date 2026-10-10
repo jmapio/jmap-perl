@@ -29,7 +29,7 @@ sub local_id  { return 'L' . lc(new_uuid_string() =~ s/-//gr) }
 sub server_id { return 'S' . substr(sha1_hex(encode_utf8($_[0])), 0, 32) }
 
 sub blob_id { my ($nodeid, $etag) = @_; return "d-$nodeid-" . substr(sha1_hex(encode_utf8($etag // '')), 0, 16) }
-sub parse_blob_id { return ($_[0] // '') =~ /^d-([LS][0-9a-f]{32}|[LS]\w+)-([0-9a-f]{16})$/ ? ($1, $2) : () }
+sub parse_blob_id { return ($_[0] // '') =~ /^d-([LS][0-9a-f]{32}|[LS]\w+)-([0-9a-f]{16})\z/ ? ($1, $2) : () }
 
 # draft S3.1 "name" and the capability: non-empty, <= 255 UTF-8 octets, no
 # forbidden characters or names, no control characters.
@@ -45,16 +45,26 @@ sub name_problem {
 }
 
 # draft S3.2.5 nameMatch: * ? [set] [!set] [^set], anchored, case-insensitive.
+# nameMatch comes straight from clients, so this never dies: a bracket set
+# that cannot be compiled (e.g. a reversed range like [z-a]) and an
+# unterminated '[' are both treated as literal text.
 sub glob_regex {
   my $glob = shift // '';
   my $re = '';
   while (length $glob) {
-    if    ($glob =~ s/^\*//)                { $re .= '.*' }
-    elsif ($glob =~ s/^\?//)                { $re .= '.' }
-    elsif ($glob =~ s/^\[([!^]?)([^\]]+)\]//) {
+    if    ($glob =~ s/^\*//) { $re .= '.*' }
+    elsif ($glob =~ s/^\?//) { $re .= '.' }
+    elsif ($glob =~ /^\[([!^]?)([^\]]+)\]/) {
       my ($neg, $set) = ($1, $2);
-      $set =~ s/([\\\]\[^])/\\$1/g;
-      $re .= '[' . ($neg ? '^' : '') . $set . ']';
+      (my $escaped = $set) =~ s/([\\\]\[^])/\\$1/g;
+      my $cls = ($neg ? '^' : '') . $escaped;
+      if (eval { qr/[$cls]/; 1 }) {
+        $re .= "[$cls]";
+        substr($glob, 0, length($neg) + length($set) + 2, '');
+      }
+      else {
+        $re .= '\\['; substr($glob, 0, 1, '');
+      }
     }
     else { $glob =~ s/^(.)//s; $re .= quotemeta $1 }
   }
@@ -88,10 +98,14 @@ sub rights {
 }
 
 sub utc { my $t = shift; return defined $t ? strftime('%Y-%m-%dT%H:%M:%SZ', gmtime($t)) : undef }
+
+# Always returns exactly one value (int or undef), never an empty list, so it
+# is safe inside hash constructors.
 sub epoch {
   my $s = shift // '';
-  return undef unless $s =~ /^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(?:\.\d+)?Z$/;
-  return eval { timegm($6, $5, $4, $3, $2 - 1, $1) };
+  return undef unless $s =~ /^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(?:\.\d+)?Z\z/;
+  my $t = eval { timegm($6, $5, $4, $3, $2 - 1, $1) };
+  return $t;
 }
 
 1;
