@@ -1567,6 +1567,7 @@ CREATE TABLE IF NOT EXISTS jfilenodes (
   executable INTEGER,
   isSubscribed INTEGER,
   deadprops TEXT,
+  sharewith TEXT,
   jcreated INTEGER,
   jmodseq INTEGER,
   mtime DATE,
@@ -1748,7 +1749,7 @@ CREATE TABLE IF NOT EXISTS jfilenodes (
   etag TEXT, ctag TEXT, size INTEGER, type TEXT, created INTEGER,
   modified INTEGER, accessed INTEGER, changed INTEGER, fileid TEXT,
   fingerprint TEXT, privs TEXT, role TEXT, executable INTEGER,
-  isSubscribed INTEGER, deadprops TEXT, jcreated INTEGER, jmodseq INTEGER,
+  isSubscribed INTEGER, deadprops TEXT, sharewith TEXT, jcreated INTEGER, jmodseq INTEGER,
   mtime DATE, active BOOLEAN
 )
 EOF

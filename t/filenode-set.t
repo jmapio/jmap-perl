@@ -17,6 +17,12 @@ require JMAP::API;
 my $R = '/dav/drive/user/u';
 my $T0 = 1_700_000_000;
 my (%tree, @log, %fail, $bogus_delete, $deadprops_stored);
+# sharing: each collection's own (non-inherited) ACEs, the principals the
+# server knows, and an override for the answer to an ACL request
+my (%acl, %principal, $acl_answer, @acl_reqs, $acl_tree);
+my $OWNER = '/dav/principals/user/u/';
+my $SELF_ACE = { principal => 'self', invert => 0, grant => ['all'], deny => [], inherited => 0, protected => 0 };
+sub aces_of { my $h = shift; return [ map { +{ %$_ } } @{ $acl{$h} || [ $SELF_ACE ] } ] }
 my $etag = 0;
 sub reset_tree {
   %tree = ($R => { href => $R, isCollection => 1, etag => 'r', modified => $T0, dead => {} });
@@ -35,12 +41,36 @@ no warnings qw(redefine once);
   return $fail{$cmd} if $fail{$cmd} && $cmd ne 'files_put';
   if ($cmd eq 'files_prop_find') {
     my $self = $tree{$dir} or die "PROPFIND $path: HTTP 404\n";
-    return [ { %$self } ] if $a[0] == 0;
-    return [ { %$self }, map { +{ %{ $tree{$_} } } } kids($dir) ];
+    my $with = sub {   # a listing that asks for the ACL gets it, and the owner
+      my $e = { %{ $_[0] } };
+      return $e unless ref $a[1] eq 'HASH' && $a[1]{acl};
+      $e->{owner} = $OWNER;
+      $e->{acl} = $e->{isCollection} ? aces_of($e->{href})
+                : [ map { +{ %$_, inherited => 1 } } @{ aces_of($e->{href} =~ s{/[^/]+\z}{}r) } ];
+      return $e;
+    };
+    return [ $with->($self) ] if $a[0] == 0;
+    return [ $with->($self), map { $with->($tree{$_}) } kids($dir) ];
   }
   if ($cmd eq 'files_raw') {   # PROPFIND Depth 0, status only
     die "unexpected raw $a[0]" unless $a[0] eq 'PROPFIND';
+    return { status => $principal{$path} ? 207 : 404 } if $path =~ m{^/dav/principals/};
     return { status => $tree{$dir} ? 207 : 404 };
+  }
+  if ($cmd eq 'files_acl_info') {
+    return undef unless $tree{$dir} && $tree{$dir}{isCollection};
+    return { aces => aces_of($dir), owner => $OWNER, ($acl_tree ? (privileges => $acl_tree) : ()),
+             principalCollections => ['/dav/principals/user/'] };
+  }
+  if ($cmd eq 'files_set_acl') {
+    my ($aces) = @a;
+    push @acl_reqs, [ $dir, $aces ];
+    if ($acl_answer) { my $r = $acl_answer->($dir, $aces); return $r if $r }
+    # RFC 3744 S8.1.1 DAV:recognized-principal
+    return { status => 403, error => 'recognized-principal' }
+      if grep { $_->{principal} =~ m{^/} && !$principal{ $_->{principal} } } @$aces;
+    $acl{$dir} = [ map { +{ %$_ } } @$aces ];
+    return { status => 200 };
   }
   if ($cmd eq 'files_put') {
     my ($bytes, %o) = @a;
@@ -506,7 +536,10 @@ is_deeply($set->{notUpdated}{$id{a}}{properties}, ['nodeType'], 'nodeType is imm
 $set = set(update => { $id{a} => { id => 'Lother', size => 1, myRights => {} } })->[1];
 is_deeply($set->{notUpdated}{$id{a}}{properties}, [ qw(id myRights size) ], 'server-set properties');
 $set = set(update => { $id{a} => { shareWith => { u2 => {} } } })->[1];
-is_deeply($set->{notUpdated}{$id{a}}{properties}, ['shareWith'], 'shareWith: not yet');
+is_deeply($set->{notUpdated}{$id{a}}, { type => 'invalidProperties', properties => ['shareWith'] },
+          'shareWith on a server without ACLs: invalidProperties (spec "Sharing")');
+is(get($id{a})->{$id{a}}{shareWith}, undef, 'and it reads as null');
+ok(!get($id{a})->{$id{a}}{myRights}{mayShare}, 'with mayShare false');
 $set = set(update => { $id{a} => { name => 'x/y' }, $id{b} => { parentId => $id{a} }, $id{c} => { parentId => 'Lnosuch' } })->[1];
 is_deeply($set->{notUpdated}{$id{a}}{properties}, ['name'], 'a bad name');
 is_deeply($set->{notUpdated}{$id{b}}{properties}, ['parentId'], 'a file is no parent');
@@ -693,13 +726,13 @@ for my $flag (0, 1) {
 # that update is refused: no destroy in the call may take it, and no replace
 # may overwrite it
 sub files_under { my $p = shift; return [ sort grep { m{^\Q$p\E/} && !$tree{$_}{isCollection} } keys %tree ] }
-# refused in step 1 (shareWith), inside the directory a replace displaces
+# refused in step 1 (a bad shareWith), inside the directory a replace displaces
 {
   my $x = mk(D => { parentId => $home, name => 'R13' }, f => { parentId => '#D', name => 'f.txt', blobId => 'f-y' },
              s => { parentId => '#D', name => 's2' }, k => { parentId => '#s', name => 'k.txt', blobId => 'f-x' });
   $set = set(onExists => 'replace', onDestroyRemoveChildren => JSON::true,
              update => { $x->{f} => { name => 's2' },
-                         $x->{k} => { parentId => $x->{D}, name => 'k.txt', shareWith => { u2 => {} } } })->[1];
+                         $x->{k} => { parentId => $x->{D}, name => 'k.txt', shareWith => 'not an object' } })->[1];
   is($set->{notUpdated}{$x->{k}}{type}, 'invalidProperties', 'k is refused in step 1') or diag explain $set;
   is($set->{notUpdated}{$x->{f}}{type}, 'nodeHasChildren', 'so the replace that would take k with s2 is refused') or diag explain $set;
   ok(!$set->{destroyed}, 'nothing is destroyed');
@@ -730,7 +763,7 @@ sub files_under { my $p = shift; return [ sort grep { m{^\Q$p\E/} && !$tree{$_}{
 {
   my $x = mk(D => { parentId => $home, name => 'R15' }, k => { parentId => '#D', name => 'k.txt', blobId => 'f-x' });
   $set = set(onDestroyRemoveChildren => JSON::true, destroy => [ $x->{D} ],
-             update => { $x->{k} => { parentId => $home, shareWith => { u2 => {} } } })->[1];
+             update => { $x->{k} => { parentId => $home, shareWith => 'not an object' } })->[1];
   is($set->{notUpdated}{$x->{k}}{type}, 'invalidProperties', 'the move out is refused') or diag explain $set;
   is($set->{notDestroyed}{$x->{D}}{type}, 'nodeHasChildren', 'so the destroy is refused, flag or no flag') or diag explain $set;
   ok(!$set->{destroyed} && $tree{"$R/R15/k.txt"}, 'k is still there');
@@ -751,7 +784,7 @@ sub files_under { my $p = shift; return [ sort grep { m{^\Q$p\E/} && !$tree{$_}{
   my $x = mk(D => { parentId => $home, name => 'R16' }, a => { parentId => '#D', name => 'a.txt', blobId => 'f-y' },
              b => { parentId => '#D', name => 'b.txt', blobId => 'f-x' });
   @log = ();
-  $set = set(onExists => 'replace', update => { $x->{a} => { name => 'b.txt' }, $x->{b} => { name => 'c.txt', shareWith => {} } })->[1];
+  $set = set(onExists => 'replace', update => { $x->{a} => { name => 'b.txt' }, $x->{b} => { name => 'c.txt', shareWith => 'not an object' } })->[1];
   is($set->{notUpdated}{$x->{b}}{type}, 'invalidProperties', 'b\'s move away is refused') or diag explain $set;
   is_deeply($set->{notUpdated}{$x->{a}}, { type => 'alreadyExists', existingId => $x->{b} }, 'so a may not replace it') or diag explain $set;
   ok(!$set->{destroyed} && !grep({ /files_move|files_delete/ } @log), 'nothing moved or deleted');
@@ -762,7 +795,7 @@ sub files_under { my $p = shift; return [ sort grep { m{^\Q$p\E/} && !$tree{$_}{
   my $x = mk(D => { parentId => $home, name => 'R17' }, f => { parentId => '#D', name => 'f.txt', blobId => 'f-y' },
              s => { parentId => '#D', name => 's2' }, k => { parentId => '#s', name => 'k.txt', blobId => 'f-x' });
   $set = set(onExists => 'replace', onDestroyRemoveChildren => JSON::true,
-             update => { $x->{f} => { name => 's2' }, $x->{s} => { parentId => $home, shareWith => {} } })->[1];
+             update => { $x->{f} => { name => 's2' }, $x->{s} => { parentId => $home, shareWith => 'not an object' } })->[1];
   is($set->{notUpdated}{$x->{s}}{type}, 'invalidProperties', 's2\'s move is refused') or diag explain $set;
   is_deeply($set->{notUpdated}{$x->{f}}, { type => 'alreadyExists', existingId => $x->{s} }, 'so f may not replace it') or diag explain $set;
   ok(!$set->{destroyed}, 'nothing is destroyed');
@@ -785,17 +818,166 @@ sub files_under { my $p = shift; return [ sort grep { m{^\Q$p\E/} && !$tree{$_}{
   $x = mk(s => { parentId => $x->{D}, name => 's3' }, k => { parentId => '#s', name => 'k.txt', blobId => 'f-x' });
   $set = set(onExists => 'replace', onDestroyRemoveChildren => JSON::true,
              create => { n => { parentId => rows()->{"$R/R18"}{nodeid}, name => 's3', blobId => 'f-y' } },
-             update => { $x->{k} => { parentId => $home, shareWith => {} } })->[1];
+             update => { $x->{k} => { parentId => $home, shareWith => 'not an object' } })->[1];
   is($set->{notUpdated}{$x->{k}}{type}, 'invalidProperties', 'k\'s move is refused') or diag explain $set;
   is($set->{notCreated}{n}{type}, 'nodeHasChildren', 'so the create may not replace the directory over it') or diag explain $set;
   ok(!$set->{destroyed} && $tree{"$R/R18/s3/k.txt"} && $tree{"$R/R18/s3"}{isCollection}, 'k and s3 are still there');
   # a create at the name of a file whose own move was refused
   $set = set(onExists => 'replace', create => { n => { parentId => $x->{s}, name => 'k.txt', blobId => 'f-y' } },
-             update => { $x->{k} => { name => 'z.txt', shareWith => {} } })->[1];
+             update => { $x->{k} => { name => 'z.txt', shareWith => 'not an object' } })->[1];
   is($set->{notUpdated}{$x->{k}}{type}, 'invalidProperties', 'k\'s rename is refused') or diag explain $set;
   is_deeply([ @{ $set->{notCreated}{n} }{qw(type existingId)} ], [ 'alreadyExists', $x->{k} ], 'so the create may not overwrite it') or diag explain $set;
   is(content("$R/R18/s3/k.txt"), '8:text/plain', 'k keeps its content');
   ok(!$set->{destroyed}, 'nothing is destroyed');
+}
+
+# --- sharing: shareWith over RFC 3744 ACLs (Task 10)
+{
+  features(acl => 1, principalBase => '/dav/principals/user/');
+  %principal = map { ("/dav/principals/user/$_/" => 1) } qw(u user2 user3);
+  my $t = JSON::true; my $f = JSON::false;
+  my %none = map { ($_ => $f) } qw(mayRead mayAddChildren mayRename mayDelete mayModifyContent mayShare);
+  my $x = mk(S => { parentId => $home, name => 'S1' }, k => { parentId => '#S', name => 'k.txt', blobId => 'f-x' },
+             T => { parentId => $home, name => 'S2' });
+  my $obj = get($x->{S})->{$x->{S}};
+  ok($obj->{myRights}{mayShare}, 'a directory on an ACL server: mayShare');
+  is($obj->{shareWith}, undef, 'shared with nobody: null');
+  ok(!get($x->{k})->{$x->{k}}{myRights}{mayShare}, 'a file: never mayShare (spec "Sharing")');
+
+  # set it
+  my ($st0) = $api->api_FileNode_get({ accountId => $db->accountid(), ids => [] });
+  @acl_reqs = ();
+  $set = set(update => { $x->{S} => { shareWith => { user2 => { mayRead => $t } } } })->[1];
+  ok(exists $set->{updated}{$x->{S}}, 'shareWith set') or diag explain $set;
+  is(scalar @acl_reqs, 1, 'one ACL request');
+  is_deeply($acl_reqs[0][1], [ $SELF_ACE, { principal => '/dav/principals/user/user2/', grant => ['read'], deny => [] } ],
+            'it keeps the self ACE and grants user2 read') or diag explain \@acl_reqs;
+  is_deeply(get($x->{S})->{$x->{S}}{shareWith}, { user2 => { %none, mayRead => $t } }, 'FileNode/get reads it back');
+  my ($ch) = $api->api_FileNode_changes({ accountId => $db->accountid(), sinceState => $st0->[1]{state} });
+  is_deeply($ch->[1]{updated}, [ $x->{S} ], 'FileNode/changes reports the node') or diag explain $ch;
+  my $state1 = $ch->[1]{newState};
+
+  # the same value again: nothing to do (stripped as unchanged)
+  @acl_reqs = ();
+  $set = set(update => { $x->{S} => { shareWith => { user2 => { %none, mayRead => $t } } } })->[1];
+  ok(exists $set->{updated}{$x->{S}} && !@acl_reqs, 'the current value: no request');
+
+  # patch paths (RFC 8620 S5.3)
+  $set = set(update => { $x->{S} => { 'shareWith/user3' => { mayRead => $t, mayAddChildren => $t }, 'shareWith/user2/mayShare' => $t } })->[1];
+  ok(exists $set->{updated}{$x->{S}}, 'patched') or diag explain $set;
+  is_deeply(get($x->{S})->{$x->{S}}{shareWith},
+            { user2 => { %none, mayRead => $t, mayShare => $t }, user3 => { %none, mayRead => $t, mayAddChildren => $t } }, 'both paths applied');
+  $set = set(update => { $x->{S} => { 'shareWith/user3' => undef } })->[1];
+  is_deeply([ keys %{ get($x->{S})->{$x->{S}}{shareWith} } ], ['user2'], 'a null path removes a user');
+  $set = set(update => { $x->{S} => { 'shareWith/nobody/mayRead' => $t } })->[1];
+  is($set->{notUpdated}{$x->{S}}{type}, 'invalidPatch', 'a path below a user who is not there');
+  $set = set(update => { $x->{S} => { shareWith => {}, 'shareWith/user2' => undef } })->[1];
+  is($set->{notUpdated}{$x->{S}}{type}, 'invalidPatch', 'shareWith and a path below it');
+
+  # bad values: invalidProperties, and nothing sent
+  @acl_reqs = ();
+  for my $bad ('nope', [], { user2 => 1 }, { user2 => { mayRead => 1 } }, { user2 => { mayFly => $t } },
+               { 'a/b' => { mayRead => $t } }, { qq{a"b<c} => { mayRead => $t } }, { '..' => { mayRead => $t } }) {
+    $set = set(update => { $x->{S} => { shareWith => $bad } })->[1];
+    is_deeply([ @{ $set->{notUpdated}{$x->{S}} || {} }{qw(type properties)} ], [ 'invalidProperties', ['shareWith'] ],
+              'invalid: ' . JSON->new->allow_nonref->canonical->encode($bad)) or diag explain $set;
+  }
+  $set = set(update => { $x->{S} => { 'shareWith/a~1b' => { mayRead => $t } } })->[1];
+  is($set->{notUpdated}{$x->{S}}{type}, 'invalidProperties', 'a "/" smuggled in through ~1');
+  $set = set(update => { $x->{S} => { shareWith => { u => { mayRead => $t } } } })->[1];
+  is($set->{notUpdated}{$x->{S}}{type}, 'invalidProperties', 'the owner cannot be a sharee');
+  is(scalar @acl_reqs, 0, 'none of them reached the server') or diag explain \@acl_reqs;
+
+  # rights: a file, and a directory without write-acl
+  $set = set(update => { $x->{k} => { shareWith => { user2 => { mayRead => $t } } } })->[1];
+  is($set->{notUpdated}{$x->{k}}{type}, 'forbidden', 'a file: forbidden (no mayShare)');
+  $tree{"$R/S2"}{privileges} = [qw(read write bind unbind write-content)];
+  $db->sync_files();
+  ok(!get($x->{T})->{$x->{T}}{myRights}{mayShare}, 'no write-acl: no mayShare');
+  $set = set(update => { $x->{T} => { shareWith => { user2 => { mayRead => $t } } } })->[1];
+  is($set->{notUpdated}{$x->{T}}{type}, 'forbidden', 'so setting it is forbidden');
+  is(scalar @acl_reqs, 0, 'and nothing was sent');
+  # ... and a node the caller may not share reads as null, whatever its ACL
+  $acl{"$R/S2"} = [ $SELF_ACE, { principal => '/dav/principals/user/user2/', grant => ['read'], deny => [] } ];
+  $db->sync_files();
+  is(get($x->{T})->{$x->{T}}{shareWith}, undef, 'shareWith is null without mayShare');
+  delete $tree{"$R/S2"}{privileges};
+
+  # null clears
+  $set = set(update => { $x->{S} => { shareWith => undef } })->[1];
+  ok(exists $set->{updated}{$x->{S}}, 'null') or diag explain $set;
+  is(get($x->{S})->{$x->{S}}{shareWith}, undef, 'clears it');
+  is_deeply($acl{"$R/S1"}, [ $SELF_ACE ], 'only the self ACE is left');
+
+  # every ACE that is not a user's sharing survives a rewrite
+  my @other = ({ principal => '/dav/principals/user/user3/', invert => 0, grant => [], deny => ['write'], inherited => 0, protected => 0 },
+               { principal => '/dav/principals/group/g/', invert => 0, grant => ['read'], deny => [], inherited => 0, protected => 0 },
+               { principal => 'property', property => '{DAV:}owner', invert => 0, grant => ['read-acl'], deny => [], inherited => 0, protected => 1 });
+  $acl{"$R/S1"} = [ @other, $SELF_ACE ];
+  $principal{'/dav/principals/group/g/'} = 1;
+  $set = set(update => { $x->{S} => { shareWith => { user2 => { mayRead => $t } } } })->[1];
+  is_deeply([ map { $_->{principal} } @{ $acl_reqs[-1][1] } ],
+            [ '/dav/principals/user/user3/', '/dav/principals/group/g/', 'property', 'self', '/dav/principals/user/user2/' ],
+            'the deny, the group, the protected and the self ACEs are sent back as they were');
+
+  # Cyrus: it lists its admin, which is no principal, and will not take it back
+  $acl{"$R/S1"} = [ $SELF_ACE, { principal => '/dav/principals/user/admin/', invert => 0, grant => ['all'], deny => [], inherited => 0, protected => 0 } ];
+  $db->sync_files();
+  is(get($x->{S})->{$x->{S}}{shareWith}, undef, 'the admin ACE is not shown as sharing');
+  @acl_reqs = ();
+  $set = set(update => { $x->{S} => { shareWith => { user2 => { mayRead => $t } } } })->[1];
+  ok(exists $set->{updated}{$x->{S}}, 'recognized-principal: dropped and retried') or diag explain $set;
+  is(scalar @acl_reqs, 2, 'two requests');
+  ok(!grep({ $_->{principal} =~ /admin/ } @{ $acl_reqs[1][1] }), 'the second without the admin');
+  $set = set(update => { $x->{S} => { shareWith => { user9 => { mayRead => $t } } } })->[1];
+  is_deeply([ @{ $set->{notUpdated}{$x->{S}} }{qw(type properties)} ], [ 'invalidProperties', ['shareWith'] ], 'no such user');
+  like($set->{notUpdated}{$x->{S}}{description}, qr/user9/, 'named');
+
+  # the server's privilege tree: write-acl abstract under its admin; bind holds write-content
+  my $CY = '{http://cyrusimap.org/ns/}';
+  $acl_tree = { all => { parent => undef, abstract => 0 }, read => { parent => 'all', abstract => 0 },
+                write => { parent => 'all', abstract => 0 }, bind => { parent => 'write', abstract => 0 },
+                'write-content' => { parent => 'bind', abstract => 0 }, unbind => { parent => 'write', abstract => 0 },
+                "${CY}admin" => { parent => 'all', abstract => 0 }, 'write-acl' => { parent => "${CY}admin", abstract => 1 } };
+  $set = set(update => { $x->{S} => { shareWith => { user2 => { mayRead => $t, mayShare => $t, mayAddChildren => $t } } } })->[1];
+  is_deeply($acl_reqs[-1][1][-1]{grant}, [ 'bind', 'read', "${CY}admin" ], 'mayShare is granted as the admin privilege');
+  is_deeply($set->{updated}{$x->{S}}{shareWith},
+            { user2 => { %none, mayRead => $t, mayShare => $t, mayAddChildren => $t, mayModifyContent => $t } },
+            'the server granted more than asked: updated says what it is') or diag explain $set;
+  undef $acl_tree;
+
+  # a refused ACL after a move: the move stays, the item is serverFail
+  $acl_answer = sub { return { status => 403, error => 'need-privileges' } };
+  $set = set(update => { $x->{S} => { name => 'S1b', shareWith => { user3 => { mayRead => $t } } } })->[1];
+  is($set->{notUpdated}{$x->{S}}{type}, 'serverFail', 'move done, ACL refused: serverFail') or diag explain $set;
+  ok($tree{"$R/S1b"} && !$tree{"$R/S1"}, 'the move was made');
+  is(get($x->{S})->{$x->{S}}{name}, 'S1b', 'and the mirror has it');
+  $set = set(update => { $x->{S} => { shareWith => { user3 => { mayRead => $t } } } })->[1];
+  is($set->{notUpdated}{$x->{S}}{type}, 'forbidden', 'shareWith alone, refused: forbidden');
+  undef $acl_answer;
+
+  # behind the proxy's back: an ACL change shows up on the next sync
+  $db->sync_files();   # (the fake, like Cyrus, gave k.txt a new ETag when S1 moved)
+  my ($st2) = $api->api_FileNode_get({ accountId => $db->accountid(), ids => [] });
+  $acl{"$R/S2"} = [ $SELF_ACE, { principal => '/dav/principals/user/user3/', invert => 0, grant => ['read', 'write-acl'], deny => [], inherited => 0, protected => 0 } ];
+  $db->sync_files();
+  ($ch) = $api->api_FileNode_changes({ accountId => $db->accountid(), sinceState => $st2->[1]{state} });
+  is_deeply($ch->[1]{updated}, [ $x->{T} ], 'an ACL changed elsewhere is a change') or diag explain $ch;
+  is_deeply(get($x->{T})->{$x->{T}}{shareWith}, { user3 => { %none, mayRead => $t, mayShare => $t } }, 'and reads back');
+
+  # create with shareWith
+  $set = set(create => { n => { parentId => $home, name => 'S3', shareWith => { user2 => { mayRead => $t } } },
+                         nf => { parentId => $home, name => 'S3.txt', blobId => 'f-x', shareWith => { user2 => { mayRead => $t } } } })->[1];
+  ok($set->{created}{n}, 'a directory is created shared') or diag explain $set;
+  is_deeply(get($set->{created}{n}{id})->{ $set->{created}{n}{id} }{shareWith}, { user2 => { %none, mayRead => $t } }, 'and is');
+  is_deeply([ @{ $set->{notCreated}{nf} }{qw(type properties)} ], [ 'invalidProperties', ['shareWith'] ], 'a file is not');
+  ok(!$tree{"$R/S3.txt"}, 'and is not created');
+
+  # no ACL support: setting is invalidProperties, reading is null
+  features();
+  is(get($x->{T})->{$x->{T}}{shareWith}, undef, 'no ACLs: null');
+  $set = set(update => { $x->{T} => { shareWith => { user2 => { mayRead => $t } } } })->[1];
+  is_deeply([ @{ $set->{notUpdated}{$x->{T}} }{qw(type properties)} ], [ 'invalidProperties', ['shareWith'] ], 'no ACLs: invalidProperties');
 }
 
 ok(!$db->in_transaction(), 'no transaction left open');

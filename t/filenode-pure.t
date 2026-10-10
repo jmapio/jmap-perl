@@ -108,4 +108,87 @@ is(JMAP::FileNode::utc(JMAP::FileNode::epoch('2009-02-13T23:31:30Z')), '2009-02-
   is_deeply($eff->('ro'), ['read'], 'a non-empty set is authoritative');
 }
 
+# --- sharing (Task 10)
+{
+  my $CY = '{http://cyrusimap.org/ns/}';
+  # Cyrus's DAV:supported-privilege-set, as WebDAVTalk::parse_privilege_tree reads it
+  my %tree = (all => { parent => undef, abstract => 0 }, read => { parent => 'all', abstract => 0 },
+              write => { parent => 'all', abstract => 0 }, bind => { parent => 'write', abstract => 0 },
+              'write-content' => { parent => 'bind', abstract => 0 }, unbind => { parent => 'write', abstract => 0 },
+              "${CY}admin" => { parent => 'all', abstract => 0 },
+              'write-acl' => { parent => "${CY}admin", abstract => 1 }, 'read-acl' => { parent => "${CY}admin", abstract => 1 });
+  my $t = JSON::true; my $f = JSON::false;
+  is_deeply(JMAP::FileNode::share_rights([ 'read', "${CY}admin" ], \%tree),
+            { mayRead => $t, mayAddChildren => $f, mayRename => $f, mayDelete => $f, mayModifyContent => $f, mayShare => $t },
+            'the server\'s admin privilege holds write-acl: mayShare');
+  ok(JMAP::FileNode::share_rights(['bind'], \%tree)->{mayModifyContent}, 'Cyrus: bind holds write-content');
+  ok(!JMAP::FileNode::share_rights(['bind'], undef)->{mayModifyContent}, 'without a tree, bind is only bind');
+  ok(JMAP::FileNode::rights([ "${CY}admin" ], undef, \%tree)->{mayShare}, 'myRights use the tree too');
+
+  is_deeply(JMAP::FileNode::grant_for_rights({ mayRead => $t, mayShare => $t }, \%tree), [ 'read', "${CY}admin" ],
+            'write-acl is abstract: its nearest grantable aggregate is granted');
+  is_deeply(JMAP::FileNode::grant_for_rights({ mayRead => $t, mayAddChildren => $t, mayModifyContent => $t }, \%tree),
+            [ qw(bind read) ], 'write-content is left out where bind holds it');
+  is_deeply(JMAP::FileNode::grant_for_rights({ mayRename => $t, mayDelete => $f }, \%tree), ['unbind'], 'rename and delete are unbind');
+  is_deeply(JMAP::FileNode::grant_for_rights({ mayRead => $t, mayShare => $t }, undef), [ qw(read write-acl) ], 'no tree: the plain names');
+  is_deeply(JMAP::FileNode::grant_for_rights({ mayRead => $f }, \%tree), [], 'no rights, no privileges');
+  my %notree = (read => { parent => undef, abstract => 0 });
+  is_deeply([ JMAP::FileNode::grant_for_rights({ mayShare => $t }, \%notree) ], [ undef, 'mayShare' ],
+            'a right the server has no privilege for');
+  my %abs = (read => { parent => undef, abstract => 0 }, 'write-acl' => { parent => undef, abstract => 1 });
+  is_deeply([ JMAP::FileNode::grant_for_rights({ mayShare => $t }, \%abs) ], [ undef, 'mayShare' ],
+            'abstract with nothing grantable above it');
+
+  my $base = '/dav/principals/user/';
+  is(JMAP::FileNode::share_user('/dav/principals/user/user2/', $base), 'user2', 'principal -> user id');
+  is(JMAP::FileNode::share_user('/dav/principals/user/jane.doe@example.com/', $base), 'jane.doe@example.com', 'with a domain');
+  is(JMAP::FileNode::share_user('/dav/principals/group/staff/', $base), undef, 'a group is not a user');
+  is(JMAP::FileNode::share_user('/dav/principals/user/a/b/', $base), undef, 'not directly below the base');
+  is(JMAP::FileNode::share_user(qq{/dav/principals/user/a"b<c/}, $base), undef, 'not a safe id');
+  is(JMAP::FileNode::share_user('self', $base), undef, 'self is no user');
+  is(JMAP::FileNode::share_user('/principals/users/bob/', undef), 'bob', 'no base known: the usual shapes');
+
+  is(JMAP::FileNode::sharewith_problem(undef), undef, 'null is fine');
+  is(JMAP::FileNode::sharewith_problem({}), undef, 'so is {}');
+  is(JMAP::FileNode::sharewith_problem({ user2 => { mayRead => $t } }), undef, 'a right left out is false');
+  ok(JMAP::FileNode::sharewith_problem($_), 'bad: ' . JSON->new->allow_nonref->canonical->encode($_))
+    for 'x', [], { user2 => 1 }, { user2 => { mayRead => 1 } }, { user2 => { mayFly => $t } },
+        { 'a/b' => { mayRead => $t } }, { qq{a"b<c} => { mayRead => $t } }, { '..' => {} }, { '' => {} };
+
+  is(JMAP::FileNode::sharewith_json({ b => { mayRead => $t }, a => { mayShare => $f } }),
+     '{"b":{"mayAddChildren":false,"mayDelete":false,"mayModifyContent":false,"mayRead":true,"mayRename":false,"mayShare":false}}',
+     'canonical, every right present, users without rights left out');
+  is(JMAP::FileNode::sharewith_json({ a => {} }), undef, 'nobody left: undef');
+
+  my @aces = (
+    { principal => 'self', grant => ['all'], deny => [] },
+    { principal => '/dav/principals/user/u/', grant => ['all'], deny => [] },                 # the owner
+    { principal => '/dav/principals/user/admin/', grant => ['all'], deny => [] },             # not a principal (hidden)
+    { principal => '/dav/principals/user/user2/', grant => ['read'], deny => [] },
+    { principal => '/dav/principals/user/user2/', grant => ['bind'], deny => [] },            # merged
+    { principal => '/dav/principals/user/user3/', grant => [], deny => ['read'] },            # a deny: kept
+    { principal => '/dav/principals/user/user4/', grant => ['read'], deny => [], inherited => 1 },
+    { principal => '/dav/principals/user/user5/', grant => ['read'], deny => [], protected => 1 },
+    { principal => '/dav/principals/group/g/', grant => ['read'], deny => [] },
+  );
+  my ($share, $kept) = JMAP::FileNode::share_aces(\@aces, base => $base, owner => '/dav/principals/user/u/', tree => \%tree,
+                                                  hidden => sub { $_[0] =~ m{/admin/} });
+  is_deeply($share, { user2 => { mayRead => $t, mayAddChildren => $t, mayRename => $f, mayDelete => $f, mayModifyContent => $t, mayShare => $f } },
+            'only user2 is shared with; its ACEs are merged') or diag explain $share;
+  is_deeply([ map { $_->{principal} } @$kept ],
+            [ 'self', map { "/dav/principals/$_/" } qw(user/u user/admin user/user3 user/user4 user/user5 group/g) ],
+            'everything else is kept as it is');
+  ($share) = JMAP::FileNode::share_aces(\@aces, base => $base, me => 'user2');
+  ok($share && !exists $share->{user2} && $share->{admin}, 'the account\'s own user is never in shareWith (nor hidden here: admin)');
+}
+
+# reconcile: a changed ACL on a directory is an update
+{
+  my $row = { nodeid => 'Lx', href => '/r/d', nodetype => 'directory', etag => 'e', sharewith => undef, privs => undef, deadprops => undef };
+  my $e = { href => '/r/d', isCollection => 1, etag => 'e', dead => {} };
+  is(scalar @{ JMAP::FileNode::reconcile([$row], [ { %$e } ])->{update} }, 0, 'no ACL asked for: no update');
+  is(scalar @{ JMAP::FileNode::reconcile([$row], [ { %$e, sharewith => undef } ])->{update} }, 0, 'nobody before or after');
+  is(scalar @{ JMAP::FileNode::reconcile([$row], [ { %$e, sharewith => '{"u":{}}' } ])->{update} }, 1, 'shared now: an update');
+}
+
 done_testing;

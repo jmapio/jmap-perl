@@ -447,4 +447,79 @@ my ($u3) = @{ jmap(['FileNode/queryChanges', { filter => { parentId => $t{z} }, 
 is($u3->{type}, 'invalidArguments', 'maxChanges 0 is invalid');
 jmap(['FileNode/set', { onDestroyRemoveChildren => JSON::true, destroy => [ $t{z}, $t{b} ] }]);
 
+# --- sharing (Task 10): shareWith over the WebDAV ACL
+SKIP: {
+  my $sharee = $ENV{CYRUS_SHAREE} || ($user eq 'user2' ? 'user1' : 'user2');
+  my $peer = JMAP::Sync::WebDAVTalk->new(user => $sharee, password => 'x', url => "$ENV{CYRUS_URL}/dav/drive/user/$user/");
+  skip "the WebDAV server has no ACL support (Probe): shareWith is covered by t/filenode-set.t's fake server", 1
+    unless $dav->GetAcl("$root/");
+  my $principal = $dav->Raw('PROPFIND', "/dav/principals/user/$sharee/", undef, Depth => 0)->{status};
+  if ($principal == 404) {
+    # a clean stack has only the test user: provision the sharee (the Cyrus
+    # container's management API needs a body on PUT)
+    my $cmgmt = ($ENV{CYRUS_MGMT_URL} || 'http://localhost:8001') =~ s{/\z}{}r;
+    $http->put("$cmgmt/api/$sharee", { headers => { 'Content-Type' => 'application/json' },
+      content => encode_json({ mailboxes => [ { name => 'INBOX', subscribed => JSON::true } ], quota_kb => 102400 }) });
+    # Cyrus makes a user's DAV principal on their first DAV request
+    $peer->Raw('PROPFIND', "/dav/principals/user/$sharee/", undef, Depth => 0);
+    $principal = $dav->Raw('PROPFIND', "/dav/principals/user/$sharee/", undef, Depth => 0)->{status};
+  }
+  skip "no user $sharee on the test server (principal: HTTP $principal)", 1 if $principal == 404;
+  my $t = JSON::true; my $f = JSON::false;
+  my %none = map { ($_ => $f) } qw(mayRead mayAddChildren mayRename mayDelete mayModifyContent mayShare);
+  my ($sd) = @{ jmap(['FileNode/set', { create => { s => { parentId => $home->{id}, name => "$tag-shared" },
+                                                    sf => { parentId => '#s', name => 'inside.txt', blobId => $blob->{blobId} } } }]) };
+  my $sid = $sd->{created}{s}{id};
+  ok($sid && $sd->{created}{sf}, 'a directory to share, with a file in it') or diag explain $sd;
+  my ($g0) = @{ jmap(['FileNode/get', { ids => [ $sid, $sd->{created}{sf}{id} ], properties => [ 'myRights', 'shareWith' ] }]) };
+  my %g0 = map { $_->{id} => $_ } @{$g0->{list}};
+  ok($g0{$sid}{myRights}{mayShare}, 'the owner may share a directory');
+  is($g0{$sid}{shareWith}, undef, 'shared with nobody yet');
+  ok(!$g0{ $sd->{created}{sf}{id} }{myRights}{mayShare}, 'a file is not shareable (spec "Sharing")');
+  is($peer->Raw('GET', "$root/$tag-shared/inside.txt")->{status}, 403, "$sharee cannot read it yet");
+
+  my $before = $g0->{state};
+  my ($ss) = @{ jmap(['FileNode/set', { update => { $sid => { shareWith => { $sharee => { %none, mayRead => $t } } } } }]) };
+  ok(exists $ss->{updated}{$sid}, 'shareWith set') or diag explain $ss;
+  my $acl = $dav->GetAcl("$root/$tag-shared/");
+  ok((grep { $_->{principal} =~ m{/\Q$sharee\E/$} && grep { $_ eq 'read' } @{$_->{grant}} } @$acl), "an ACE for $sharee with read")
+    or diag explain $acl;
+  ok((grep { $_->{principal} eq 'self' && grep { $_ eq 'all' } @{$_->{grant}} } @$acl), 'the owner keeps every right') or diag explain $acl;
+  my ($sg) = @{ jmap(['FileNode/get', { ids => [ $sid ], properties => ['shareWith'] }]) };
+  is_deeply($sg->{list}[0]{shareWith}, { $sharee => { %none, mayRead => $t } }, 'shareWith reads back');
+  my ($sc) = @{ jmap(['FileNode/changes', { sinceState => $before }]) };
+  ok((grep { $_ eq $sid } @{$sc->{updated}}), 'FileNode/changes reports the node') or diag explain $sc;
+  is($peer->Raw('GET', "$root/$tag-shared/inside.txt")->{status}, 200, "$sharee can read the file now");
+  is($peer->Put("$root/$tag-shared/new.txt", 'x', type => 'text/plain')->{status}, 403, 'but not write');
+
+  # a patch path; mayShare is Cyrus's admin privilege (write-acl is abstract there)
+  my ($sp) = @{ jmap(['FileNode/set', { update => { $sid => { "shareWith/$sharee/mayShare" => $t } } }]) };
+  ok(exists $sp->{updated}{$sid}, 'patched mayShare') or diag explain $sp;
+  ($sg) = @{ jmap(['FileNode/get', { ids => [ $sid ], properties => ['shareWith'] }]) };
+  ok($sg->{list}[0]{shareWith}{$sharee}{mayShare}, 'and it reads back') or diag explain $sg;
+
+  # a sharee who is no user
+  my ($sn) = @{ jmap(['FileNode/set', { update => { $sid => { 'shareWith/nosuchuser' => { mayRead => $t } } } }]) };
+  is($sn->{notUpdated}{$sid}{type}, 'invalidProperties', 'no such user: invalidProperties') or diag explain $sn;
+  # a hostile id never reaches the server
+  ($sn) = @{ jmap(['FileNode/set', { update => { $sid => { shareWith => { qq{a"b</D:href>} => { mayRead => $t } } } } }]) };
+  is($sn->{notUpdated}{$sid}{type}, 'invalidProperties', 'an id that is no safe principal name: invalidProperties');
+
+  # null clears; the owner still has everything
+  my ($sx) = @{ jmap(['FileNode/set', { update => { $sid => { shareWith => undef } } }]) };
+  ok(exists $sx->{updated}{$sid}, 'cleared') or diag explain $sx;
+  $acl = $dav->GetAcl("$root/$tag-shared/");
+  ok(!(grep { $_->{principal} =~ m{/\Q$sharee\E/$} } @$acl), "no ACE for $sharee") or diag explain $acl;
+  is($peer->Raw('GET', "$root/$tag-shared/inside.txt")->{status}, 403, "$sharee cannot read it any more");
+  ok(scalar(grep { $_->{href} eq "$root/$tag-shared/inside.txt" } @{ $dav->PropFind("$root/$tag-shared/", 1) }), 'the owner still lists it');
+
+  # an ACL changed behind the proxy's back
+  $dav->SetAcl("$root/$tag-shared/", [ { principal => 'self', grant => ['all'] },
+                                       { principal => "/dav/principals/user/$sharee/", grant => [ 'read', 'bind' ] } ]);
+  force_sync();
+  ($sg) = @{ jmap(['FileNode/get', { ids => [ $sid ], properties => ['shareWith'] }]) };
+  ok($sg->{list}[0]{shareWith}{$sharee}{mayAddChildren}, 'an ACL set elsewhere shows up after a sync') or diag explain $sg;
+  jmap(['FileNode/set', { onDestroyRemoveChildren => JSON::true, destroy => [ $sid ] }]);
+}
+
 done_testing;

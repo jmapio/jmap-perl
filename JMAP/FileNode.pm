@@ -74,12 +74,150 @@ sub glob_regex {
 
 # RFC 3744 privileges -> draft S3.1 FilesRights.  DAV:all and DAV:write are
 # aggregates.  Deleting or moving a node is an unbind on its parent.
+#
+# $tree, when the server gave one, is its DAV:supported-privilege-set as
+# WebDAVTalk::parse_privilege_tree reads it ({ name => { parent, abstract } }):
+# an aggregate grants every privilege below it, whatever the server calls
+# it (Cyrus: write-content under bind, write-acl under its own admin).
 sub _expand {
-  my $privs = shift;
+  my ($privs, $tree) = @_;
   my %p = map { $_ => 1 } @$privs;
   @p{qw(read write write-content write-properties bind unbind write-acl read-acl)} = (1) x 8 if $p{all};
   @p{qw(write-content write-properties bind unbind)} = (1) x 4 if $p{write};
+  if ($tree && %$tree) {
+    my $more = 1;
+    while ($more) {
+      $more = 0;
+      for my $name (keys %$tree) {
+        next if $p{$name};
+        my $parent = $tree->{$name}{parent};
+        next unless defined $parent && $p{$parent};
+        $p{$name} = $more = 1;
+      }
+    }
+  }
   return \%p;
+}
+
+# --- sharing: shareWith over RFC 3744 ACLs (spec "Sharing")
+our @RIGHTS = qw(mayRead mayAddChildren mayRename mayDelete mayModifyContent mayShare);
+our %RIGHT2PRIV = (mayRead => 'read', mayAddChildren => 'bind', mayDelete => 'unbind', mayRename => 'unbind',
+                   mayModifyContent => 'write-content', mayShare => 'write-acl');
+
+# The rights one ACE's granted privileges give a sharee, on the node itself.
+sub share_rights {
+  my ($grant, $tree) = @_;
+  my $p = _expand($grant, $tree);
+  return { map { ($_ => ($p->{ $RIGHT2PRIV{$_} } ? JSON::true : JSON::false)) } @RIGHTS };
+}
+
+# FilesRights -> the privileges to grant, or (undef, $right) when a right
+# has no privilege the server lets one grant.  An abstract privilege cannot
+# be granted (RFC 3744 S5.3, DAV:no-abstract): the nearest aggregate above
+# it that is not abstract is granted instead (Cyrus: write-acl is abstract
+# under its admin privilege).  A privilege another one granted already
+# holds is left out.
+sub grant_for_rights {
+  my ($r, $tree) = @_;
+  my $known = $tree && %$tree;
+  my %want;
+  for my $right (@RIGHTS) {
+    next unless $r->{$right};
+    my $p = $RIGHT2PRIV{$right};
+    if ($known) {
+      my %seen;
+      while (1) {
+        return (undef, $right) unless $tree->{$p} && !$seen{$p}++;
+        last unless $tree->{$p}{abstract};
+        $p = $tree->{$p}{parent} // return (undef, $right);
+      }
+    }
+    $want{$p} = 1;
+  }
+  my @p = sort keys %want;
+  return [ grep { my $x = $_; !grep { $_ ne $x && _expand([$_], $tree)->{$x} } @p } @p ];
+}
+
+# A shareWith key: a JMAP user id that is safe as one segment of a principal
+# href -- no "/", nothing XML or a URL would treat specially, not "." or "..".
+# Real user names ("user2", "jane.doe@example.com") fit.
+our $SHARE_USER = qr/\A[A-Za-z0-9][A-Za-z0-9._@+-]{0,254}\z/;
+
+# The user id an ACE's principal stands for: an href directly below
+# $base (the server's user principal collection) whose name is a safe id.
+sub share_user {
+  my ($principal, $base) = @_;
+  return undef unless defined $principal && $principal =~ m{^/};
+  if (defined $base && length $base) {
+    return undef unless index($principal, $base) == 0;
+    my $rest = substr($principal, length $base);
+    my ($uid) = $rest =~ m{\A([^/]+)/?\z};
+    return defined $uid && $uid =~ $SHARE_USER ? $uid : undef;
+  }
+  my ($uid) = $principal =~ m{/principals/(?:users?/)?([^/]+)/?\z};
+  return defined $uid && $uid =~ $SHARE_USER ? $uid : undef;
+}
+
+# draft S3.1 shareWith: null, or Id[FilesRights].  Returns a problem
+# description, or undef when the value is good.  A FilesRights may leave a
+# right out (it is then false), but every value given must be a boolean.
+sub sharewith_problem {
+  my $s = shift;
+  return undef unless defined $s;
+  return 'shareWith must be an object or null' unless ref $s eq 'HASH';
+  my %ok = map { $_ => 1 } @RIGHTS;
+  for my $uid (sort keys %$s) {
+    return "not a user id this server can share with: $uid" unless $uid =~ $SHARE_USER;
+    my $r = $s->{$uid};
+    return "shareWith/$uid must be a FilesRights object" unless ref $r eq 'HASH';
+    for my $k (sort keys %$r) {
+      return "shareWith/$uid/$k is not a FilesRights property" unless $ok{$k};
+      return "shareWith/$uid/$k must be a boolean" unless JSON::is_bool($r->{$k});
+    }
+  }
+  return undef;
+}
+
+# A shareWith value in its canonical form: every right present, users with
+# no right at all left out (an ACE that grants nothing shares nothing),
+# undef when nobody is left.
+sub sharewith_normal {
+  my $s = shift;
+  return undef unless ref $s eq 'HASH';
+  my %out;
+  for my $uid (keys %$s) {
+    my $r = $s->{$uid};
+    next unless ref $r eq 'HASH';
+    my %n = map { ($_ => ($r->{$_} ? JSON::true : JSON::false)) } @RIGHTS;
+    $out{$uid} = \%n if grep { $n{$_} } @RIGHTS;
+  }
+  return %out ? \%out : undef;
+}
+
+# The mirror's sharewith column: canonical JSON, or undef for "nobody".
+my $SHARE_CANON = JSON->new->canonical->utf8;
+sub sharewith_json { my $n = sharewith_normal(shift); return $n ? $SHARE_CANON->encode($n) : undef }
+
+# The shareWith an ACL describes: the non-inherited, non-protected grant
+# ACEs naming a user principal below $base, other than the owner.  ACEs that
+# deny, invert, or name anything else (self, all, a group, a property) are
+# not a user's sharing; they are kept as they are when shareWith is set.
+# $hidden is a code ref saying whether a principal href is to be skipped
+# (the server's own not-a-principal answers, see ImapDB).
+sub share_aces {
+  my ($aces, %o) = @_;
+  my (%by, @kept);
+  for my $ace (@{ $aces || [] }) {
+    my $uid = (!$ace->{inherited} && !$ace->{protected} && !$ace->{invert} && !@{ $ace->{deny} || [] }
+               && @{ $ace->{grant} || [] }) ? share_user($ace->{principal}, $o{base}) : undef;
+    $uid = undef if defined $uid && ((defined $o{owner} && $ace->{principal} eq $o{owner})
+                                     || (defined $o{me} && $uid eq $o{me})
+                                     || ($o{hidden} && $o{hidden}->($ace->{principal})));
+    if (defined $uid) { push @{ $by{$uid} }, @{ $ace->{grant} } }
+    else { push @kept, $ace }
+  }
+  my %share = map { ($_ => share_rights($by{$_}, $o{tree})) } keys %by;
+  return (sharewith_normal(\%share), \@kept);
 }
 # R7: an empty or absent current-user-privilege-set means "not reported" (Cyrus
 # lists files with none).  Such a node inherits its parent collection's
@@ -98,11 +236,11 @@ sub effective_privs {
 }
 
 sub rights {
-  my ($privs, $parent) = @_;
+  my ($privs, $parent, $tree) = @_;
   return { map { $_ => JSON::true } qw(mayRead mayAddChildren mayRename mayDelete mayModifyContent mayShare) }
     unless defined $privs;
-  my $p  = _expand($privs);
-  my $pp = defined $parent ? _expand($parent) : { unbind => 1 };
+  my $p  = _expand($privs, $tree);
+  my $pp = defined $parent ? _expand($parent, $tree) : { unbind => 1 };
   my $b = sub { $_[0] ? JSON::true : JSON::false };
   return {
     mayRead          => $b->($p->{read}),
@@ -112,6 +250,20 @@ sub rights {
     mayModifyContent => $b->($p->{'write-content'}),
     mayShare         => $b->($p->{'write-acl'}),
   };
+}
+
+# A node's myRights (draft S3.1) from the mirror: R7's effective privileges,
+# read through the server's privilege tree, with mayShare only where the
+# proxy can share -- a directory, on a server with ACLs (spec "Sharing").
+# $parent_of maps a row to its parent row (or undef).
+sub node_rights {
+  my ($row, $parent_of, $features) = @_;
+  $features ||= {};
+  my $parent = $parent_of->($row);
+  my $r = rights(effective_privs($row, $parent_of), $parent ? effective_privs($parent, $parent_of) : undef,
+                 $features->{privileges});
+  $r->{mayShare} = JSON::false unless $features->{acl} && $row->{nodetype} eq 'directory';
+  return $r;
 }
 
 # The mirror's deadprops column: an entry's J: dead properties as canonical
@@ -155,6 +307,8 @@ sub reconcile {
     return 1 if ($row->{privs} // '') ne ($eprivs // '');
     # client-set values kept as dead properties change the object too
     return 1 if ($row->{deadprops} // '') ne (dead_json($e->{dead}) // '');
+    # sharing (a listing that asked for the ACL; ImapDB fills {sharewith})
+    return 1 if exists $e->{sharewith} && ($row->{sharewith} // '') ne ($e->{sharewith} // '');
     return scalar grep { ($row->{$_} // '') ne ($e->{$_} // '') } qw(href etag size modified type);
   };
   my $pair = sub {

@@ -9,7 +9,7 @@ use warnings;
 use parent 'Net::DAVTalk';
 use Net::DAVTalk::XMLParser;
 use Encode qw(decode_utf8 encode_utf8);
-use URI::Escape qw(uri_unescape);
+use URI::Escape qw(uri_unescape uri_escape_utf8);
 use HTTP::Date qw(str2time);
 use Digest::SHA qw(sha1_hex);
 use Data::UUID::LibUUID qw(new_uuid_string);
@@ -29,11 +29,20 @@ sub _unescape_href {
   return $path;
 }
 
+# Net::DAVTalk::XMLParser dies on the predefined "xml" prefix ("Unknown
+# namespace xml"), and Cyrus puts xml:lang on every DAV:description in a
+# supported-privilege-set.  Nothing here reads xml:* attributes: drop them.
+sub _xml_hash {
+  my $xml = shift;
+  $xml =~ s/\sxml:[A-Za-z_][\w.-]*\s*=\s*(?:"[^"]*"|'[^']*')//g;
+  return xmlToHash($xml);
+}
+
 # RFC 4918 S14.16: a multistatus of responses.  Returns normalised entries.
 sub parse_multistatus {
   my ($xml) = @_;
   return [] unless defined $xml && $xml =~ /<[^?!]/;
-  my $tree = eval { xmlToHash($xml) };
+  my $tree = eval { _xml_hash($xml) };
   return [] unless $tree;
   my @entries;
   for my $resp (_list($tree->{"${D}response"})) {
@@ -66,6 +75,8 @@ sub parse_multistatus {
           $e{privileges} = [ map { my $p = $_; map { s/^\{DAV:\}//r } grep { /^\{DAV:\}/ } keys %$p }
                              map { _list($_) } $val->{"${D}privilege"} ];
         }
+        elsif ($key eq "${D}acl")   { $e{acl} = parse_aces($val) }
+        elsif ($key eq "${D}owner") { my $o = ref $val eq 'HASH' ? _href_path($val->{"${D}href"}) : undef; $e{owner} = $o if defined $o }
         elsif ($key =~ /^\{\Q$NS_J\E\}(.+)$/) { $e{dead}{$1} = _text($val) }
       }
     }
@@ -100,9 +111,14 @@ sub Raw {
 sub _xml { my ($Self, $method, $path, $xml, %h) = @_;
   return $Self->Raw($method, $path, encode_utf8($xml), 'Content-Type' => 'application/xml; charset=utf-8', %h) }
 
+# With { acl => 1 } each entry also carries its DAV:acl (acl, as parse_aces
+# gives it) and DAV:owner (owner, an href path): Cyrus answers both in a
+# Depth-1 listing, so a sync learns every collection's sharing for free.
 sub PropFind {
-  my ($Self, $path, $depth) = @_;
-  my $res = $Self->_xml('PROPFIND', $path, $PROPFIND_BODY, Depth => $depth // 1);
+  my ($Self, $path, $depth, $o) = @_;
+  my $body = $PROPFIND_BODY;
+  $body =~ s{</D:prop>}{<D:acl/><D:owner/></D:prop>} if ref $o eq 'HASH' && $o->{acl};
+  my $res = $Self->_xml('PROPFIND', $path, $body, Depth => $depth // 1);
   die "PROPFIND $path: HTTP $res->{status}\n" unless $res->{status} == 207;
   return parse_multistatus($res->{content});
 }
@@ -169,42 +185,139 @@ sub PropPatch {
   return (($res->{content} // '') =~ m{<(?:\w+:)?status>HTTP/1\.1 (?!2)\d\d\d}) ? 0 : 1;
 }
 
-sub GetAcl {
-  my ($Self, $path) = @_;
-  my $res = $Self->_xml('PROPFIND', $path,
-    qq{<?xml version="1.0"?><D:propfind xmlns:D="DAV:"><D:prop><D:acl/></D:prop></D:propfind>}, Depth => 0);
-  return undef unless $res->{status} == 207;
-  my $tree = eval { xmlToHash($res->{content}) } or return undef;
+# --- RFC 3744 access control.  An ACE is
+#   { principal => '/principals/user/x/' (an href, unescaped, with a
+#                  trailing "/") | 'all' | 'authenticated' |
+#                  'unauthenticated' | 'self' (DAV: principals, bare) |
+#                  'property' (with property => '{ns}name'),
+#     invert => 0|1, grant => [...], deny => [...],
+#     inherited => 0|1, protected => 0|1 }
+# Privileges are named bare in DAV: ('read') and in Clark notation in any
+# other namespace ('{http://cyrusimap.org/ns/}admin'), so an ACL read back
+# can be written back without losing a server's own privileges.
+
+my $XMLNS = '{http://www.w3.org/2000/xmlns/}';
+sub _clark { my $k = shift; return $k =~ /^\{DAV:\}(.+)\z/s ? $1 : $k }
+sub _elements { my $h = shift; return ref $h eq 'HASH' ? grep { /^\{/ && index($_, $XMLNS) != 0 } keys %$h : () }
+sub _privileges {   # the privileges named in a grant, deny or prop element
+  my $x = shift;
+  return map { _clark($_) } map { _elements($_) } map { _list($_) } (ref $x eq 'HASH' ? $x->{"${D}privilege"} : undef);
+}
+sub _href_path { my $h = _text(shift); return undef unless defined $h && length $h; return _unescape_href($h) =~ s{/*\z}{/}r }
+
+sub parse_aces {
+  my $acl = shift;
   my @aces;
-  for my $resp (_list($tree->{"${D}response"})) {
-    for my $ps (_list($resp->{"${D}propstat"})) {
-      next unless (_text($ps->{"${D}status"}) // '') =~ / 200 /;
-      my $acl = $ps->{"${D}prop"}{"${D}acl"} or next;
-      for my $ace (_list($acl->{"${D}ace"})) {
-        my $p = $ace->{"${D}principal"} || {};
-        my $principal = $p->{"${D}href"} ? _unescape_href(_text($p->{"${D}href"})) . '/'
-                      : (map { s/^\{DAV:\}//r } grep { /^\{DAV:\}/ } keys %$p)[0];
-        my @grant = map { my $x = $_; map { s/^\{DAV:\}//r } grep { /^\{DAV:\}/ } keys %$x }
-                    map { _list($_) } (($ace->{"${D}grant"} || {})->{"${D}privilege"});
-        push @aces, { principal => $principal, grant => \@grant,
-                      inherited => exists $ace->{"${D}inherited"} ? 1 : 0 };
-      }
+  for my $ace (_list(ref $acl eq 'HASH' ? $acl->{"${D}ace"} : undef)) {
+    next unless ref $ace eq 'HASH';
+    my %a = (invert => 0, grant => [ _privileges($ace->{"${D}grant"}) ], deny => [ _privileges($ace->{"${D}deny"}) ],
+             inherited => exists $ace->{"${D}inherited"} ? 1 : 0, protected => exists $ace->{"${D}protected"} ? 1 : 0);
+    my $p = $ace->{"${D}principal"};
+    if (!$p && ref $ace->{"${D}invert"} eq 'HASH') { $p = $ace->{"${D}invert"}{"${D}principal"}; $a{invert} = 1 }
+    next unless ref $p eq 'HASH';
+    if (exists $p->{"${D}href"}) { $a{principal} = _href_path($p->{"${D}href"}) // next }
+    elsif (ref $p->{"${D}property"} eq 'HASH') {
+      ($a{property}) = _elements($p->{"${D}property"});
+      next unless defined $a{property};
+      $a{principal} = 'property';
     }
+    else { ($a{principal}) = map { _clark($_) } _elements($p); next unless defined $a{principal} }
+    push @aces, \%a;
   }
   return \@aces;
 }
 
-sub SetAcl {
-  my ($Self, $path, $aces) = @_;
+# DAV:supported-privilege-set (RFC 3744 S5.3) as { name => { parent, abstract } }
+sub parse_privilege_tree {
+  my ($sps, $parent, $out) = @_;
+  $out ||= {};
+  for my $sp (_list(ref $sps eq 'HASH' ? $sps->{"${D}supported-privilege"} : undef)) {
+    next unless ref $sp eq 'HASH';
+    my ($name) = map { _clark($_) } map { _elements($_) } _list($sp->{"${D}privilege"});
+    next unless defined $name && !exists $out->{$name};
+    $out->{$name} = { parent => $parent, abstract => exists $sp->{"${D}abstract"} ? 1 : 0 };
+    parse_privilege_tree($sp, $name, $out);
+  }
+  return $out;
+}
+
+# One resource's access control: { aces, owner, privileges (the tree),
+# principalCollections }.  undef when the server would not give the
+# DAV:acl property (no ACL support, or no read-acl).
+sub AclInfo {
+  my ($Self, $path) = @_;
+  my $res = $Self->_xml('PROPFIND', $path,
+    qq{<?xml version="1.0" encoding="utf-8"?><D:propfind xmlns:D="DAV:"><D:prop>}
+    . '<D:acl/><D:owner/><D:supported-privilege-set/><D:principal-collection-set/></D:prop></D:propfind>', Depth => 0);
+  return undef unless $res->{status} == 207;
+  my $tree = eval { _xml_hash($res->{content}) } or return undef;
+  (my $want = $path) =~ s{/+\z}{};
+  my @resps = _list($tree->{"${D}response"});
+  # Cyrus answers a Depth-0 PROPFIND on a collection with its members too
+  my ($resp) = (grep { _unescape_href(_text($_->{"${D}href"})) eq $want } @resps);
+  $resp //= $resps[0] if @resps == 1;
+  return undef unless $resp;
+  my %info;
+  for my $ps (_list($resp->{"${D}propstat"})) {
+    next unless (_text($ps->{"${D}status"}) // '') =~ / 2\d\d /;
+    my $prop = $ps->{"${D}prop"};
+    next unless ref $prop eq 'HASH';
+    $info{aces} = parse_aces($prop->{"${D}acl"}) if exists $prop->{"${D}acl"};
+    $info{owner} = _href_path($prop->{"${D}owner"}{"${D}href"}) if ref $prop->{"${D}owner"} eq 'HASH';
+    $info{privileges} = parse_privilege_tree($prop->{"${D}supported-privilege-set"})
+      if ref $prop->{"${D}supported-privilege-set"} eq 'HASH';
+    $info{principalCollections} = [ grep { defined } map { _href_path($_) } _list($prop->{"${D}principal-collection-set"}{"${D}href"}) ]
+      if ref $prop->{"${D}principal-collection-set"} eq 'HASH';
+  }
+  return $info{aces} ? \%info : undef;
+}
+
+sub GetAcl { my $i = $_[0]->AclInfo($_[1]); return $i ? $i->{aces} : undef }
+
+# Names come from the server's own ACL or from a client (a FileNode
+# shareWith user id), so nothing is interpolated into the XML unchecked: a
+# privilege or principal element must be an XML name, a namespace is an
+# escaped attribute, and an href is percent-encoded segment by segment
+# (a "/" inside a user id cannot add a path segment).  Anything else dies.
+my $NCNAME = qr/\A[A-Za-z_][A-Za-z0-9._-]*\z/;
+sub _xattr { my $s = _xesc(shift); $s =~ s/"/&quot;/g; return $s }
+sub _xml_element {
+  my $name = shift // '';
+  return "<D:$name/>" if $name =~ $NCNAME;
+  return qq{<X:$2 xmlns:X="} . _xattr($1) . '"/>' if $name =~ /\A\{([^{}]+)\}([A-Za-z_][A-Za-z0-9._-]*)\z/;
+  die "SetAcl: not an XML name: $name\n";
+}
+sub _xml_href {
+  my $path = shift;
+  my @seg = split m{/}, $path, -1;
+  return '<D:href>' . _xesc(join('/', map { uri_escape_utf8($_) } @seg)) . '</D:href>';
+}
+sub acl_xml {
+  my $aces = shift;
   my $xml = qq{<?xml version="1.0" encoding="utf-8"?>\n<D:acl xmlns:D="DAV:">};
   for my $ace (@$aces) {
-    my $pr = $ace->{principal} =~ m{^/} ? '<D:href>' . _xesc($ace->{principal}) . '</D:href>' : "<D:$ace->{principal}/>";
-    $xml .= "<D:ace><D:principal>$pr</D:principal><D:grant>"
-          . join('', map { "<D:privilege><D:$_/></D:privilege>" } @{$ace->{grant}})
-          . '</D:grant></D:ace>';
+    my $p = $ace->{principal} // '';
+    my $pr = $p =~ m{^/} ? _xml_href($p)
+           : $p eq 'property' ? '<D:property>' . _xml_element($ace->{property}) . '</D:property>'
+           : _xml_element($p);
+    $pr = "<D:principal>$pr</D:principal>";
+    $pr = "<D:invert>$pr</D:invert>" if $ace->{invert};
+    my ($kind, $privs) = @{ $ace->{deny} || [] } ? ('deny', $ace->{deny}) : ('grant', $ace->{grant} || []);
+    die "SetAcl: an ACE without privileges\n" unless @$privs;
+    $xml .= "<D:ace>$pr<D:$kind>" . join('', map { '<D:privilege>' . _xml_element($_) . '</D:privilege>' } @$privs)
+          . "</D:$kind></D:ace>";
   }
-  $xml .= '</D:acl>';
-  return $Self->_xml('ACL', $path, $xml)->{status};
+  return "$xml</D:acl>";
+}
+
+# RFC 3744 S8.1: replace the resource's non-inherited, non-protected ACEs.
+# Returns { status, error }, error being the DAV:error precondition the
+# server named (e.g. 'recognized-principal', 'no-abstract'), if any.
+sub SetAcl {
+  my ($Self, $path, $aces) = @_;
+  my $res = $Self->_xml('ACL', $path, acl_xml([ grep { !$_->{inherited} && !$_->{protected} } @$aces ]));
+  my ($err) = ($res->{content} // '') =~ m{<(?:[\w.-]+:)?error\b[^>]*>\s*<(?:[\w.-]+:)?([\w.-]+)};
+  return { status => $res->{status}, error => $err };
 }
 
 sub _try_list { my ($Self, $p) = @_; my $r = eval { $Self->PropFind($p, 1) }; return $r || [] }
@@ -241,7 +354,22 @@ sub Probe {
   die $err unless $ok;
 
   $f{syncCollection} = $Self->SyncCollection($root, '') ? 1 : 0;
-  $f{acl} = defined $Self->GetAcl("$root/") ? 1 : 0;
+  # RFC 3744 S7.2: an ACL server says "access-control" in its DAV header;
+  # and the DAV:acl property must really be readable
+  my $opt = eval { $Self->Raw('OPTIONS', "$root/") } || {};
+  my $davhdr = join(',', _list(($opt->{headers} || {})->{dav}));
+  my $acl = $davhdr =~ /(?:^|,)\s*access-control\s*(?:,|\z)/ ? eval { $Self->AclInfo("$root/") } : undef;
+  if ($acl) {
+    $f{acl} = 1;
+    $f{privileges} = $acl->{privileges} if $acl->{privileges} && %{ $acl->{privileges} };
+    # where user principals live: the principal collection holding the
+    # owner's own principal (Cyrus: /dav/principals/user/)
+    my @pc = @{ $acl->{principalCollections} || [] };
+    my ($base) = grep { defined $acl->{owner} && index($acl->{owner}, $_) == 0 } @pc;
+    $base //= $acl->{owner} =~ s{[^/]+/\z}{}r if defined $acl->{owner};
+    $base //= $pc[0];
+    $f{principalBase} = $base if defined $base;
+  }
   my $q = $Self->_xml('PROPFIND', "$root/",
     qq{<?xml version="1.0"?><D:propfind xmlns:D="DAV:"><D:prop><D:quota-used-bytes/></D:prop></D:propfind>}, Depth => 0);
   $f{quota} = ($q->{status} == 207 && ($q->{content} // '') =~ m{quota-used-bytes>\d}) ? 1 : 0;

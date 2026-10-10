@@ -18,10 +18,7 @@ my @FILENODE_PROPERTIES = qw(
 # parent: WebDAV's unbind).
 sub _filenode_object {
   my ($Self, $row, $byid) = @_;
-  my $parent = defined $row->{parentid} ? $byid->{$row->{parentid}} : undef;
   my $up = sub { defined $_[0]{parentid} ? $byid->{$_[0]{parentid}} : undef };
-  my $privs  = JMAP::FileNode::effective_privs($row, $up);
-  my $pprivs = $parent ? JMAP::FileNode::effective_privs($parent, $up) : undef;
   my $isfile = $row->{nodetype} eq 'file';
   # client-set values the server keeps as dead properties override the
   # server's own (ImapDB::_filenode_cols keeps them apart)
@@ -33,7 +30,10 @@ sub _filenode_object {
   my $accessed = $dtime->('accessed') // $row->{accessed} // $modified;
   my $executable   = $dbool->('executable')   // $row->{executable};
   my $isSubscribed = $dbool->('isSubscribed') // $row->{isSubscribed} // 1;
-  my $rights = JMAP::FileNode::rights($privs, $pprivs);
+  # the features as _filenode_init loaded them (no I/O here: this runs
+  # inside transactions too)
+  my $features = $Self->{db}->can('filenode_features_cached') ? $Self->{db}->filenode_features_cached() : {};
+  my $rights = JMAP::FileNode::node_rights($row, $up, $features);
   # the home collection is the account's single top-level node: it cannot
   # be renamed, moved or destroyed (mayCreateTopLevelFileNode is false)
   @$rights{qw(mayRename mayDelete)} = (JSON::false, JSON::false) unless defined $row->{parentid};
@@ -53,7 +53,9 @@ sub _filenode_object {
     executable   => $executable ? JSON::true : JSON::false,
     isSubscribed => $isSubscribed ? JSON::true : JSON::false,
     myRights     => $rights,
-    shareWith    => undef,
+    # draft S3.1: null unless the user may share it (and when nobody is
+    # shared with); from the mirror, which every listing keeps up to date
+    shareWith    => $rights->{mayShare} ? $Self->{db}->filenode_sharewith($row) : undef,
     role         => $row->{role},
   };
 }
@@ -64,9 +66,12 @@ sub _filenode_object {
 # run before _api_init opens the transaction.
 sub _filenode_init {
   my ($Self, $args, $maxage) = @_;
+  my $mine = !($args->{accountId} && $args->{accountId} ne $Self->{db}->accountid());
   $Self->{db}->sync_files_if_due($maxage // 60, { first => 1 })
-    if $Self->{db}->can('sync_files_if_due')
-       && !($args->{accountId} && $args->{accountId} ne $Self->{db}->accountid());
+    if $Self->{db}->can('sync_files_if_due') && $mine;
+  # what the server supports (myRights.mayShare, the privilege tree), loaded
+  # now: it may have to ask the server, which cannot happen in a transaction
+  $Self->{db}->filenode_features() if $Self->{db}->can('filenode_features') && $mine;
   return $Self->_api_init($args);
 }
 

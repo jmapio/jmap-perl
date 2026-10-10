@@ -1113,6 +1113,9 @@ sub filenode_features {
   return $Self->{_filefeatures} = $f;
 }
 
+# The features filenode_features last loaded, without any I/O ({} if none).
+sub filenode_features_cached { return $_[0]{_filefeatures} || {} }
+
 # DBD::SQLite (without sqlite_unicode) hands text back as UTF-8 bytes,
 # while listings carry character strings: every jfilenodes read goes
 # through these, so a non-ASCII href or name compares (and is served) as
@@ -1176,6 +1179,9 @@ sub _filenode_cols {
     fingerprint => $e->{sha1},
     privs       => defined $e->{privileges} ? join(' ', @{$e->{privileges}}) : undef,
     deadprops   => JMAP::FileNode::dead_json($dead),
+    # only when the listing asked for the ACL (_filenode_share_entries):
+    # otherwise the mirror keeps what it knows
+    (exists $e->{sharewith} ? (sharewith => $e->{sharewith}) : ()),
   );
 }
 
@@ -1187,15 +1193,16 @@ sub _filenode_cols {
 # {synthetic}: it only stands in for the root, it never overwrites its row.
 sub _files_walk {
   my ($Self, $root) = @_;
+  my $o = $Self->_files_listing_opts();
   my ($rootentry) = grep { !$_->{missing} && $_->{href} eq $root }
-                    @{ $Self->backend_cmd('files_prop_find', "$root/", 0) };
+                    @{ $Self->backend_cmd('files_prop_find', "$root/", 0, $o) };
   $rootentry ||= { href => $root, dead => {}, synthetic => 1 };
   $rootentry->{isCollection} = 1;
   my @listing = ($rootentry);
   my %seen = ($root => 1);
   my @todo = ($root);
   while (defined(my $dir = shift @todo)) {
-    my $entries = $Self->backend_cmd('files_prop_find', "$dir/", 1);
+    my $entries = $Self->backend_cmd('files_prop_find', "$dir/", 1, $o);
     for my $e (@$entries) {
       next if $e->{missing};
       next unless $e->{href} =~ m{^\Q$dir\E/[^/]+\z};
@@ -1205,7 +1212,153 @@ sub _files_walk {
       push @todo, $e->{href} if $e->{isCollection};
     }
   }
+  $Self->_filenode_share_entries(\@listing);
   return \@listing;
+}
+
+# --- sharing (spec "Sharing"): shareWith is the DAV:acl of a directory.
+# It is server state, so it lives in a column (sharewith, canonical JSON)
+# filled by every listing that asks for the ACL -- the sync walk and the
+# re-listing after each write -- and a change to it is a change to the node
+# (reconcile counts it).  FileNode/get reads the mirror; it never fetches
+# an ACL.  Files are never shared: a WebDAV server commonly keeps ACLs per
+# collection (Cyrus answers an ACL request on a file by rewriting its
+# collection's ACL), so a file's myRights.mayShare is false (the draft's
+# "Access Control" allows exactly that).
+
+# The listing options: the ACL and owner too, where the server has ACLs.
+sub _files_listing_opts {
+  my $Self = shift;
+  return $Self->filenode_features()->{acl} ? { acl => 1 } : undef;
+}
+
+# The account's own WebDAV user name (never a sharee of its own nodes).
+sub _files_me {
+  my $Self = shift;
+  return $Self->{_files_me} if exists $Self->{_files_me};
+  $Self->begin();
+  my $me = $Self->dgetfield('iserver', {}, 'username');
+  $Self->commit();
+  return $Self->{_files_me} = $me;
+}
+
+# Is this principal href one the server does not answer as a principal?
+# RFC 3744 S8.1.1 DAV:recognized-principal: an ACL request may only name
+# principals.  Cyrus lists its admin in every ACL, yet answers a PROPFIND of
+# /dav/principals/user/admin/ with 404 and refuses an ACL request naming it.
+# Only a 404 counts; anything else (403 for another user's principal, a
+# failure) is taken to be a principal.  Remembered for the worker's life.
+sub _files_not_principal {
+  my ($Self, $href) = @_;
+  my $cache = $Self->{_files_principal} ||= {};
+  return $cache->{$href} if exists $cache->{$href};
+  my $res = eval { $Self->backend_cmd('files_raw', 'PROPFIND', $href, undef, Depth => 0) };
+  return $cache->{$href} = ($res && ($res->{status} // 0) == 404) ? 1 : 0;
+}
+
+# The pieces share_aces needs, for one directory's ACL.  Not in a transaction.
+sub _files_share_opts {
+  my ($Self, $owner) = @_;
+  my $f = $Self->filenode_features();
+  return (base => $f->{principalBase}, tree => $f->{privileges}, owner => $owner, me => $Self->_files_me(),
+          hidden => sub { $Self->_files_not_principal($_[0]) });
+}
+
+# Fill {sharewith} on the directory entries of a listing that carries ACLs
+# (call outside any transaction: it may ask the server about principals).
+sub _filenode_share_entries {
+  my ($Self, $entries) = @_;
+  for my $e (@$entries) {
+    my $acl = delete $e->{acl};
+    next unless $acl && $e->{isCollection};
+    my ($share) = JMAP::FileNode::share_aces($acl, $Self->_files_share_opts($e->{owner}));
+    $e->{sharewith} = JMAP::FileNode::sharewith_json($share);
+  }
+}
+
+# A node's shareWith from the mirror (undef: shared with nobody).
+sub filenode_sharewith {
+  my ($Self, $row) = @_;
+  return undef unless $row && defined $row->{sharewith} && length $row->{sharewith};
+  return eval { decode_json($row->{sharewith}) };
+}
+
+# Set a directory's shareWith ($share: the whole new value, or undef for
+# nobody).  Reads the ACL fresh, keeps every ACE that is not a user's
+# sharing (self, the owner, deny ACEs, groups, ...) as it is, replaces the
+# users' grant ACEs, and reads the result back into the mirror, which gets
+# a new modseq when it changed.  Returns (undef, $readback) on success, or
+# a SetError.  Not in a transaction.
+sub set_filenode_sharewith {
+  my ($Self, $row, $share) = @_;
+  my $f = $Self->filenode_features();
+  return { type => 'invalidProperties', properties => ['shareWith'], description => 'the WebDAV server has no ACL support' }
+    unless $f->{acl};
+  return { type => 'forbidden', description => 'only directories are shared' } unless $row->{nodetype} eq 'directory';
+  my $path = _filenode_path($row);
+  my $info = eval { $Self->backend_cmd('files_acl_info', $path) };
+  return { type => 'serverFail', description => 'the ACL could not be read' . ($@ ? ": $@" : '') } unless $info;
+  # One privilege tree for the account, so a listing and a set read an ACL
+  # the same way.  An account probed before the tree was kept learns it here.
+  if (!$f->{privileges} && $info->{privileges} && %{ $info->{privileges} }) {
+    $f->{privileges} = $info->{privileges};
+    $Self->begin();
+    $Self->dupdate('iserver', { webdavFeatures => JSON::XS::encode_json($f) });
+    $Self->commit();
+  }
+  my $tree = $f->{privileges};
+  my %o = $Self->_files_share_opts($info->{owner});
+  my $me = $o{me};
+  my $base = $o{base} // ($info->{owner} && $info->{owner} =~ m{^(.*/)[^/]+/\z} ? $1 : undef);
+  return { type => 'serverFail', description => 'the server names no principal collection for users' } unless defined $base;
+  my (undef, $kept) = JMAP::FileNode::share_aces($info->{aces}, %o);
+  my $owner_uid = JMAP::FileNode::share_user($info->{owner}, $base);
+  my @new;
+  for my $uid (sort keys %{ $share || {} }) {
+    # never trust the caller to have checked: this name goes into an href
+    return { type => 'invalidProperties', properties => ['shareWith'], description => "not a user id this server can share with: $uid" }
+      unless $uid =~ $JMAP::FileNode::SHARE_USER;
+    return { type => 'invalidProperties', properties => ['shareWith'], description => "the owner cannot be in shareWith: $uid" }
+      if (defined $me && $uid eq $me) || (defined $owner_uid && $uid eq $owner_uid);
+    my ($grant, $right) = JMAP::FileNode::grant_for_rights($share->{$uid}, $tree);
+    return { type => 'invalidProperties', properties => ['shareWith'], description => "the server cannot grant $right" }
+      unless $grant;
+    push @new, { principal => "$base$uid/", grant => $grant, deny => [] } if @$grant;
+  }
+  my $res = eval { $Self->backend_cmd('files_set_acl', $path, [ @$kept, @new ]) };
+  return { type => 'serverFail', description => "ACL: $@" } unless $res;
+  if ($res->{status} == 403 && ($res->{error} // '') eq 'recognized-principal') {
+    # a sharee that is no user, or an ACE the server lists but will not take
+    # back (Cyrus: its admin): the first is the client's error; the second
+    # is dropped and the request made once more
+    my @nouser = grep { $Self->_files_not_principal($_->{principal}) } @new;
+    return { type => 'invalidProperties', properties => ['shareWith'],
+             description => 'no such user: ' . join(' ', map { $_->{principal} =~ m{([^/]+)/\z} } @nouser) } if @nouser;
+    my @still = grep { !($_->{principal} =~ m{^/} && $Self->_files_not_principal($_->{principal})) } @$kept;
+    $res = eval { $Self->backend_cmd('files_set_acl', $path, [ @still, @new ]) } if @still < @$kept;
+    return { type => 'serverFail', description => "ACL: $@" } unless $res;
+  }
+  unless ($res->{status} =~ /^2/) {
+    return { type => 'invalidProperties', properties => ['shareWith'], description => "ACL: HTTP $res->{status} ($res->{error})" }
+      if ($res->{error} // '') =~ /\A(?:no-abstract|not-supported-privilege|recognized-principal|allowed-principal|grant-only|limited-number-of-aces)\z/;
+    return _filenode_http_error($res->{status}, 'ACL');
+  }
+  # read back what the server made of it
+  my $back = eval { $Self->backend_cmd('files_acl_info', $path) };
+  my $json;
+  if ($back) {
+    my ($s) = JMAP::FileNode::share_aces($back->{aces}, %o, owner => $back->{owner});
+    $json = JMAP::FileNode::sharewith_json($s);
+  }
+  else {
+    $json = JMAP::FileNode::sharewith_json($share);   # what was asked for: the next sync corrects it
+  }
+  $Self->begin();
+  my $cur = $Self->dgetfield('jfilenodes', { nodeid => $row->{nodeid} }, 'sharewith');
+  $Self->ddirty('jfilenodes', { sharewith => $json, changed => time() }, { nodeid => $row->{nodeid} })
+    if ($cur // '') ne ($json // '');
+  $Self->commit();
+  return (undef, defined $json ? decode_json($json) : undef);
 }
 
 # One full sync of the WebDAV tree into jfilenodes.  Returns 1 when a
@@ -1366,12 +1519,13 @@ sub _files_refresh_dir {
   my $known = $Self->dcount('jfilenodes', { href => Encode::encode_utf8($dirhref), active => 1, nodetype => 'directory' });
   $Self->commit();
   return {} unless $known;   # destroyed in this call, or never seen: nothing to refresh
-  my $entries = $Self->backend_cmd('files_prop_find', "$dirhref/", 1);
+  my $entries = $Self->backend_cmd('files_prop_find', "$dirhref/", 1, $Self->_files_listing_opts());
   my %seen;
   my @listing = grep {
     !$_->{missing} && $_->{href} =~ m{^\Q$dirhref\E/[^/]+\z}
       && $_->{href} !~ m{/\.jmap-probe-[^/]*\z} && !$seen{$_->{href}}++
   } @$entries;
+  $Self->_filenode_share_entries(\@listing);
   $Self->begin();
   my ($dir) = @{ $Self->filenode_get({ href => $dirhref, active => 1, nodetype => 'directory' }) };
   unless ($dir) { $Self->commit(); return {} }
@@ -1607,8 +1761,10 @@ sub _filenode_check_create {
   my (@bad, %v);
   push @bad, grep { !$FILENODE_CREATE_PROPS{$_} } keys %$c;
   push @bad, 'role' if defined $c->{role};
-  push @bad, 'shareWith' if defined $c->{shareWith};   # sharing: a later task
   my $nodetype = $c->{nodeType} // (defined $c->{blobId} ? 'file' : defined $c->{target} ? 'symlink' : 'directory');
+  # sharing (spec "Sharing"): directories only
+  my $share = JMAP::FileNode::sharewith_problem($c->{shareWith}) ? undef : JMAP::FileNode::sharewith_normal($c->{shareWith});
+  push @bad, 'shareWith' if JMAP::FileNode::sharewith_problem($c->{shareWith}) || ($share && $nodetype ne 'directory');
   if (ref $nodetype || $nodetype !~ /^(?:file|directory)\z/) {
     push @bad, 'nodeType';   # no symlinks over WebDAV
     $nodetype = '';
@@ -1634,7 +1790,7 @@ sub _filenode_check_create {
     if (JSON::is_bool($c->{$k})) { $dead{$k} = $c->{$k} ? 1 : 0 } else { push @bad, $k }
   }
   my %u;
-  return ([ grep { !$u{$_}++ } sort @bad ], { nodetype => $nodetype, dead => \%dead });
+  return ([ grep { !$u{$_}++ } sort @bad ], { nodetype => $nodetype, dead => \%dead, share => $share });
 }
 
 # A node the client asked to move or rename in the same call ($protect:
@@ -1687,9 +1843,19 @@ sub create_filenodes {
     my $siblings = $parent ? $Self->filenode_get({ parentid => $parent->{nodeid}, active => 1 }) : [];
     $Self->commit();
     push @$bad, 'parentId' unless ($parent && $parent->{nodetype} eq 'directory') || grep { $_ eq 'parentId' } @$bad;
+    push @$bad, 'shareWith' if $v->{share} && !$Self->filenode_features()->{acl} && !grep { $_ eq 'shareWith' } @$bad;
     if (@$bad) {
       $notcreated{$cid} = { type => 'invalidProperties', properties => [ sort @$bad ] };
       next;
+    }
+    if ($v->{share}) {
+      # a new directory starts with its parent's privileges: mayShare there
+      my $ff = $Self->filenode_features();
+      $Self->begin();
+      my $up = sub { defined $_[0]{parentid} ? $Self->filenode_row($_[0]{parentid}) : undef };
+      my $r = JMAP::FileNode::node_rights($parent, $up, $ff);
+      $Self->commit();
+      unless ($r->{mayShare}) { $notcreated{$cid} = { type => 'forbidden', description => 'no mayShare' }; next }
     }
 
     my ($content, $ctype);
@@ -1783,9 +1949,49 @@ sub create_filenodes {
       $notcreated{$cid} = { type => 'serverFail', description => 'PROPPATCH of dead properties failed' };
       next;
     }
+    if ($v->{share}) {
+      my ($err) = $Self->set_filenode_sharewith($row, $v->{share});
+      if ($err) {   # created, but not shared: as for the dead properties above
+        $notcreated{$cid} = { type => 'serverFail', description => 'created, but shareWith: ' . ($err->{description} // $err->{type}) };
+        next;
+      }
+    }
     $created{$cid} = $row;
   }
   return (\%created, \%notcreated, \@alsodestroyed);
+}
+
+# An update's new shareWith: the whole value it sets, or the current one
+# with its "shareWith/<user>" and "shareWith/<user>/<right>" patch paths
+# applied (RFC 8620 S5.3; ~1 and ~0 escape "/" and "~").  Returns
+# ([ $normal ]) -- $normal undef for nobody -- or (undef, $setError).
+sub _filenode_share_patch {
+  my ($Self, $row, $p) = @_;
+  my @paths = sort grep { m{^shareWith/} } keys %$p;
+  return (undef, { type => 'invalidPatch', description => 'shareWith and a path below it in one patch' })
+    if exists $p->{shareWith} && @paths;
+  my $bad = sub { (undef, { type => 'invalidProperties', properties => ['shareWith'], description => $_[0] }) };
+  my $new;
+  if (exists $p->{shareWith}) { $new = $p->{shareWith} }
+  else {
+    my $cur = $Self->filenode_sharewith($row) || {};
+    $new = { map { ($_ => { %{ $cur->{$_} } }) } keys %$cur };
+    for my $path (@paths) {
+      my @seg = map { s/~1/\//gr =~ s/~0/~/gr } split m{/}, substr($path, length 'shareWith/'), -1;
+      my $v = $p->{$path};
+      if (@seg == 1) {
+        if (defined $v) { $new->{ $seg[0] } = $v } else { delete $new->{ $seg[0] } }
+      }
+      elsif (@seg == 2) {
+        return (undef, { type => 'invalidPatch', description => "$path: shareWith has no $seg[0]" })
+          unless ref $new->{ $seg[0] } eq 'HASH';
+        $new->{ $seg[0] }{ $seg[1] } = defined $v ? $v : JSON::false;   # null: the default
+      }
+      else { return (undef, { type => 'invalidPatch', description => "$path: no such property" }) }
+    }
+  }
+  if (my $why = JMAP::FileNode::sharewith_problem($new)) { return $bad->($why) }
+  return ([ JMAP::FileNode::sharewith_normal($new) ]);
 }
 
 my %FILENODE_UPDATE_PROPS = map { $_ => 1 } qw(parentId name blobId type size created modified
@@ -1824,12 +2030,8 @@ sub update_filenodes {
   my %byid = map { $_->{nodeid} => $_ } @{ $Self->filenode_rows() };
   $Self->commit();
   my $up = sub { defined $_[0]{parentid} ? $byid{ $_[0]{parentid} } : undef };
-  my $rights = sub {   # R7: effective privileges
-    my $r = shift;
-    my $p = $up->($r);
-    return JMAP::FileNode::rights(JMAP::FileNode::effective_privs($r, $up),
-                                  $p ? JMAP::FileNode::effective_privs($p, $up) : undef);
-  };
+  my $features = $Self->filenode_features();
+  my $rights = sub { JMAP::FileNode::node_rights($_[0], $up, $features) };   # R7: effective privileges
   my $deadof = sub { defined $_[0]{deadprops} ? (eval { decode_json($_[0]{deadprops}) } || {}) : {} };
   my $modified_of = sub { JMAP::FileNode::epoch($deadof->($_[0])->{modified}) // $_[0]{modified} // 0 };
   my $now = time();
@@ -1855,8 +2057,15 @@ sub update_filenodes {
     my $row = $byid{$id} or do { $notupdated{$id} = { type => 'notFound' }; next };
     my $isfile = $row->{nodetype} eq 'file';
     my (@bad, %dead);
-    push @bad, grep { !$FILENODE_UPDATE_PROPS{$_} } keys %$p;   # server-set or immutable, and changed
-    push @bad, 'shareWith' if exists $p->{shareWith};             # sharing: a later task
+    push @bad, grep { !$FILENODE_UPDATE_PROPS{$_} && !m{^shareWith/} } keys %$p;   # server-set or immutable, and changed
+    # sharing: the whole value, or patch paths below it (RFC 8620 S5.3)
+    my $share;
+    if (exists $p->{shareWith} || grep { m{^shareWith/} } keys %$p) {
+      my $err;
+      ($share, $err) = $Self->_filenode_share_patch($row, $p);
+      if ($err && $err->{type} eq 'invalidPatch') { $notupdated{$id} = $err; next }
+      push @bad, 'shareWith' if $err || !$features->{acl};   # spec "Sharing": no ACLs, invalidProperties
+    }
     push @bad, 'name' if exists $p->{name} && JMAP::FileNode::name_problem($p->{name});
     my $newparent = $row->{parentid};
     if (exists $p->{parentId}) {
@@ -1899,13 +2108,14 @@ sub update_filenodes {
     my $why = $dest{$id} && !$r->{mayRename} ? 'mayRename'
             : $dest{$id} && $dest{$id}[0] ne $row->{parentid} && !$rights->($byid{ $dest{$id}[0] })->{mayAddChildren} ? 'mayAddChildren on the new parent'
             : (grep { exists $p->{$_} } qw(blobId type modified accessed executable)) && !$r->{mayModifyContent} ? 'mayModifyContent'
+            : $share && !$r->{mayShare} ? 'mayShare'
             : undef;
     if ($why) {
       $notupdated{$id} = { type => 'forbidden', description => "no $why" };
       delete $dest{$id};
       next;
     }
-    $plan{$id} = { uid => $uid, patch => $p, dead => \%dead };
+    $plan{$id} = { uid => $uid, patch => $p, dead => \%dead, ($share ? (share => $share) : ()) };
   }
 
   # 2. draft S3.2.3: no node may end up inside itself -- checked on the
@@ -2232,6 +2442,25 @@ sub update_filenodes {
         next;
       }
       $out{$_} = $dead->{$_} for grep { exists $p->{$_} && !defined $p->{$_} } qw(modified accessed);
+    }
+    # sharing: one more step of its own, after everything else, so a refused
+    # ACL never undoes a move or a content change already made
+    if (my $share = $plan{$id}{share}) {
+      $Self->begin();
+      my $row = $Self->filenode_row($id);
+      $Self->commit();
+      my ($err, $back) = $row ? $Self->set_filenode_sharewith($row, $share->[0])
+                              : ({ type => 'serverFail', description => 'the node went away' });
+      if ($err) {
+        # partway (spec "Writes"): the rest of this update was made
+        my $other = $moved{$id} || exists $p->{blobId} || %$dead;
+        $notupdated{$id} = $other ? { type => 'serverFail', description => 'shareWith: ' . ($err->{description} // $err->{type})
+                                                                         . '; the rest of the update was made' } : $err;
+        next;
+      }
+      # the server may grant more than was asked (Cyrus: bind holds
+      # write-content, unbind is both mayRename and mayDelete)
+      $out{shareWith} = $back if (JMAP::FileNode::sharewith_json($share->[0]) // '') ne (JMAP::FileNode::sharewith_json($back) // '');
     }
     $out{name} = $plan{$id}{renamed} if defined $plan{$id}{renamed};
     $updated{$id} = %out ? \%out : undef;

@@ -215,6 +215,40 @@ Enabling `webdav` in `httpmodules` serves `/dav/drive/user/<user>/`.
   enabled by building a derived image whose `/srv/testserver/imapd.conf`
   template has `webdav` in `httpmodules`.
 
+ACLs (probe, 2026-10-10, Task 10). Cyrus #drive does implement RFC 3744 on
+collections, and the live test proves sharing end to end (the sharee can
+then read the files):
+
+- `DAV: ... access-control` is advertised; `DAV:acl`, `DAV:owner`,
+  `DAV:supported-privilege-set` and `DAV:principal-collection-set`
+  (`/dav/principals/user/`) all come back in a Depth-1 PROPFIND, so a sync
+  gets every collection's ACL with no extra request. The owner is listed as
+  a `DAV:self` ACE granting `DAV:all`.
+- A file's ACEs are all `inherited` from its collection (the mailbox), and
+  an ACL request on a file REWRITES ITS COLLECTION's ACL. So the proxy never
+  shares files.
+- `write-acl` and `read-acl` are abstract (`DAV:no-abstract` 403); the
+  grantable privilege that holds them is `{http://cyrusimap.org/ns/}admin`
+  (IMAP `a`). `bind` holds `write-content` (IMAP `i`), so a sharee given
+  `mayAddChildren` also gets `mayModifyContent`.
+- Every collection lists an ACE for `/dav/principals/user/admin/`, but that
+  principal answers 404 and an ACL request naming it is refused with
+  `DAV:recognized-principal`. Such ACEs are not shown in `shareWith`, and
+  are dropped from the rewrite when the server refuses them.
+- The ACL request replaces every non-inherited ACE: leaving out `DAV:self`
+  removes the owner's own rights. The proxy always sends it back. Sending
+  back `self: all` maps to `lrwikxtecdan`, losing the IMAP `s` and `p`
+  rights a new collection starts with (harmless for #drive).
+- A user's DAV principal exists only after their first DAV request (until
+  then it is 404, and sharing with them is `DAV:recognized-principal`).
+- ACLs are per mailbox and do NOT propagate: a subcollection created later
+  copies its parent's ACL, but sharing a directory does not share the
+  subdirectories it already has. (The draft says sharing a node shares its
+  descendants; with Cyrus that holds for files and for new subdirectories
+  only.)
+- Net::DAVTalk's XML parser dies on the `xml:lang` attributes Cyrus puts in
+  `supported-privilege-set`; WebDAVTalk strips `xml:*` attributes first.
+
 ## Writes (`FileNode/set`)
 
 Each create, update and destroy goes to WebDAV first, ordered so sibling
@@ -314,13 +348,46 @@ In memory over the mirror:
   move half of `mayRename`); `write-content` → `mayModifyContent`;
   `write-acl` → `mayShare`. A server that reports no privilege set gives all
   rights.
-- `shareWith` reads and writes the `DAV:acl`, mapping principals to JMAP
-  user ids the way calendars do and ignoring inherited ACEs.
-- A server without ACL support: `shareWith` is null, and setting it is
-  `invalidProperties`.
+  The server's `DAV:supported-privilege-set` is read once (Probe) and
+  aggregates are expanded through it (Cyrus: `write-acl` sits under its
+  own admin privilege).
+- `shareWith` reads and writes the `DAV:acl`. A user's sharing is a
+  non-inherited, non-protected grant ACE whose principal is directly
+  below the user principal collection (the `DAV:principal-collection-set`
+  entry holding the owner's principal), named by a safe id
+  (`[A-Za-z0-9][A-Za-z0-9._@+-]*`, so no `/`, quote or `<`); the owner,
+  `DAV:self`, groups, deny and inverted ACEs, `DAV:property` principals,
+  and principals the server answers 404 for are not sharing and are kept
+  as they are on a rewrite. Rights map `mayRead` → `read`,
+  `mayAddChildren` → `bind`, `mayRename`/`mayDelete` → `unbind`,
+  `mayModifyContent` → `write-content`, `mayShare` → `write-acl`; an
+  abstract privilege is granted through its nearest non-abstract
+  aggregate.
+- Only directories are shared: a file's `mayShare` is false (the draft's
+  Access Control allows it), because servers keep ACLs per collection
+  (see the Cyrus findings).
+- The ACL is server state: it lives in the mirror's `sharewith` column,
+  filled by every listing (the sync walk and the re-listing after a write
+  ask for `DAV:acl` and `DAV:owner` when the server has ACLs), and a change
+  bumps the node's modseq. `FileNode/get` reads the mirror and never
+  fetches an ACL.
+- Setting it (update, the whole value or `shareWith/<user>[/<right>]`
+  patch paths, or create of a directory): a bad value, an unsafe user id,
+  or the owner as a sharee is `invalidProperties` before any request; no
+  `mayShare` is `forbidden` before any request; the ACL is then read
+  fresh, the users' ACEs replaced and every other ACE sent back, and the
+  result read back into the mirror. A sharee who is no principal is
+  `invalidProperties`. When the server grants more than was asked (Cyrus's
+  `bind` holds `write-content`), `updated` carries the real `shareWith`.
+  The ACL is the last step of an update: if it fails after a move or a
+  content change, those stay and the item is `serverFail`.
+- A server without ACL support (no `access-control` in the `DAV:` header,
+  or no readable `DAV:acl`): `shareWith` is null, `mayShare` false, and
+  setting it is `invalidProperties`.
 - After a `shareWith` change, the next sync re-reads privileges below that
   node and bumps the descendants whose derived `myRights` changed, as the
-  draft's Access Control section requires.
+  draft's Access Control section requires. (The account's own privileges
+  never change through its own `shareWith`: the owner's ACEs are kept.)
 
 ## Direct HTTP write
 

@@ -96,4 +96,131 @@ is($ok->{token}, 'tok1', 'sync 207 gives a token');
   like($u, qr{/dav/%E4%B8%AD$}, 'non-Latin-1 does not die');
 }
 
+# --- RFC 3744 ACLs (Task 10)
+my $CY = 'http://cyrusimap.org/ns/';
+# a Cyrus-like DAV:acl, with every principal form RFC 3744 S5.5.1 allows
+my $ACL = qq{<D:acl>}
+  . q{<D:ace><D:principal><D:self/></D:principal><D:grant><D:privilege><D:all/></D:privilege></D:grant></D:ace>}
+  . q{<D:ace><D:principal><D:href>/dav/principals/user/user2/</D:href></D:principal><D:grant><D:privilege><D:read/></D:privilege><D:privilege><CY:admin/></D:privilege></D:grant></D:ace>}
+  . q{<D:ace><D:principal><D:href>http://h/dav/principals/user/caf%C3%A9</D:href></D:principal><D:deny><D:privilege><D:write/></D:privilege></D:deny></D:ace>}
+  . q{<D:ace><D:principal><D:property><D:owner/></D:property></D:principal><D:grant><D:privilege><D:read-acl/></D:privilege></D:grant><D:protected/></D:ace>}
+  . q{<D:ace><D:invert><D:principal><D:authenticated/></D:principal></D:invert><D:deny><D:privilege><D:read/></D:privilege></D:deny></D:ace>}
+  . q{<D:ace><D:principal><D:all/></D:principal><D:grant><D:privilege><D:read/></D:privilege></D:grant><D:inherited><D:href>/dav/drive/user/u/</D:href></D:inherited></D:ace>}
+  . q{</D:acl>};
+# (Cyrus describes each privilege with xml:lang, which Net::DAVTalk's parser chokes on)
+my $PRIVSET = q{<D:supported-privilege-set><D:supported-privilege><D:privilege><D:all/></D:privilege><D:description xml:lang="en">Any operation</D:description>}
+  . q{<D:supported-privilege><D:privilege><D:read/></D:privilege></D:supported-privilege>}
+  . q{<D:supported-privilege><D:privilege><D:write/></D:privilege>}
+  .   q{<D:supported-privilege><D:privilege><D:bind/></D:privilege><D:supported-privilege><D:privilege><D:write-content/></D:privilege></D:supported-privilege></D:supported-privilege>}
+  .   q{<D:supported-privilege><D:privilege><D:unbind/></D:privilege></D:supported-privilege></D:supported-privilege>}
+  . q{<D:supported-privilege><D:privilege><CY:admin/></D:privilege>}
+  .   q{<D:supported-privilege><D:privilege><D:write-acl/></D:privilege><D:abstract/></D:supported-privilege></D:supported-privilege>}
+  . q{</D:supported-privilege></D:supported-privilege-set>};
+sub acl_ms { my ($href, $props) = @_;
+  qq{<?xml version="1.0"?><D:multistatus xmlns:D="DAV:" xmlns:CY="$CY">} . resp($href, $props) . '</D:multistatus>' }
+my @EXPECT_ACES = (
+  { principal => 'self', invert => 0, grant => ['all'], deny => [], inherited => 0, protected => 0 },
+  { principal => '/dav/principals/user/user2/', invert => 0, grant => ['read', "{$CY}admin"], deny => [], inherited => 0, protected => 0 },
+  { principal => "/dav/principals/user/caf\x{e9}/", invert => 0, grant => [], deny => ['write'], inherited => 0, protected => 0 },
+  { principal => 'property', property => '{DAV:}owner', invert => 0, grant => ['read-acl'], deny => [], inherited => 0, protected => 1 },
+  { principal => 'authenticated', invert => 1, grant => [], deny => ['read'], inherited => 0, protected => 0 },
+  { principal => 'all', invert => 0, grant => ['read'], deny => [], inherited => 1, protected => 0 },
+);
+{
+  my @reqs;
+  my $d = bless { log => [] }, 'Stub';
+  $d->{script} = sub {
+    my ($m, $p, $b) = @_;
+    push @reqs, [$m, $p, $b];
+    if ($m eq 'PROPFIND' && $b =~ /<D:acl\/>/) {
+      # Cyrus answers a Depth-0 PROPFIND on a collection with its members too
+      return r207(qq{<?xml version="1.0"?><D:multistatus xmlns:D="DAV:" xmlns:CY="$CY">}
+        . resp('/dav/drive/user/u/d/f.txt', '<D:acl/>')
+        . resp('/dav/drive/user/u/d/', "$ACL<D:owner><D:href>/dav/principals/user/u/</D:href></D:owner>$PRIVSET"
+               . '<D:principal-collection-set><D:href>/dav/principals/user/</D:href></D:principal-collection-set>')
+        . '</D:multistatus>');
+    }
+    return { status => 403, headers => {}, content => '<?xml version="1.0"?><D:error xmlns:D="DAV:"><D:recognized-principal/></D:error>' }
+      if $m eq 'ACL';
+    return { status => 500, headers => {}, content => '' };
+  };
+  my $info = $d->AclInfo('/dav/drive/user/u/d/');
+  is_deeply($info->{aces}, \@EXPECT_ACES, 'AclInfo: every principal form, deny, invert, protected, inherited, foreign privileges')
+    or diag explain $info;
+  is($info->{owner}, '/dav/principals/user/u/', 'the owner');
+  is_deeply($info->{principalCollections}, ['/dav/principals/user/'], 'the principal collections');
+  is_deeply($info->{privileges}{'write-acl'}, { parent => "{$CY}admin", abstract => 1 }, 'write-acl: abstract, under the server\'s admin');
+  is_deeply($info->{privileges}{'write-content'}, { parent => 'bind', abstract => 0 }, 'write-content under bind');
+  is($info->{privileges}{all}{parent}, undef, 'all is the top');
+  is_deeply($d->GetAcl('/dav/drive/user/u/d/'), \@EXPECT_ACES, 'GetAcl: the ACEs');
+
+  # SetAcl writes back what it read: inherited and protected ACEs are left
+  # out (RFC 3744 S8.1), every other one round-trips
+  my $r = $d->SetAcl('/dav/drive/user/u/d/', \@EXPECT_ACES);
+  is_deeply($r, { status => 403, error => 'recognized-principal' }, 'SetAcl: status and the DAV:error precondition');
+  my $body = $reqs[-1][2];
+  my $back = JMAP::Sync::WebDAVTalk::parse_aces(Net::DAVTalk::XMLParser::xmlToHash($body));
+  is_deeply($back, [ grep { !$_->{inherited} && !$_->{protected} } @EXPECT_ACES ], 'the ACL request round-trips') or diag $body;
+  like($body, qr{<D:href>/dav/principals/user/caf%C3%A9/</D:href>}, 'an href is percent-encoded again');
+
+  # nothing from a client reaches the XML raw
+  my $x = JMAP::Sync::WebDAVTalk::acl_xml([ { principal => '/dav/principals/user/a"b<c&d>e/', grant => ['read'] } ]);
+  like($x, qr{<D:href>/dav/principals/user/a%22b%3Cc%26d%3Ee/</D:href>}, 'a hostile user id is percent-encoded');
+  ok(eval { Net::DAVTalk::XMLParser::xmlToHash($x); 1 }, 'and the body is well-formed XML');
+  $x = JMAP::Sync::WebDAVTalk::acl_xml([ { principal => '/p/a b/', grant => [qq{{urn:x"y}priv}] } ]);
+  like($x, qr{<X:priv xmlns:X="urn:x&quot;y"/>}, 'a foreign namespace is an escaped attribute');
+  for my $bad ([ principal => 'all"/><D:x', grant => ['read'] ], [ principal => 'self', grant => ['read/><D:all'] ],
+               [ principal => 'property', property => '<x>', grant => ['read'] ], [ principal => 'self', grant => [] ],
+               [ principal => 'self', grant => ['{urn:x}a b'] ]) {
+    ok(!eval { JMAP::Sync::WebDAVTalk::acl_xml([ { @$bad } ]); 1 }, "refused: @$bad[0..1] / @{ $bad->[-1] || [] }");
+  }
+}
+# parse_multistatus carries acl and owner when a listing asks for them
+{
+  my $e = JMAP::Sync::WebDAVTalk::parse_multistatus(acl_ms('/dav/drive/user/u/d/',
+    "<D:resourcetype><D:collection/></D:resourcetype>$ACL<D:owner><D:href>/dav/principals/user/u/</D:href></D:owner>"));
+  is_deeply($e->[0]{acl}, \@EXPECT_ACES, 'a listing entry carries its ACL');
+  is($e->[0]{owner}, '/dav/principals/user/u/', 'and its owner');
+  my $d = bless { log => [] }, 'Stub';
+  my $body;
+  $d->{script} = sub { $body = $_[2]; return r207(acl_ms('/x/', '')) };
+  $d->PropFind('/x/', 1);
+  unlike($body, qr/<D:acl/, 'a plain listing does not ask for the ACL');
+  $d->PropFind('/x/', 1, { acl => 1 });
+  like($body, qr{<D:acl/><D:owner/></D:prop>}, 'with { acl => 1 } it does');
+}
+# Probe: ACL support is the "access-control" class (RFC 3744 S7.2) AND a
+# DAV:acl that really reads back
+for my $case ([ '1, 2, 3, access-control', 1 ], [ '1, 2, 3', 0 ], [ '1, access-control-ish', 0 ]) {
+  my ($dav, $want) = @$case;
+  my $d = mk(etag => 'zz');
+  my $orig = $d->{script};
+  $d->{script} = sub {
+    my ($m, $p, $b) = @_;
+    return { status => 200, headers => { dav => $dav }, content => '' } if $m eq 'OPTIONS';
+    return r207(acl_ms("$root/", "$ACL<D:owner><D:href>/dav/principals/user/u/</D:href></D:owner>$PRIVSET"
+                       . '<D:principal-collection-set><D:href>/dav/principals/group/</D:href><D:href>/dav/principals/user/</D:href></D:principal-collection-set>'))
+      if $m eq 'PROPFIND' && $b =~ /<D:acl\/>/;
+    return $orig->(@_);
+  };
+  my $f = probe($d);
+  is($f->{acl}, $want, "DAV: $dav -> acl $want");
+  next unless $want;
+  is($f->{principalBase}, '/dav/principals/user/', 'principalBase: the collection holding the owner');
+  is($f->{privileges}{'write-acl'}{abstract}, 1, 'the privilege tree is kept');
+}
+{
+  # access-control advertised, but DAV:acl is not readable (404 propstat)
+  my $d = mk(etag => 'zz');
+  my $orig = $d->{script};
+  $d->{script} = sub {
+    my ($m, $p, $b) = @_;
+    return { status => 200, headers => { dav => '1, access-control' }, content => '' } if $m eq 'OPTIONS';
+    return r207(qq{<?xml version="1.0"?><D:multistatus xmlns:D="DAV:"><D:response><D:href>$root/</D:href><D:propstat><D:prop><D:acl/></D:prop><D:status>HTTP/1.1 404 Not Found</D:status></D:propstat></D:response></D:multistatus>})
+      if $m eq 'PROPFIND' && $b =~ /<D:acl\/>/;
+    return $orig->(@_);
+  };
+  is(probe($d)->{acl}, 0, 'access-control claimed but DAV:acl unreadable: acl 0');
+}
+
 done_testing;
