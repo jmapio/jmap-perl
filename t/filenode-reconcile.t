@@ -90,4 +90,44 @@ $l = [ entry(href => "$R/x", fileid => 'dup'), entry(href => "$R/y", fileid => '
 $r = $rec->($m, $l, {});
 is(scalar @{$r->{create}}, 2, 'duplicate fileid entries: both created');
 
+# fileid matching refuses a change of kind
+$m = [ row(nodeid => JMAP::FileNode::server_id('k1'), href => "$R/a", fileid => 'k1') ];
+$l = [ entry(href => "$R/a", isCollection => 1, fileid => 'k1') ];
+$r = $rec->($m, $l, {});
+is(scalar @{$r->{destroy}}, 1, 'file->dir with same fileid: destroy');
+is(scalar @{$r->{create}}, 1, 'and create');
+is(scalar @{$r->{update}}, 0, 'not an update');
+$m = [ row(nodeid => JMAP::FileNode::server_id('k2'), href => "$R/d", fileid => 'k2', %dir) ];
+$l = [ entry(href => "$R/e", fileid => 'k2') ];
+$r = $rec->($m, $l, {});
+is(scalar @{$r->{destroy}}, 1, 'dir->file with same fileid: destroy');
+is(scalar @{$r->{create}}, 1, 'and create');
+
+# an S id still held by a mirror row is never reissued in the same pass
+my $sid = JMAP::FileNode::server_id('dupf');
+$m = [ row(nodeid => $sid, href => "$R/a", fileid => 'dupf'),
+       row(nodeid => 'L9', href => "$R/b", fileid => 'dupf') ];
+$l = [ entry(href => "$R/c", fileid => 'dupf') ];
+$r = $rec->($m, $l, {});
+is(scalar @{$r->{destroy}}, 2, 'duplicate-fileid rows both destroyed');
+like($r->{create}[0]{nodeid}, qr/^L/, 'created with a local id, not the held S id');
+isnt($r->{create}[0]{nodeid}, $sid, 'S id not reused');
+
+# the same href listed twice is one node
+$l = [ entry(href => "$R/a", size => 1), entry(href => "$R/a", size => 2) ];
+$r = $rec->([], $l, {});
+is(scalar @{$r->{create}}, 1, 'duplicate href: one node');
+is($r->{create}[0]{size}, 1, 'first entry kept');
+
+# a directory moved with a file inside: the file keeps its id, the directory does not
+$m = [ row(nodeid => 'LD', href => "$R/d", %dir),
+       row(nodeid => 'LF', href => "$R/d/f", size => 3, modified => 30) ];
+$l = [ entry(href => "$R/n", isCollection => 1),
+       entry(href => "$R/n/f", size => 3, modified => 30) ];
+$r = $rec->($m, $l, {});
+is_deeply([ map { $_->[0]{nodeid} } @{$r->{update}} ], ['LF'], 'file inside moved dir keeps its id');
+is($r->{update}[0][1]{href}, "$R/n/f", 'with its new href');
+is_deeply([ map { $_->{nodeid} } @{$r->{destroy}} ], ['LD'], 'moved directory destroyed');
+is(scalar @{$r->{create}}, 1, 'and created anew');
+
 done_testing;

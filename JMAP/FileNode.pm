@@ -115,6 +115,9 @@ sub epoch {
 sub reconcile {
   my ($mirror, $listing, $features) = @_;
   $features ||= {};
+  # A bogus server may list one href twice; keep the first so it is one node.
+  my %seen_href;
+  $listing = [ grep { !$seen_href{$_->{href}}++ } @$listing ];
   my (%row_used, %entry_used, @update);
   my $type_of = sub { $_[0]{isCollection} ? 'directory' : 'file' };
   # privileges count: a changed ACL changes the derived myRights (draft "Access Control")
@@ -134,9 +137,11 @@ sub reconcile {
   my (%rows_by_fileid, %entries_by_fileid);
   push @{ $rows_by_fileid{$_->{fileid}} }, $_ for grep { defined $_->{fileid} } @$mirror;
   push @{ $entries_by_fileid{$_->{fileid}} }, $_ for grep { defined $_->{fileid} } @$listing;
-  for my $id (keys %entries_by_fileid) {
+  for my $id (sort keys %entries_by_fileid) {
     next unless @{ $rows_by_fileid{$id} || [] } == 1 && @{ $entries_by_fileid{$id} } == 1;
-    $pair->($rows_by_fileid{$id}[0], $entries_by_fileid{$id}[0]);
+    my ($row, $e) = ($rows_by_fileid{$id}[0], $entries_by_fileid{$id}[0]);
+    next if $row->{nodetype} ne $type_of->($e);   # a change of kind is not the same node
+    $pair->($row, $e);
   }
   # 2. same path, same kind
   my %rows_by_href;
@@ -166,17 +171,21 @@ sub reconcile {
       my $k = $ek->($e);
       push @{ $entries{$k} }, $e if defined $k;
     }
-    for my $k (keys %rows) {
+    for my $k (sort keys %rows) {
       next unless @{$rows{$k}} == 1 && @{ $entries{$k} || [] } == 1;
       $pair->($rows{$k}[0], $entries{$k}[0]);
     }
   }
 
   # a fileid repeated in the listing cannot name two nodes: fall back to local ids
+  # an S id is never reused for a different node in one pass: if any mirror row
+  # (matched or not) already holds it, the new node gets a local id
+  my %mirror_ids = map { $_->{nodeid} => 1 } @$mirror;
   my @create;
   for my $e (grep { !$entry_used{$_->{href}} } @$listing) {
-    $e->{nodeid} = defined $e->{fileid} && @{ $entries_by_fileid{$e->{fileid}} } == 1
-                 ? server_id($e->{fileid}) : local_id();
+    my $sid = defined $e->{fileid} && @{ $entries_by_fileid{$e->{fileid}} } == 1
+            ? server_id($e->{fileid}) : undef;
+    $e->{nodeid} = defined $sid && !$mirror_ids{$sid} ? $sid : local_id();
     push @create, $e;
   }
   my @destroy = grep { !$row_used{$_->{nodeid}} } @$mirror;
