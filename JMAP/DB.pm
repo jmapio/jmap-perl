@@ -49,6 +49,7 @@ my %TABLE2GROUPS = (
   jcontactgroupmap => ['ContactGroup'],
   jcontacts => ['Contact'],
   jsubmission => ['EmailSubmission'],
+  jfilenodes => ['FileNode'],
   jclientprefs => ['ClientPreferences'],
   jcalendarprefs => ['CalendarPreferences'],
 );
@@ -1221,7 +1222,7 @@ sub get_submission_changes {
     {}, $since_modseq);
 }
 
-my $USER_SCHEMA_VERSION = 11;
+my $USER_SCHEMA_VERSION = 12;
 
 sub save_query {
   my ($Self, $type, $params, $state, $ids) = @_;
@@ -1359,6 +1360,7 @@ CREATE TABLE IF NOT EXISTS account (
   jstateClientPreferences TEXT NOT NULL DEFAULT 1,
   jstateCalendarPreferences TEXT NOT NULL DEFAULT 1,
   jstateEmailSubmission TEXT NOT NULL DEFAULT 1,
+  jstateFileNode TEXT NOT NULL DEFAULT 1,
   mtime DATE
 );
 EOF
@@ -1539,6 +1541,44 @@ CREATE TABLE IF NOT EXISTS jqueries (
 );
 EOF
 
+  $dbh->do(<<EOF);
+CREATE TABLE IF NOT EXISTS jfilenodes (
+  nodeid TEXT PRIMARY KEY,
+  parentid TEXT,
+  name TEXT,
+  href TEXT,
+  nodetype TEXT,
+  etag TEXT,
+  ctag TEXT,
+  size INTEGER,
+  type TEXT,
+  created INTEGER,
+  modified INTEGER,
+  accessed INTEGER,
+  changed INTEGER,
+  fileid TEXT,
+  fingerprint TEXT,
+  privs TEXT,
+  role TEXT,
+  executable INTEGER,
+  isSubscribed INTEGER,
+  deadprops TEXT,
+  jcreated INTEGER,
+  jmodseq INTEGER,
+  mtime DATE,
+  active BOOLEAN
+);
+EOF
+  $dbh->do("CREATE INDEX IF NOT EXISTS jfilenodeparent ON jfilenodes (parentid)");
+  $dbh->do("CREATE INDEX IF NOT EXISTS jfilenodehref ON jfilenodes (href)");
+  $dbh->do(<<EOF);
+CREATE TABLE IF NOT EXISTS jfilesync (
+  href TEXT PRIMARY KEY,
+  token TEXT,
+  mtime DATE
+);
+EOF
+
 }
 
 sub _initdb {
@@ -1691,6 +1731,36 @@ sub _initdb {
     };
     if ($@) { $dbh->rollback; die "user DB migration to v11 failed: $@" }
     $v = 11;
+  }
+
+  if ($v < 12) {
+    # FileNode over WebDAV: the metadata mirror, per-collection sync tokens,
+    # the FileNode state, and the account's WebDAV settings.
+    $dbh->begin_work;
+    eval {
+      $dbh->do(<<EOF);
+CREATE TABLE IF NOT EXISTS jfilenodes (
+  nodeid TEXT PRIMARY KEY, parentid TEXT, name TEXT, href TEXT, nodetype TEXT,
+  etag TEXT, ctag TEXT, size INTEGER, type TEXT, created INTEGER,
+  modified INTEGER, accessed INTEGER, changed INTEGER, fileid TEXT,
+  fingerprint TEXT, privs TEXT, role TEXT, executable INTEGER,
+  isSubscribed INTEGER, deadprops TEXT, jcreated INTEGER, jmodseq INTEGER,
+  mtime DATE, active BOOLEAN
+)
+EOF
+      $dbh->do("CREATE INDEX IF NOT EXISTS jfilenodeparent ON jfilenodes (parentid)");
+      $dbh->do("CREATE INDEX IF NOT EXISTS jfilenodehref ON jfilenodes (href)");
+      $dbh->do("CREATE TABLE IF NOT EXISTS jfilesync (href TEXT PRIMARY KEY, token TEXT, mtime DATE)");
+      $dbh->do("ALTER TABLE account ADD COLUMN jstateFileNode TEXT NOT NULL DEFAULT 1");
+      # iserver only exists for IMAP-backed accounts
+      for my $col ('webdavURL TEXT', 'webdavFeatures TEXT', 'lastfilesync INTEGER') {
+        eval { $dbh->do("ALTER TABLE iserver ADD COLUMN $col") };
+      }
+      $dbh->do('PRAGMA user_version = 12');
+      $dbh->commit;
+    };
+    if ($@) { $dbh->rollback; die "user DB migration to v12 failed: $@" }
+    $v = 12;
   }
 }
 

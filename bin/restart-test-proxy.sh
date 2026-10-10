@@ -53,11 +53,22 @@ if [ "$CLEAN" = "1" ]; then
         docker stop "$CYRUS_CONTAINER" >/dev/null 2>&1 || true
         docker rm   "$CYRUS_CONTAINER" >/dev/null 2>&1 || true
     fi
+    BASE_IMAGE="${CYRUS_IMAGE:-ghcr.io/cyrusimap/cyrus-docker-test-server:latest}"
+    case "${BASE_IMAGE##*/}" in
+        *:*) WEBDAV_IMAGE="${BASE_IMAGE%:*}:${BASE_IMAGE##*:}-webdav" ;;
+        *)   WEBDAV_IMAGE="${BASE_IMAGE}-webdav" ;;
+    esac
+    if ! docker image inspect "$WEBDAV_IMAGE" >/dev/null 2>&1; then
+        # Cyrus regenerates /etc/imapd.conf from this template at every boot, and
+        # restarting the container breaks its auth, so WebDAV has to be baked in.
+        printf 'FROM %s\nRUN sed -i "s/^httpmodules: .*/httpmodules: caldav carddav jmap webdav/" /srv/testserver/imapd.conf\n' \
+            "$BASE_IMAGE" | docker build -q -t "$WEBDAV_IMAGE" - >/dev/null
+    fi
     docker run -d --name "$CYRUS_CONTAINER" \
         -p ${CYRUS_IMAP_PORT}:8143 \
         -p 8080:8080 \
         -p 8001:8001 \
-        "${CYRUS_IMAGE:-ghcr.io/cyrusimap/cyrus-docker-test-server:latest}" >/dev/null
+        "$WEBDAV_IMAGE" >/dev/null
 
     # Wait for Cyrus IMAP to be ready
     echo -n "Waiting for Cyrus..."
@@ -121,7 +132,8 @@ if [ "$CLEAN" = "1" ]; then
                 \"smtpPort\":  25,
                 \"smtpSSL\":   1,
                 \"caldavURL\": \"$CYRUS_URL\",
-                \"carddavURL\":\"$CYRUS_URL\"
+                \"carddavURL\":\"$CYRUS_URL\",
+                \"webdavURL\": \"$CYRUS_URL/dav/drive/user/$CYRUS_USER/\"
             }" >/dev/null
         echo "Initialized and synced (IMAP)"
     fi

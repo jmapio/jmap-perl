@@ -545,6 +545,7 @@ sub run_backend_worker {
           smtpSSL    => $args->{smtpSSL}    // 1,
           caldavURL  => $args->{caldavURL}  || '',
           carddavURL => $args->{carddavURL} || '',
+          webdavURL  => $args->{webdavURL}  || '',
         });
         $target_db->firstsync();
 
@@ -657,6 +658,7 @@ sub run_backend_worker {
           smtpSSL    => $args->{smtpSSL}    // 0,
           caldavURL  => $args->{caldavURL}  || '',
           carddavURL => $args->{carddavURL} || '',
+          webdavURL  => $args->{webdavURL}  || '',
         });
         $db->firstsync();
         $db->sync_imap();
@@ -1304,6 +1306,7 @@ sub _account_details_child {
     imapPort   => $iserver->{imapPort},
     caldavURL  => $iserver->{caldavURL},
     carddavURL => $iserver->{carddavURL},
+    webdavURL  => $iserver->{webdavURL},
     folders    => $folders,
     messages   => $messages,
   };
@@ -3320,7 +3323,7 @@ sub do_signup {
   return invalid_request($req) unless lc $req->method eq 'post';
 
   my %opts;
-  for my $key (qw(username password imapHost imapPort imapSSL smtpHost smtpPort smtpSSL caldavURL carddavURL force)) {
+  for my $key (qw(username password imapHost imapPort imapSSL smtpHost smtpPort smtpSSL caldavURL carddavURL webdavURL force)) {
     $opts{$key} = $req->parm($key);
   }
 
@@ -3557,6 +3560,7 @@ sub _do_accounts_authed {
       smtpSSL    => $req->parm('smtpSSL')  // 3,
       caldavURL  => $req->parm('caldavURL')  || '',
       carddavURL => $req->parm('carddavURL') || '',
+      webdavURL  => $req->parm('webdavURL')  || '',
     );
 
     send_backend_request($aid, 'update_settings', \%args, sub {
@@ -4280,6 +4284,7 @@ sub mgmt_dashboard {
     <div class="form-group"><label>Password</label><input id="f-pass" type="password"></div>
     <div class="form-group"><label>CalDAV URL (optional)</label><input id="f-caldav" placeholder="https://example.com"></div>
     <div class="form-group"><label>CardDAV URL (optional)</label><input id="f-carddav" placeholder="https://example.com"></div>
+    <div class="form-group"><label>WebDAV URL (files, optional)</label><input id="f-webdav" placeholder="https://example.com/dav/drive/user/me/"></div>
     <div style="margin-top: 16px;">
       <button class="btn-add" onclick="addAccount()">Create Account</button>
     </div>
@@ -4333,6 +4338,7 @@ function addAccount() {
     password: document.getElementById('f-pass').value,
     caldavURL: document.getElementById('f-caldav').value,
     carddavURL: document.getElementById('f-carddav').value,
+    webdavURL: (document.getElementById('f-webdav') || {}).value || '',
   };
   fetch('/api/accounts', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) })
     .then(r => r.json())

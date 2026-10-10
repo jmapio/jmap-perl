@@ -3490,6 +3490,9 @@ CREATE TABLE IF NOT EXISTS iserver (
   smtpSSL INTEGER,
   caldavURL TEXT,
   carddavURL TEXT,
+  webdavURL TEXT,
+  webdavFeatures TEXT,
+  lastfilesync INTEGER,
   lastfoldersync DATE,
   mtime DATE NOT NULL
 );
