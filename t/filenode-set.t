@@ -1234,5 +1234,59 @@ sub files_under { my $p = shift; return [ sort grep { m{^\Q$p\E/} && !$tree{$_}{
   features();
 }
 
+# --- sharing, fix round 3
+{
+  my $t = JSON::true;
+  features(acl => 1, principalBase => '/dav/principals/user/');
+  %principal = map { ("/dav/principals/user/$_/" => 1) } qw(u user2 user3);
+  undef $acl_answer; $inherits = 0;
+  my $users = sub { [ sort map { m{/user/([^/]+)/} ? $1 : () } map { $_->{principal} } @{ $acl{ $_[0] } || [] } ] };
+  # Two moves in one call: P out of shared S, and C (inside P) out to Q.
+  # C's sharing came from P before the call, whatever P's own carry does
+  # first.  Ids are time-ordered, so the child's id sorts first only when
+  # it was made first (and moved into P afterwards).
+  for my $childfirst (0, 1) {
+    my $tag = "R3$childfirst";
+    my $x = mk(S => { parentId => $home, name => "${tag}S" }, U => { parentId => $home, name => "${tag}U" },
+               Q => { parentId => $home, name => "${tag}Q" });
+    my ($P, $C);
+    if ($childfirst) {
+      $C = mk(C => { parentId => $home, name => "${tag}c" })->{C};
+      $P = mk(P => { parentId => $x->{S}, name => 'p' })->{P};
+      set(update => { $C => { parentId => $P, name => 'c' } });
+    }
+    else {
+      my $y = mk(P => { parentId => $x->{S}, name => 'p' }, C => { parentId => '#P', name => 'c' });
+      ($P, $C) = @$y{qw(P C)};
+    }
+    set(update => { $x->{S} => { shareWith => { user2 => { mayRead => $t } } } });   # reaches P and C
+    my $order = $C lt $P ? 'child id first' : 'parent id first';
+    is($order, $childfirst ? 'child id first' : 'parent id first', "the ids sort as intended ($order)");
+    ok((grep { $_ eq 'user2' } @{ $users->("$R/${tag}S/p/c") }), "C is shared through S ($order)");
+    $set = set(update => { $P => { parentId => $x->{U} }, $C => { parentId => $x->{Q} } })->[1];
+    ok(exists $set->{updated}{$P} && exists $set->{updated}{$C}, "both moved ($order)") or diag explain $set;
+    is_deeply($users->("$R/${tag}Q/c"), [], "C has no user2 ACE ($order)") or diag explain $acl{"$R/${tag}Q/c"};
+    is_deeply($users->("$R/${tag}U/p"), [], "nor P ($order)");
+    ok(!get($C)->{$C}{shareWith}, "and C's mirror agrees ($order)");
+  }
+
+  # a bare allowlist name is a user principal only; an href must match exactly
+  local $ENV{JMAP_FILES_DROPPABLE_PRINCIPALS} = 'admin, /dav/principals/svc/robot/';
+  my $b = '/dav/principals/user/';
+  ok(JMAP::ImapDB::_files_droppable('/dav/principals/user/admin/', $b), '"admin": the user principal admin');
+  ok(!JMAP::ImapDB::_files_droppable('/dav/principals/group/admin/', $b), 'not a group called admin');
+  ok(!JMAP::ImapDB::_files_droppable('/dav/principals/user/admin/', undef), 'nor anything when the base is unknown');
+  ok(JMAP::ImapDB::_files_droppable('/dav/principals/svc/robot/', $b), 'a whole href matches exactly');
+  ok(!JMAP::ImapDB::_files_droppable('/dav/principals/svc/robot/x/', $b), 'and only exactly');
+  # end to end: a group "admin" stops the share
+  my $x = mk(G => { parentId => $home, name => 'R3G' });
+  $acl{"$R/R3G"} = [ $SELF_ACE, { principal => '/dav/principals/group/admin/', invert => 0, grant => ['read'], deny => [], inherited => 0, protected => 0 } ];
+  my $before = JSON->new->canonical->encode($acl{"$R/R3G"});
+  $set = set(update => { $x->{G} => { shareWith => { user2 => { mayRead => $t } } } })->[1];
+  is($set->{notUpdated}{$x->{G}}{type}, 'serverFail', 'a group named admin is not dropped: serverFail');
+  is(JSON->new->canonical->encode($acl{"$R/R3G"}), $before, 'and its ACL is unchanged');
+  features();
+}
+
 ok(!$db->in_transaction(), 'no transaction left open');
 done_testing;

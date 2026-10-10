@@ -415,10 +415,13 @@ In memory over the mirror:
   shows the server's state. The node's own result reflects only its own
   ACL write.
 - A directory that moves to another parent carries sharing the same way:
-  after the moves, the users whose sharing differs between the old and
-  the new parent (from the mirror, which propagation keeps as each
-  directory's effective sharing) are changed on the moved directory and
-  every directory below it. Moving into a shared directory grants its
+  after the moves, the users whose sharing differs between the old parent
+  as it was before the call and the new parent as it is now (from the
+  mirror, which propagation keeps as each directory's effective sharing)
+  are changed on the moved directory and every directory below it. Moved
+  directories are handled top-down in the final tree, so a new parent
+  that moved too has had its own carry first, and a carry never reads an
+  old parent another carry in the same call has already changed. Moving into a shared directory grants its
   sharees; moving out removes only the old parent's sharees (those in the
   delta), keeping the directory's own. Nothing is done when both parents
   share alike, or when the moved directory shows an inherited ACE (the
@@ -428,7 +431,9 @@ In memory over the mirror:
   (no such user). A refusal of an ACE the proxy only kept is `serverFail`
   naming its principal, and the ACL is left as it was -- unless every such
   principal is in `JMAP_FILES_DROPPABLE_PRINCIPALS` (see SETUP.md); those
-  are dropped, each with a warning, and the request made once more.
+  are dropped, each with a warning, and the request made once more. A
+  bare name there means the user principal of that name (directly below
+  the principal base) only; an href must match exactly.
 - The user principal collection is the `DAV:principal-collection-set`
   entry the owner's principal is directly below, else the owner's parent
   (learnt and kept in `webdavFeatures.principalBase`, as the privilege

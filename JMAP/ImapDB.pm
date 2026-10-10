@@ -1326,16 +1326,19 @@ sub filenode_sharewith {
 
 # The principals whose ACEs may be dropped when the server refuses to take
 # back an ACE it lists itself (JMAP_FILES_DROPPABLE_PRINCIPALS: names, or
-# whole hrefs, comma-separated; empty by default).  Cyrus lists an ACE for
+# whole hrefs, comma-separated; empty by default).  A bare name is a user
+# principal (directly below $base) only; an href must match exactly, so
+# "admin" never lets /dav/principals/group/admin/ go.  Cyrus lists an ACE for
 # every principal in a collection's ACL -- its admin, from the test
 # server's defaultacl -- but refuses an ACL request naming any principal
 # it cannot resolve, and a real user who never used DAV is one of them.
 # So nothing is dropped unless the operator says so.
 sub _files_droppable {
-  my $href = shift;
-  my %ok = map { ($_ => 1) } grep { length } map { s/^\s+|\s+$//gr } split /,/, ($ENV{JMAP_FILES_DROPPABLE_PRINCIPALS} // '');
-  my ($name) = $href =~ m{([^/]+)/?\z};
-  return $ok{$href} || (defined $name && $ok{$name}) ? 1 : 0;
+  my ($href, $base) = @_;
+  for my $ok (grep { length } map { s/^\s+|\s+$//gr } split /,/, ($ENV{JMAP_FILES_DROPPABLE_PRINCIPALS} // '')) {
+    return 1 if $ok =~ m{/} ? $href eq $ok : (defined $base && $href eq "$base$ok/");
+  }
+  return 0;
 }
 
 # One ACL request (RFC 3744 S8.1).  $aces: the whole ACL as it is to go;
@@ -1364,7 +1367,8 @@ sub _files_write_acl {
   return \%out if @{ $out{nouser} };
   my @gone = grep { !$isnew{$_} && $_->{principal} =~ m{^/} && !$_->{inherited} && !$_->{protected}
                     && $Self->_files_not_principal($_->{principal}, !$remembered) } @$aces;
-  my @keep = grep { !_files_droppable($_->{principal}) } @gone;
+  my $base = @gone ? $Self->_files_base() : undef;
+  my @keep = grep { !_files_droppable($_->{principal}, $base) } @gone;
   $out{refused} = [ map { $_->{principal} } (@keep ? @keep : @gone) ];
   return \%out if @keep || !@gone;
   $out{refused} = [];
@@ -1535,15 +1539,19 @@ sub _filenode_apply_share_delta {
 }
 
 # After a directory's MOVE (update_filenodes step 5b).  $before is its row
-# before the move.  Nothing is done when the parent did not change, when
-# both parents share alike, or when the server inherits ACLs (the moved
-# directory shows an inherited ACE).  Not in a transaction.
+# before the call and $oldp its old parent's row before the call: the
+# sharing the directory had came from there, whatever other carries in the
+# same call have done to that parent since.  The new parent's sharing is
+# the mirror's now -- the caller goes top-down in the final tree, so a new
+# parent that moved too has had its own carry.  Nothing is done when the
+# parent did not change, when both parents share alike, or when the server
+# inherits ACLs (the moved directory shows an inherited ACE).  Not in a
+# transaction.
 sub _filenode_move_share {
-  my ($Self, $before, $features) = @_;
+  my ($Self, $before, $oldp, $features) = @_;
   return unless $features->{acl} && defined $before->{parentid};
   $Self->begin();
   my $row = $Self->filenode_row($before->{nodeid});
-  my $oldp = $Self->filenode_get({ nodeid => $before->{parentid} })->[0];
   my $newp = $row && defined $row->{parentid} ? $Self->filenode_row($row->{parentid}) : undef;
   $Self->commit();
   return unless $row && $newp && $row->{parentid} ne $before->{parentid};
@@ -2626,7 +2634,22 @@ sub update_filenodes {
   # directory below it -- granted the new parent's sharees, and losing the
   # old parent's -- with the same delta-only rules as a shareWith change.
   # A failure warns and reads the ACL back; it never undoes the move.
-  $Self->_filenode_move_share($byid{$_}, $features) for sort grep { $byid{$_}{nodetype} eq 'directory' } keys %arrived;
+  # Top-down in the final tree; the old parents as they were before the call.
+  if ($features->{acl}) {
+    my @movedirs = grep { $byid{$_}{nodetype} eq 'directory' } keys %arrived;
+    my %depth;
+    $Self->begin();
+    for my $id (@movedirs) {
+      my ($d, %seen) = (0);
+      for (my $r = $Self->filenode_row($id); $r && defined $r->{parentid} && !$seen{ $r->{nodeid} }++; $r = $Self->filenode_row($r->{parentid})) { $d++ }
+      $depth{$id} = $d;
+    }
+    $Self->commit();
+    for my $id (sort { $depth{$a} <=> $depth{$b} || $a cmp $b } @movedirs) {
+      my $before = $byid{$id};
+      $Self->_filenode_move_share($before, defined $before->{parentid} ? $byid{ $before->{parentid} } : undef, $features);
+    }
+  }
 
   # 6. content, type and the client-set properties
   for my $id (sort keys %plan) {
