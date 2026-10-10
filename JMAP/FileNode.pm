@@ -100,7 +100,13 @@ sub rights {
 # The mirror's deadprops column: an entry's J: dead properties as canonical
 # JSON (so equal sets compare equal), or undef when there are none.
 my $CANON = JSON->new->canonical->utf8;   # bytes, as DBD::SQLite hands them back
-sub dead_json { my $d = shift; return $d && %$d ? $CANON->encode($d) : undef }
+# Values are strings, as a multistatus reads them back, so a mirror value
+# set by the proxy (executable => 1) equals the server's ("1").
+sub dead_json {
+  my $d = shift;
+  return undef unless $d && %$d;
+  return $CANON->encode({ map { ($_ => defined $d->{$_} ? "$d->{$_}" : undef) } keys %$d });
+}
 
 sub utc { my $t = shift; return defined $t ? strftime('%Y-%m-%dT%H:%M:%SZ', gmtime($t)) : undef }
 
@@ -212,7 +218,7 @@ sub order_creates {
     $progress = 0;
     my @next;
     for my $cid (@todo) {
-      my $p = $create->{$cid}{parentId} // '';
+      my $p = ref $create->{$cid} eq 'HASH' ? ($create->{$cid}{parentId} // '') : '';   # non-objects fail later
       if ($p =~ /^#(.+)\z/s && exists $create->{$1} && !$done{$1}) { push @next, $cid; next }
       push @order, $cid;
       $done{$cid} = $progress = 1;

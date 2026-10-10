@@ -1408,17 +1408,25 @@ sub _filenode_path { my $row = shift; return $row->{nodetype} eq 'directory' ? "
 # Probe showed it really stores them, and always into the mirror's
 # deadprops (merged), since a server without dead properties lists none
 # back.  Returns 0 if the server refused the PROPPATCH.
+#
+# With $fresh (a new node that took over an existing resource, as onExists
+# "replace" does with one PUT), the old resource's dead properties are not
+# the new node's: the server's are removed (PROPPATCH remove) unless the
+# client sent them, and the mirror's start from $dead alone.
 sub _filenode_dead_set {
-  my ($Self, $row, $dead) = @_;
-  return 1 unless %$dead;
-  my $ok = 1;
-  $ok = $Self->backend_cmd('files_prop_patch', _filenode_path($row), $dead)
-    if $Self->filenode_features()->{deadProps};
-  return 0 unless $ok;
+  my ($Self, $row, $dead, $fresh) = @_;
+  return 1 unless %$dead || $fresh;
   $Self->begin();
   my $cur = $Self->dgetfield('jfilenodes', { nodeid => $row->{nodeid} }, 'deadprops');
+  $Self->commit();
   my $old = defined $cur ? (eval { decode_json($cur) } || {}) : {};
-  my $json = JMAP::FileNode::dead_json({ %$old, %$dead });
+  my %patch = (($fresh ? (map { $_ => undef } grep { !exists $dead->{$_} } keys %$old) : ()), %$dead);
+  my $ok = 1;
+  $ok = $Self->backend_cmd('files_prop_patch', _filenode_path($row), \%patch)
+    if %patch && $Self->filenode_features()->{deadProps};
+  return 0 unless $ok;
+  $Self->begin();
+  my $json = JMAP::FileNode::dead_json($fresh ? $dead : { %$old, %$dead });
   $Self->ddirty('jfilenodes', { deadprops => $json, changed => time() }, { nodeid => $row->{nodeid} })
     if ($json // '') ne ($cur // '');
   $Self->commit();
@@ -1460,8 +1468,25 @@ sub destroy_filenodes {
       delete $destroying{$id};   # so its parent is not destroyed over it
       next;
     }
-    my $status = $r->{nodetype} eq 'directory' ? $Self->_files_delete_collection($r->{href})
-                                               : $Self->backend_cmd('files_delete', $r->{href});
+    # the mirror can be behind the server: a directory's members are
+    # checked again against the server's own listing before anything goes
+    my $status = eval {
+      $r->{nodetype} eq 'directory'
+        ? $Self->_files_delete_collection($r->{href}, 0,
+            $opts->{onDestroyRemoveChildren} ? undef : { map { $_->{href} => 1 } grep { $destroying{$_->{nodeid}} } values %row })
+        : $Self->backend_cmd('files_delete', $r->{href});
+    };
+    unless (defined $status) {
+      $notdestroyed{$id} = { type => 'serverFail', description => "DELETE: $@" };
+      delete $destroying{$id};
+      next;
+    }
+    if ($status eq 'children') {
+      $notdestroyed{$id} = { type => 'nodeHasChildren', description => 'the server lists children the mirror did not have' };
+      delete $destroying{$id};
+      eval { $Self->_files_refresh_dir($r->{href}); 1 } or warn "destroy_filenodes: re-listing $r->{href}: $@";
+      next;
+    }
     unless ($status =~ /^2/ || $status == 404) {   # 404: already gone
       $notdestroyed{$id} = _filenode_http_error($status, 'DELETE');
       delete $destroying{$id};
@@ -1489,12 +1514,21 @@ sub destroy_filenodes {
 # from the mirror, which may be behind), and a 2xx is not trusted: the
 # collection is looked up again at Depth 0 (spec "Defending against bogus
 # servers").  Returns an HTTP status; 404 counts as gone.
+#
+# $allowed (set when onDestroyRemoveChildren is false) holds the hrefs
+# being destroyed in this call: if the server lists any other member --
+# one the mirror, up to a minute old, did not know -- nothing is deleted
+# and the answer is "children" (nodeHasChildren).
 sub _files_delete_collection {
-  my ($Self, $href, $depth) = @_;
+  my ($Self, $href, $depth, $allowed) = @_;
   $depth //= 0;
   return 508 if $depth > 256;   # a bogus listing that never ends
   my $entries = eval { $Self->backend_cmd('files_prop_find', "$href/", 1) };
   return 404 if !$entries && $@ =~ /HTTP 404/;
+  die $@ if !$entries && $allowed;   # cannot tell what is in it: delete nothing
+  return 'children' if $allowed && grep {
+    !$_->{missing} && $_->{href} =~ m{^\Q$href\E/[^/]+\z} && !$allowed->{$_->{href}}
+  } @$entries;
   my %seen;
   for my $e (grep { !$_->{missing} && $_->{isCollection} && $_->{href} =~ m{^\Q$href\E/[^/]+\z} && !$seen{$_->{href}}++ }
              @{ $entries || [] }) {
@@ -1562,7 +1596,7 @@ sub create_filenodes {
   my $key = sub { my $n = $_[0]; return $n unless $ci; utf8::upgrade($n); return lc $n };   # Unicode lc
   for my $cid (@{ JMAP::FileNode::order_creates($create) }) {
     my $c = $create->{$cid};
-    unless (ref $c eq 'HASH') { $notcreated{$cid} = { type => 'invalidArguments' }; next }
+    unless (ref $c eq 'HASH') { $notcreated{$cid} = { type => 'invalidProperties', description => 'a create must be an object' }; next }
     if (my @srv = grep { $FILENODE_SERVER_SET{$_} } keys %$c) {
       $notcreated{$cid} = { type => 'invalidProperties', properties => [ sort @srv ],
                             description => 'server-set properties' };
@@ -1667,7 +1701,7 @@ sub create_filenodes {
       $notcreated{$cid} = { type => 'serverFail', description => 'the new node is not in its parent\'s listing' };
       next;
     }
-    unless ($Self->_filenode_dead_set($row, $v->{dead})) {
+    unless ($Self->_filenode_dead_set($row, $v->{dead}, $overwrite ? 1 : 0)) {
       # created on the server, but not all of it: report it, and let the
       # mirror keep what the server has (spec "Writes")
       $notcreated{$cid} = { type => 'serverFail', description => 'PROPPATCH of dead properties failed' };

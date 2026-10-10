@@ -231,6 +231,16 @@ force_sync();
 my ($gone) = @{ jmap(['FileNode/get', { ids => [ $top->{id}, @made ] }]) };
 is(scalar @{$gone->{list}}, 0, 'and stays gone after a sync');
 
+# a child added behind the proxy's back (the mirror has not seen it yet) still blocks a destroy
+my ($ed) = @{ jmap(['FileNode/set', { create => { e => { parentId => $home->{id}, name => "$tag-empty" } } }]) };
+my $edid = $ed->{created}{e}{id};
+$dav->Put("$root/$tag-empty/sneaky.txt", "s", type => 'text/plain');
+($set) = @{ jmap(['FileNode/set', { destroy => [ $edid ] }]) };
+is($set->{notDestroyed}{$edid}{type}, 'nodeHasChildren', 'an unseen child is nodeHasChildren') or diag explain $set;
+is($dav->Get("$root/$tag-empty/sneaky.txt")->{content}, 's', 'and it is not deleted');
+($set) = @{ jmap(['FileNode/set', { onDestroyRemoveChildren => JSON::true, destroy => [ $edid ] }]) };
+is(scalar @{ $set->{destroyed} || [] }, 2, 'with the flag: the directory and the child the re-list found') or diag explain $set;
+
 # destroy a and create a in one call: the name is free at the end
 my ($mk) = @{ jmap(['FileNode/set', { create => { a => { parentId => $home->{id}, name => "$tag-a", blobId => $blob->{blobId} } } }]) };
 ($set) = @{ jmap(['FileNode/set', { destroy => [ $mk->{created}{a}{id} ],

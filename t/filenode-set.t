@@ -48,8 +48,9 @@ no warnings qw(redefine once);
     return { status => 412 } if $o{if_none_match} && $tree{$path};
     (my $p = $path) =~ s{/[^/]+\z}{};
     return { status => 409 } unless $tree{$p};
+    # a PUT over an existing resource keeps its dead properties, as servers do
     $tree{$path} = { href => $path, isCollection => 0, etag => 'e' . ++$etag, size => length $bytes,
-                     type => $o{type}, modified => $T0 + $etag, dead => {} };
+                     type => $o{type}, modified => $T0 + $etag, dead => ($tree{$path} ? $tree{$path}{dead} : {}) };
     return { status => 201, etag => "e$etag" };
   }
   if ($cmd eq 'files_mkcol') {
@@ -77,7 +78,11 @@ no warnings qw(redefine once);
   if ($cmd eq 'files_prop_patch') {
     my ($props) = @a;
     return 0 unless $tree{$dir};
-    $tree{$dir}{dead} = { %{ $tree{$dir}{dead} }, %$props } if $deadprops_stored;
+    if ($deadprops_stored) {
+      for my $k (keys %$props) {
+        if (defined $props->{$k}) { $tree{$dir}{dead}{$k} = "$props->{$k}" } else { delete $tree{$dir}{dead}{$k} }
+      }
+    }
     return 1;
   }
   die "unexpected $cmd";
@@ -145,6 +150,20 @@ ok($set->{created}{e}, 'directory with a dead property') or diag explain $set;
 ok((grep { $_ eq "files_prop_patch $R/dir/sub/" } @log), 'PROPPATCH of a directory has the trailing slash') or diag explain \@log;
 is($tree{"$R/dir/sub"}{dead}{isSubscribed}, 0, 'stored on the server as 0');
 my $subid = $set->{created}{e}{id};
+my $seq = rows()->{"$R/dir/sub"}{jmodseq};
+$db->sync_files();
+is(rows()->{"$R/dir/sub"}{jmodseq}, $seq, 'the next sync reads the dead properties back as equal: no spurious change');
+
+# a same-name replace is one PUT onto the old resource: its dead properties are not the new node's
+$set = set(create => { o => { parentId => $dirid, name => 'ow.txt', blobId => 'f-x', executable => JSON::true,
+                              created => '2000-01-01T00:00:00Z' } })->[1];
+is($tree{"$R/dir/ow.txt"}{dead}{executable}, '1', 'old resource has a dead executable');
+$set = set(onExists => 'replace', create => { o => { parentId => $dirid, name => 'ow.txt', blobId => 'f-x',
+                                                     isSubscribed => JSON::false } })->[1];
+ok($set->{created}{o}, 'replaced') or diag explain $set;
+is_deeply($tree{"$R/dir/ow.txt"}{dead}, { isSubscribed => '0' }, 'the server keeps only what the client sent');
+is_deeply(decode_json(rows()->{"$R/dir/ow.txt"}{deadprops}), { isSubscribed => '0' }, 'and so does the mirror');
+is($set->{created}{o}{executable}, JSON::false, 'the new node is not executable');
 features();
 $deadprops_stored = 0;
 
@@ -187,7 +206,9 @@ $set = set(create => {
   c => { parentId => $dirid, name => 'w', modified => 'yesterday' },
   x => { parentId => $dirid, name => 'v', executable => 'yes' },
   r => { parentId => '#r', name => 'loop' },
+  s => 'not an object',
 })->[1];
+is($set->{notCreated}{s}{type}, 'invalidProperties', 'a non-object create is invalidProperties');
 is($set->{notCreated}{$_}{type}, 'invalidProperties', "$_ invalid") for qw(n p b t c x r);
 is_deeply($set->{notCreated}{c}{properties}, ['modified'], 'bad timestamp');
 is_deeply($set->{notCreated}{x}{properties}, ['executable'], 'non-boolean executable');
@@ -198,6 +219,40 @@ is(set(onExists => 'unchanged', create => {})->[1]{type}, 'invalidArguments', 'o
 $set = set(destroy => [ $dirid ])->[1];
 is($set->{notDestroyed}{$dirid}{type}, 'nodeHasChildren', 'nodeHasChildren');
 ok($tree{"$R/dir"}, 'and nothing deleted');
+
+# the mirror can be behind the server: a member it has never seen still counts
+$set = set(create => { e => { parentId => $home, name => 'empty' } })->[1];
+my $emptyid = $set->{created}{e}{id};
+$tree{"$R/empty/unseen"} = { href => "$R/empty/unseen", isCollection => 0, etag => 'u', size => 1, modified => $T0, dead => {} };
+@log = ();
+$set = set(destroy => [ $emptyid ])->[1];
+is($set->{notDestroyed}{$emptyid}{type}, 'nodeHasChildren', 'a child only the server knows is nodeHasChildren');
+ok($tree{"$R/empty/unseen"} && $tree{"$R/empty"}, 'and nothing is deleted');
+ok(!grep({ /files_delete/ } @log), 'no DELETE was sent');
+my $unseen = rows()->{"$R/empty/unseen"};
+ok($unseen, 'the directory was re-listed: the mirror now has the child');
+$set = set(onDestroyRemoveChildren => JSON::true, destroy => [ $emptyid ])->[1];
+is_deeply([ sort @{ $set->{destroyed} } ], [ sort $emptyid, $unseen->{nodeid} ], 'with the flag both go, the child listed');
+ok(!$tree{"$R/empty"}, 'gone from the server');
+# with the flag, a member the mirror never saw has no id: it simply goes
+$set = set(create => { e => { parentId => $home, name => 'empty2' } })->[1];
+$emptyid = $set->{created}{e}{id};
+$tree{"$R/empty2/unseen"} = { href => "$R/empty2/unseen", isCollection => 0, etag => 'u', size => 1, modified => $T0, dead => {} };
+$set = set(onDestroyRemoveChildren => JSON::true, destroy => [ $emptyid ])->[1];
+is_deeply($set->{destroyed}, [ $emptyid ], 'an unseen child is deleted with its directory, and has no id to list');
+ok(!$tree{"$R/empty2/unseen"}, 'it is gone from the server');
+# onExists replace of a directory checks the server too
+$set = set(create => { e => { parentId => $home, name => 'empty3' } })->[1];
+$emptyid = $set->{created}{e}{id};
+$tree{"$R/empty3/unseen"} = { href => "$R/empty3/unseen", isCollection => 0, etag => 'u', size => 1, modified => $T0, dead => {} };
+$set = set(onExists => 'replace', create => { f => { parentId => $home, name => 'empty3', blobId => 'f-x' } })->[1];
+is($set->{notCreated}{f}{type}, 'nodeHasChildren', 'onExists replace of a directory with an unseen child');
+ok($tree{"$R/empty3/unseen"} && $tree{"$R/empty3"}{isCollection}, 'and nothing is deleted');
+# children destroyed in the same call are not "other" members
+$set = set(create => { d => { parentId => $home, name => 'pair' }, c => { parentId => '#d', name => 'c', blobId => 'f-x' } })->[1];
+my @pair = ($set->{created}{d}{id}, $set->{created}{c}{id});
+$set = set(destroy => \@pair)->[1];
+is_deeply([ sort @{ $set->{destroyed} } ], [ sort @pair ], 'a directory with its only child, in one call');
 
 # Cyrus: DELETE of a collection with subcollections answers 204, removes
 # only its files and keeps itself and the subcollections
