@@ -689,5 +689,114 @@ for my $flag (0, 1) {
   ok(!grep({ m{^\Q$R/R12/\E.*~tmp~} } keys %tree), 'no temporary name is left');
 }
 
+# --- fix round 4 (N3): a node the client asked to move is a mover even when
+# that update is refused: no destroy in the call may take it, and no replace
+# may overwrite it
+sub files_under { my $p = shift; return [ sort grep { m{^\Q$p\E/} && !$tree{$_}{isCollection} } keys %tree ] }
+# refused in step 1 (shareWith), inside the directory a replace displaces
+{
+  my $x = mk(D => { parentId => $home, name => 'R13' }, f => { parentId => '#D', name => 'f.txt', blobId => 'f-y' },
+             s => { parentId => '#D', name => 's2' }, k => { parentId => '#s', name => 'k.txt', blobId => 'f-x' });
+  $set = set(onExists => 'replace', onDestroyRemoveChildren => JSON::true,
+             update => { $x->{f} => { name => 's2' },
+                         $x->{k} => { parentId => $x->{D}, name => 'k.txt', shareWith => { u2 => {} } } })->[1];
+  is($set->{notUpdated}{$x->{k}}{type}, 'invalidProperties', 'k is refused in step 1') or diag explain $set;
+  is($set->{notUpdated}{$x->{f}}{type}, 'nodeHasChildren', 'so the replace that would take k with s2 is refused') or diag explain $set;
+  ok(!$set->{destroyed}, 'nothing is destroyed');
+  is_deeply(files_under("$R/R13"), [ "$R/R13/f.txt", "$R/R13/s2/k.txt" ], 'f and k are where they were');
+  is(rows()->{"$R/R13/s2/k.txt"}{nodeid}, $x->{k}, 'the mirror agrees');
+  ok(!grep({ m{^\Q$R/R13/\E.*~tmp~} } keys %tree), 'no temporary name is left');
+}
+# refused in step 3 (two movers want one name: one loses), inside the directory a replace displaces
+{
+  my $x = mk(D => { parentId => $home, name => 'R14' }, f => { parentId => '#D', name => 'f.txt', blobId => 'f-y' },
+             s => { parentId => '#D', name => 's2' }, k => { parentId => '#s', name => 'k.txt', blobId => 'f-x' },
+             g => { parentId => '#s', name => 'g.txt', blobId => 'f-x' });
+  $set = set(onExists => 'replace', onDestroyRemoveChildren => JSON::true,
+             update => { $x->{f} => { name => 's2' }, $x->{k} => { parentId => $x->{D}, name => 'x.txt' },
+                         $x->{g} => { parentId => $x->{D}, name => 'x.txt' } })->[1];
+  my ($loser) = grep { ($set->{notUpdated}{$_}{type} // '') eq 'alreadyExists' } @$x{qw(k g)};
+  ok($loser, 'one of the two movers loses the name') or diag explain $set;
+  my ($winner) = grep { $_ ne ($loser // '') } @$x{qw(k g)};
+  ok(exists $set->{updated}{$winner}, 'the other moves out') or diag explain $set;
+  is($set->{notUpdated}{$x->{f}}{type}, 'nodeHasChildren', 'the replace is refused: the loser is still inside s2') or diag explain $set;
+  ok(!$set->{destroyed}, 'nothing is destroyed');
+  my $lname = $loser eq $x->{k} ? 'k.txt' : 'g.txt';
+  is_deeply(files_under("$R/R14"), [ "$R/R14/f.txt", "$R/R14/s2/$lname", "$R/R14/x.txt" ], 'three files, the loser still in s2');
+  is(rows()->{"$R/R14/s2/$lname"}{nodeid}, $loser, 'the mirror agrees');
+  ok(!grep({ m{^\Q$R/R14/\E.*~tmp~} } keys %tree), 'no temporary name is left');
+}
+# an explicit destroy with the flag, while the child asked to move out is refused
+{
+  my $x = mk(D => { parentId => $home, name => 'R15' }, k => { parentId => '#D', name => 'k.txt', blobId => 'f-x' });
+  $set = set(onDestroyRemoveChildren => JSON::true, destroy => [ $x->{D} ],
+             update => { $x->{k} => { parentId => $home, shareWith => { u2 => {} } } })->[1];
+  is($set->{notUpdated}{$x->{k}}{type}, 'invalidProperties', 'the move out is refused') or diag explain $set;
+  is($set->{notDestroyed}{$x->{D}}{type}, 'nodeHasChildren', 'so the destroy is refused, flag or no flag') or diag explain $set;
+  ok(!$set->{destroyed} && $tree{"$R/R15/k.txt"}, 'k is still there');
+  is(rows()->{"$R/R15/k.txt"}{nodeid}, $x->{k}, 'the mirror agrees');
+  # ... and the same for a rename, which is a move too
+  $set = set(onDestroyRemoveChildren => JSON::true, destroy => [ $x->{D} ],
+             update => { $x->{k} => { name => '' } })->[1];
+  is($set->{notUpdated}{$x->{k}}{type}, 'invalidProperties', 'the rename is refused') or diag explain $set;
+  is($set->{notDestroyed}{$x->{D}}{type}, 'nodeHasChildren', 'and so is the destroy over it') or diag explain $set;
+  ok(!$set->{destroyed} && $tree{"$R/R15/k.txt"}, 'k is still there');
+  # a rename that succeeds inside a directory destroyed with the flag: the client asked for both
+  $set = set(onDestroyRemoveChildren => JSON::true, destroy => [ $x->{D} ], update => { $x->{k} => { name => 'k2.txt' } })->[1];
+  is_deeply([ sort @{ $set->{destroyed} || [] } ], [ sort @$x{qw(D k)} ], 'both go when the rename lands inside the destroyed directory')
+    or diag explain $set;
+}
+# a file holder whose own move away was refused is not overwritten by a replace
+{
+  my $x = mk(D => { parentId => $home, name => 'R16' }, a => { parentId => '#D', name => 'a.txt', blobId => 'f-y' },
+             b => { parentId => '#D', name => 'b.txt', blobId => 'f-x' });
+  @log = ();
+  $set = set(onExists => 'replace', update => { $x->{a} => { name => 'b.txt' }, $x->{b} => { name => 'c.txt', shareWith => {} } })->[1];
+  is($set->{notUpdated}{$x->{b}}{type}, 'invalidProperties', 'b\'s move away is refused') or diag explain $set;
+  is_deeply($set->{notUpdated}{$x->{a}}, { type => 'alreadyExists', existingId => $x->{b} }, 'so a may not replace it') or diag explain $set;
+  ok(!$set->{destroyed} && !grep({ /files_move|files_delete/ } @log), 'nothing moved or deleted');
+  is(content("$R/R16/a.txt") . ' ' . content("$R/R16/b.txt"), '7:text/x-y 8:text/plain', 'both files as they were');
+}
+# a directory holder whose own move was refused is not replaced (nor its child taken)
+{
+  my $x = mk(D => { parentId => $home, name => 'R17' }, f => { parentId => '#D', name => 'f.txt', blobId => 'f-y' },
+             s => { parentId => '#D', name => 's2' }, k => { parentId => '#s', name => 'k.txt', blobId => 'f-x' });
+  $set = set(onExists => 'replace', onDestroyRemoveChildren => JSON::true,
+             update => { $x->{f} => { name => 's2' }, $x->{s} => { parentId => $home, shareWith => {} } })->[1];
+  is($set->{notUpdated}{$x->{s}}{type}, 'invalidProperties', 's2\'s move is refused') or diag explain $set;
+  is_deeply($set->{notUpdated}{$x->{f}}, { type => 'alreadyExists', existingId => $x->{s} }, 'so f may not replace it') or diag explain $set;
+  ok(!$set->{destroyed}, 'nothing is destroyed');
+  is_deeply(files_under("$R/R17"), [ "$R/R17/f.txt", "$R/R17/s2/k.txt" ], 'f and k are where they were');
+}
+# a create with onExists replace at the name of a directory a mover leaves:
+# late, so it replaces the directory once the mover has left (R6) ...
+{
+  my $x = mk(D => { parentId => $home, name => 'R18' }, s => { parentId => '#D', name => 's2' },
+             k => { parentId => '#s', name => 'k.txt', blobId => 'f-x' });
+  $set = set(onExists => 'replace', onDestroyRemoveChildren => JSON::true,
+             create => { n => { parentId => $x->{D}, name => 's2', blobId => 'f-y' } },
+             update => { $x->{k} => { parentId => $x->{D} } })->[1];
+  ok(exists $set->{updated}{$x->{k}}, 'k moves out first') or diag explain $set;
+  ok($set->{created}{n}, 'then the create replaces the directory') or diag explain $set;
+  is_deeply($set->{destroyed}, [ $x->{s} ], 'which is destroyed, alone');
+  is_deeply(files_under("$R/R18"), [ "$R/R18/k.txt", "$R/R18/s2" ], 'k survives beside the new file');
+  is(rows()->{"$R/R18/k.txt"}{nodeid}, $x->{k}, 'the mirror agrees');
+  # ... and never takes a mover whose move was refused
+  $x = mk(s => { parentId => $x->{D}, name => 's3' }, k => { parentId => '#s', name => 'k.txt', blobId => 'f-x' });
+  $set = set(onExists => 'replace', onDestroyRemoveChildren => JSON::true,
+             create => { n => { parentId => rows()->{"$R/R18"}{nodeid}, name => 's3', blobId => 'f-y' } },
+             update => { $x->{k} => { parentId => $home, shareWith => {} } })->[1];
+  is($set->{notUpdated}{$x->{k}}{type}, 'invalidProperties', 'k\'s move is refused') or diag explain $set;
+  is($set->{notCreated}{n}{type}, 'nodeHasChildren', 'so the create may not replace the directory over it') or diag explain $set;
+  ok(!$set->{destroyed} && $tree{"$R/R18/s3/k.txt"} && $tree{"$R/R18/s3"}{isCollection}, 'k and s3 are still there');
+  # a create at the name of a file whose own move was refused
+  $set = set(onExists => 'replace', create => { n => { parentId => $x->{s}, name => 'k.txt', blobId => 'f-y' } },
+             update => { $x->{k} => { name => 'z.txt', shareWith => {} } })->[1];
+  is($set->{notUpdated}{$x->{k}}{type}, 'invalidProperties', 'k\'s rename is refused') or diag explain $set;
+  is_deeply([ @{ $set->{notCreated}{n} }{qw(type existingId)} ], [ 'alreadyExists', $x->{k} ], 'so the create may not overwrite it') or diag explain $set;
+  is(content("$R/R18/s3/k.txt"), '8:text/plain', 'k keeps its content');
+  ok(!$set->{destroyed}, 'nothing is destroyed');
+}
+
 ok(!$db->in_transaction(), 'no transaction left open');
 done_testing;

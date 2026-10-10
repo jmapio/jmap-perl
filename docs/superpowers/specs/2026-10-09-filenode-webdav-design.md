@@ -241,8 +241,13 @@ moves in the same call: those run after it. A node that `onExists:
 "replace"` displaces is likewise destroyed only once every node leaving it
 in this call has left (a node inside it first steps out under a temporary
 name in its destination directory), so the replace never deletes a node
-that is moving; the displaced node must allow `mayDelete`. `updated` and
-`notUpdated` are keyed by the resolved node id, also for a `#cid` key.
+that is moving; the displaced node must allow `mayDelete`. A node the
+client asked to move or rename counts as moving even when that update is
+refused (it stays where it is, and the client did not ask for it to go):
+no replace takes its name (`alreadyExists`), and no destroy in the call --
+explicit, or on behalf of a replace -- takes it or a directory it is still
+inside (`nodeHasChildren`, flag or no flag). `updated` and `notUpdated`
+are keyed by the resolved node id, also for a `#cid` key.
 
 Operations:
 

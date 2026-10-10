@@ -202,49 +202,51 @@ sub api_FileNode_set {
   }
 
   # The set is judged by its final state (RFC 8620 S5.3; draft S3.2.3):
-  # - a directory whose children an update moves out is destroyed after
-  #   the moves, so it is empty by then (its server-side member check
+  # - a directory holding a node an update moves or renames is destroyed
+  #   after the moves, so it is empty by then (its server-side member check
   #   still runs, and still guards against a stale mirror) -- inside
   #   update_filenodes, so a move into its name can follow it;
   # - a create whose name a node is moving away from, or a late destroy
-  #   frees, runs after the moves.
+  #   frees, or whose onExists "replace" would take such a directory, runs
+  #   after the moves.
   # Everything else: destroys first (freeing names), then creates (so a
   # move may go into a new directory), then updates.
-  my (@early, @late, %late_create);
+  # A node the client asked to move is a mover even when that update is
+  # refused: a refused move leaves it where it is, and nothing in the call
+  # may then delete it (update_filenodes and create_filenodes both refuse,
+  # with nodeHasChildren or alreadyExists), so the partition here counts
+  # every requested move, not only those that will succeed.
+  my (@early, @late, %late_create, %mover);
   {
     my $ci = $opts{ci};
     my $key = sub { my $n = $_[0]; return $n unless $ci; utf8::upgrade($n); return lc $n };
-    my %leaving;   # nodeid => 1 for each node an update moves or renames
-    my %from;      # "parent\0name" each of them leaves
+    my %from;      # "parent\0name" each mover leaves
+    my %holds;     # nodeid => 1 for each directory a mover is inside
     for my $uid (keys %update) {
       my $p = $update{$uid};
       next unless ref $p eq 'HASH' && (exists $p->{parentId} || exists $p->{name});
       my $row = $before{ $Self->idmap($uid) // $uid } or next;
-      $leaving{ $row->{nodeid} } = 1 if exists $p->{parentId};
+      $mover{ $row->{nodeid} } = 1;
       $from{ ($row->{parentid} // '') . "\0" . $key->($row->{name}) } = 1;
+      my %seen;
+      for (my $a = $row->{parentid}; defined $a && !$seen{$a}++; $a = $before{$a} ? $before{$a}{parentid} : undef) {
+        $holds{$a} = 1;
+      }
     }
     for my $did (map { $Self->idmap($_) } @{ $args->{destroy} || [] }) {
-      my $moved_out = 0;
-      if (defined $did && %leaving) {
-        for my $id (keys %leaving) {
-          my %seen;
-          for (my $a = $before{$id}{parentid}; defined $a && !$seen{$a}++; $a = $before{$a} ? $before{$a}{parentid} : undef) {
-            if ($a eq $did) { $moved_out = 1; last }
-          }
-          last if $moved_out;
-        }
-      }
-      push @{ $moved_out ? \@late : \@early }, $did;
+      push @{ defined $did && $holds{$did} ? \@late : \@early }, $did;
     }
     for my $did (grep { defined && $before{$_} } @late) {
       $from{ ($before{$did}{parentid} // '') . "\0" . $key->($before{$did}{name}) } = 1;
     }
+    my %at = map { (($_->{parentid} // '') . "\0" . $key->($_->{name}) => $_->{nodeid}) } values %before;
     my $create = $args->{create} || {};
     for my $cid (keys %$create) {
       my $c = $create->{$cid};
       next unless ref $c eq 'HASH' && defined $c->{parentId} && !ref $c->{parentId}
                && defined $c->{name} && !ref $c->{name} && $c->{parentId} !~ /^#/;
-      $late_create{$cid} = 1 if $from{ ($Self->idmap($c->{parentId}) // '') . "\0" . $key->($c->{name}) };
+      my $k = ($Self->idmap($c->{parentId}) // '') . "\0" . $key->($c->{name});
+      $late_create{$cid} = 1 if $from{$k} || (defined $at{$k} && $holds{ $at{$k} });
     }
     # a create inside a late one is late too
     my $more = 1;
@@ -257,6 +259,7 @@ sub api_FileNode_set {
       }
     }
   }
+  $opts{protect} = \%mover;   # create_filenodes: never replace a mover, or a directory one is still inside
   my $create = $args->{create} || {};
   my %early_create = map { ($_ => $create->{$_}) } grep { !$late_create{$_} } keys %$create;
   my %late_create_args = map { ($_ => $create->{$_}) } keys %late_create;

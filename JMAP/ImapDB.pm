@@ -1637,6 +1637,24 @@ sub _filenode_check_create {
   return ([ grep { !$u{$_}++ } sort @bad ], { nodetype => $nodetype, dead => \%dead });
 }
 
+# A node the client asked to move or rename in the same call ($protect:
+# nodeid => 1, see api_FileNode_set) is never replaced, and nor is a
+# directory one of them is still inside -- even when that move was refused,
+# since a refused move leaves the node where it is, and the client did not
+# ask for it to go.  Returns a setError, or undef when $row may be replaced.
+sub _filenode_protected_err {
+  my ($Self, $row, $protect) = @_;
+  return undef unless $protect && %$protect;
+  return { type => 'alreadyExists', existingId => "$row->{nodeid}",
+           description => 'the node is moved in this call' } if $protect->{ $row->{nodeid} };
+  return undef unless $row->{nodetype} eq 'directory';
+  $Self->begin();
+  my @inside = sort grep { $protect->{$_} } map { $_->{nodeid} } @{ $Self->_filenode_subtree($row->{nodeid}) };
+  $Self->commit();
+  return undef unless @inside;
+  return { type => 'nodeHasChildren', description => "a node moving in this call is still inside it: @inside" };
+}
+
 # Create nodes (draft S3.2.3).  $idmap resolves ids from earlier method
 # calls; "#cid" references to creations in this call resolve here, and
 # order_creates puts a creation after the one its parentId names.
@@ -1699,6 +1717,10 @@ sub create_filenodes {
         my $theirs = JMAP::FileNode::epoch($dead->{modified}) // $clash->{modified} // 0;
         my $ours = defined $v->{dead}{modified} ? JMAP::FileNode::epoch($v->{dead}{modified}) : time();
         $mode = $ours > $theirs ? 'replace' : '';
+      }
+      if ($mode eq 'replace' && (my $kept = $Self->_filenode_protected_err($clash, $opts->{protect}))) {
+        $notcreated{$cid} = $kept;
+        next;
       }
       if ($mode eq 'rename') {
         $name = JMAP::FileNode::unique_name($name, { map { ($key->($_->{name}) => 1) } @$siblings }, $ci);
@@ -1812,6 +1834,18 @@ sub update_filenodes {
   my $modified_of = sub { JMAP::FileNode::epoch($deadof->($_[0])->{modified}) // $_[0]{modified} // 0 };
   my $now = time();
 
+  # Every node the client asked to move or rename, whether or not that
+  # update survives the checks below.  A refused mover is still a mover: no
+  # replace may take its name, and no destroy in this call may take it
+  # (it never "arrives", so the safety net in $run_destroy holds it back).
+  my %mover;
+  for my $uid (keys %$update) {
+    my $p = $update->{$uid};
+    next unless ref $p eq 'HASH' && (exists $p->{parentId} || exists $p->{name});
+    my $id = $idmap->($uid) // $uid;
+    $mover{$id} = 1 if $byid{$id};
+  }
+
   # 1. each update on its own
   my (%plan, %dest);   # id => { uid, patch, dead }; id => [newparentid, newname] for a move
   for my $uid (sort keys %$update) {
@@ -1920,7 +1954,9 @@ sub update_filenodes {
       next;
     }
     my ($np, $nn) = @{ $dest{$id} };
-    my $mode = $dest{$holder} || $claimed{$k} ? '' : ($opts->{onExists} // '');   # never replace another mover
+    # never replace another mover -- not even one whose own move was refused
+    # above and so still holds the name
+    my $mode = $mover{$holder} ? '' : ($opts->{onExists} // '');
     if ($mode eq 'newest') {
       my $ours = exists $plan{$id}{dead}{modified} ? JMAP::FileNode::epoch($plan{$id}{dead}{modified}) : $modified_of->($byid{$id});
       $mode = $ours > $modified_of->($byid{$holder}) ? 'replace' : '';
@@ -1996,7 +2032,6 @@ sub update_filenodes {
     }
   }
   my (%touched, %parked, %moved, %destroy_err, %arrived);
-  my %mover = map { ($_ => 1) } keys %dest;   # every node this call moves
   my $do_move = sub {   # MOVE $row into $dir as $name; the mirror follows
     my ($row, $dir, $name, $overwrite) = @_;
     my $to = "$dir->{href}/$name";
@@ -2051,9 +2086,10 @@ sub update_filenodes {
     return $destroy_err{$h} if exists $destroy_err{$h};
     my @ids = ($h, grep { $late{$_} && !exists $destroy_err{$_} && $under->($_, $h) } keys %late);
     # Safety net: never delete a node the client asked to move and that has
-    # not reached its destination.  If one is still inside what is about to
-    # go (some ordering this code did not foresee), the destroy is refused --
-    # refusing a valid set is acceptable, losing data is not.
+    # not reached its destination -- its move refused, failed, or not yet
+    # run (some ordering this code did not foresee).  If one is still inside
+    # what is about to go, the destroy is refused: refusing a valid-looking
+    # set is acceptable, losing data is not.
     $Self->begin();
     my @stuck = grep { $mover{$_} && !$arrived{$_} } $h, map { $_->{nodeid} } map { @{ $Self->_filenode_subtree($_) } } @ids;
     $Self->commit();
