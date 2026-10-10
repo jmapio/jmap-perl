@@ -19,6 +19,9 @@ CYRUS_URL="${CYRUS_URL:-http://localhost:8080}"
 export JMAP_DATADIR="$DATADIR"
 export JMAP_HOME
 export BASEURL="http://localhost:$FRONTEND_PORT"
+# The test server's defaultacl gives "admin" an ACE on every mailbox, which
+# Cyrus lists in DAV:acl but will not take back in an ACL request.
+export JMAP_FILES_DROPPABLE_PRINCIPALS="${JMAP_FILES_DROPPABLE_PRINCIPALS:-admin}"
 
 CLEAN=0
 BACKEND=imap

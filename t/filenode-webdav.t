@@ -501,6 +501,20 @@ SKIP: {
   is_deeply($ssub->{list}[0]{shareWith}, { $sharee => { %none, mayRead => $t } }, 'the subdirectory\'s shareWith says so');
   is($peer->Put("$root/$tag-shared/new.txt", 'x', type => 'text/plain')->{status}, 403, 'but not write');
 
+  # a directory moved into the shared one is shared with it, and moved out again is not
+  my ($mv) = @{ jmap(['FileNode/set', { create => { m => { parentId => $home->{id}, name => "$tag-mover" },
+                                                    mf => { parentId => '#m', name => 'moved.txt', blobId => $blob->{blobId} } } }]) };
+  my $mid = $mv->{created}{m}{id};
+  ok($mid, 'a directory to move') or diag explain $mv;
+  is($peer->Raw('GET', "$root/$tag-mover/moved.txt")->{status}, 403, "$sharee cannot read it where it is");
+  my ($mi) = @{ jmap(['FileNode/set', { update => { $mid => { parentId => $sid } } }]) };
+  ok(exists $mi->{updated}{$mid}, 'moved into the shared directory') or diag explain $mi;
+  is($peer->Raw('GET', "$root/$tag-shared/$tag-mover/moved.txt")->{status}, 200, "$sharee can read the moved file");
+  my ($mo) = @{ jmap(['FileNode/set', { update => { $mid => { parentId => $home->{id} } } }]) };
+  ok(exists $mo->{updated}{$mid}, 'moved back out') or diag explain $mo;
+  is($peer->Raw('GET', "$root/$tag-mover/moved.txt")->{status}, 403, "$sharee cannot read it any more");
+  jmap(['FileNode/set', { onDestroyRemoveChildren => JSON::true, destroy => [ $mid ] }]);
+
   # a patch path; mayShare is Cyrus's admin privilege (write-acl is abstract there)
   my ($sp) = @{ jmap(['FileNode/set', { update => { $sid => { "shareWith/$sharee/mayShare" => $t } } }]) };
   ok(exists $sp->{updated}{$sid}, 'patched mayShare') or diag explain $sp;

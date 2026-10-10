@@ -110,8 +110,10 @@ no warnings qw(redefine once);
         return 204;
       }
       delete $tree{$_} for @sub;
+      delete $acl{$_} for @sub;
     }
     delete $tree{$dir};
+    delete $acl{$dir};
     return 204;
   }
   if ($cmd eq 'files_move') {
@@ -130,6 +132,7 @@ no warnings qw(redefine once);
       my $n = $to . substr($h, length $dir);
       $tree{$n} = { %{ delete $tree{$h} }, href => $n };
       $tree{$n}{etag} = 'm' . ++$etag unless $tree{$n}{isCollection};   # Cyrus: a file's ETag changes on MOVE
+      $acl{$n} = delete $acl{$h} if exists $acl{$h};                    # a collection keeps its own ACL
     }
     return $existed ? 204 : 201;
   }
@@ -932,11 +935,37 @@ sub files_under { my $p = shift; return [ sort grep { m{^\Q$p\E/} && !$tree{$_}{
   $acl{"$R/S1"} = [ $SELF_ACE, { principal => '/dav/principals/user/admin/', invert => 0, grant => ['all'], deny => [], inherited => 0, protected => 0 } ];
   $db->sync_files();
   is(get($x->{S})->{$x->{S}}{shareWith}, undef, 'the admin ACE is not shown as sharing');
+  # nothing is dropped unless the operator allows it: serverFail, ACL untouched
+  my $before = JSON->new->canonical->encode($acl{"$R/S1"});
   @acl_reqs = ();
   $set = set(update => { $x->{S} => { shareWith => { user2 => { mayRead => $t } } } })->[1];
-  ok(exists $set->{updated}{$x->{S}}, 'recognized-principal: dropped and retried') or diag explain $set;
-  is(scalar @acl_reqs, 2, 'two requests');
-  ok(!grep({ $_->{principal} =~ /admin/ } @{ $acl_reqs[1][1] }), 'the second without the admin');
+  is($set->{notUpdated}{$x->{S}}{type}, 'serverFail', 'recognized-principal for a listed ACE: serverFail') or diag explain $set;
+  like($set->{notUpdated}{$x->{S}}{description}, qr{/dav/principals/user/admin/}, 'naming the principal');
+  is(scalar @acl_reqs, 1, 'no second request');
+  is(JSON->new->canonical->encode($acl{"$R/S1"}), $before, 'the ACL is unchanged');
+  {
+    # an allowlisted principal is dropped, with a warning
+    local $ENV{JMAP_FILES_DROPPABLE_PRINCIPALS} = ' svc-x , admin ';
+    my @w;
+    local $SIG{__WARN__} = sub { push @w, @_ };
+    @acl_reqs = ();
+    $set = set(update => { $x->{S} => { shareWith => { user2 => { mayRead => $t } } } })->[1];
+    ok(exists $set->{updated}{$x->{S}}, 'allowlisted: dropped and retried') or diag explain $set;
+    is(scalar @acl_reqs, 2, 'two requests');
+    ok(!grep({ $_->{principal} =~ /admin/ } @{ $acl_reqs[1][1] }), 'the second without the admin');
+    ok((grep { m{dropping the ACE for /dav/principals/user/admin/} } @w), 'and the drop is warned about') or diag explain \@w;
+    # ... but an unknown principal that is not on the list still stops it
+    $acl{"$R/S1"} = [ $SELF_ACE, { principal => '/dav/principals/user/svc/', invert => 0, grant => ['read'], deny => [], deny => [], inherited => 0, protected => 0 },
+                      { principal => '/dav/principals/user/admin/', invert => 0, grant => ['all'], deny => [], inherited => 0, protected => 0 } ];
+    $before = JSON->new->canonical->encode($acl{"$R/S1"});
+    $set = set(update => { $x->{S} => { shareWith => { user3 => { mayRead => $t } } } })->[1];
+    is($set->{notUpdated}{$x->{S}}{type}, 'serverFail', 'an unknown principal not on the list: serverFail');
+    like($set->{notUpdated}{$x->{S}}{description}, qr{/user/svc/}, 'naming it');
+    unlike($set->{notUpdated}{$x->{S}}{description}, qr{/user/admin/}, 'and only it');
+    is(JSON->new->canonical->encode($acl{"$R/S1"}), $before, 'the ACL is unchanged');
+    $acl{"$R/S1"} = [ $SELF_ACE ];
+    set(update => { $x->{S} => { shareWith => { user2 => { mayRead => $t } } } });
+  }
   $set = set(update => { $x->{S} => { shareWith => { user9 => { mayRead => $t } } } })->[1];
   is_deeply([ @{ $set->{notUpdated}{$x->{S}} }{qw(type properties)} ], [ 'invalidProperties', ['shareWith'] ], 'no such user');
   like($set->{notUpdated}{$x->{S}}{description}, qr/user9/, 'named');
@@ -1094,7 +1123,7 @@ sub files_under { my $p = shift; return [ sort grep { m{^\Q$p\E/} && !$tree{$_}{
   # nothing changed for anyone: nothing below is touched
   @acl_reqs = ();
   $set = set(update => { $x->{A} => { 'shareWith/user2/mayModifyContent' => $f } })->[1];
-  is(scalar @acl_reqs, 1, 'no change for anyone: the node only');
+  is(scalar @acl_reqs, 0, 'no change for anyone: no request at all (a no-op rewrite still costs rights on Cyrus)');
   # unshare
   $set = set(update => { $x->{A} => { shareWith => undef } })->[1];
   ok(!(grep { $_->{principal} =~ m{/user2/} } map { @{ $acl{$_} || [] } } "$R/PA", "$R/PA/b", "$R/PA/b/c"), 'unshared everywhere');
@@ -1118,6 +1147,90 @@ sub files_under { my $p = shift; return [ sort grep { m{^\Q$p\E/} && !$tree{$_}{
   ok(exists $set->{updated}{$x->{A}}, 'shared on an inheriting server');
   is_deeply([ map { $_->[0] } @acl_reqs ], [ "$R/PA" ], 'the descendants show it inherited: no request below');
   $inherits = 0;
+  features();
+}
+
+# --- sharing, fix round 2
+{
+  my $t = JSON::true; my $f = JSON::false;
+  features(acl => 1, principalBase => '/dav/principals/user/');
+  %principal = map { ("/dav/principals/user/$_/" => 1) } qw(u user2 user3);
+  undef $acl_answer; $inherits = 0;
+  my $x = mk(Sh => { parentId => $home, name => 'Q-shared' }, Sh2 => { parentId => $home, name => 'Q-shared2' },
+             U => { parentId => $home, name => 'Q-plain' }, M => { parentId => '#U', name => 'm' },
+             N => { parentId => '#M', name => 'n' }, g => { parentId => '#N', name => 'g.txt', blobId => 'f-x' });
+  set(update => { $x->{Sh} => { shareWith => { user2 => { mayRead => $t } } }, $x->{Sh2} => { shareWith => { user2 => { mayRead => $t } } } });
+  my $own3 = { principal => '/dav/principals/user/user3/', invert => 0, grant => ['read'], deny => [], inherited => 0, protected => 0 };
+  $acl{"$R/Q-plain/m"} = [ $SELF_ACE, $own3 ];
+  $db->sync_files();
+  my $users = sub { [ sort map { m{/user/([^/]+)/} ? $1 : () } map { $_->{principal} } @{ $acl{ $_[0] } || [] } ] };
+
+  # moving a directory into a shared one shares it, and everything below
+  my ($st) = $api->api_FileNode_get({ accountId => $db->accountid(), ids => [] });
+  $set = set(update => { $x->{M} => { parentId => $x->{Sh} } })->[1];
+  ok(exists $set->{updated}{$x->{M}}, 'moved in') or diag explain $set;
+  is_deeply($users->("$R/Q-shared/m"), [ qw(user2 user3) ], 'the moved directory gets the new parent\'s sharee, and keeps its own');
+  is_deeply($users->("$R/Q-shared/m/n"), ['user2'], 'and so does the one below');
+  my ($ch) = $api->api_FileNode_changes({ accountId => $db->accountid(), sinceState => $st->[1]{state} });
+  ok((grep { $_ eq $x->{N} } @{ $ch->[1]{updated} }), 'FileNode/changes reports the directory below') or diag explain $ch;
+  ok(get($x->{N})->{$x->{N}}{shareWith}{user2}, 'whose mirror has it');
+
+  # between two parents that share alike: nothing to do
+  @acl_reqs = ();
+  $set = set(update => { $x->{M} => { parentId => $x->{Sh2} } })->[1];
+  ok(exists $set->{updated}{$x->{M}}, 'moved across');
+  is(scalar @acl_reqs, 0, 'parents sharing alike: no ACL request');
+
+  # moving out removes only what came from the old parent
+  $set = set(update => { $x->{M} => { parentId => $x->{U} } })->[1];
+  ok(exists $set->{updated}{$x->{M}}, 'moved out') or diag explain $set;
+  is_deeply($users->("$R/Q-plain/m"), ['user3'], 'the old parent\'s sharee goes; its own stays');
+  is_deeply($users->("$R/Q-plain/m/n"), [], 'and below');
+  ok(!get($x->{N})->{$x->{N}}{shareWith}, 'the mirror follows');
+
+  # a refusal never undoes the move
+  $acl_answer = sub { return $_[0] eq "$R/Q-shared/m" ? { status => 403, error => 'need-privileges' } : undef };
+  my @w;
+  { local $SIG{__WARN__} = sub { push @w, @_ }; $set = set(update => { $x->{M} => { parentId => $x->{Sh} } })->[1] }
+  ok(exists $set->{updated}{$x->{M}} && $tree{"$R/Q-shared/m"}, 'the move stands') or diag explain $set;
+  ok((grep { m{Q-shared/m/: ACL: HTTP 403} } @w), 'the refusal is warned about') or diag explain \@w;
+  ok(!get($x->{M})->{$x->{M}}{shareWith}{user2}, 'and its mirror shows the server');
+  ok(get($x->{N})->{$x->{N}}{shareWith}{user2}, 'the one below still got it');
+  undef $acl_answer;
+  set(update => { $x->{M} => { parentId => $x->{U} } });
+
+  # a server that inherits: nothing is carried
+  $inherits = 1;
+  @acl_reqs = ();
+  $set = set(update => { $x->{M} => { parentId => $x->{Sh} } })->[1];
+  ok(exists $set->{updated}{$x->{M}}, 'moved in, on an inheriting server');
+  is(scalar @acl_reqs, 0, 'no ACL request');
+  $inherits = 0;
+  set(update => { $x->{M} => { parentId => $x->{U} } });
+
+  # propagation retries with the remembered answers, and drops nothing unlisted
+  my $y = mk(S => { parentId => $x->{Sh}, name => 'sub' });
+  $acl{"$R/Q-shared/sub"} = [ $SELF_ACE, { principal => '/dav/principals/user/svc/', invert => 0, grant => ['read'], deny => [], inherited => 0, protected => 0 } ];
+  my $before = JSON->new->canonical->encode($acl{"$R/Q-shared/sub"});
+  @w = ();
+  { local $SIG{__WARN__} = sub { push @w, @_ }; $set = set(update => { $x->{Sh} => { shareWith => { user3 => { mayRead => $t } } } })->[1] }
+  ok(exists $set->{updated}{$x->{Sh}}, 'the node itself is shared') or diag explain $set;
+  is(JSON->new->canonical->encode($acl{"$R/Q-shared/sub"}), $before, 'the descendant naming an unknown principal is left as it was');
+  ok((grep { m{Q-shared/sub/: the server will not take back ACEs for /dav/principals/user/svc/} } @w), 'and that is warned about') or diag explain \@w;
+
+  # a descendant already as it should be: no request
+  $acl{"$R/Q-shared/sub"} = [ $SELF_ACE ];
+  set(update => { $x->{Sh} => { shareWith => undef } });
+  $acl{"$R/Q-shared/sub"} = [ $SELF_ACE, { principal => '/dav/principals/user/user2/', grant => ['read'], deny => [] } ];
+  @acl_reqs = ();
+  set(update => { $x->{Sh} => { shareWith => { user2 => { mayRead => $t } } } });
+  is_deeply([ map { $_->[0] } @acl_reqs ], [ "$R/Q-shared" ], 'a descendant that already has it gets no request');
+
+  # M2: the error is the request's own
+  $acl_answer = sub { die "boom on the wire\n" };
+  $set = set(update => { $x->{Sh} => { shareWith => { user3 => { mayRead => $t } } } })->[1];
+  like($set->{notUpdated}{$x->{Sh}}{description}, qr/ACL: boom on the wire/, 'a failed request reports its own error');
+  undef $acl_answer;
   features();
 }
 

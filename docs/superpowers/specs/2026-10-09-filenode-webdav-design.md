@@ -231,10 +231,20 @@ then read the files):
   grantable privilege that holds them is `{http://cyrusimap.org/ns/}admin`
   (IMAP `a`). `bind` holds `write-content` (IMAP `i`), so a sharee given
   `mayAddChildren` also gets `mayModifyContent`.
-- Every collection lists an ACE for `/dav/principals/user/admin/`, but that
-  principal answers 404 and an ACL request naming it is refused with
-  `DAV:recognized-principal`. Such ACEs are not shown in `shareWith`, and
-  are dropped from the rewrite when the server refuses them.
+- Every collection on the test server lists an ACE for
+  `/dav/principals/user/admin/`. It is real, not implicit: it comes from
+  the test server's `defaultacl: admin lrswipkxtecdan`. Cyrus refuses any
+  principal href that `principal_parse_path` cannot resolve -- that admin
+  (its principal answers 404), and equally a real user who has never used
+  DAV, an IMAP-only service account, or a group -- with
+  `DAV:recognized-principal`. A Cyrus bug worth reporting: it lists ACEs
+  in `DAV:acl` that it then refuses to take back in an ACL request. Such
+  ACEs are not shown in `shareWith`. The proxy never drops them silently:
+  a refused rewrite is `serverFail` naming the principals, unless the
+  operator lists them in `JMAP_FILES_DROPPABLE_PRINCIPALS` (the test stack
+  lists `admin`), in which case each is dropped with a warning and the
+  request retried. Over HTTP a global admin keeps only the implicit
+  `la` (lookup and admin, `httpd_myrights`) once its ACE is gone.
 - The ACL request replaces every non-inherited ACE: leaving out `DAV:self`
   removes the owner's own rights. The proxy always sends it back. Sending
   back `self: all` maps to `lrwikxtecdan`, losing the IMAP `s` and `p`
@@ -392,12 +402,33 @@ In memory over the mirror:
   descendant stays. Accepted cost: a descendant's own grant for one of
   those users is overwritten by the parent's change. A user for whom a
   descendant already shows an `inherited` ACE is skipped there (that
-  server inherits). Only the node itself is read back; each descendant's
+  server inherits). A descendant whose ACL would not change is not
+  rewritten (on Cyrus even a rewrite to the same ACL costs the owner
+  rights), and neither is the node itself. Propagation is synchronous
+  and unbounded: it runs inside the `FileNode/set` call, costing at least
+  two requests (the ACL's PROPFIND and the ACL request) per directory
+  below the node, plus a retry where an allowlisted ACE has to be
+  dropped. Only the node itself is read back; each descendant's
   mirror row follows the change it was sent (a new modseq, so
   `FileNode/changes` reports it), and a descendant whose ACL request
   fails is warned about and its ACL read back at once, so its mirror
   shows the server's state. The node's own result reflects only its own
   ACL write.
+- A directory that moves to another parent carries sharing the same way:
+  after the moves, the users whose sharing differs between the old and
+  the new parent (from the mirror, which propagation keeps as each
+  directory's effective sharing) are changed on the moved directory and
+  every directory below it. Moving into a shared directory grants its
+  sharees; moving out removes only the old parent's sharees (those in the
+  delta), keeping the directory's own. Nothing is done when both parents
+  share alike, or when the moved directory shows an inherited ACE (the
+  server inherits). A failure warns and reads the ACL back; it never
+  undoes the move.
+- A `DAV:recognized-principal` refusal of a sharee is `invalidProperties`
+  (no such user). A refusal of an ACE the proxy only kept is `serverFail`
+  naming its principal, and the ACL is left as it was -- unless every such
+  principal is in `JMAP_FILES_DROPPABLE_PRINCIPALS` (see SETUP.md); those
+  are dropped, each with a warning, and the request made once more.
 - The user principal collection is the `DAV:principal-collection-set`
   entry the owner's principal is directly below, else the owner's parent
   (learnt and kept in `webdavFeatures.principalBase`, as the privilege
