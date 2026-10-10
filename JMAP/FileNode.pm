@@ -7,6 +7,7 @@ package JMAP::FileNode;
 use strict;
 use warnings;
 use JSON;
+use B ();
 use Encode qw(encode_utf8);
 use Digest::SHA qw(sha1_hex);
 use Data::UUID::LibUUID qw(new_uuid_string);
@@ -68,7 +69,7 @@ sub glob_regex {
     }
     else { $glob =~ s/^(.)//s; $re .= quotemeta $1 }
   }
-  return qr/^$re$/si;
+  return qr/\A$re\z/si;
 }
 
 # RFC 3744 privileges -> draft S3.1 FilesRights.  DAV:all and DAV:write are
@@ -365,18 +366,90 @@ sub _ancestors {
 }
 
 # draft S3.2.5 FilterCondition / RFC 8620 FilterOperator.
+# Like epoch, but keeps fractional seconds, so "...00.5Z" sorts after "...00Z".
+sub epoch_frac {
+  my $s = shift // '';
+  my $t = epoch($s);
+  return undef unless defined $t;
+  my ($f) = $s =~ /(\.\d+)Z\z/;
+  return $t + ($f // 0);
+}
+
+# Why a filter's condition values are the wrong type, or undef (draft S3.2.5
+# types: Boolean, Id/String, UnsignedInt, UTCDate).  Walks FilterOperators.
+sub filter_problem {
+  my ($f) = @_;
+  return 'a filter must be an object' unless ref $f eq 'HASH';
+  if (exists $f->{operator}) {
+    for my $c (@{ $f->{conditions} || [] }) {
+      my $why = filter_problem($c);
+      return $why if $why;
+    }
+    return undef;
+  }
+  my $isbool = sub { ref $_[0] && JSON::is_bool($_[0]) };
+  my $isuint = sub {
+    return 0 if !defined $_[0] || ref $_[0];
+    my $fl = B::svref_2object(\$_[0])->FLAGS;
+    return 0 unless $fl & (B::SVf_IOK | B::SVf_NOK);
+    return $_[0] >= 0 && $_[0] == int($_[0]);
+  };
+  my $isstr = sub {
+    return 0 if !defined $_[0] || ref $_[0];
+    return (B::svref_2object(\$_[0])->FLAGS & B::SVf_POK) ? 1 : 0;
+  };
+  for my $k (sort keys %$f) {
+    my $v = $f->{$k};
+    if ($k =~ /\A(?:isTopLevel|hasAnyRole|isExecutable)\z/) {
+      return "$k must be a boolean" unless $isbool->($v);
+    }
+    elsif ($k =~ /\A(?:minSize|maxSize)\z/) {
+      return "$k must be an unsigned integer" unless $isuint->($v);
+    }
+    elsif ($k =~ /(?:Before|After)\z/) {
+      return "$k must be a UTCDate" unless $isstr->($v) && defined epoch($v);
+    }
+    else {
+      return "$k must be a string" unless $isstr->($v);
+    }
+  }
+  return undef;
+}
+
+# draft S3.2.5 FilterCondition / RFC 8620 FilterOperator.
+#
+# $ctx->{depth} (draft "depth": levels of subdirectories to recurse into)
+# widens parentId and isTopLevel, and only those: ancestorId is already
+# recursive.  It applies to the top-level condition and through a top-level
+# AND; below OR or NOT the conditions keep their exact meaning.
 sub filter_match {
   my ($o, $f, $ctx) = @_;
+  my $depth = $ctx->{depth} || 0;
   if (exists $f->{operator}) {
     my @c = @{ $f->{conditions} || [] };
-    return (grep { !filter_match($o, $_, $ctx) } @c) ? 0 : 1 if $f->{operator} eq 'AND';
-    return (grep {  filter_match($o, $_, $ctx) } @c) ? 1 : 0 if $f->{operator} eq 'OR';
-    return (grep {  filter_match($o, $_, $ctx) } @c) ? 0 : 1;   # NOT
+    if ($f->{operator} eq 'AND') {
+      return (grep { !filter_match($o, $_, $ctx) } @c) ? 0 : 1;
+    }
+    my $sub = { %$ctx, depth => 0 };
+    return (grep {  filter_match($o, $_, $sub) } @c) ? 1 : 0 if $f->{operator} eq 'OR';
+    return (grep {  filter_match($o, $_, $sub) } @c) ? 0 : 1;   # NOT
   }
   my $byid = $ctx->{byid};
-  my $date = sub { epoch($_[0]) // 0 };
-  if (exists $f->{isTopLevel})   { return 0 unless !defined $o->{parentId} == !!$f->{isTopLevel} }
-  if (defined $f->{parentId})    { return 0 unless ($o->{parentId} // '') eq $f->{parentId} }
+  my $date = sub { epoch_frac($_[0]) // 0 };
+  if (exists $f->{isTopLevel}) {
+    my $top = !defined $o->{parentId};
+    $top = 1 if !$top && $f->{isTopLevel} && $depth && scalar(my @a = _ancestors($o->{id}, $byid)) <= $depth;
+    return 0 unless !!$top == !!$f->{isTopLevel};
+  }
+  if (defined $f->{parentId}) {
+    my $ok = ($o->{parentId} // '') eq $f->{parentId};
+    if (!$ok && $depth) {
+      my @a = _ancestors($o->{id}, $byid);
+      my ($i) = grep { $a[$_] eq $f->{parentId} } 0 .. $#a;
+      $ok = defined $i && $i <= $depth;
+    }
+    return 0 unless $ok;
+  }
   if (defined $f->{ancestorId})  { return 0 unless grep { $_ eq $f->{ancestorId} } _ancestors($o->{id}, $byid) }
   if (defined $f->{descendantId}){ return 0 unless grep { $_ eq $o->{id} } _ancestors($f->{descendantId}, $byid) }
   if (defined $f->{nodeType})    { return 0 unless $o->{nodeType} eq $f->{nodeType} }
@@ -406,35 +479,69 @@ my %NODE_ORDER = (directory => 0, symlink => 1, file => 2);
 sub sort_nodes {
   my ($objs, $sort, $byid) = @_;
   my %keys;
+  my $desc = sub { defined $_[0]{isAscending} && !$_[0]{isAscending} };
   my $cmp_one = sub {
     my ($c, $x, $y) = @_;
     my $p = $c->{property};
     my $r;
-    if    ($p eq 'name')     { $r = JMAP::Collation::compare($c->{collation}, $x->{name}, $y->{name}, \%keys) }
-    elsif ($p eq 'nodeType') { $r = $NODE_ORDER{$x->{nodeType}} <=> $NODE_ORDER{$y->{nodeType}} }
-    elsif ($p eq 'type')     { $r = ($NODE_ORDER{$x->{nodeType}} <=> $NODE_ORDER{$y->{nodeType}})
-                                 || JMAP::Collation::compare($c->{collation}, $x->{type} // '', $y->{type} // '', \%keys) }
-    elsif ($p eq 'size')     { $r = (defined $x->{size} ? 0 : 1) <=> (defined $y->{size} ? 0 : 1) || ($x->{size} // 0) <=> ($y->{size} // 0) }
-    else                     { $r = (epoch($x->{$p}) // 0) <=> (epoch($y->{$p}) // 0) }
-    $r = -$r if defined $c->{isAscending} && !$c->{isAscending} && $p ne 'size';
-    $r = ((defined $x->{size} ? 0 : 1) <=> (defined $y->{size} ? 0 : 1)) || (($y->{size} // 0) <=> ($x->{size} // 0))
-      if $p eq 'size' && defined $c->{isAscending} && !$c->{isAscending};
+    if ($p eq 'name') {
+      $r = JMAP::Collation::compare($c->{collation}, $x->{name}, $y->{name}, \%keys);
+      $r = -$r if $desc->($c);
+    }
+    elsif ($p eq 'nodeType') {
+      $r = $NODE_ORDER{$x->{nodeType}} <=> $NODE_ORDER{$y->{nodeType}};
+      $r = -$r if $desc->($c);
+    }
+    elsif ($p eq 'type') {
+      # directories (non-files) stay first either way; only the media type reverses
+      $r = $NODE_ORDER{$x->{nodeType}} <=> $NODE_ORDER{$y->{nodeType}};
+      unless ($r) {
+        $r = JMAP::Collation::compare($c->{collation}, $x->{type} // '', $y->{type} // '', \%keys);
+        $r = -$r if $desc->($c);
+      }
+    }
+    elsif ($p eq 'size') {
+      # null sizes (directories) last in both directions
+      $r = (defined $x->{size} ? 0 : 1) <=> (defined $y->{size} ? 0 : 1);
+      unless ($r) {
+        $r = ($x->{size} // 0) <=> ($y->{size} // 0);
+        $r = -$r if $desc->($c);
+      }
+    }
+    else {
+      $r = (epoch_frac($x->{$p}) // 0) <=> (epoch_frac($y->{$p}) // 0);
+      $r = -$r if $desc->($c);
+    }
     return $r;
   };
   my @flat = grep { ($_->{property} // '') ne 'tree' } @$sort;
   my $cmp = sub { my ($x, $y) = @_; for my $c (@flat) { my $r = $cmp_one->($c, $x, $y); return $r if $r } return $x->{id} cmp $y->{id} };
-  return [ sort { $cmp->($a, $b) } @$objs ] unless grep { ($_->{property} // '') eq 'tree' } @$sort;
+  my ($tree) = grep { ($_->{property} // '') eq 'tree' } @$sort;
+  return [ sort { $cmp->($a, $b) } @$objs ] unless $tree;
 
-  # draft S3.2.5 "tree": by name, each directory followed by its sorted children
-  my $tc = { property => 'name', collation => (grep { $_->{property} eq 'tree' } @$sort)[0]{collation} };
-  my %in = map { $_->{id} => $_ } @$objs;
+  # draft S3.2.5 "tree": by name, each directory immediately followed by its
+  # sorted children.  Walk the whole tree (a filtered-out parent still places
+  # its matched descendants) and emit only the matched nodes; then any matched
+  # node the walk never reached (a parentId cycle from a bogus server) goes on
+  # the end by name, so no id is ever dropped.
+  my $tc = { property => 'name', collation => $tree->{collation}, isAscending => $tree->{isAscending} };
+  my $order = sub { $cmp_one->($tc, $_[0], $_[1]) || $_[0]{id} cmp $_[1]{id} };
+  my %want = map { $_->{id} => 1 } @$objs;
   my %kids;
-  push @{ $kids{ defined $_->{parentId} && $in{$_->{parentId}} ? $_->{parentId} : '' } }, $_ for @$objs;
-  my $order = sub { my ($x, $y) = @_; ($NODE_ORDER{$x->{nodeType}} <=> $NODE_ORDER{$y->{nodeType}}) || $cmp_one->($tc, $x, $y) || $x->{id} cmp $y->{id} };
-  my @out;
+  for my $n (values %$byid) {
+    push @{ $kids{ defined $n->{parentId} && $byid->{$n->{parentId}} ? $n->{parentId} : '' } }, $n;
+  }
+  my (@out, %seen);
   my $walk;
-  $walk = sub { for my $n (sort { $order->($a, $b) } @{ $kids{$_[0]} || [] }) { push @out, $n; $walk->($n->{id}) } };
+  $walk = sub {
+    for my $n (sort { $order->($a, $b) } @{ $kids{$_[0]} || [] }) {
+      next if $seen{$n->{id}}++;
+      push @out, $n if $want{$n->{id}};
+      $walk->($n->{id});
+    }
+  };
   $walk->('');
+  push @out, sort { $order->($a, $b) } grep { !$seen{$_->{id}} } @$objs;
   return \@out;
 }
 

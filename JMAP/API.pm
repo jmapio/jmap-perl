@@ -146,6 +146,27 @@ my %PARAM_SCHEMA = (
     sortAsTree         => 'bool?',
     filterAsTree       => 'bool?',
   },
+  'FileNode/query' => {
+    accountId          => 'string?',
+    filter             => 'object?',
+    sort               => '[object]?',
+    position           => 'int?',
+    anchor             => 'string?',
+    anchorOffset       => 'int?',
+    limit              => 'uint?',
+    calculateTotal     => 'bool?',
+    depth              => 'uint?',
+  },
+  'FileNode/queryChanges' => {
+    accountId          => 'string?',
+    filter             => 'object?',
+    sort               => '[object]?',
+    sinceQueryState    => 'string',
+    maxChanges         => 'uint?',
+    upToId             => 'string?',
+    calculateTotal     => 'bool?',
+    depth              => 'uint?',
+  },
   'Mailbox/changes' => {
     accountId          => 'string?',
     sinceState         => 'string',
@@ -627,6 +648,9 @@ sub _check_since_state {
 sub _apply_window {
   my ($Self, $data, $args, $id_cb) = @_;
   my $start = $args->{position} // 0;
+  # RFC 8620 S5.5: a negative position counts back from the end of the results
+  $start += @$data if $start < 0;
+  $start = 0 if $start < 0;
   if (defined $args->{anchor}) {
     my $found;
     for my $i (0 .. $#$data) {

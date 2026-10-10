@@ -292,10 +292,18 @@ In memory over the mirror:
 
 - every draft filter except `body` (`unsupportedFilter`); `text` is
   `nameMatch` OR `typeMatch`;
-- `depth` relative to `parentId` or `ancestorId`;
+- `depth` (levels of subdirectories to recurse into; absent, null or 0
+  means none) widens `parentId` and `isTopLevel`, at the top level of the
+  filter or through a top-level AND; `ancestorId` is already recursive and
+  is not narrowed by it;
 - sorts `name`, `type`, `size`, `created`, `modified`, `accessed`,
-  `nodeType` and `tree`, with `JMAP::Collation`;
-- `queryChanges` through the `jqueries` snapshots.
+  `nodeType` and `tree`, with `JMAP::Collation`; `tree` orders siblings by
+  name only (like `find`, not directories first), walks the whole tree so a
+  filtered-out parent still places its matched children, and
+  `isAscending: false` reverses sibling order; `type` keeps directories
+  first in both directions;
+- `queryChanges` through the `jqueries` snapshots; under `tree`, the
+  descendants of a changed node count as changed (their positions moved).
 
 `FileNode/get` supports `fetchParents` and reads the state after the data.
 

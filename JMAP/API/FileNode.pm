@@ -317,34 +317,18 @@ sub _filenode_query_ids {
   my %rowbyid = map { $_->{nodeid} => $_ } @$rows;
   my @objs = map { $Self->_filenode_object($_, \%rowbyid) } @$rows;
   my %byid = map { $_->{id} => $_ } @objs;
-  my $ctx = { byid => \%byid };
+  # depth widens a top-level parentId / isTopLevel (see JMAP::FileNode::filter_match)
+  my $ctx = { byid => \%byid, depth => $args->{depth} // 0 };
   my $filter = $args->{filter};
-  # draft S3.2.5 depth: "The number of levels of subdirectories to recurse
-  # into".  With a top-level parentId (or ancestorId) condition P and depth
-  # d > 0, the query covers the nodes at most d levels below P's children:
-  # P's children are level 0, their children level 1, and so on.
-  my $depth = $args->{depth} // 0;
-  my $key = ref $filter eq 'HASH' && !exists $filter->{operator}
-            ? (defined $filter->{parentId} ? 'parentId' : defined $filter->{ancestorId} ? 'ancestorId' : undef)
-            : undef;
-  my @m;
-  if ($depth > 0 && $key) {
-    my %f = %$filter;
-    my $base = delete $f{$key};
-    @m = grep { JMAP::FileNode::filter_match($_, \%f, $ctx) } grep {
-      my @a = JMAP::FileNode::_ancestors($_->{id}, \%byid);
-      my ($i) = grep { $a[$_] eq $base } 0 .. $#a;
-      defined $i && $i <= $depth;
-    } @objs;
-  }
-  else {
-    @m = grep { !$filter || JMAP::FileNode::filter_match($_, $filter, $ctx) } @objs;
-  }
+  my @m = grep { !$filter || JMAP::FileNode::filter_match($_, $filter, $ctx) } @objs;
   return [ map { $_->{id} } @{ JMAP::FileNode::sort_nodes(\@m, $args->{sort} || [], \%byid) } ];
 }
 
 sub _filenode_query_problem {
   my ($Self, $args) = @_;
+  if (defined $args->{filter} and my $why = JMAP::FileNode::filter_problem($args->{filter})) {
+    return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['filter'], description => $why}]);
+  }
   my %ok = map { $_ => 1 } @{ $JMAP::FileNode::CAPS{fileNodeQuerySortOptions} };
   for my $c (@{ $args->{sort} || [] }) {
     return $Self->_transError(['error', {type => 'unsupportedSort', sort => $c}]) unless $ok{$c->{property} // ''};
@@ -363,8 +347,6 @@ sub api_FileNode_query {
   return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
   my @e = $Self->_filenode_query_problem($args);
   return @e if @e;
-  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['depth']}])
-    if defined $args->{depth} && $args->{depth} !~ /\A\d+\z/;
   my $rows = $Self->{db}->filenode_rows();
   my $state = "$user->{jstateFileNode}";
   $Self->commit();
@@ -382,8 +364,6 @@ sub api_FileNode_queryChanges {
   return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
   my @e = $Self->_filenode_query_problem($args);
   return @e if @e;
-  return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['depth']}])
-    if defined $args->{depth} && $args->{depth} !~ /\A\d+\z/;
   my $state = "$user->{jstateFileNode}";
   my $since = $args->{sinceQueryState};
   return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceQueryState']}])
@@ -392,6 +372,18 @@ sub api_FileNode_queryChanges {
   my $rows = $Self->{db}->filenode_rows();
   my %changed = map { $_->{nodeid} => 1 } @{ $Self->{db}->dget('jfilenodes', { jmodseq => ['>', $since] }, 'nodeid') };
   $Self->commit();
+  # Under the tree sort a directory's descendants follow it: renaming or
+  # moving the directory moves them too, though only its own row changed.
+  if (grep { ($_->{property} // '') eq 'tree' } @{ $args->{sort} || [] }) {
+    my %parent = map { $_->{nodeid} => $_->{parentid} } @$rows;
+    for my $id (keys %parent) {
+      next if $changed{$id};
+      my %seen;
+      for (my $p = $parent{$id}; defined $p && !$seen{$p}++; $p = $parent{$p}) {
+        if ($changed{$p}) { $changed{$id} = 1; last }
+      }
+    }
+  }
   # load_query and save_query open their own transactions
   my $old = $Self->{db}->load_query('FileNode', $params, $since);
   return ['error', {type => 'cannotCalculateChanges', newQueryState => $state}] unless $old;

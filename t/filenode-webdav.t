@@ -391,4 +391,60 @@ my ($qs) = @{ jmap(['FileNode/query', { sort => [ { property => 'name', collatio
 is($qs->{type}, 'unsupportedSort', 'unknown collation');
 jmap(['FileNode/set', { destroy => [ $nid ] }]);
 
+# --- query fix round 1
+my ($tc) = @{ jmap(['FileNode/set', { create => {
+  z => { parentId => $home->{id}, name => "$tag-zdir" },
+  a => { parentId => '#z', name => 'a.txt', blobId => $blob->{blobId} },
+  c => { parentId => '#z', name => 'c.txt', blobId => $blob->{blobId} },
+  b => { parentId => $home->{id}, name => "$tag-b.txt", blobId => $blob->{blobId} },
+} }]) };
+my %t = map { $_ => $tc->{created}{$_}{id} } qw(z a c b);
+my $tfilter = { operator => 'AND', conditions => [ { nodeType => 'file' }, { nameMatch => '*.txt' }, { ancestorId => $home->{id} } ] };
+my ($tf) = @{ jmap(['FileNode/query', { filter => $tfilter, sort => [ { property => 'tree' } ] }]) };
+my @mine = grep { my $i = $_; grep { $_ eq $i } values %t } @{$tf->{ids}};
+is_deeply(\@mine, [ $t{b}, $t{a}, $t{c} ], 'tree over files only keeps the directory hierarchy (home/b, zdir/a, zdir/c)') or diag explain $tf;
+
+# positions, limits, anchors
+my ($p0) = @{ jmap(['FileNode/query', { filter => $tfilter, sort => [ { property => 'tree' } ], calculateTotal => JSON::true }]) };
+my @all = @{$p0->{ids}};
+my ($pn) = @{ jmap(['FileNode/query', { filter => $tfilter, sort => [ { property => 'tree' } ], position => -1 }]) };
+is_deeply($pn->{ids}, [ $all[-1] ], 'position -1 is the last id, no duplicates') or diag explain $pn;
+is($pn->{position}, $#all, 'and reports the resolved position');
+my ($pl) = @{ jmap(['FileNode/query', { filter => $tfilter, sort => [ { property => 'tree' } ], limit => -1 }]) };
+is($pl->{type}, 'invalidArguments', 'negative limit');
+my ($pa) = @{ jmap(['FileNode/query', { filter => $tfilter, sort => [ { property => 'tree' } ], anchor => $all[1], anchorOffset => -1, limit => 2 }]) };
+is_deeply($pa->{ids}, [ @all[0, 1] ], 'anchor with negative offset and limit') or diag explain $pa;
+my ($pm) = @{ jmap(['FileNode/query', { anchor => 'nope' }]) };
+is($pm->{type}, 'anchorNotFound', 'unknown anchor');
+my ($pw) = @{ jmap(['FileNode/query', { filter => { isTopLevel => 'false' } }]) };
+is($pw->{type}, 'invalidArguments', 'filter value of the wrong type');
+my ($pd) = @{ jmap(['FileNode/query', { filter => { parentId => $home->{id} }, depth => undef }]) };
+ok($pd->{ids}, 'depth null is accepted');
+my ($ps) = @{ jmap(['FileNode/queryChanges', { filter => $tfilter }]) };
+is($ps->{type}, 'invalidArguments', 'queryChanges needs sinceQueryState');
+
+# queryChanges: a renamed directory moves its descendants under tree
+my $tsort = [ { property => 'tree' } ];
+my ($b1) = @{ jmap(['FileNode/query', { filter => $tfilter, sort => $tsort }]) };
+jmap(['FileNode/set', { update => { $t{z} => { name => "$tag-zzz" } } }]);
+my ($qr) = @{ jmap(['FileNode/queryChanges', { filter => $tfilter, sort => $tsort, sinceQueryState => $b1->{queryState} }]) };
+my %rm = map { $_ => 1 } @{$qr->{removed}};
+my %ad = map { $_->{id} => $_->{index} } @{$qr->{added}};
+ok($rm{$t{a}} && $rm{$t{c}} && exists $ad{$t{a}} && exists $ad{$t{c}},
+   'tree queryChanges: renaming a directory removes and re-adds its descendants') or diag explain $qr;
+my ($b2) = @{ jmap(['FileNode/query', { filter => $tfilter, sort => $tsort }]) };
+for my $e (@{$qr->{added}}) { is($b2->{ids}[$e->{index}], $e->{id}, "added index for $e->{id} matches the new query") }
+
+# an updated node is removed and re-added; maxChanges
+my ($uq) = @{ jmap(['FileNode/query', { filter => { parentId => $t{z} }, sort => [ { property => 'name' } ] }]) };
+jmap(['FileNode/set', { update => { $t{a} => { executable => JSON::true } } }]);
+my ($u1) = @{ jmap(['FileNode/queryChanges', { filter => { parentId => $t{z} }, sort => [ { property => 'name' } ], sinceQueryState => $uq->{queryState} }]) };
+is_deeply($u1->{removed}, [ $t{a} ], 'an updated node is removed') or diag explain $u1;
+is_deeply($u1->{added}, [ { id => $t{a}, index => 0 } ], 'and re-added at its index');
+my ($u2) = @{ jmap(['FileNode/queryChanges', { filter => { parentId => $t{z} }, sort => [ { property => 'name' } ], sinceQueryState => $uq->{queryState}, maxChanges => 1 }]) };
+is($u2->{type}, 'tooManyChanges', 'maxChanges exceeded');
+my ($u3) = @{ jmap(['FileNode/queryChanges', { filter => { parentId => $t{z} }, sort => [ { property => 'name' } ], sinceQueryState => $uq->{queryState}, maxChanges => 0 }]) };
+is($u3->{type}, 'invalidArguments', 'maxChanges 0 is invalid');
+jmap(['FileNode/set', { onDestroyRemoveChildren => JSON::true, destroy => [ $t{z}, $t{b} ] }]);
+
 done_testing;
