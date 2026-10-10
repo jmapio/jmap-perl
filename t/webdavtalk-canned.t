@@ -30,7 +30,7 @@ my $bytes = "jmap-probe\n";
 # Build a stub server.  %o: etag (PUT etag), moved_etag, dead (listing carries J:probe),
 # sync (status for REPORT), die_on (method that dies)
 sub mk {
-  my %o = @_;
+  my %o = (sync => 207, @_);
   my $d = bless { log => [] }, 'Stub';
   $d->{script} = sub {
     my ($m, $p, $b, %h) = @_;
