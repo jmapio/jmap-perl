@@ -146,7 +146,27 @@ is(JMAP::FileNode::utc(JMAP::FileNode::epoch('2009-02-13T23:31:30Z')), '2009-02-
   is(JMAP::FileNode::share_user('/dav/principals/user/a/b/', $base), undef, 'not directly below the base');
   is(JMAP::FileNode::share_user(qq{/dav/principals/user/a"b<c/}, $base), undef, 'not a safe id');
   is(JMAP::FileNode::share_user('self', $base), undef, 'self is no user');
-  is(JMAP::FileNode::share_user('/principals/users/bob/', undef), 'bob', 'no base known: the usual shapes');
+  is(JMAP::FileNode::share_user('/principals/users/bob/', undef), undef, 'no base known: nobody is a user');
+  is(JMAP::FileNode::share_user('/dav/principals/staff/', '/dav/principals/user/'), undef, 'a group beside the users is not one');
+
+  # propagation to descendants: the delta, and splicing it into another ACL
+  my $d = JMAP::FileNode::share_delta({ a => { mayRead => $t }, b => { mayRead => $t }, c => { mayRead => $t } },
+                                      { a => { mayRead => $t }, b => { mayRead => $t, mayShare => $t }, n => { mayRead => $t } });
+  is_deeply([ sort keys %$d ], [ qw(b c n) ], 'delta: changed, removed and added users only');
+  is($d->{c}, undef, 'a removed user is undef');
+  ok($d->{b}{mayShare}, 'a changed one has its new rights');
+  is_deeply(JMAP::FileNode::share_delta(undef, {}), {}, 'nothing to nothing: no delta');
+  my @desc = (
+    { principal => 'self', grant => ['all'], deny => [] },
+    { principal => "${base}b/", href => "${base}b/", grant => ['read'], deny => [] },
+    { principal => "${base}c/", grant => ['read', 'bind'], deny => [] },
+    { principal => "${base}z/", grant => ['read'], deny => [] },          # not in the delta: untouched
+    { principal => "${base}c/", grant => [], deny => ['write'] },        # a deny: not sharing, kept
+  );
+  my $out = JMAP::FileNode::splice_share(\@desc, $d, base => $base, tree => \%tree);
+  is_deeply([ map { $_->{principal} . ':' . join(',', @{ $_->{grant} }, map { "-$_" } @{ $_->{deny} }) } @$out ],
+            [ 'self:all', "${base}z/:read", "${base}c/:-write", "${base}b/:read,${CY}admin", "${base}n/:read" ],
+            'only the delta\'s users change; everything else stays') or diag explain $out;
 
   is(JMAP::FileNode::sharewith_problem(undef), undef, 'null is fine');
   is(JMAP::FileNode::sharewith_problem({}), undef, 'so is {}');

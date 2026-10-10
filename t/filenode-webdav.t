@@ -468,7 +468,10 @@ SKIP: {
   my $t = JSON::true; my $f = JSON::false;
   my %none = map { ($_ => $f) } qw(mayRead mayAddChildren mayRename mayDelete mayModifyContent mayShare);
   my ($sd) = @{ jmap(['FileNode/set', { create => { s => { parentId => $home->{id}, name => "$tag-shared" },
-                                                    sf => { parentId => '#s', name => 'inside.txt', blobId => $blob->{blobId} } } }]) };
+                                                    sf => { parentId => '#s', name => 'inside.txt', blobId => $blob->{blobId} },
+                                                    sub => { parentId => '#s', name => 'sub' },
+                                                    deep => { parentId => '#sub', name => 'deep.txt', blobId => $blob->{blobId} } } }]) };
+  my $subid = $sd->{created}{sub}{id};
   my $sid = $sd->{created}{s}{id};
   ok($sid && $sd->{created}{sf}, 'a directory to share, with a file in it') or diag explain $sd;
   my ($g0) = @{ jmap(['FileNode/get', { ids => [ $sid, $sd->{created}{sf}{id} ], properties => [ 'myRights', 'shareWith' ] }]) };
@@ -489,7 +492,13 @@ SKIP: {
   is_deeply($sg->{list}[0]{shareWith}, { $sharee => { %none, mayRead => $t } }, 'shareWith reads back');
   my ($sc) = @{ jmap(['FileNode/changes', { sinceState => $before }]) };
   ok((grep { $_ eq $sid } @{$sc->{updated}}), 'FileNode/changes reports the node') or diag explain $sc;
+  ok((grep { $_ eq $subid } @{$sc->{updated}}), 'and the subdirectory the share reached') or diag explain $sc;
   is($peer->Raw('GET', "$root/$tag-shared/inside.txt")->{status}, 200, "$sharee can read the file now");
+  # Cyrus keeps ACLs per collection: the proxy carries the share to the
+  # subdirectory that already existed (draft "Access Control")
+  is($peer->Raw('GET', "$root/$tag-shared/sub/deep.txt")->{status}, 200, "$sharee can read a file in the subdirectory too");
+  my ($ssub) = @{ jmap(['FileNode/get', { ids => [ $subid ], properties => ['shareWith'] }]) };
+  is_deeply($ssub->{list}[0]{shareWith}, { $sharee => { %none, mayRead => $t } }, 'the subdirectory\'s shareWith says so');
   is($peer->Put("$root/$tag-shared/new.txt", 'x', type => 'text/plain')->{status}, 403, 'but not write');
 
   # a patch path; mayShare is Cyrus's admin privilege (write-acl is abstract there)
@@ -511,6 +520,7 @@ SKIP: {
   $acl = $dav->GetAcl("$root/$tag-shared/");
   ok(!(grep { $_->{principal} =~ m{/\Q$sharee\E/$} } @$acl), "no ACE for $sharee") or diag explain $acl;
   is($peer->Raw('GET', "$root/$tag-shared/inside.txt")->{status}, 403, "$sharee cannot read it any more");
+  is($peer->Raw('GET', "$root/$tag-shared/sub/deep.txt")->{status}, 403, 'nor the file in the subdirectory');
   ok(scalar(grep { $_->{href} eq "$root/$tag-shared/inside.txt" } @{ $dav->PropFind("$root/$tag-shared/", 1) }), 'the owner still lists it');
 
   # an ACL changed behind the proxy's back

@@ -31,10 +31,13 @@ sub _unescape_href {
 
 # Net::DAVTalk::XMLParser dies on the predefined "xml" prefix ("Unknown
 # namespace xml"), and Cyrus puts xml:lang on every DAV:description in a
-# supported-privilege-set.  Nothing here reads xml:* attributes: drop them.
+# supported-privilege-set.  Nothing here reads xml:* attributes: drop them
+# -- inside start tags only, so text (a dead property's value) is untouched.
+# Text cannot hold a raw "<", so a start tag is found from its "<".
+my $XML_ATTR = qr/\sxml:[A-Za-z_][\w.-]*\s*=\s*(?:"[^"]*"|'[^']*')/;
 sub _xml_hash {
   my $xml = shift;
-  $xml =~ s/\sxml:[A-Za-z_][\w.-]*\s*=\s*(?:"[^"]*"|'[^']*')//g;
+  $xml =~ s{(<[A-Za-z_](?:[^<>"']|"[^"]*"|'[^']*')*>)}{ my $t = $1; $t =~ s/$XML_ATTR//g; $t }ge;
   return xmlToHash($xml);
 }
 
@@ -205,6 +208,17 @@ sub _privileges {   # the privileges named in a grant, deny or prop element
 }
 sub _href_path { my $h = _text(shift); return undef unless defined $h && length $h; return _unescape_href($h) =~ s{/*\z}{/}r }
 
+# Where user principals live: the principal collection the owner's own
+# principal is DIRECTLY below (RFC 3744 S5.8 DAV:principal-collection-set),
+# else the owner principal's parent.  No owner: nothing is known (undef).
+sub principal_base {
+  my ($owner, $collections) = @_;
+  return undef unless defined $owner && $owner =~ m{\A(/.*/)[^/]+/\z};
+  my $parent = $1;
+  my ($base) = grep { $_ eq $parent } @{ $collections || [] };
+  return $base // $parent;
+}
+
 sub parse_aces {
   my $acl = shift;
   my @aces;
@@ -215,7 +229,10 @@ sub parse_aces {
     my $p = $ace->{"${D}principal"};
     if (!$p && ref $ace->{"${D}invert"} eq 'HASH') { $p = $ace->{"${D}invert"}{"${D}principal"}; $a{invert} = 1 }
     next unless ref $p eq 'HASH';
-    if (exists $p->{"${D}href"}) { $a{principal} = _href_path($p->{"${D}href"}) // next }
+    if (exists $p->{"${D}href"}) {
+      $a{principal} = _href_path($p->{"${D}href"}) // next;
+      $a{href} = _text($p->{"${D}href"});   # sent back as it came (a %2F stays %2F)
+    }
     elsif (ref $p->{"${D}property"} eq 'HASH') {
       ($a{property}) = _elements($p->{"${D}property"});
       next unless defined $a{property};
@@ -297,7 +314,8 @@ sub acl_xml {
   my $xml = qq{<?xml version="1.0" encoding="utf-8"?>\n<D:acl xmlns:D="DAV:">};
   for my $ace (@$aces) {
     my $p = $ace->{principal} // '';
-    my $pr = $p =~ m{^/} ? _xml_href($p)
+    # an ACE read from the server goes back with its own href, byte for byte
+    my $pr = $p =~ m{^/} ? (defined $ace->{href} && length $ace->{href} ? '<D:href>' . _xesc($ace->{href}) . '</D:href>' : _xml_href($p))
            : $p eq 'property' ? '<D:property>' . _xml_element($ace->{property}) . '</D:property>'
            : _xml_element($p);
     $pr = "<D:principal>$pr</D:principal>";
@@ -362,12 +380,8 @@ sub Probe {
   if ($acl) {
     $f{acl} = 1;
     $f{privileges} = $acl->{privileges} if $acl->{privileges} && %{ $acl->{privileges} };
-    # where user principals live: the principal collection holding the
-    # owner's own principal (Cyrus: /dav/principals/user/)
-    my @pc = @{ $acl->{principalCollections} || [] };
-    my ($base) = grep { defined $acl->{owner} && index($acl->{owner}, $_) == 0 } @pc;
-    $base //= $acl->{owner} =~ s{[^/]+/\z}{}r if defined $acl->{owner};
-    $base //= $pc[0];
+    # where user principals live (Cyrus: /dav/principals/user/)
+    my $base = principal_base($acl->{owner}, $acl->{principalCollections});
     $f{principalBase} = $base if defined $base;
   }
   my $q = $Self->_xml('PROPFIND', "$root/",

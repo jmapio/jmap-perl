@@ -120,8 +120,8 @@ sub acl_ms { my ($href, $props) = @_;
   qq{<?xml version="1.0"?><D:multistatus xmlns:D="DAV:" xmlns:CY="$CY">} . resp($href, $props) . '</D:multistatus>' }
 my @EXPECT_ACES = (
   { principal => 'self', invert => 0, grant => ['all'], deny => [], inherited => 0, protected => 0 },
-  { principal => '/dav/principals/user/user2/', invert => 0, grant => ['read', "{$CY}admin"], deny => [], inherited => 0, protected => 0 },
-  { principal => "/dav/principals/user/caf\x{e9}/", invert => 0, grant => [], deny => ['write'], inherited => 0, protected => 0 },
+  { principal => '/dav/principals/user/user2/', href => '/dav/principals/user/user2/', invert => 0, grant => ['read', "{$CY}admin"], deny => [], inherited => 0, protected => 0 },
+  { principal => "/dav/principals/user/caf\x{e9}/", href => 'http://h/dav/principals/user/caf%C3%A9', invert => 0, grant => [], deny => ['write'], inherited => 0, protected => 0 },
   { principal => 'property', property => '{DAV:}owner', invert => 0, grant => ['read-acl'], deny => [], inherited => 0, protected => 1 },
   { principal => 'authenticated', invert => 1, grant => [], deny => ['read'], inherited => 0, protected => 0 },
   { principal => 'all', invert => 0, grant => ['read'], deny => [], inherited => 1, protected => 0 },
@@ -161,7 +161,11 @@ my @EXPECT_ACES = (
   my $body = $reqs[-1][2];
   my $back = JMAP::Sync::WebDAVTalk::parse_aces(Net::DAVTalk::XMLParser::xmlToHash($body));
   is_deeply($back, [ grep { !$_->{inherited} && !$_->{protected} } @EXPECT_ACES ], 'the ACL request round-trips') or diag $body;
-  like($body, qr{<D:href>/dav/principals/user/caf%C3%A9/</D:href>}, 'an href is percent-encoded again');
+  like($body, qr{<D:href>http://h/dav/principals/user/caf%C3%A9</D:href>}, 'a kept ACE goes back with the href it came with');
+  my $x2 = JMAP::Sync::WebDAVTalk::acl_xml([ { principal => '/p/a/b/', href => '/p/a%2Fb/', grant => ['read'] } ]);
+  like($x2, qr{<D:href>/p/a%2Fb/</D:href>}, 'a %2F is not decoded into a new segment');
+  $x2 = JMAP::Sync::WebDAVTalk::acl_xml([ { principal => '/p/x/', href => '/p/<x>"&/', grant => ['read'] } ]);
+  like($x2, qr{<D:href>/p/&lt;x&gt;"&amp;/</D:href>}, 'and it is still XML-escaped');
 
   # nothing from a client reaches the XML raw
   my $x = JMAP::Sync::WebDAVTalk::acl_xml([ { principal => '/dav/principals/user/a"b<c&d>e/', grant => ['read'] } ]);
@@ -221,6 +225,35 @@ for my $case ([ '1, 2, 3, access-control', 1 ], [ '1, 2, 3', 0 ], [ '1, access-c
     return $orig->(@_);
   };
   is(probe($d)->{acl}, 0, 'access-control claimed but DAV:acl unreadable: acl 0');
+}
+
+# xml:* attributes are dropped from start tags only, never from text (M6)
+{
+  my $e = JMAP::Sync::WebDAVTalk::parse_multistatus(
+    qq{<?xml version="1.0"?><D:multistatus xmlns:D="DAV:" xmlns:J="https://jmap.io/ns/filenode"><D:response xml:lang="en">}
+    . q{<D:href>/r/f</D:href><D:propstat><D:prop><J:type xml:space='preserve'>text/x; xml:a="b"</J:type></D:prop>}
+    . q{<D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>});
+  is($e->[0]{dead}{type}, 'text/x; xml:a="b"', 'a dead value containing xml:a="b" survives; the attributes go');
+}
+
+# principal_base (I2): the collection the owner is DIRECTLY below, else the owner's parent
+is(JMAP::Sync::WebDAVTalk::principal_base('/principals/users/u/', [ '/principals/', '/principals/users/' ]), '/principals/users/',
+   'the collection directly above the owner, not merely a prefix of it');
+is(JMAP::Sync::WebDAVTalk::principal_base('/principals/users/u/', ['/principals/']), '/principals/users/',
+   'no collection directly above: the owner\'s parent');
+is(JMAP::Sync::WebDAVTalk::principal_base(undef, ['/principals/']), undef, 'no owner: no base');
+{
+  my $d = mk(etag => 'zz');
+  my $orig = $d->{script};
+  $d->{script} = sub {
+    my ($m, $p, $b) = @_;
+    return { status => 200, headers => { dav => '1, access-control' }, content => '' } if $m eq 'OPTIONS';
+    return r207(acl_ms("$root/", "$ACL<D:owner><D:href>/principals/users/u/</D:href></D:owner>"
+                       . '<D:principal-collection-set><D:href>/principals/</D:href></D:principal-collection-set>'))
+      if $m eq 'PROPFIND' && $b =~ /<D:acl\/>/;
+    return $orig->(@_);
+  };
+  is(probe($d)->{principalBase}, '/principals/users/', 'Probe: /principals/ is not where users are; /principals/users/ is');
 }
 
 done_testing;

@@ -145,16 +145,12 @@ our $SHARE_USER = qr/\A[A-Za-z0-9][A-Za-z0-9._@+-]{0,254}\z/;
 
 # The user id an ACE's principal stands for: an href directly below
 # $base (the server's user principal collection) whose name is a safe id.
+# With no base known, nothing is a user (a guess could take a group).
 sub share_user {
   my ($principal, $base) = @_;
-  return undef unless defined $principal && $principal =~ m{^/};
-  if (defined $base && length $base) {
-    return undef unless index($principal, $base) == 0;
-    my $rest = substr($principal, length $base);
-    my ($uid) = $rest =~ m{\A([^/]+)/?\z};
-    return defined $uid && $uid =~ $SHARE_USER ? $uid : undef;
-  }
-  my ($uid) = $principal =~ m{/principals/(?:users?/)?([^/]+)/?\z};
+  return undef unless defined $principal && $principal =~ m{^/} && defined $base && length $base;
+  return undef unless index($principal, $base) == 0;
+  my ($uid) = substr($principal, length $base) =~ m{\A([^/]+)/?\z};
   return defined $uid && $uid =~ $SHARE_USER ? $uid : undef;
 }
 
@@ -208,16 +204,51 @@ sub share_aces {
   my ($aces, %o) = @_;
   my (%by, @kept);
   for my $ace (@{ $aces || [] }) {
-    my $uid = (!$ace->{inherited} && !$ace->{protected} && !$ace->{invert} && !@{ $ace->{deny} || [] }
-               && @{ $ace->{grant} || [] }) ? share_user($ace->{principal}, $o{base}) : undef;
-    $uid = undef if defined $uid && ((defined $o{owner} && $ace->{principal} eq $o{owner})
-                                     || (defined $o{me} && $uid eq $o{me})
-                                     || ($o{hidden} && $o{hidden}->($ace->{principal})));
+    my $uid = ace_user($ace, %o);
     if (defined $uid) { push @{ $by{$uid} }, @{ $ace->{grant} } }
     else { push @kept, $ace }
   }
   my %share = map { ($_ => share_rights($by{$_}, $o{tree})) } keys %by;
   return (sharewith_normal(\%share), \@kept);
+}
+
+# The user whose sharing one ACE is (see share_aces), or undef.
+sub ace_user {
+  my ($ace, %o) = @_;
+  return undef if $ace->{inherited} || $ace->{protected} || $ace->{invert} || @{ $ace->{deny} || [] } || !@{ $ace->{grant} || [] };
+  my $uid = share_user($ace->{principal}, $o{base});
+  return undef unless defined $uid;
+  return undef if (defined $o{owner} && $ace->{principal} eq $o{owner}) || (defined $o{me} && $uid eq $o{me})
+               || ($o{hidden} && $o{hidden}->($ace->{principal}));
+  return $uid;
+}
+
+# What changed between two shareWith values: { user => new rights, or undef
+# for a user no longer shared with }, for the users whose rights differ.
+sub share_delta {
+  my ($old, $new) = map { sharewith_normal($_) || {} } @_;
+  my %d;
+  for my $uid (keys %{{ %$old, %$new }}) {
+    my ($a, $b) = map { $_->{$uid} ? $SHARE_CANON->encode($_->{$uid}) : '' } $old, $new;
+    $d{$uid} = $new->{$uid} if $a ne $b;
+  }
+  return \%d;
+}
+
+# Apply a share_delta to one ACL (for a descendant of the node shared):
+# only the users in the delta are touched -- their grant ACEs go, and those
+# still shared with get one new ACE; every other ACE stays.  Returns the new
+# ACE list, or (undef, $right) when a right cannot be granted.
+sub splice_share {
+  my ($aces, $delta, %o) = @_;
+  my @out = grep { my $u = ace_user($_, %o); !(defined $u && exists $delta->{$u}) } @{ $aces || [] };
+  for my $uid (sort keys %$delta) {
+    next unless $delta->{$uid};
+    my ($grant, $right) = grant_for_rights($delta->{$uid}, $o{tree});
+    return (undef, $right) unless $grant;
+    push @out, { principal => "$o{base}$uid/", grant => $grant, deny => [] } if @$grant;
+  }
+  return \@out;
 }
 # R7: an empty or absent current-user-privilege-set means "not reported" (Cyrus
 # lists files with none).  Such a node inherits its parent collection's

@@ -19,7 +19,7 @@ my $T0 = 1_700_000_000;
 my (%tree, @log, %fail, $bogus_delete, $deadprops_stored);
 # sharing: each collection's own (non-inherited) ACEs, the principals the
 # server knows, and an override for the answer to an ACL request
-my (%acl, %principal, $acl_answer, @acl_reqs, $acl_tree);
+my (%acl, %principal, $acl_answer, @acl_reqs, $acl_tree, $inherits);
 my $OWNER = '/dav/principals/user/u/';
 my $SELF_ACE = { principal => 'self', invert => 0, grant => ['all'], deny => [], inherited => 0, protected => 0 };
 sub aces_of { my $h = shift; return [ map { +{ %$_ } } @{ $acl{$h} || [ $SELF_ACE ] } ] }
@@ -59,7 +59,15 @@ no warnings qw(redefine once);
   }
   if ($cmd eq 'files_acl_info') {
     return undef unless $tree{$dir} && $tree{$dir}{isCollection};
-    return { aces => aces_of($dir), owner => $OWNER, ($acl_tree ? (privileges => $acl_tree) : ()),
+    # a server that inherits: the users' grants of every ancestor show as inherited ACEs
+    my @inh;
+    if ($inherits) {
+      for (my $a = $dir =~ s{/[^/]+\z}{}r; $tree{$a}; $a =~ s{/[^/]+\z}{} or last) {
+        push @inh, map { +{ %$_, inherited => 1 } } grep { $_->{principal} =~ m{/user/} } @{ $acl{$a} || [] };
+        last if $a eq $R;
+      }
+    }
+    return { aces => [ @{ aces_of($dir) }, @inh ], owner => $OWNER, ($acl_tree ? (privileges => $acl_tree) : ()),
              principalCollections => ['/dav/principals/user/'] };
   }
   if ($cmd eq 'files_set_acl') {
@@ -978,6 +986,139 @@ sub files_under { my $p = shift; return [ sort grep { m{^\Q$p\E/} && !$tree{$_}{
   is(get($x->{T})->{$x->{T}}{shareWith}, undef, 'no ACLs: null');
   $set = set(update => { $x->{T} => { shareWith => { user2 => { mayRead => $t } } } })->[1];
   is_deeply([ @{ $set->{notUpdated}{$x->{T}} }{qw(type properties)} ], [ 'invalidProperties', ['shareWith'] ], 'no ACLs: invalidProperties');
+}
+
+# --- sharing, fix round 1
+{
+  my $t = JSON::true; my $f = JSON::false;
+  my %none = map { ($_ => $f) } qw(mayRead mayAddChildren mayRename mayDelete mayModifyContent mayShare);
+  %principal = map { ("/dav/principals/user/$_/" => 1) } qw(u user2 user3);
+  undef $acl_answer; undef $acl_tree;
+
+  # I2: a feature set without principalBase learns it from the owner
+  features(acl => 1);
+  my $x = mk(P => { parentId => $home, name => 'P1' });
+  $acl{"$R/P1"} = [ $SELF_ACE, { principal => '/dav/principals/staff/', href => '/dav/principals/staff/', invert => 0, grant => ['read'], deny => [], inherited => 0, protected => 0 } ];
+  $principal{'/dav/principals/staff/'} = 1;
+  $db->sync_files();
+  is(get($x->{P})->{$x->{P}}{shareWith}, undef, 'no principalBase: a group beside the users is nobody\'s sharing');
+  $set = set(update => { $x->{P} => { shareWith => { user2 => { mayRead => $t } } } })->[1];
+  ok(exists $set->{updated}{$x->{P}}, 'set without a known base') or diag explain $set;
+  is($acl_reqs[-1][1][-1]{principal}, '/dav/principals/user/user2/', 'the new ACE goes below the owner\'s parent');
+  ok((grep { $_->{principal} eq '/dav/principals/staff/' } @{ $acl_reqs[-1][1] }), 'the group ACE is kept');
+  is($acl_reqs[-1][1][1]{href}, '/dav/principals/staff/', 'with the href it came with (M5)');
+  $db->begin(); my $fj = decode_json($db->dgetfield('iserver', {}, 'webdavFeatures')); $db->commit();
+  is($fj->{principalBase}, '/dav/principals/user/', 'principalBase is learnt and kept');
+  is_deeply(get($x->{P})->{$x->{P}}{shareWith}, { user2 => { %none, mayRead => $t } }, 'and the read side agrees');
+
+  # I1: a 404 remembered for a principal that appears later does not hide it
+  $acl{"$R/P1"} = [ $SELF_ACE, { principal => '/dav/principals/user/user5/', invert => 0, grant => ['read'], deny => [], inherited => 0, protected => 0 } ];
+  $db->sync_files();
+  is(get($x->{P})->{$x->{P}}{shareWith}, undef, 'user5 answers 404: not shown');
+  $principal{'/dav/principals/user/user5/'} = 1;   # user5 logs in for the first time
+  $set = set(update => { $x->{P} => { shareWith => { user5 => { mayRead => $t, mayAddChildren => $t } } } })->[1];
+  ok(exists $set->{updated}{$x->{P}}, 'user5 shared with') or diag explain $set;
+  is(scalar(grep { $_->{principal} =~ m{/user5/} } @{ $acl{"$R/P1"} }), 1, 'one ACE for user5, not the old one kept beside a new one')
+    or diag explain $acl{"$R/P1"};
+  is_deeply(get($x->{P})->{$x->{P}}{shareWith}, { user5 => { %none, mayRead => $t, mayAddChildren => $t } }, 'and it reads back');
+  # ... and on the read side the 404 is only remembered for a while
+  $acl{"$R/P1"} = [ $SELF_ACE, { principal => '/dav/principals/user/user6/', invert => 0, grant => ['read'], deny => [], inherited => 0, protected => 0 } ];
+  $db->sync_files();
+  is(get($x->{P})->{$x->{P}}{shareWith}, undef, 'user6 answers 404: not shown');
+  $principal{'/dav/principals/user/user6/'} = 1;
+  $db->{_files_principal}{'/dav/principals/user/user6/'}{until} = time() - 1;   # the minute passes
+  $db->sync_files();
+  ok(get($x->{P})->{$x->{P}}{shareWith}{user6}, 'once the remembered 404 expires, user6 shows');
+
+  # M1: overlapping patch paths
+  $set = set(update => { $x->{P} => { 'shareWith/user6' => { mayRead => $t }, 'shareWith/user6/mayShare' => $t } })->[1];
+  is($set->{notUpdated}{$x->{P}}{type}, 'invalidPatch', 'a path and a path below it: invalidPatch');
+
+  # M3: the owner as a sharee never reaches the server -- not even a PROPFIND
+  @log = ();
+  $set = set(update => { $x->{P} => { shareWith => { u => { mayRead => $t } } } })->[1];
+  is($set->{notUpdated}{$x->{P}}{type}, 'invalidProperties', 'the owner as a sharee');
+  is_deeply(\@log, [], 'no request at all') or diag explain \@log;
+  @log = ();
+  $set = set(create => { o => { parentId => $home, name => 'P0', shareWith => { u => { mayRead => $t } } } })->[1];
+  is($set->{notCreated}{o}{type}, 'invalidProperties', 'nor on create');
+  is_deeply(\@log, [], 'with no request either') or diag explain \@log;
+
+  # M2: a caller without mayShare learns nothing about the sharees
+  $tree{"$R/P1"}{privileges} = [qw(read write bind unbind write-content)];
+  $db->sync_files();
+  my @e = map { set(update => { $x->{P} => { $_ => $t } })->[1]{notUpdated}{$x->{P}} } 'shareWith/user6/mayShare', 'shareWith/nobody/mayShare';
+  is_deeply($e[0], $e[1], 'the same answer for a sharee and for a stranger');
+  is($e[0]{type}, 'forbidden', 'forbidden');
+  delete $tree{"$R/P1"}{privileges};
+  $db->sync_files();
+
+  # M4: kept ACEs that come back changed are warned about
+  $acl{"$R/P1"} = [ $SELF_ACE, { principal => '/dav/principals/staff/', href => '/dav/principals/staff/', invert => 0, grant => ['read'], deny => [], inherited => 0, protected => 0 } ];
+  $acl_answer = sub { my ($d, $aces) = @_; $acl{$d} = [ map { +{ %$_, ($_->{principal} =~ /staff/ ? (grant => ['all']) : ()) } } @$aces ]; return { status => 200 } };
+  my @w;
+  { local $SIG{__WARN__} = sub { push @w, @_ }; $set = set(update => { $x->{P} => { shareWith => { user2 => { mayRead => $t } } } })->[1] }
+  ok(exists $set->{updated}{$x->{P}}, 'set');
+  ok((grep { /kept came back changed/ } @w), 'a kept ACE that came back changed is warned about') or diag explain \@w;
+  undef $acl_answer;
+
+  # PROPAGATION: a share reaches every directory below, touching only the users that changed
+  $x = mk(A => { parentId => $home, name => 'PA' }, B => { parentId => '#A', name => 'b' }, C => { parentId => '#B', name => 'c' },
+          f => { parentId => '#B', name => 'f.txt', blobId => 'f-x' });
+  my $own3 = { principal => '/dav/principals/user/user3/', invert => 0, grant => ['read', 'bind'], deny => [], inherited => 0, protected => 0 };
+  my $grp  = { principal => '/dav/principals/staff/', href => '/dav/principals/staff/', invert => 0, grant => ['read'], deny => [], inherited => 0, protected => 0 };
+  $acl{"$R/PA/b"} = [ $SELF_ACE, $grp, $own3 ];
+  $db->sync_files();
+  my ($st) = $api->api_FileNode_get({ accountId => $db->accountid(), ids => [] });
+  @acl_reqs = ();
+  $set = set(update => { $x->{A} => { shareWith => { user2 => { mayRead => $t } } } })->[1];
+  ok(exists $set->{updated}{$x->{A}}, 'shared') or diag explain $set;
+  is_deeply([ map { $_->[0] } @acl_reqs ], [ "$R/PA", "$R/PA/b", "$R/PA/b/c" ], 'the node, then each directory below, parents first');
+  is_deeply([ map { $_->{principal} } @{ $acl{"$R/PA/b"} } ], [ 'self', '/dav/principals/staff/', '/dav/principals/user/user3/', '/dav/principals/user/user2/' ],
+            'below: user2 added, every other ACE kept') or diag explain $acl{"$R/PA/b"};
+  ok((grep { $_->{principal} =~ m{/user2/} } @{ $acl{"$R/PA/b/c"} }), 'and two levels down');
+  my ($ch) = $api->api_FileNode_changes({ accountId => $db->accountid(), sinceState => $st->[1]{state} });
+  is_deeply([ sort @{ $ch->[1]{updated} } ], [ sort @$x{qw(A B C)} ], 'FileNode/changes reports the descendants') or diag explain $ch;
+  is_deeply(get($x->{C})->{$x->{C}}{shareWith}, { user2 => { %none, mayRead => $t } }, 'whose mirror has the sharing');
+  ok(get($x->{B})->{$x->{B}}{shareWith}{user3}, 'and keeps what was its own');
+  $db->sync_files();
+  ($ch) = $api->api_FileNode_changes({ accountId => $db->accountid(), sinceState => $ch->[1]{newState} });
+  is_deeply($ch->[1]{updated}, [], 'the next sync agrees with the mirror') or diag explain $ch;
+
+  # a change: only the users that changed go to the descendants
+  @acl_reqs = ();
+  $set = set(update => { $x->{A} => { 'shareWith/user2/mayAddChildren' => $t } })->[1];
+  is(scalar @acl_reqs, 3, 'one request per directory');
+  is_deeply([ map { join ',', @{ $_->{grant} } } grep { $_->{principal} =~ m{/user[23]/} } @{ $acl{"$R/PA/b"} } ],
+            [ 'read,bind', 'bind,read' ], 'user3\'s own grant below is untouched; user2\'s follows') or diag explain $acl{"$R/PA/b"};
+  # nothing changed for anyone: nothing below is touched
+  @acl_reqs = ();
+  $set = set(update => { $x->{A} => { 'shareWith/user2/mayModifyContent' => $f } })->[1];
+  is(scalar @acl_reqs, 1, 'no change for anyone: the node only');
+  # unshare
+  $set = set(update => { $x->{A} => { shareWith => undef } })->[1];
+  ok(!(grep { $_->{principal} =~ m{/user2/} } map { @{ $acl{$_} || [] } } "$R/PA", "$R/PA/b", "$R/PA/b/c"), 'unshared everywhere');
+  ok(get($x->{B})->{$x->{B}}{shareWith}{user3} && !get($x->{C})->{$x->{C}}{shareWith}, 'the mirror follows');
+
+  # a descendant that refuses: the node still succeeds; the descendant's mirror shows the server
+  $acl_answer = sub { return $_[0] eq "$R/PA/b" ? { status => 403, error => 'need-privileges' } : undef };
+  @w = ();
+  { local $SIG{__WARN__} = sub { push @w, @_ }; $set = set(update => { $x->{A} => { shareWith => { user2 => { mayRead => $t } } } })->[1] }
+  ok(exists $set->{updated}{$x->{A}}, 'the node is shared') or diag explain $set;
+  ok((grep { m{PA/b/: ACL: HTTP 403} } @w), 'the refusal below is warned about') or diag explain \@w;
+  ok(!get($x->{B})->{$x->{B}}{shareWith}{user2}, 'b\'s mirror: as the server has it (no user2)');
+  ok(get($x->{C})->{$x->{C}}{shareWith}{user2}, 'c still got it');
+  undef $acl_answer;
+  $set = set(update => { $x->{A} => { shareWith => undef } })->[1];
+
+  # a server that inherits: nothing is copied below
+  $inherits = 1;
+  @acl_reqs = ();
+  $set = set(update => { $x->{A} => { shareWith => { user2 => { mayRead => $t } } } })->[1];
+  ok(exists $set->{updated}{$x->{A}}, 'shared on an inheriting server');
+  is_deeply([ map { $_->[0] } @acl_reqs ], [ "$R/PA" ], 'the descendants show it inherited: no request below');
+  $inherits = 0;
+  features();
 }
 
 ok(!$db->in_transaction(), 'no transaction left open');

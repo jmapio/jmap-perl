@@ -243,9 +243,10 @@ then read the files):
   then it is 404, and sharing with them is `DAV:recognized-principal`).
 - ACLs are per mailbox and do NOT propagate: a subcollection created later
   copies its parent's ACL, but sharing a directory does not share the
-  subdirectories it already has. (The draft says sharing a node shares its
-  descendants; with Cyrus that holds for files and for new subdirectories
-  only.)
+  subdirectories it already has. The draft says sharing a node shares its
+  descendants, so the proxy carries each change down itself (see
+  "Sharing"); the live test proves a sharee can then read a file two
+  levels down.
 - Net::DAVTalk's XML parser dies on the `xml:lang` attributes Cyrus puts in
   `supported-privilege-set`; WebDAVTalk strips `xml:*` attributes first.
 
@@ -372,15 +373,43 @@ In memory over the mirror:
   bumps the node's modseq. `FileNode/get` reads the mirror and never
   fetches an ACL.
 - Setting it (update, the whole value or `shareWith/<user>[/<right>]`
-  patch paths, or create of a directory): a bad value, an unsafe user id,
-  or the owner as a sharee is `invalidProperties` before any request; no
-  `mayShare` is `forbidden` before any request; the ACL is then read
+  patch paths, or create of a directory): no `mayShare` is `forbidden`,
+  decided before the current value is read, so the answer does not reveal
+  the sharees; a bad value, overlapping patch paths (`invalidPatch`), an
+  unsafe user id, or the owner as a sharee is refused before any request,
+  even the ACL's PROPFIND; the ACL is then read
   fresh, the users' ACEs replaced and every other ACE sent back, and the
   result read back into the mirror. A sharee who is no principal is
   `invalidProperties`. When the server grants more than was asked (Cyrus's
   `bind` holds `write-content`), `updated` carries the real `shareWith`.
   The ACL is the last step of an update: if it fails after a move or a
   content change, those stay and the item is `serverFail`.
+- Descendants are updated by the proxy. The draft shares a node's
+  descendants with it, and Cyrus does not, so after a node's ACL is
+  written the users whose sharing changed (added, changed or removed)
+  are changed the same way on every directory below it, parents first.
+  Only those users' grant ACEs are touched; every other ACE of a
+  descendant stays. Accepted cost: a descendant's own grant for one of
+  those users is overwritten by the parent's change. A user for whom a
+  descendant already shows an `inherited` ACE is skipped there (that
+  server inherits). Only the node itself is read back; each descendant's
+  mirror row follows the change it was sent (a new modseq, so
+  `FileNode/changes` reports it), and a descendant whose ACL request
+  fails is warned about and its ACL read back at once, so its mirror
+  shows the server's state. The node's own result reflects only its own
+  ACL write.
+- The user principal collection is the `DAV:principal-collection-set`
+  entry the owner's principal is directly below, else the owner's parent
+  (learnt and kept in `webdavFeatures.principalBase`, as the privilege
+  tree is); with no base known, no ACE is a user's sharing.
+- A principal the server answers 404 for is remembered as "not a
+  principal" for 60 seconds only (Cyrus makes a user's principal on their
+  first DAV request); a set always asks again, and every sharee the
+  server accepted is a principal from then on.
+- No lock is taken: WebDAV ACL is read-modify-write, so a change another
+  client makes to the same ACL between the proxy's read and its ACL
+  request is lost. The ACEs the proxy kept are compared with the ACL read
+  back, and a difference is logged.
 - A server without ACL support (no `access-control` in the `DAV:` header,
   or no readable `DAV:acl`): `shareWith` is null, `mayShare` false, and
   setting it is `invalidProperties`.
