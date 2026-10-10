@@ -1277,15 +1277,21 @@ sub _apply_file_listing {
   $Self->dupdate('iserver', { lastfilesync => $now });
 }
 
-# Run a file sync, and never die.  A failure is still recorded as the last
+# Run a file sync, and never die.  A failure (or a sync that gave up because
+# the mirror kept changing under its walks) is still recorded as the last
 # sync, so a broken or unreachable WebDAV server is not walked again on every
 # FileNode call and tick: the next attempt waits for the usual age.
 sub sync_files_safely {
   my $Self = shift;
-  return 1 if eval { $Self->sync_files(); 1 };
-  my $err = $@;
-  $Self->reset();
-  warn "sync_files: $err";
+  my $ok = eval { $Self->sync_files() };
+  if (defined $ok) {
+    return 1 if $ok;
+  }
+  else {
+    my $err = $@;
+    $Self->reset();
+    warn "sync_files: $err";
+  }
   eval {
     $Self->begin();
     $Self->dupdate('iserver', { lastfilesync => time() });
@@ -1297,13 +1303,18 @@ sub sync_files_safely {
 
 # Sync when the last one is older than $maxage seconds (spec "Sync": 60 on
 # demand from a FileNode method, 300 from the periodic sync).  Never dies.
+# An account that has never synced its files is left alone unless
+# $opts->{first} is true: its first full walk belongs to the backfill worker
+# (first_files_sync), and only a FileNode request -- a user waiting on the
+# answer -- may run it sooner.
 sub sync_files_if_due {
-  my ($Self, $maxage) = @_;
+  my ($Self, $maxage, $opts) = @_;
   return unless $Self->files_root();
   $Self->begin();
-  my $last = $Self->dgetfield('iserver', {}, 'lastfilesync') // 0;
+  my $last = $Self->dgetfield('iserver', {}, 'lastfilesync');
   $Self->commit();
-  return if time() - $last < $maxage;
+  return if !defined $last && !($opts && $opts->{first});
+  return if time() - ($last // 0) < $maxage;
   $Self->sync_files_safely();
 }
 

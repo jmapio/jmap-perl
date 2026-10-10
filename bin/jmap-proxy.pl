@@ -830,7 +830,7 @@ sub run_backend_worker {
         # the management API ({force => 1}) always does.
         if ($db->can('sync_files')) {
           if ($args->{force}) { $db->sync_files_safely() }
-          else                { $db->sync_files_if_due(300) }
+          else                { $db->sync_files_if_due(300, { first => 0 }) }   # first walk: backfill worker
         }
         eval { $write_json->(['synced', time()]) };
         return ['sync', $JSON::true];

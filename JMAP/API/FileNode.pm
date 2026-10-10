@@ -57,11 +57,13 @@ sub _filenode_object {
   };
 }
 
-# Sync first when the mirror is stale (spec "Sync": 60s on demand).  The sync
-# talks to WebDAV, so it MUST run before _api_init opens the transaction.
+# Sync first when the mirror is stale (spec "Sync": 60s on demand), even
+# the account's first sync if the backfill worker has not done it yet: a
+# user is waiting on this request.  The sync talks to WebDAV, so it MUST
+# run before _api_init opens the transaction.
 sub _filenode_init {
   my ($Self, $args, $maxage) = @_;
-  $Self->{db}->sync_files_if_due($maxage // 60)
+  $Self->{db}->sync_files_if_due($maxage // 60, { first => 1 })
     if $Self->{db}->can('sync_files_if_due')
        && !($args->{accountId} && $args->{accountId} ne $Self->{db}->accountid());
   return $Self->_api_init($args);

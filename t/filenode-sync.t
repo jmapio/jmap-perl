@@ -163,4 +163,35 @@ $db->sync_files_if_due(60);
 is($calls, 0, 'so the next call within the minute does not walk again');
 $die = 0;
 
+# --- a never-synced account: the background sync leaves the first walk to
+# the backfill worker; a FileNode request does it if it is still undone
+$db->begin(); $db->dupdate('iserver', { lastfilesync => undef }); $db->commit();
+$calls = 0;
+$db->sync_files_if_due(300, { first => 0 });
+is($calls, 0, 'background sync skips an account that has never synced its files');
+$db->sync_files_if_due(300);
+is($calls, 0, 'and so does the default');
+is($db->sync_files_if_due(60, { first => 1 }), 1, 'the on-demand sync runs the first walk');
+ok($calls > 0, 'with backend calls');
+
+# --- a sync that gives up on a mirror that keeps changing backs off too
+$db->begin(); $db->dupdate('iserver', { lastfilesync => 0 }); $db->commit();
+my $n = 0;
+$during_walk = sub {
+  my ($Self) = @_;
+  return if $n++ % 2;   # once per walk: a write lands during every walk
+  $Self->begin();
+  $Self->ddirty('jfilenodes', { changed => time() }, { nodeid => $proxyid });
+  $Self->commit();
+};
+{
+  my $warned;
+  local $SIG{__WARN__} = sub { $warned .= $_[0] };
+  is($db->sync_files_if_due(60), 0, 'a sync that keeps finding a changed mirror gives up');
+  like($warned, qr/changed during every walk/, 'and warns');
+}
+$during_walk = undef;
+$db->begin(); $last = $db->dgetfield('iserver', {}, 'lastfilesync'); $db->commit();
+ok(time() - $last < 5, 'the attempt is recorded for back-off');
+
 done_testing;
