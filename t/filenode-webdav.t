@@ -49,6 +49,11 @@ ok($sess->{capabilities}{'urn:ietf:params:jmap:filenode'}, 'session capability')
 is_deeply($sess->{capabilities}{'urn:ietf:params:jmap:filenode'}, {}, 'and it is an empty object');
 my $acap = $sess->{accounts}{$user}{accountCapabilities}{'urn:ietf:params:jmap:filenode'};
 is($acap->{maxSizeFileNodeName}, 255, 'account capability');
+# draft S2.1: "The available variable is {id}" -- every direct write below
+# goes to the URL the template gives for the node
+is_deeply([ ($acap->{webWriteUrlTemplate} // '') =~ /\{([^}]*)\}/g ], ['id'], 'webWriteUrlTemplate has {id} and no other variable')
+  or diag $acap->{webWriteUrlTemplate};
+sub write_url { my $u = $acap->{webWriteUrlTemplate}; $u =~ s/\{id\}/$_[0]/; return $u }
 
 # the root (find it with FileNode/query or a full /get)
 force_sync();   # whatever else changed on the drive is in the mirror before $state is taken
@@ -266,7 +271,8 @@ my ($cp) = @{ jmap(['FileNode/set', { create => { c => { parentId => $home->{id}
 ok($cp->{created}{c}, 'create a file from another FileNode blob') or diag explain $cp;
 is(raw(get1($cp->{created}{c}{id})->{blobId})->{content}, 'uploaded', 'with the same content');
 
-my $put = $http->request('PUT', "$ENV{JMAP_PROXY_URL}/filenode/$user/$fid",
+like(write_url($fid), qr{^\Q$ENV{JMAP_PROXY_URL}\E/}, 'the template is under the proxy');
+my $put = $http->request('PUT', write_url($fid),
   { headers => { Authorization => $auth, 'Content-Type' => 'text/markdown; charset=utf-8' }, content => '# new' });
 is($put->{status}, 200, 'direct PUT') or diag $put->{content};
 my $pj = decode_json($put->{content});
@@ -277,18 +283,18 @@ is(get1($fid)->{blobId}, $pj->{blobId}, 'the node carries the new blobId');
 is(raw($pj->{blobId})->{content}, '# new', 'new content downloads');
 is(raw($fb)->{status}, 404, 'the old blob no longer exists');
 $dav->Put("$root/$tag-dl.txt", "behind", type => 'text/plain');
-is($http->request('PUT', "$ENV{JMAP_PROXY_URL}/filenode/$user/$fid", { headers => { Authorization => $auth }, content => 'x' })->{status}, 412,
+is($http->request('PUT', write_url($fid), { headers => { Authorization => $auth }, content => 'x' })->{status}, 412,
    'a change behind the mirror is 412');
-is($http->request('PUT', "$ENV{JMAP_PROXY_URL}/filenode/$user/$home->{id}", { headers => { Authorization => $auth }, content => 'x' })->{status}, 400,
+is($http->request('PUT', write_url($home->{id}), { headers => { Authorization => $auth }, content => 'x' })->{status}, 400,
    'PUT to a directory is 400');
-is($http->request('PUT', "$ENV{JMAP_PROXY_URL}/filenode/$user/Lnosuchnode", { headers => { Authorization => $auth }, content => 'x' })->{status}, 404,
+is($http->request('PUT', write_url('Lnosuchnode'), { headers => { Authorization => $auth }, content => 'x' })->{status}, 404,
    'PUT to an unknown id is 404');
-is($http->request('PATCH', "$ENV{JMAP_PROXY_URL}/filenode/$user/$fid", { headers => { Authorization => $auth }, content => 'x' })->{status}, 415,
+is($http->request('PATCH', write_url($fid), { headers => { Authorization => $auth }, content => 'x' })->{status}, 415,
    'PATCH is 415');
-my $gp = $http->request('GET', "$ENV{JMAP_PROXY_URL}/filenode/$user/$fid", { headers => { Authorization => $auth } });
+my $gp = $http->request('GET', write_url($fid), { headers => { Authorization => $auth } });
 is($gp->{status}, 405, 'GET is 405');
 is($gp->{headers}{allow}, 'PUT', 'with Allow: PUT');
-is($http->request('PUT', "$ENV{JMAP_PROXY_URL}/filenode/$user/$fid", { content => 'x' })->{status}, 401, 'unauthenticated is 401');
+is($http->request('PUT', write_url($fid), { content => 'x' })->{status}, 401, 'unauthenticated is 401');
 force_sync();
 jmap(['FileNode/set', { destroy => [ $fid, $cp->{created}{c}{id} ] }]);
 

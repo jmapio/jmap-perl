@@ -20,8 +20,9 @@ our $MAX_DELAYED_SEND = 30 * 86400;
 # The accountCapabilities for an IMAP-backed account, as it appears both in the
 # session resource (RFC 8620 S1.6.2) and in a Principal's "accounts" map
 # (RFC 9670 S2). $conf needs only caldavURL, carddavURL and webdavURL (plus
-# baseurl for FileNode's webWriteUrlTemplate): the parent passes the account's
-# details, the per-account worker passes its iserver row.
+# accountid and baseurl for FileNode's webWriteUrlTemplate): the parent passes
+# the account's details, the per-account worker passes its iserver row with
+# the accountid added.
 # The proxy's own base URL: what the parent passes, else BASEURL as
 # bin/jmap-proxy.pl works it out (a worker building a Principal has no
 # $conf->{baseurl}, and must advertise the same template as the session).
@@ -92,9 +93,13 @@ sub imap_account_capabilities {
     }) : ()),
     # draft-ietf-jmap-filenode S2: only for an account with a WebDAV home
     # that a Probe has worked on (a server with no WebDAV advertises nothing).
+    # The template's only variable is {id} (draft S2.1): the account is
+    # expanded here, so each account advertises its own URL.  Without an
+    # accountid there is no URL to give (null: no direct writes).
     (filenode_ok($conf) ? ('urn:ietf:params:jmap:filenode' => {
       %JMAP::FileNode::CAPS,
-      webWriteUrlTemplate => _baseurl($conf) . '/filenode/{accountId}/{id}',
+      webWriteUrlTemplate => defined $conf->{accountid} && length $conf->{accountid}
+        ? _baseurl($conf) . "/filenode/$conf->{accountid}/{id}" : undef,
     }) : ()),
   };
 }

@@ -45,7 +45,7 @@ sub _principal {
         name                => "$name",
         isPersonal          => JSON::true,
         isReadOnly          => JSON::false,
-        accountCapabilities => imap_account_capabilities($iserver),
+        accountCapabilities => imap_account_capabilities({ %$iserver, accountid => "$accountid" }),
       },
     },
   };

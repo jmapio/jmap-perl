@@ -19,16 +19,20 @@ ok(!exists imap_account_capabilities({ webdavURL => 'http://dav/drive/', filenod
 ok(exists imap_account_capabilities({ webdavURL => 'http://dav/drive/', webdavFeatures => '{"acl":0}' })->{$urn},
    'a stored Probe result: capability');
 
-my $c = imap_account_capabilities({ webdavURL => 'http://dav/drive/', filenode => 1, baseurl => 'https://p.example/' })->{$urn};
+my $c = imap_account_capabilities({ webdavURL => 'http://dav/drive/', filenode => 1, baseurl => 'https://p.example/', accountid => 'alice' })->{$urn};
 ok($c, 'webdavURL and a working Probe: capability');
 is($c->{maxSizeFileNodeName}, 255, 'maxSizeFileNodeName');
 ok(!$c->{mayCreateTopLevelFileNode}, 'mayCreateTopLevelFileNode false');
-is($c->{webWriteUrlTemplate}, 'https://p.example/filenode/{accountId}/{id}', 'webWriteUrlTemplate from baseurl');
+# draft S2.1: "The available variable is {id}" -- the account is expanded
+is($c->{webWriteUrlTemplate}, 'https://p.example/filenode/alice/{id}', 'webWriteUrlTemplate from baseurl, with the account expanded');
+is_deeply([ $c->{webWriteUrlTemplate} =~ /\{([^}]*)\}/g ], ['id'], 'the only template variable is {id}');
 
 {
   local $ENV{BASEURL} = 'https://env.example';
-  is(imap_account_capabilities({ webdavURL => 'x', filenode => 1 })->{$urn}{webWriteUrlTemplate},
-     'https://env.example/filenode/{accountId}/{id}', 'a worker without baseurl falls back to BASEURL');
+  is(imap_account_capabilities({ webdavURL => 'x', filenode => 1, accountid => 'bob' })->{$urn}{webWriteUrlTemplate},
+     'https://env.example/filenode/bob/{id}', 'a worker without baseurl falls back to BASEURL');
 }
+is(imap_account_capabilities({ webdavURL => 'x', filenode => 1 })->{$urn}{webWriteUrlTemplate}, undef,
+   'no accountid to expand: no template (null: no direct writes)');
 
 done_testing;

@@ -456,10 +456,14 @@ In memory over the mirror:
 
 ## Direct HTTP write
 
-`webWriteUrlTemplate` is `{BASEURL}/filenode/{accountId}/{id}`.
+`webWriteUrlTemplate` is `{BASEURL}/filenode/<accountId>/{id}`: the account
+is expanded when the capability object is built (draft S2.1: the only
+template variable is `{id}`), so each account advertises its own URL.
 
-- PUT streams through the parent to the worker, then to a WebDAV PUT with
-  `If-Match`. It answers `200 {blobId, size, type}`.
+- The parent spools the PUT body to a temp file (it never holds a request
+  body for a worker in memory) and refuses one over `JMAP_FILES_MAX_BYTES`
+  with 413 before the worker sees it; the worker reads the file and sends
+  one WebDAV PUT with `If-Match`. It answers `200 {blobId, size, type}`.
 - A directory is 400; no `mayModifyContent` is 403; PATCH is 415.
 
 ## Capability
@@ -467,9 +471,9 @@ In memory over the mirror:
 The session's top-level `capabilities` gets `"urn:ietf:params:jmap:filenode":
 {}` whenever any account has it (the draft requires an empty object there).
 The account capability is advertised only for accounts with a `webdavURL`.
-`{BASEURL}` below is the proxy's configured base URL, expanded when the
-session is built; `{accountId}` and `{id}` stay in the template for the
-client to expand.
+`{BASEURL}` and `<accountId>` below are the proxy's configured base URL and
+the account's id, expanded when the session (or a Principal) is built; only
+`{id}` stays in the template for the client to expand.
 
 ```json
 {
@@ -483,7 +487,7 @@ client to expand.
     "modified", "accessed", "nodeType", "tree"],
   "webTrashUrl": null,
   "webUrlTemplate": null,
-  "webWriteUrlTemplate": "{BASEURL}/filenode/{accountId}/{id}"
+  "webWriteUrlTemplate": "{BASEURL}/filenode/<accountId>/{id}"
 }
 ```
 
