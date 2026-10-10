@@ -42,6 +42,7 @@ use JMAP::OAuth::PACC;
 use JMAP::OAuth::OIDC;
 use JMAP::Dispatch;
 use JMAP::FileNodeCopy;
+use JMAP::FileNode;   # max_bytes, is_too_large: the in-memory cap on one file's content
 use JMAP::Collation;
 use JMAP::Capabilities qw(imap_account_capabilities);
 
@@ -688,7 +689,11 @@ sub run_backend_worker {
             $args->{blobId}, $args->{name}, $args->{type});
           return ['download', [$dtype, $content]];
         }
-        my ($dtype, $content) = $api->downloadFile($args->{blobId});
+        # a FileNode blob over JMAP_FILES_MAX_BYTES is refused, not read
+        # (a die here would end the worker); the parent answers 501
+        my ($dtype, $content) = eval { $api->downloadFile($args->{blobId}) };
+        return ['download', { status => 501, error => $@ =~ s/\n\z//r }] if JMAP::FileNode::is_too_large($@);
+        die $@ if $@;
         return ['download', [$dtype, $content]];
       }
       if ($cmd eq 'raw') {
@@ -758,9 +763,13 @@ sub run_backend_worker {
           }
           elsif ($blobid =~ /^d-/) {
             # a FileNode's content, read from WebDAV pinned to the ETag the
-            # blobId names: undef when the file changed since (a 412) or went
+            # blobId names: undef when the file changed since (a 412) or went;
+            # { error } for one over JMAP_FILES_MAX_BYTES, which no copy reads
             my ($type, $content) = eval { $db->get_blob($blobid) };
-            if (defined $content) {
+            if (JMAP::FileNode::is_too_large($@)) {
+              $result{$blobid} = { error => $@ =~ s/\n\z//r };
+            }
+            elsif (defined $content) {
               my $fh = File::Temp->new(DIR => "$datadir/tmp", UNLINK => 0, SUFFIX => '.blob');
               binmode $fh; print $fh $content; close $fh;
               $result{$blobid} = { type => $type || 'application/octet-stream', path => $fh->filename, is_temp => 1 };
@@ -1873,7 +1882,10 @@ sub _copy_blobs {
     my (%copied, %not_copied, @to_store);
 
     for my $blobid (@$ids) {
-      if ($blob_map->{$blobid}) {
+      if ($blob_map->{$blobid} && $blob_map->{$blobid}{error}) {
+        $not_copied{$blobid} = { type => 'serverFail', description => $blob_map->{$blobid}{error} };
+      }
+      elsif ($blob_map->{$blobid}) {
         push @to_store, [$blobid, $blob_map->{$blobid}];
       }
       else {
@@ -2216,6 +2228,15 @@ sub do_filenode_write {
   return $req->respond([405, 'method not allowed', { Allow => 'PUT' }, 'method not allowed'])
     unless uc $req->method eq 'PUT';
 
+  # the worker holds the whole body in memory for one WebDAV PUT: over
+  # JMAP_FILES_MAX_BYTES it is refused here, before it is spooled or sent
+  my $max = JMAP::FileNode::max_bytes();
+  my $len = $req->headers->{'content-length'} // 0;
+  $len = length $req->content if length($req->content // '') > $len;
+  return $req->respond([413, 'content too large', { 'Content-Type' => 'text/plain' },
+                        JMAP::FileNode::too_large_error('the request body', $len)])
+    if $len > $max;
+
   my $ctype = $req->headers->{'content-type'};
   my $tmpfile = _spool_body_to_temp($req);
 
@@ -2291,6 +2312,10 @@ sub do_raw {
     _check_account_access($auth_aid, $accountid, sub {
       send_backend_request($accountid, 'download', { blobId => $blobid, name => $name, type => $type }, sub {
         my $result = shift;
+        # the worker refused it with a status (a FileNode blob over
+        # JMAP_FILES_MAX_BYTES: 501, streaming not implemented)
+        return $req->respond([$result->{status}, 'error', { 'Content-Type' => 'text/plain' }, $result->{error} // "error $result->{status}"])
+          if ref $result eq 'HASH' && $result->{status};
         # RFC 8620 S6.2: no blob, no data -- that is not a 200.
         return $req->respond([404, 'not found', {}, 'not found'])
           unless ref $result eq 'ARRAY' && defined $result->[1];

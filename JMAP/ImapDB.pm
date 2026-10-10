@@ -1821,6 +1821,10 @@ sub get_filenode_blob {
   $Self->commit();
   return () unless $row && $row->{nodetype} eq 'file'
                 && JMAP::FileNode::blob_id($nodeid, $row->{etag}) eq $blobId;
+  # the whole content is held in memory: a file over the cap is refused
+  # before the GET (the If-Match below pins the content the size describes)
+  die JMAP::FileNode::too_large_error("the file", $row->{size}) . "\n"
+    if defined $row->{size} && $row->{size} > JMAP::FileNode::max_bytes();
   my $res = $Self->backend_cmd('files_get', $row->{href}, if_match => $row->{etag});
   return () unless $res->{status} == 200;   # 412: changed since -- that blob is gone
   return ($row->{type} || $res->{type} || 'application/octet-stream', $res->{content});
@@ -2178,7 +2182,9 @@ sub create_filenodes {
     if ($nodetype eq 'file') {
       ($ctype, $content) = eval { $Self->get_blob($c->{blobId}) };
       unless (defined $content) {
-        $notcreated{$cid} = { type => 'invalidProperties', properties => ['blobId'], description => 'blob not found' };
+        # RFC 8620 S5.3 tooLarge: over a server-defined size limit
+        $notcreated{$cid} = JMAP::FileNode::is_too_large($@) ? { type => 'tooLarge', description => $@ =~ s/\n\z//r }
+                          : { type => 'invalidProperties', properties => ['blobId'], description => 'blob not found' };
         next;
       }
       if (defined $c->{size} && $c->{size} != length $content) {
@@ -2820,7 +2826,8 @@ sub update_filenodes {
     if (exists $p->{blobId}) {
       my ($ctype, $bytes) = eval { $Self->get_blob($p->{blobId}) };
       unless (defined $bytes) {
-        $notupdated{$id} = { type => 'invalidProperties', properties => ['blobId'], description => 'blob not found' };
+        $notupdated{$id} = JMAP::FileNode::is_too_large($@) ? { type => 'tooLarge', description => $@ =~ s/\n\z//r }
+                         : { type => 'invalidProperties', properties => ['blobId'], description => 'blob not found' };
         next;
       }
       if (defined $p->{size} && $p->{size} != length $bytes) {

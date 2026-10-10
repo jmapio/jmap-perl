@@ -298,6 +298,31 @@ is($http->request('PUT', write_url($fid), { content => 'x' })->{status}, 401, 'u
 force_sync();
 jmap(['FileNode/set', { destroy => [ $fid, $cp->{created}{c}{id} ] }]);
 
+# --- the in-memory cap: bin/restart-test-proxy.sh runs the stack with
+# JMAP_FILES_MAX_BYTES=1048576; the proxy refuses to hold more of one file
+SKIP: {
+  my $cap = $ENV{JMAP_FILES_MAX_BYTES} || 1048576;
+  skip 'a cap too big to try', 1 if $cap > 8 * 1024 * 1024;
+  my $big = 'b' x ($cap + 1);
+  my ($mkb) = @{ jmap(['FileNode/set', { create => { f => { parentId => $home->{id}, name => "$tag-big.txt", blobId => $blob->{blobId} } } }]) };
+  my $bid = $mkb->{created}{f}{id};
+  my $p413 = $http->request('PUT', write_url($bid), { headers => { Authorization => $auth, 'Content-Type' => 'text/plain' }, content => $big });
+  is($p413->{status}, 413, 'a direct PUT over the cap is 413') or diag $p413->{content};
+  like($p413->{content}, qr/JMAP_FILES_MAX_BYTES/, 'naming the limit');
+  is($dav->Get("$root/$tag-big.txt")->{content}, 'uploaded', 'and the file is untouched');
+  # a big file written behind the proxy: its blob cannot be downloaded or copied
+  $dav->Put("$root/$tag-big.txt", $big, type => 'text/plain');
+  force_sync();
+  my $bn = get1($bid);
+  is($bn->{size}, $cap + 1, 'the node shows the size');
+  my $dl = raw($bn->{blobId});
+  is($dl->{status}, 501, 'a download of a blob over the cap is 501') or diag $dl->{content};
+  like($dl->{content}, qr/JMAP_FILES_MAX_BYTES/, 'naming the limit');
+  my ($cb) = @{ jmap(['FileNode/set', { create => { c => { parentId => $home->{id}, name => "$tag-big2.txt", blobId => $bn->{blobId} } } }]) };
+  is($cb->{notCreated}{c}{type}, 'tooLarge', 'a create from it is tooLarge') or diag explain $cb;
+  jmap(['FileNode/set', { destroy => [ $bid ] }]);
+}
+
 # --- update (Task 8)
 my ($u0) = @{ jmap(['FileNode/set', { create => {
   P => { parentId => $home->{id}, name => "$tag-P" },
@@ -722,6 +747,21 @@ SKIP: {
     or diag explain $dm;
   is($dm->[1][1]{type}, 'stateMismatch', 'stateMismatch');
   ok(get1($src{one}), 'and the original stays');
+
+  # a source file over JMAP_FILES_MAX_BYTES: that item fails with the reason
+  SKIP: {
+    my $cap = $ENV{JMAP_FILES_MAX_BYTES} || 1048576;
+    skip 'a cap too big to try', 1 if $cap > 8 * 1024 * 1024;
+    $dav->Put("$root/$tag-huge.txt", 'h' x ($cap + 1), type => 'text/plain');
+    force_sync();
+    my ($hq) = @{ jmap(['FileNode/query', { filter => { parentId => $home->{id}, nameMatch => "$tag-huge.txt" } }]) };
+    my ($hid) = @{ $hq->{ids} || [] };
+    ok($hid, 'the big file is in the mirror') or diag explain $hq;
+    my ($hc) = @{ $ojmap->('FileNode/copy', { fromAccountId => $user, create => { h => { id => $hid, parentId => $ohome->{id} } } }) };
+    is($hc->{notCreated}{h}{type}, 'serverFail', 'copying a file over the cap: serverFail') or diag explain $hc;
+    like($hc->{notCreated}{h}{description} // '', qr/JMAP_FILES_MAX_BYTES/, 'with the reason');
+    jmap(['FileNode/set', { destroy => [ $hid ] }]) if $hid;
+  }
 
   # the source changed behind the mirror's back (a 412 on its pinned blobId):
   # that item fails, as a whole and without leaving a partial copy; the rest

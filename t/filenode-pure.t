@@ -211,4 +211,24 @@ is(JMAP::FileNode::utc(JMAP::FileNode::epoch('2009-02-13T23:31:30Z')), '2009-02-
   is(scalar @{ JMAP::FileNode::reconcile([$row], [ { %$e, sharewith => '{"u":{}}' } ])->{update} }, 1, 'shared now: an update');
 }
 
+# the in-memory cap on one file's content (JMAP_FILES_MAX_BYTES)
+{
+  local $ENV{JMAP_FILES_MAX_BYTES};
+  delete $ENV{JMAP_FILES_MAX_BYTES};
+  is(JMAP::FileNode::max_bytes(), 256 * 1024 * 1024, 'default 256 MiB');
+  $ENV{JMAP_FILES_MAX_BYTES} = '1048576';
+  is(JMAP::FileNode::max_bytes(), 1048576, 'from the environment');
+  $ENV{JMAP_FILES_MAX_BYTES} = 'lots';
+  is(JMAP::FileNode::max_bytes(), 256 * 1024 * 1024, 'a value that is no number: the default');
+  $ENV{JMAP_FILES_MAX_BYTES} = '0';
+  is(JMAP::FileNode::max_bytes(), 256 * 1024 * 1024, 'zero: the default');
+  $ENV{JMAP_FILES_MAX_BYTES} = '8';
+  my $e = JMAP::FileNode::too_large_error('the file', 9);
+  like($e, qr/^fileTooLarge: the file is 9 bytes, over JMAP_FILES_MAX_BYTES \(8\)$/, 'the error names the size and the cap');
+  ok(JMAP::FileNode::is_too_large($e), 'and is recognised');
+  ok(JMAP::FileNode::is_too_large("$e\n"), 'with a trailing newline too');
+  ok(!JMAP::FileNode::is_too_large('HTTP 412'), 'another error is not');
+  ok(!JMAP::FileNode::is_too_large(undef), 'nor nothing');
+}
+
 done_testing;

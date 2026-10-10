@@ -33,7 +33,10 @@ sub reset_tree {
 sub kids { my $p = shift; return sort grep { m{^\Q$p\E/[^/]+\z} } keys %tree }
 
 no warnings qw(redefine once);
-*JMAP::ImapDB::get_blob = sub { my ($Self, $id) = @_; return $id eq 'f-x' ? ('text/plain', 'uploaded') : $id eq 'f-y' ? ('text/x-y', 'second!') : $id eq 'f-e' ? ('text/plain', '') : () };
+*JMAP::ImapDB::get_blob = sub { my ($Self, $id) = @_;
+  return $Self->get_filenode_blob($id) if $id =~ /^d-/;   # the real one (the cap)
+  die JMAP::FileNode::too_large_error('the file', 9) . "\n" if $id eq 'f-big';
+  return $id eq 'f-x' ? ('text/plain', 'uploaded') : $id eq 'f-y' ? ('text/x-y', 'second!') : $id eq 'f-e' ? ('text/plain', '') : () };
 *JMAP::ImapDB::backend_cmd = sub {
   my ($Self, $cmd, $path, @a) = @_;
   die "in transaction\n" if $Self->in_transaction();
@@ -1506,6 +1509,30 @@ sub files_under { my $p = shift; return [ sort grep { m{^\Q$p\E/} && !$tree{$_}{
   $set = set(onExists => 'replace', create => { n => { parentId => $x->{P}, name => 'd.txt', blobId => 'f-y' } })->[1];
   is($set->{notCreated}{n}{type}, 'alreadyExists', 'a replacing create over a file rewritten since: alreadyExists') or diag explain $set;
   is(content("$R/OW/d.txt"), '8:text/plain', 'the rewritten file is untouched');
+  set(onDestroyRemoveChildren => JSON::true, destroy => [ $x->{P} ]);
+}
+
+# --- the in-memory cap (JMAP_FILES_MAX_BYTES): a blob over it is tooLarge
+# (RFC 8620 S5.3), and a FileNode blob over it is refused before any GET
+{
+  my $x = mk(P => { parentId => $home, name => 'CAP' }, f => { parentId => '#P', name => 'f.txt', blobId => 'f-x' });
+  $set = set(create => { b => { parentId => $x->{P}, name => 'big.txt', blobId => 'f-big' } })->[1];
+  is($set->{notCreated}{b}{type}, 'tooLarge', 'a create from a blob over the cap: tooLarge') or diag explain $set;
+  like($set->{notCreated}{b}{description}, qr/JMAP_FILES_MAX_BYTES/, 'saying so');
+  $set = set(update => { $x->{f} => { blobId => 'f-big' } })->[1];
+  is($set->{notUpdated}{$x->{f}}{type}, 'tooLarge', 'an update to a blob over the cap: tooLarge') or diag explain $set;
+  is(content("$R/CAP/f.txt"), '8:text/plain', 'the file is untouched');
+  my $blob = get($x->{f})->{$x->{f}}{blobId};
+  {
+    local $ENV{JMAP_FILES_MAX_BYTES} = 4;   # the file is 8 bytes
+    @log = ();
+    my @got = eval { $db->get_filenode_blob($blob) };
+    ok(JMAP::FileNode::is_too_large($@), 'a FileNode blob over the cap: refused') or diag $@;
+    ok(!grep({ /^files_get/ } @log), 'without a GET');
+    # and so a create from it in the same account
+    $set = set(create => { c => { parentId => $x->{P}, name => 'copy.txt', blobId => $blob } })->[1];
+    is($set->{notCreated}{c}{type}, 'tooLarge', 'a create from a FileNode blob over the cap: tooLarge') or diag explain $set;
+  }
   set(onDestroyRemoveChildren => JSON::true, destroy => [ $x->{P} ]);
 }
 

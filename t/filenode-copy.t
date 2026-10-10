@@ -141,7 +141,8 @@ my $send = sub {
     return $cb->({ methodResponses => [ map { my $r = fcall($ac, $_->[0], $_->[1]); [ @$r, $_->[2] ] } @{ $args->{methodCalls} } ] });
   }
   if ($cmd eq 'fetch_blobs') {
-    return $cb->({ map { ($_ => (defined $ac->{blobs}{$_} && !$ac->{stale}{$_} ? { path => "mem:$_", content => $ac->{blobs}{$_} } : undef)) } @{ $args->{ids} } });
+    return $cb->({ map { ($_ => ($ac->{toobig}{$_} ? { error => "fileTooLarge: the file is 9 bytes, over JMAP_FILES_MAX_BYTES (8)" }
+                              : defined $ac->{blobs}{$_} && !$ac->{stale}{$_} ? { path => "mem:$_", content => $ac->{blobs}{$_} } : undef)) } @{ $args->{ids} } });
   }
   if ($cmd eq 'store_blob') {
     my $bid = 'f-' . ++$ac->{n};
@@ -224,6 +225,17 @@ $r = run_copy(create => { c => { id => 'D', parentId => 'home' } });
 like($r->[1]{notCreated}{c}{description}, qr{d/sub/b\.txt}, 'a stale blob fails the item, naming it') or diag explain $r;
 ok(!(grep { $_->[0] eq 'B' && $_->[1] eq 'jmap' && grep { $_->[0] eq 'FileNode/set' && %{ $_->[1]{create} || {} } } @{ $_->[2] } } @log),
    'the destination saw no creates');
+
+# a file the source refuses to read (over JMAP_FILES_MAX_BYTES): the item
+# fails with the source's reason; the rest of the call goes ahead
+setup();
+$acct{A}{toobig}{'d-FB'} = 1;
+$r = run_copy(create => { c => { id => 'D', parentId => 'home' }, l => { id => 'LONE', parentId => 'home' } });
+is($r->[1]{notCreated}{c}{type}, 'serverFail', 'a blob over the cap fails the item: serverFail') or diag explain $r;
+like($r->[1]{notCreated}{c}{description}, qr{JMAP_FILES_MAX_BYTES}, 'with the reason');
+like($r->[1]{notCreated}{c}{description}, qr{d/sub/b\.txt}, 'naming the file');
+ok($r->[1]{created}{l}, 'the other item is copied') or diag explain $r;
+ok(!(grep { $_->[0] eq 'B' && $_->[1] eq 'store_blob' && ($_->[2]{error} // '') } @log), 'nothing refused was stored');
 
 # the destination refuses part of the tree: rolled back by explicit ids, a
 # file someone else put in it meanwhile is not lost

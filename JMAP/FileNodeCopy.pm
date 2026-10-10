@@ -234,13 +234,20 @@ sub copy {
     my $after_fetch = sub {
       my ($blobs) = @_;
       $blobs ||= {};
+      # a blob the source refused with a reason (over JMAP_FILES_MAX_BYTES)
+      # fails its item with that reason; one it could not read, generically
+      my %refused = map { ($_ => $blobs->{$_}{error}) } grep { $blobs->{$_} && $blobs->{$_}{error} } @bids;
       my %unread = map { ($_ => 1) } grep { !$blobs->{$_} } @bids;
+      for my $cid (sort keys %plan) {
+        my @why = map { $refused{$_} } grep { exists $refused{$_} } map { $_->{blobId} } $files_of->($cid);
+        $drop->($cid, \%refused, 'the source content could not be read: ' . join('; ', @why)) if @why;
+      }
       for my $cid (sort keys %plan) {
         $drop->($cid, \%unread, 'the source content could not be read (changed or gone since it was listed)')
           if grep { $unread{ $_->{blobId} } } $files_of->($cid);
       }
       my %live = map { ($_->{blobId} => 1) } map { $files_of->($_) } keys %plan;
-      for my $bid (grep { $blobs->{$_} && !$live{$_} } @bids) {
+      for my $bid (grep { $blobs->{$_} && !$refused{$_} && !$live{$_} } @bids) {
         unlink $blobs->{$bid}{path} if $blobs->{$bid}{is_temp};
       }
       my @queue = grep { $live{$_} } @bids;

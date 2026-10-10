@@ -479,7 +479,8 @@ Follow-ups:
 - [ ] -15 extended attributes and named streams
 - [ ] `onExists: "unchanged"` (needs JMAP-CONDITIONAL; `invalidArguments` until then)
 - [ ] PATCH writes on the direct-write URL (415 today)
-- [ ] Stream large blobs (download, PUT, cross-account copy) instead of holding them in memory
+- [ ] Stream large blobs (download, PUT, cross-account copy) instead of holding them in memory;
+      until then `JMAP_FILES_MAX_BYTES` (256 MiB) refuses bigger ones with a clear error
 - [ ] `sync-collection` with `sync-level: infinite` where a server supports it (one REPORT
       instead of one PROPFIND per collection)
 - [ ] Upstream a Net::DAVTalk XML parser fix for `xml:lang` (WebDAVTalk strips `xml:*`

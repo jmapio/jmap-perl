@@ -26,6 +26,20 @@ our %CAPS = (
   webUrlTemplate            => undef,
 );
 
+# The most bytes of one file's content the proxy will hold in memory
+# (JMAP_FILES_MAX_BYTES, default 256 MiB): a direct PUT, a d- download, a
+# cross-account copy.  Streaming is a ROADMAP follow-up; until then a
+# bigger file is refused with a clear error rather than a dead worker.
+sub max_bytes {
+  my $v = $ENV{JMAP_FILES_MAX_BYTES};
+  return (defined $v && $v =~ /^\d+\z/ && $v > 0) ? 0 + $v : 256 * 1024 * 1024;
+}
+# The error for a file over the cap, and its test: every path that reads
+# a file's content dies with this, and every caller that must answer
+# instead of dying looks for it.
+sub too_large_error { my ($what, $size) = @_; return "fileTooLarge: $what is $size bytes, over JMAP_FILES_MAX_BYTES (" . max_bytes() . ")" }
+sub is_too_large { return (shift // '') =~ /^fileTooLarge: / ? 1 : 0 }
+
 sub local_id  { return 'L' . lc(new_uuid_string() =~ s/-//gr) }
 sub server_id { return 'S' . substr(sha1_hex(encode_utf8($_[0])), 0, 32) }
 

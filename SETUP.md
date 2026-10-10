@@ -67,6 +67,7 @@ All variables are optional unless marked **required**.
 | `JMAP_IDLE_TIMEOUT` | `300` | Seconds of inactivity before a per-account worker is killed. Set to `0` to disable. |
 | `JMAP_SYNC_INTERVAL` | `30` | Seconds between background IMAP/CalDAV/CardDAV sync polls. |
 | `JMAP_FILES_DROPPABLE_PRINCIPALS` | _(empty)_ | Comma-separated user principal names (a bare name matches only the user principal of that name) or whole principal hrefs (matched exactly) whose ACEs FileNode sharing may drop when the WebDAV server refuses to take back an ACE it lists itself (`DAV:recognized-principal`; Cyrus lists principals it cannot resolve, such as an `admin` from `defaultacl`). Each drop is logged. Anything not listed makes the share fail (`serverFail`) and leaves the ACL alone. The test stack sets `admin`. |
+| `JMAP_FILES_MAX_BYTES` | `268435456` (256 MiB) | The most bytes of one file's content the proxy holds in memory for FileNode: a direct PUT over it is refused with 413 before the body reaches a worker, a download of a bigger file's blob is 501, and a cross-account `FileNode/copy` of one fails that item with `serverFail` naming the limit (a `FileNode/set` from such a blob is `tooLarge`). Content is not streamed yet. |
 | `JMAP_DEBUG` | _(unset)_ | Set to any value to log full JMAP request/response bodies to stderr. |
 | `JMAP_SECRET_KEY` | _(unset)_ | 64 hex chars (256-bit AES key) for credential encryption. Recommended for production. |
 | `JMAP_OPENBAO_ADDR` | _(unset)_ | OpenBao/Vault address for Transit-based credential encryption (e.g. `http://vault:8200`). |

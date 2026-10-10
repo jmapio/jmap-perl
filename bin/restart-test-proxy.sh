@@ -22,6 +22,9 @@ export BASEURL="http://localhost:$FRONTEND_PORT"
 # The test server's defaultacl gives "admin" an ACE on every mailbox, which
 # Cyrus lists in DAV:acl but will not take back in an ACL request.
 export JMAP_FILES_DROPPABLE_PRINCIPALS="${JMAP_FILES_DROPPABLE_PRINCIPALS:-admin}"
+# A small in-memory cap on one file's content (default 256 MiB), so the
+# live tests can show a direct PUT, a download and a copy refusing one.
+export JMAP_FILES_MAX_BYTES="${JMAP_FILES_MAX_BYTES:-1048576}"
 
 CLEAN=0
 BACKEND=imap
