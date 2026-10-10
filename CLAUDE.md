@@ -100,7 +100,9 @@ their **metadata only**: every method reads the mirror, every write goes to WebD
   result in `iserver.webdavFeatures` (`deadProps`, `etagIsContent`, `acl`, `quota`, ...);
   other facts are learnt on first use (`moveLeavesEmpty`, `principalBase`, `privileges`).
   An account probed before a key existed lacks it, so code must treat a missing key as
-  "unknown", not "no". Each defence has a canned bad response in `t/webdavtalk-canned.t`.
+  "unknown", not "no". Nor its status codes: a PUT is checked against the size the server
+  then lists. Each defence replays a canned bad answer (`t/webdavtalk-canned.t`,
+  `t/filenode-set.t`).
 - **`FileNode/set` is judged by its final state**: destroys, creates and moves are ordered
   (temporary names break swaps and cycles) so sibling names stay unique at every step. A
   node the client asked to move or rename is **never deleted by the same call** — not by a
@@ -112,9 +114,9 @@ their **metadata only**: every method reads the mirror, every write goes to WebD
   `admin`) that it then refuses back; the proxy fails the share rather than drop one,
   unless it is named in `JMAP_FILES_DROPPABLE_PRINCIPALS` (the test stack sets `admin`).
 - **Test stack**: `restart-test-proxy.sh clean` builds and runs `<CYRUS_IMAGE>-webdav`, a
-  derived image with `webdav` in `httpmodules`; restarting the Cyrus container breaks its
-  auth, so always rebuild with `clean`. Cyrus has no FileNode, so `t/FileNode/` has no
-  `--direct` baseline: every failure there is the proxy's — except
+  derived image with `webdav` in `httpmodules`; `docker restart` of the Cyrus container
+  breaks its auth, so recreate it with `clean` instead. Cyrus has no FileNode, so
+  `t/FileNode/` has no `--direct` baseline: every failure there is the proxy's — except
   `t/FileNode/set/zero-byte.t`, which fails because Cyrus cannot store an empty file (a
   zero-length PUT stores the previous request's body; the proxy answers `serverFail`).
 
