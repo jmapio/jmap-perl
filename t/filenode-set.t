@@ -40,7 +40,10 @@ no warnings qw(redefine once);
   ($path, @a) = ($a[0], $path, @a[1 .. $#a]) if $cmd eq 'files_raw';   # Raw($method, $path, ...)
   push @log, "$cmd $path";
   my $dir = $path =~ s{/\z}{}r;
-  return $fail{$cmd} if $fail{$cmd} && $cmd ne 'files_put';
+  if ($fail{$cmd} && $cmd ne 'files_put') {   # a code ref may let the request through (undef)
+    my $f = ref $fail{$cmd} eq 'CODE' ? $fail{$cmd}->($path, @a) : $fail{$cmd};
+    return $f if defined $f;
+  }
   if ($cmd eq 'files_prop_find') {
     my $real = ci($dir);
     my $self = $tree{$real} or die "PROPFIND $path: HTTP 404\n";
@@ -104,8 +107,10 @@ no warnings qw(redefine once);
     return 201;
   }
   if ($cmd eq 'files_delete') {
+    my %o = @a;
     $dir = ci($dir);
     return 404 unless $tree{$dir};
+    return 412 if defined $o{if_match} && ($tree{$dir}{etag} // '') ne $o{if_match};
     if ($tree{$dir}{isCollection}) {
       my @sub = grep { m{^\Q$dir\E/} } keys %tree;
       return 500 if $tree{$dir}{broken};
@@ -269,6 +274,33 @@ $set = set(create => { a => { parentId => $dirid, name => 'empty.txt', blobId =>
 is($set->{notCreated}{a}{type}, 'serverFail', 'a PUT the server stored wrongly is serverFail') or diag explain $set;
 ok(!$tree{"$R/dir/empty.txt"}, 'and the wrong resource is deleted again');
 ok(!rows()->{"$R/dir/empty.txt"}, 'and is not in the mirror');
+# the clean-up DELETE carries If-Match, and Cyrus's 500 is tried again
+@log = ();
+my @dels;
+$fail{files_delete} = sub { push @dels, { @_[1 .. $#_] }; return @dels == 1 ? 500 : undef };
+$set = set(create => { a => { parentId => $dirid, name => 'empty.txt', blobId => 'f-e' } })->[1];
+is($set->{notCreated}{a}{type}, 'serverFail', 'a 500 on the clean-up: still serverFail');
+is(scalar @dels, 2, 'a 500 is retried once');
+ok($dels[0]{if_match}, 'the clean-up DELETE has If-Match') or diag explain \@dels;
+ok(!$tree{"$R/dir/empty.txt"}, 'and the retry removed it');
+# a clean-up the server keeps refusing: warned, the mirror shows the file,
+# and the SetError says so
+@dels = ();
+$fail{files_delete} = sub { push @dels, 1; return 403 };
+{
+  my @w;
+  local $SIG{__WARN__} = sub { push @w, @_ };
+  $set = set(create => { a => { parentId => $dirid, name => 'empty.txt', blobId => 'f-e' } })->[1];
+  ok((grep { /stays as node/ } @w), 'warned that the wrong file stays') or diag explain \@w;
+}
+delete $fail{files_delete};
+is(scalar @dels, 1, 'a 403 is not retried');
+is($set->{notCreated}{a}{type}, 'serverFail', 'a refused clean-up: serverFail');
+my $left = rows()->{"$R/dir/empty.txt"};
+ok($left && $left->{active}, 'the mirror has the file the server kept');
+like($set->{notCreated}{a}{description}, qr/stays as node \Q$left->{nodeid}\E/, 'and the SetError names it')
+  or diag explain $set;
+set(destroy => [ $left->{nodeid} ]);
 $set = set(update => { $fid => { blobId => 'f-e' } })->[1];
 is($set->{notUpdated}{$fid}{type}, 'serverFail', 'a content update the server stored wrongly is serverFail') or diag explain $set;
 $put_garbles = 0;

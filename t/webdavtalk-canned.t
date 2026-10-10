@@ -279,4 +279,14 @@ is(JMAP::Sync::WebDAVTalk::principal_base(undef, ['/principals/']), undef, 'no o
   is($q->(sub { +{ status => 404, headers => {}, content => '' } }), undef, 'Quota: PROPFIND refused, no quota');
 }
 
+# Delete with If-Match sends the ETag quoted
+{
+  my %h;
+  my $d = bless { log => [], script => sub { my ($m, $p, $b, %hh) = @_; %h = %hh; +{ status => 412, headers => {}, content => '' } } }, 'Stub';
+  is($d->Delete('/r/f', if_match => 'abc'), 412, 'Delete returns the status');
+  is($h{'If-Match'}, '"abc"', 'Delete sends If-Match');
+  $d->Delete('/r/f');
+  ok(!exists $h{'If-Match'}, 'and none without if_match');
+}
+
 done_testing;

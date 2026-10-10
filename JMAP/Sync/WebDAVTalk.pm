@@ -181,7 +181,10 @@ sub Put {
 }
 
 sub Mkcol  { $_[0]->Raw('MKCOL', "$_[1]/")->{status} }
-sub Delete { $_[0]->Raw('DELETE', $_[1])->{status} }
+sub Delete {
+  my ($Self, $path, %o) = @_;
+  return $Self->Raw('DELETE', $path, undef, ($o{if_match} ? ('If-Match' => qq{"$o{if_match}"}) : ()))->{status};
+}
 sub _url   { my ($Self, $path) = @_; return $Self->request_url(encode_utf8($path)) }
 sub _dest  { my ($Self, $path) = @_; return $Self->_url($path) }
 sub Move {

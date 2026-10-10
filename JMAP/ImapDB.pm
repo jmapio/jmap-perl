@@ -1880,6 +1880,19 @@ sub _filenode_put_mismatch {
   return "the WebDAV server stored $row->{size} bytes for a PUT of " . length($bytes);
 }
 
+# DELETE the file a bad PUT left (If-Match: the ETag just listed, so a
+# file someone else wrote since is kept).  Cyrus answers a second DELETE
+# of the same name within a second 500, so a 500 is tried once more after
+# a pause.  Returns the status (0 if the request died); warns unless 2xx.
+sub _files_delete_bad_put {
+  my ($Self, $href, $etag) = @_;
+  my $del = sub { eval { $Self->backend_cmd('files_delete', $href, ($etag ? (if_match => $etag) : ())) } // 0 };
+  my $st = $del->();
+  if ($st == 500) { sleep 1; $st = $del->() }
+  warn "create_filenodes: DELETE $href (after a bad PUT): HTTP $st\n" unless $st =~ /^2/;
+  return $st;
+}
+
 # WebDAV path of a node: collections end in "/" (Delete, Move and PropPatch
 # take the path as given).
 sub _filenode_path { my $row = shift; return $row->{nodetype} eq 'directory' ? "$row->{href}/" : $row->{href} }
@@ -2226,9 +2239,15 @@ sub create_filenodes {
       next;
     }
     if (my $bad = _filenode_put_mismatch($row, $content)) {
-      # never leave a node whose content is not what the client gave
-      eval { $Self->backend_cmd('files_delete', $href); 1 } or warn "create_filenodes: DELETE $href: $@";
-      eval { $Self->_files_refresh_dir($parent->{href}) };
+      # never leave a node whose content is not what the client gave: delete
+      # exactly what was just listed (If-Match), then list again so the
+      # mirror shows what the server really has
+      my $st = $Self->_files_delete_bad_put($href, $row->{etag});
+      my $after = eval { $Self->_files_refresh_dir($parent->{href}) } || {};
+      if (my $left = $after->{$href}) {
+        warn "create_filenodes: $bad; DELETE $href answered $st, so the wrong file stays as node $left->{nodeid}\n";
+        $bad .= "; it could not be removed (DELETE: HTTP $st) and stays as node $left->{nodeid}";
+      }
       $notcreated{$cid} = { type => 'serverFail', description => $bad };
       next;
     }
