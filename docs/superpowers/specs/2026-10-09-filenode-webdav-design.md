@@ -44,21 +44,25 @@ in the `"$accountid:backfill"` worker.
 
 - `JMAP/Sync/WebDAVTalk.pm` (new): a `Net::DAVTalk` subclass, protocol only,
   no DB. It adds raw-body requests on DAVTalk's authenticated `ua`:
-  - `PropFind($path, $depth, \@props)` returns normalised entries
-    `{href, name, isCollection, etag, ctag, size, type, created, modified,
-    fileid, fingerprint, privileges, deadprops}`.
-  - `SyncCollection($path, $token)` returns `{changed, removed, token}`, or
-    "unsupported" on 403/501/invalid token.
-  - `Get` (streaming, with `If-Match`), `Put` (with `If-Match` or
-    `If-None-Match: *`), `Mkcol`, `Move` and `Copy` (with `Overwrite`),
-    `Delete`, `PropPatch`, `GetAcl`, `SetAcl`.
+  - `PropFind($path, $depth, \%opts)` (`{acl => 1}` asks for the ACL and
+    owner too) returns normalised entries `{href, isCollection, etag, ctag,
+    size, type, created, modified, fileid, sha1, privileges, dead}` (a
+    missing resource is `{href, missing}`).
+  - `SyncCollection($path, $token)` returns `{entries, token}`, or undef
+    when the server refuses it (403/501/an invalid token).
+  - `Get` (the whole body in memory, with `If-Match`; streaming is a
+    ROADMAP follow-up, `JMAP_FILES_MAX_BYTES` caps it), `Put` (with
+    `If-Match` or `If-None-Match: *`), `Mkcol`, `Move` and `Copy` (with
+    `Overwrite`), `Delete` (with `If-Match`), `PropPatch`, `GetAcl`,
+    `SetAcl`. `If-Match` is sent only for a strong ETag (a weak one keeps
+    its `W/` mark and could never match).
   - Feature probing: the `DAV:` header from OPTIONS, and which properties
     the first PROPFIND returns.
 - `JMAP/Sync/Common.pm`: `connect_files()` (as `connect_calendars()`), using
   `iserver.webdavURL`, and the backend commands the worker calls.
 - `JMAP/ImapDB.pm`: `sync_files`, reconciliation, the id ladder, and the
   write operations (`create_filenodes`, `update_filenodes`,
-  `destroy_filenodes`, `copy_filenodes`, `put_filenode_content`).
+  `destroy_filenodes`, `put_filenode_content`).
 - `JMAP/API/FileNode.pm` (new): the `FileNode/*` methods over the mirror.
   `JMAP/API/StorageNode.pm` and its `JMAP::Dispatch` entry are deleted; the
   new methods are added to the method→capability table.
@@ -106,9 +110,13 @@ Ids say where they come from, by prefix:
   because MOVE only updates `href` and `parentid`. For moves made
   elsewhere, reconciliation matches a vanished path to a new path with the
   same fingerprint and keeps the id. The fingerprint, strongest first:
-  `ME:sha1hex`; a content-derived ETag (Cyrus); size plus
-  `getlastmodified`, used only when it is unique in that sync pass.
-  Unmatched paths are destroyed or created.
+  `ME:sha1hex`; an ETag the Probe has shown to be a content hash that
+  survives MOVE; size plus `getlastmodified`, used only when it is unique
+  in that sync pass. Unmatched paths are destroyed or created. On Cyrus
+  no fingerprint survives another client's MOVE of a file (its ETag,
+  `getlastmodified` and `creationdate` are all reset, unless the MOVE
+  lands in the same second), so there such a move is a destroy plus a
+  create; only the proxy's own moves keep an `L` id.
 
 Follow-up, not part of this work: give every data type the same
 server/local prefix split. Changing existing ids makes every connected
@@ -124,8 +132,10 @@ and `parentId: null`. `mayCreateTopLevelFileNode` is false.
 - A file's `blobId` is `d-<nodeid>-<first 16 hex of SHA-1 of its etag>`, the
   same `<letter>-<id>` shape as the existing `f-` and `m-` blobs. When the content
   changes, the ETag changes, so the blobId changes.
-- Download (`/raw/`) is a streaming WebDAV GET with `If-Match: <etag>`. A 412
-  means that blob no longer exists, and is answered 404.
+- Download (`/raw/`) is a WebDAV GET with `If-Match: <etag>`, the body held
+  in the worker (not streamed; a file over `JMAP_FILES_MAX_BYTES` is
+  refused with 501). A 412 means that blob no longer exists, and is
+  answered 404.
 - Creating or updating a file with a blobId from the proxy's blob store (an
   upload, or another account's content via copy) PUTs those bytes to WebDAV
   and records the resulting ETag.
@@ -196,8 +206,12 @@ Enabling `webdav` in `httpmodules` serves `/dav/drive/user/<user>/`.
 - File ETags hash Cyrus's stored resource, not the bytes, and change on MOVE
   and COPY. Collection ETags are `"<uidvalidity>-<n>-<n>"`; the uidvalidity
   survives a MOVE.
-- `getlastmodified` survives a MOVE, so size plus `getlastmodified` is the
-  usable move fingerprint.
+- `getlastmodified` and `creationdate` are reset on MOVE too, unless the
+  MOVE lands in the same second as the last change (verified live,
+  2026-10-10: a file PUT at t, MOVEd at t+2, lists ETag, modified and
+  created all new). So on Cyrus no fingerprint survives another client's
+  MOVE of a file: it is a destroy plus a create (see "Ids"); and a MOVE by
+  the proxy must pin the pre-move `created`/`modified` (see "Writes").
 - `sync-collection` works at sync-level 1 per collection (`data:,…`
   tokens); `infinite` is a 400. `Depth: infinity` PROPFIND is a 403.
 - A collection's ETag changes only when its direct children change.
@@ -344,10 +358,14 @@ check honours `compareCaseInsensitively`.
 
 ## Copy
 
-Within one account: WebDAV COPY, then PROPFIND for the new nodes, which get
-new ids. Across accounts: the parent's existing `/copy` orchestration
-fetches the content and creates the nodes in the destination account.
-`FileNode/copy` must be listed in the copy classifier (see CLAUDE.md).
+`FileNode/copy` is the standard `/copy` (RFC 8620 S5.4): `fromAccountId`
+must differ from `accountId`, as the proxy already enforces for every
+`/copy` (ruling R3; the draft adds no same-account exception), so there is
+no same-account WebDAV COPY and no `copy_filenodes`. The parent's `/copy`
+orchestration fetches the content (`fetch_blobs`, which refuses a file
+over `JMAP_FILES_MAX_BYTES` with a reason the item's `serverFail` carries)
+and creates the nodes in the destination account. `FileNode/copy` must be
+listed in the copy classifier (see CLAUDE.md).
 
 ## Query
 

@@ -89,16 +89,31 @@ like($file->{blobId}, qr/^d-/, 'blobId');
 like($file->{id}, qr/^[LS]/, 'id prefix');
 is($dir->{blobId}, undef, 'a directory has no blobId');
 
-# an external move keeps the id (Cyrus: size + getlastmodified)
+# an external move: the id is kept only when a fingerprint survives the
+# MOVE (spec "Ids").  On Cyrus none does -- it resets the ETag,
+# getlastmodified and creationdate on MOVE unless in the same second -- so
+# the move is a destroy plus a create; a server with stable ids or a
+# content-hash ETag reports an update.  Either way exactly one node carries
+# the new name, and nothing else changed.
 $state = $c->{newState};
 $dav->Move("$root/$tag/one.txt", "$root/$tag/renamed.txt");
 force_sync();
 ($c) = @{ jmap(['FileNode/changes', { sinceState => $state }]) };
-is_deeply($c->{updated}, [ $file->{id} ], 'external move is an update of the same node, and only of it') or diag explain $c;
-is_deeply($c->{created}, [], 'not a creation');
-is_deeply($c->{destroyed}, [], 'nor a destruction');
-my ($g3) = @{ jmap(['FileNode/get', { ids => [ $file->{id} ] }]) };
+my $survivor;
+if (@{ $c->{updated} }) {
+  is_deeply($c->{updated}, [ $file->{id} ], 'matched by fingerprint: an update of the same node, and only of it') or diag explain $c;
+  is_deeply([ @{$c->{created}}, @{$c->{destroyed}} ], [], 'nothing created or destroyed');
+  $survivor = $file->{id};
+}
+else {
+  is(scalar @{ $c->{created} }, 1, 'no fingerprint survived the MOVE: one node created') or diag explain $c;
+  is_deeply($c->{destroyed}, [ $file->{id} ], 'and the old one destroyed');
+  $survivor = $c->{created}[0];
+}
+my ($g3) = @{ jmap(['FileNode/get', { ids => [ $survivor ] }]) };
 is($g3->{list}[0]{name}, 'renamed.txt', 'the node carries its new name');
+is($g3->{list}[0]{parentId}, $dir->{id}, 'in the same directory');
+$file->{id} = $survivor;
 
 # fetchParents
 my ($fp) = @{ jmap(['FileNode/get', { ids => [ $file->{id} ], fetchParents => JSON::true, properties => ['name', 'parentId'] }]) };

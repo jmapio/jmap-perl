@@ -89,7 +89,9 @@ their **metadata only**: every method reads the mirror, every write goes to WebD
 
 - **Ids say where they come from**: `S` + hash of the server's stable id (survives any move),
   `L` + uuid when the server has none (survives the proxy's moves; another client's move is
-  matched by fingerprint). A sync never reissues an id it already holds.
+  matched by fingerprint where one survives the MOVE -- not on Cyrus, which resets the ETag
+  and both timestamps, so there it is a destroy plus a create). A sync never reissues an id
+  it already holds.
 - **Sync cadence**: one PROPFIND per collection, so not every tick — 60 s on demand from a
   FileNode method, 300 s from the periodic `sync`, first walk in the backfill worker. Never
   prune a subtree on an unchanged collection ETag: Cyrus does not propagate them upwards.
