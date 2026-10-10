@@ -64,13 +64,15 @@ in the `"$accountid:backfill"` worker.
   new methods are added to the method→capability table.
 - `bin/jmap-proxy.pl`: the session capability; the
   `PUT /filenode/{accountId}/{id}` route; the `/raw/` download path learns
-  the `D` blob kind; `sync_files` joins the periodic `davsync`; the
+  the `d-` blob kind; `sync_files_if_due` joins the periodic `sync` command; the
   `/copy` classifier and `_do_copy_call` gain `FileNode/copy`.
 - Schema: user DB v12 adds `jfilenodes`, `iserver.webdavURL` and a files
   sync-token column; signup and the accounts flow carry `webdavURL` as they
   do `caldavURL`/`carddavURL`.
-- Test backend: the Cyrus test image gains `webdav` in `httpmodules`;
-  `restart-test-proxy.sh` seeds `webdavURL` (`/dav/drive/user/<user>/`).
+- Test backend: `restart-test-proxy.sh clean` builds (once) and runs
+  `<CYRUS_IMAGE>-webdav`, a derived image whose `/srv/testserver/imapd.conf`
+  has `webdav` in `httpmodules`, and seeds `webdavURL`
+  (`<CYRUS_URL>/dav/drive/user/<user>/`).
 
 ## Data model
 
@@ -100,7 +102,7 @@ Ids say where they come from, by prefix:
 
 - `S` + hash of the server's stable id (`oc:fileid` or `DAV:resource-id`).
   It survives any move, whoever makes it.
-- `L` + uuid, invented by the proxy. It survives moves the proxy makes,
+- `L` + uuid (hex, no dashes), invented by the proxy. It survives moves the proxy makes,
   because MOVE only updates `href` and `parentid`. For moves made
   elsewhere, reconciliation matches a vanished path to a new path with the
   same fingerprint and keeps the id. The fingerprint, strongest first:
@@ -119,7 +121,8 @@ and `parentId: null`. `mayCreateTopLevelFileNode` is false.
 
 ## Blobs
 
-- A file's `blobId` is `D<nodeid>-<hash of its etag>`. When the content
+- A file's `blobId` is `d-<nodeid>-<first 16 hex of SHA-1 of its etag>`, the
+  same `<letter>-<id>` shape as the existing `f-` and `m-` blobs. When the content
   changes, the ETag changes, so the blobId changes.
 - Download (`/raw/`) is a streaming WebDAV GET with `If-Match: <etag>`. A 412
   means that blob no longer exists, and is answered 404.
@@ -138,18 +141,70 @@ the mirror. `created`/`modified` are otherwise read from `creationdate` and
 
 ## Sync (`sync_files`)
 
-Runs from the periodic `davsync` in the account worker; the first full sync
-runs in the backfill worker.
+The proxy's own writes update the mirror directly, so a sync is only needed
+to see changes made by other WebDAV clients. A full sync costs one request
+per collection (see "Cyrus #drive findings"), so it does not run on every
+30-second tick:
 
-1. With `sync-collection`: one REPORT on the root with the stored token. The
-   changed and removed hrefs feed reconciliation. An unsupported or invalid
-   token falls back to step 2.
-2. Without it, a walk: PROPFIND Depth 1 on the root, then descend only into
-   collections whose `getctag` or ETag differs from the mirror. A collection
-   with neither is always re-listed.
-3. Reconciliation classifies every node as created, updated (including a
+- on demand: a FileNode method syncs first when the last sync is more than
+  60 seconds old;
+- in the background: the periodic `sync` command runs it when the last sync
+  is more than 300 seconds old;
+- the first full sync runs in the backfill worker.
+
+One sync:
+
+1. Walk every collection, starting at the root, with PROPFIND Depth 1. An
+   unchanged collection ETag is NOT a reason to skip its subtree, because
+   servers (Cyrus) do not propagate a change to ancestors' ETags.
+   `sync-collection` at sync-level 1 (all Cyrus offers) needs the same one
+   request per collection, so this version does not use it; a server that
+   supports `sync-level: infinite` could sync the whole tree in one REPORT,
+   and that is the optimisation to add later (`jfilesync` holds the tokens).
+2. Reconciliation classifies every node as created, updated (including a
    matched move), destroyed or unchanged. Each changed row gets the next
    `jmodseq`.
+
+## Defending against bogus servers
+
+The proxy must cope with servers that get WebDAV wrong. Each defence has a
+unit test that replays a canned bad response:
+
+- PROPPATCH can answer 200 without storing the property: support for dead
+  properties is detected by reading one back, never from the status alone.
+- A Depth-0 PROPFIND on a file can return an empty multistatus: a file is
+  always refreshed through its parent's Depth-1 listing.
+- An ETag can change on MOVE: an ETag is only used as a move fingerprint if
+  the server's ETags are shown to be content hashes (a PUT's ETag equals the
+  SHA-1 of the bytes) and survive a probe MOVE.
+- `sync-level: infinite` can be rejected: sync is per collection.
+- Collection ETags can fail to reflect deep changes: never prune on them.
+- PROPPATCH of live properties (`getlastmodified`) is usually forbidden:
+  client timestamps go to dead properties or the mirror.
+
+## Cyrus #drive findings (probe, 2026-10-09)
+
+Enabling `webdav` in `httpmodules` serves `/dav/drive/user/<user>/`.
+
+- MKCOL, PUT (`If-None-Match: *` gives 412 on an existing file), MOVE,
+  COPY, DELETE and `If-Match` all work.
+- File ETags hash Cyrus's stored resource, not the bytes, and change on MOVE
+  and COPY. Collection ETags are `"<uidvalidity>-<n>-<n>"`; the uidvalidity
+  survives a MOVE.
+- `getlastmodified` survives a MOVE, so size plus `getlastmodified` is the
+  usable move fingerprint.
+- `sync-collection` works at sync-level 1 per collection (`data:,…`
+  tokens); `infinite` is a 400. `Depth: infinity` PROPFIND is a 403.
+- A collection's ETag changes only when its direct children change.
+- `current-user-privilege-set` reports read, write, write-properties, bind,
+  write-content and unbind; `DAV:acl` with `inherited` markers works;
+  `quota-used-bytes` is present; `DAV:resource-id` is not.
+- Dead-property PROPPATCH on a file answers 200 but nothing is stored.
+- A Depth-0 PROPFIND on a file returns an empty multistatus.
+- PROPPATCH of `getlastmodified` is 403.
+- Restarting the test container breaks its authentication; WebDAV is
+  enabled by building a derived image whose `/srv/testserver/imapd.conf`
+  template has `webdav` in `httpmodules`.
 
 ## Writes (`FileNode/set`)
 
