@@ -26,6 +26,10 @@ sub _smtp_client {
   $self->_throw("unable to establish SMTP connection") unless $smtp;
 
   if ($self->sasl_username && $self->access_token) {
+    # Never send a bearer token over an unencrypted channel: without
+    # confidentiality a sniffed token can be replayed from anywhere.
+    $self->_throw("refusing to send OAUTHBEARER access_token over a non-SSL/TLS connection")
+      unless $self->ssl;
     # RFC 7628 §3.1 initial client response: n,,[a=<authzid>,]\x01auth=Bearer <token>\x01\x01
     my $token   = $self->access_token;
     my $cmd     = "n,,\x01auth=Bearer $token\x01\x01";
