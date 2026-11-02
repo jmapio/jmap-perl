@@ -1027,6 +1027,12 @@ sub _migrate_accounts_db {
     $dbh->begin_work;
     eval {
       $dbh->do("ALTER TABLE accounts ADD COLUMN cred_fingerprint TEXT");
+      # Passthrough accounts lived in $aid.db until JMAP::JmapDB moved to
+      # $aid.sqlite3. Left behind they'd come back without their credentials.
+      for my $aid (@{ $dbh->selectcol_arrayref("SELECT accountid FROM accounts WHERE type = 'jmap'") }) {
+        rename("$datadir/$aid.db", "$datadir/$aid.sqlite3")
+          if -f "$datadir/$aid.db" && !-e "$datadir/$aid.sqlite3";
+      }
       $dbh->do('PRAGMA user_version = 2');
       $dbh->commit;
     };
