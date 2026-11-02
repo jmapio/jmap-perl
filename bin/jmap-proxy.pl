@@ -1213,9 +1213,6 @@ sub run_accounts_worker {
           return ['auth', undef] unless $stored && $stored->{password} eq $password;
         }
 
-        # Create a token for this session
-        my $token = _generate_token();
-        $dbh->do("INSERT INTO tokens (token, accountid) VALUES (?, ?)", {}, $token, $aid);
 
         # Get all accounts in the pool
         my $poolid = $row->{poolid} || $aid;
@@ -1224,7 +1221,7 @@ sub run_accounts_worker {
           { Slice => {} }, $poolid);
 
         return ['auth', { accountid => $aid, poolid => $poolid, email => $email,
-                          token => $token, accounts => $pool }];
+                          accounts => $pool }];
       }
 
       if ($cmd eq 'verify_credentials') {
@@ -4031,8 +4028,6 @@ sub do_oidc_authorize_post {
           { 'Content-Type' => 'text/html' }, $html]);
       }
       my $aid = $result->{accountid};
-      $auth_cache{"bearer:$result->{token}"} = [$aid, time() + $AUTH_CACHE_TTL]
-        if $result->{token};
       _oidc_issue_code($aid, $redirect_uri, $state, $req);
     },
     sub { $req->respond([500, 'error', {}, 'Authentication backend error']) }
