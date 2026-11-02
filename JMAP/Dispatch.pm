@@ -114,9 +114,21 @@ sub method_capability_missing {
     return \@caps;
 }
 
-# Core/echo is the only method whose arguments are not account-scoped -- it must
-# echo back exactly what it was given, so never demand an accountId of it.
-my %NO_ACCOUNT_METHOD = ('Core/echo' => 1);
+# The PushSubscription methods the parent answers itself, from accounts.sqlite3.
+# PushSubscription/changes isn't one: it stays with the worker's notImplemented.
+my %PUSH_METHODS = map { $_ => 1 } qw(PushSubscription/get PushSubscription/set);
+
+sub is_push_method { return $PUSH_METHODS{ $_[0] // '' } ? 1 : 0 }
+
+# These methods' arguments are not account-scoped. Core/echo must echo back
+# exactly what it was given, and a PushSubscription belongs to the login (RFC
+# 8620 §7.2 has no accountId), so never demand an accountId of them.
+my %NO_ACCOUNT_METHOD = map { $_ => 1 } qw(
+    Core/echo
+    PushSubscription/get
+    PushSubscription/set
+    PushSubscription/changes
+);
 
 # Validate the account ids on each call before anything is routed or rewritten.
 #
@@ -169,11 +181,13 @@ sub _call_account {
 
 # Build the copy classifier used by group_batches: a copy is 'orchestrate' unless
 # both sides resolve to the same passthrough upstream, in which case it is
-# native-forwarded (undef) and the upstream performs the copy itself.
+# native-forwarded (undef) and the upstream performs the copy itself. A push
+# method is always 'orchestrate', no worker can answer it.
 sub copy_router {
     my ($key_for_aid, $default_aid) = @_;
     return sub {
         my ($call) = @_;
+        return 'orchestrate' if is_push_method($call->[0]);
         return undef unless is_copy_method($call->[0]);
         my $args = $call->[1] // {};
         my $fk = $key_for_aid->{ $args->{fromAccountId} // $default_aid // '' } // '';
