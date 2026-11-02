@@ -170,6 +170,9 @@ sub in_transaction {
 
 sub begin_superlock {
   my $Self = shift;
+  # flock belongs to the open file, not the process, so locking again here would
+  # wait on ourselves forever: EmailSubmission/set calls Email/set with the lock held
+  return $Self->{superlock} if $Self->{superlock};
   my $accountid = $Self->accountid();
   my $lock = IO::LockedFile->new(">$DATADIR/$accountid.lock");
   $Self->{superlock} = $lock;
