@@ -39,11 +39,13 @@ sub O {
 
 sub access_token {
   my $Self = shift;
-  unless ($Self->{access_token}) {
+  # A token lasts an hour, but the sync timer keeps a worker alive for days
+  unless ($Self->{access_token} and time() < ($Self->{access_token_expires} // 0)) {
     my $refresh_token = $Self->{auth}{password};
     my $O = $Self->O();
     my $data = $O->refresh($refresh_token);
     $Self->{access_token} = $data->{access_token};
+    $Self->{access_token_expires} = time() + ($data->{expires_in} || 3600) - 60;
   }
   return $Self->{access_token};
 }
@@ -58,7 +60,7 @@ sub _smtp_transport {
     helo          => $helo,
     host          => $Self->{auth}{smtpHost},
     port          => $Self->{auth}{smtpPort},
-    ssl           => 1,
+    ssl           => 'starttls',   # smtp.gmail.com:587, the port accounts store
     sasl_username => $Self->{auth}{username},
     access_token  => $Self->access_token(),
   });
