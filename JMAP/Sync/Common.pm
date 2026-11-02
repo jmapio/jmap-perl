@@ -6,12 +6,12 @@ use warnings;
 package JMAP::Sync::Common;
 
 use Data::UUID::LibUUID;
+use JMAP::Sync::CalDAVTalk;
 use JSON ();
 use Mail::IMAPTalk;
 use Email::Simple;
 use Email::Sender::Simple qw(sendmail);
 use Email::Sender::Transport::SMTPS;
-use Net::CalDAVTalk;
 use Net::CardDAVTalk;
 use MIME::Base64 qw(decode_base64);
 use MIME::QuotedPrint qw(decode_qp);
@@ -109,7 +109,7 @@ sub connect_calendars {
     return $Self->{calendars};
   }
 
-  $Self->{calendars} = Net::CalDAVTalk->new(
+  $Self->{calendars} = JMAP::Sync::CalDAVTalk->new(
     user      => $Self->{auth}{username},
     $Self->_dav_auth(),
     url       => $url,
