@@ -4294,6 +4294,11 @@ $httpd->reg_cb(request => sub { $stat{http_requests}++ });
 $httpd->reg_cb(
   '/.well-known'      => \&do_wellknown,
   '/session'          => \&do_session,
+  # Clients built for Stalwart (e.g. the Bulwark app) request /jmap/session first
+  # and only fall back to /.well-known/jmap on a 404. Without this route the path
+  # reaches do_jmap, whose 400 for a GET ends their discovery. The more specific
+  # route fires first, and do_session's stop_request keeps '/jmap' from running.
+  '/jmap/session'     => \&do_session,
   '/eventsource'      => \&do_eventsource,
   '/jmap'             => \&do_jmap,
   '/upload'           => \&do_upload,
