@@ -260,7 +260,10 @@ authentication (Basic, Bearer, or cookie).
 
 Redirects (301) to `$BASEURL/session`.
 
-### `GET /session`
+### `GET /session`, `GET /jmap/session`
+
+`/jmap/session` is an alias for clients that request Stalwart's session path
+directly, such as the Bulwark app.
 
 Returns the JMAP Session object (RFC 8620 §2). The response includes:
 - All accounts in the authenticated user's pool
