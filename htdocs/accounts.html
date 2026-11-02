@@ -75,6 +75,12 @@
 
 <h2>Active Sessions</h2>
 [% IF tokens.size %]
+[% IF tokens.size > 1 %]
+<form method="post" action="/accounts/tokens/delete-others" style="margin-bottom:12px"
+      onsubmit="return confirm('Revoke all other sessions? Every other browser is logged out, and every JMAP client using one of these tokens as its Bearer token stops working until it signs in again.')">
+  <button class="delete" type="submit">Revoke all other sessions</button>
+</form>
+[% END %]
 <table class="tokens">
 <thead>
   <tr><th>Token</th><th>Last used</th><th>Last IP</th><th>Action</th></tr>

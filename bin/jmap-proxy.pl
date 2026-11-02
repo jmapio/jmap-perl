@@ -1274,6 +1274,25 @@ sub run_accounts_worker {
         return ['delete_token', { ok => 1 }];
       }
 
+      if ($cmd eq 'delete_tokens') {
+        # Revoke every token in the pool except 'keep'. Returns the removed
+        # tokens so the caller can drop them from its auth cache.
+        my $poolid = $args->{poolid};
+        my $keep = $args->{keep} // '';
+        my $tokens = $dbh->selectcol_arrayref(
+          "SELECT t.token
+           FROM tokens t
+           JOIN accounts a ON a.accountid = t.accountid
+           WHERE a.poolid = ? AND t.token != ?",
+          {}, $poolid, $keep);
+        $dbh->do(
+          "DELETE FROM tokens
+           WHERE accountid IN (SELECT accountid FROM accounts WHERE poolid = ?)
+             AND token != ?",
+          {}, $poolid, $keep);
+        return ['delete_tokens', { tokens => $tokens }];
+      }
+
       if ($cmd eq 'auth') {
         # Authenticate by email + password: look up account, check stored password
         my $email = $args->{username};
@@ -3883,6 +3902,39 @@ sub _do_accounts_authed {
       my $err = shift;
       $req->respond([500, 'error', {}, "delete token failed: $err"]);
     });
+    return;
+  }
+
+  # POST /accounts/tokens/delete-others — revoke every token but the current one
+  if ($path eq '/accounts/tokens/delete-others' && $method eq 'post') {
+    $httpd->stop_request();
+
+    my $cookies = crush_cookie($req->headers->{cookie} || '');
+    my $my_token = $cookies->{jmap_proxy};
+    # Without the caller's own token there is nothing to keep, and "all other"
+    # would become all -- including the session making this request.
+    unless (defined $my_token and length $my_token) {
+      $req->respond([400, 'bad request', { 'Content-Type' => 'text/plain' },
+        "No session cookie: sign in on this page to revoke the other sessions"]);
+      return;
+    }
+    my $errcb = sub {
+      my $err = shift;
+      $req->respond([500, 'error', {}, "delete tokens failed: $err"]);
+    };
+    send_backend_request('__accounts__', 'get_pool', { accountid => $auth_aid }, sub {
+      my $pool = shift;
+      send_backend_request('__accounts__', 'delete_tokens',
+        { poolid => $pool->{poolid}, keep => $my_token }, sub {
+        my $result = shift;
+        # Invalidate auth cache entries, or the tokens keep working until the TTL
+        for my $token (@{$result->{tokens} || []}) {
+          delete $auth_cache{"bearer:$token"};
+          delete $token_touch{$token};
+        }
+        $req->respond([301, 'redirected', { Location => "$BASEURL/accounts" }, "Redirected"]);
+      }, $errcb);
+    }, $errcb);
     return;
   }
 
