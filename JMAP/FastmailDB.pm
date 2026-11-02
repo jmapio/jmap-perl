@@ -27,8 +27,7 @@ sub backend_cmd {
       || die "failed to setup Fastmail for $config->{username}";
   }
 
-  die "No such command $cmd" unless $Self->{backend}->can($cmd);
-  return $Self->{backend}->$cmd(@args);
+  return $Self->_backend_call($cmd, @args);
 }
 
 1;

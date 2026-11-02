@@ -149,8 +149,20 @@ sub backend_cmd {
     $Self->{backend} = $backend;
   }
 
+  return $Self->_backend_call($cmd, @args);
+}
+
+sub _backend_call {
+  my ($Self, $cmd, @args) = @_;
+
   die "No such command $cmd" unless $Self->{backend}->can($cmd);
-  return $Self->{backend}->$cmd(@args);
+  my @res = wantarray ? $Self->{backend}->$cmd(@args) : scalar $Self->{backend}->$cmd(@args);
+
+  # Has to fail here: a fetch that broke off comes back empty, and do_folder would
+  # store the new uidnext for it and never look at the skipped messages again.
+  die "IMAP connection lost during $cmd\n" if $Self->{backend}->connection_lost();
+
+  return wantarray ? @res : $res[0];
 }
 
 # synchronise list from IMAP server to local folder cache
