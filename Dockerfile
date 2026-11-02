@@ -59,6 +59,7 @@ RUN cpanm --notest \
     URI                             \
     EV                              \
     Crypt::JWT                      \
+    Text::Diff                      \
     Imager Imager::File::PNG Imager::File::JPEG Imager::File::GIF Imager::File::WEBP \
     IO::Compress::Xz IO::Compress::Zstd Image::ExifTool \
     && rm -rf /root/.cpanm
