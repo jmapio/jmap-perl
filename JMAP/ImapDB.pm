@@ -3330,6 +3330,10 @@ sub do_folder {
       my ($msgid, $thrid) = $Self->calcmsgid($imapname, $uid, $new->{$uid});
       my @labels = $Self->calclabels($forcelabel, $new->{$uid});
       $Self->new_record($ifolderid, $uid, $new->{$uid}{'flags'}, \@labels, $new->{$uid}{envelope}, str2time($new->{$uid}{internaldate}), $msgid, $thrid, $new->{$uid}{'rfc822.size'});
+      # Remembered for sync_jmap_msgid, which is the first place that can tell
+      # whether this is a delivery. uidnext 1 means we hadn't seen this folder
+      # yet, so all of it looks new without having just arrived.
+      $Self->{new_msgids}{$msgid} = 1 if $uidnext > 1;
     }
   }
 
@@ -3817,6 +3821,8 @@ sub sync_jmap_msgid {
   }
   else {
     $Self->log('debug', "adding $msgid");
+    $Self->{t}{email_delivered} = 1
+      if delete $Self->{new_msgids}{$msgid} and $Self->_is_delivery(\%flagdata, \@jmailboxids);
     my $data = $Self->dgetone('imessages', { msgid => $msgid }, 'thrid,internaldate,size,envelope');
     return $Self->add_message({
       msgid => $msgid,
@@ -3831,6 +3837,18 @@ sub sync_jmap_msgid {
   }
 }
 
+# A new message counts as delivered if it's unread and in the inbox. Other new
+# UIDs in sync are mail filed by another client, sent copies and drafts, and
+# clients notify on inbox mail anyway. A message moved in from another folder
+# doesn't get here at all: it keeps its msgid, so it isn't a new message.
+sub _is_delivery {
+  my ($Self, $keywords, $jmailboxids) = @_;
+  return 0 if $keywords->{'$seen'} or $keywords->{'$draft'};
+  my $inbox = $Self->dgetfield('jmailboxes', { role => 'inbox' }, 'jmailboxid');
+  return 0 unless $inbox;
+  return scalar grep { $_ eq $inbox } @$jmailboxids;
+}
+
 sub sync_jmap {
   my $Self = shift;
   $Self->begin();
@@ -3839,6 +3857,7 @@ sub sync_jmap {
     $Self->sync_jmap_msgid($msgid);
     $Self->ddelete('imsgidtodo', { msgid => $msgid });
   }
+  delete $Self->{new_msgids};
   $Self->commit();
 }
 

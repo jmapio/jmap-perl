@@ -54,6 +54,7 @@ use JMAP::OAuth::Google;
 use JMAP::OAuth::Fastmail;
 use JMAP::OAuth::PACC;
 use JMAP::OAuth::OIDC;
+use JMAP::Push;
 use JMAP::Dispatch;
 use JMAP::FileNodeCopy;
 use JMAP::FileNode;   # max_bytes, is_too_large: the in-memory cap on one file's content
@@ -143,6 +144,9 @@ sub _fail_pending {
 my %PushMap;
 my $push_conn_counter = 0;
 
+# Accounts with a verified PushSubscription, refreshed by _push_refresh
+my %push_accounts;
+
 # Send an SSE event to all open connections subscribed to $accountid.
 # Cleanup on dead connections is handled inside write_sse itself.
 sub PushEvent {
@@ -190,6 +194,7 @@ sub mk_json {
     my ($hdl, $res) = @_;
     if ($res->[0] eq 'push') {
       PushEvent($accountid, 'state', { '@type' => 'StateChange', changed => { $accountid => $res->[1] } });
+      _push_state_change($accountid, $res->[1]);
     }
     elsif ($res->[0] eq 'synced') {
       $sync_times{$accountid} = $res->[1];
@@ -1073,7 +1078,13 @@ sub run_backend_worker {
   }
 }
 
-my $ACCOUNTS_SCHEMA_VERSION = 3;
+my $ACCOUNTS_SCHEMA_VERSION = 4;
+
+sub _create_push_table {
+  my ($dbh) = @_;
+  $dbh->do("CREATE TABLE push_subscriptions (id TEXT PRIMARY KEY, accountid TEXT NOT NULL, deviceClientId TEXT NOT NULL, url TEXT NOT NULL, types TEXT, expires INTEGER NOT NULL, verificationCode TEXT NOT NULL, verified INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL)")
+    or die $dbh->errstr;
+}
 
 sub _migrate_accounts_db {
   my ($dbh) = @_;
@@ -1085,6 +1096,7 @@ sub _migrate_accounts_db {
     eval {
       $dbh->do("CREATE TABLE accounts (email TEXT PRIMARY KEY, accountid TEXT, type TEXT, poolid TEXT, needs_backfill INTEGER NOT NULL DEFAULT 1, cred_fingerprint TEXT, nextsend INTEGER)");
       $dbh->do("CREATE TABLE tokens (token TEXT PRIMARY KEY, accountid TEXT NOT NULL, last_used INTEGER, last_ip TEXT)");
+      _create_push_table($dbh);
       $dbh->do("PRAGMA user_version = $ACCOUNTS_SCHEMA_VERSION");
       $dbh->commit;
     };
@@ -1123,6 +1135,28 @@ sub _migrate_accounts_db {
     warn "accounts.sqlite3: migrated to schema version 3\n";
     $v = 3;
   }
+  if ($v < 4) {
+    # push_subscriptions: PushSubscription/set (RFC 8620 S7.2), per login
+    $dbh->begin_work;
+    eval { _create_push_table($dbh); $dbh->do('PRAGMA user_version = 4'); $dbh->commit };
+    if ($@) { $dbh->rollback; die "migration to v4 failed: $@" }
+    warn "accounts.sqlite3: migrated to schema version 4\n";
+    $v = 4;
+  }
+}
+
+# Every PushSubscription of the pool $accountid is in, with types decoded
+sub _push_subscriptions {
+  my ($dbh, $accountid) = @_;
+  my $rows = $dbh->selectall_arrayref(
+    "SELECT p.*
+     FROM push_subscriptions p
+     JOIN accounts a ON a.accountid = p.accountid
+     WHERE a.poolid = (SELECT poolid FROM accounts WHERE accountid = ?)
+     ORDER BY p.created",
+    { Slice => {} }, $accountid);
+  $_->{types} = decode_json($_->{types}) for grep { defined $_->{types} } @{$rows || []};
+  return $rows || [];
 }
 
 sub run_accounts_worker {
@@ -1258,6 +1292,60 @@ sub run_accounts_worker {
         return ['delete_token', { ok => 1 }];
       }
 
+      if ($cmd eq 'push_list') {
+        return ['push_list', _push_subscriptions($dbh, $args->{accountid})];
+      }
+
+      if ($cmd eq 'push_set') {
+        my $accountid = $args->{accountid};
+        my %mine = map { $_->{id} => $_ } @{_push_subscriptions($dbh, $accountid)};
+        my $encode_types = sub { defined $_[0] ? encode_json($_[0]) : undef };
+        my $result = JMAP::Push::apply_set($args->{set}, \%mine, $args->{now}, {
+          new_id  => \&_generate_token,
+          insert  => sub {
+            my $sub = shift;
+            $dbh->do("INSERT INTO push_subscriptions
+                      (id, accountid, deviceClientId, url, types, expires, verificationCode, created)
+                      VALUES (?, ?, ?, ?, ?, ?, ?, ?)", {},
+              $sub->{id}, $accountid, $sub->{deviceClientId}, $sub->{url}, $encode_types->($sub->{types}),
+              $sub->{expires}, $sub->{verificationCode}, $args->{now}) or die $dbh->errstr;
+          },
+          update  => sub {
+            my ($id, $changes) = @_;
+            $changes->{types} = $encode_types->($changes->{types}) if exists $changes->{types};
+            my @columns = sort keys %$changes;
+            $dbh->do("UPDATE push_subscriptions SET " . join(', ', map { "$_ = ?" } @columns) . " WHERE id = ?",
+              {}, @{$changes}{@columns}, $id) or die $dbh->errstr;
+          },
+          destroy => sub { $dbh->do("DELETE FROM push_subscriptions WHERE id = ?", {}, shift) or die $dbh->errstr },
+        });
+        return ['push_set', $result];
+      }
+
+      if ($cmd eq 'push_targets') {
+        my $now = time();
+        my @active = grep { $_->{verified} and $_->{expires} > $now } @{_push_subscriptions($dbh, $args->{accountid})};
+        return ['push_targets', \@active];
+      }
+
+      if ($cmd eq 'push_delete') {
+        $dbh->do("DELETE FROM push_subscriptions WHERE id = ?", {}, $args->{id});
+        return ['push_delete', { ok => 1 }];
+      }
+
+      if ($cmd eq 'push_accounts') {
+        # An hour is plenty for a client to come back with the verification code
+        $dbh->do("DELETE FROM push_subscriptions WHERE expires <= ? OR (verified = 0 AND created <= ?)",
+          {}, $args->{now}, $args->{now} - 3600);
+        my $aids = $dbh->selectcol_arrayref(
+          "SELECT DISTINCT pool.accountid
+           FROM push_subscriptions p
+           JOIN accounts a ON a.accountid = p.accountid
+           JOIN accounts pool ON pool.poolid = a.poolid
+           WHERE p.verified = 1");
+        return ['push_accounts', $aids || []];
+      }
+
       if ($cmd eq 'auth') {
         # Authenticate by email + password: look up account, check stored password
         my $email = $args->{username};
@@ -1389,6 +1477,7 @@ sub run_accounts_worker {
         }
         # Delete tokens that now point to a non-existent account
         $dbh->do("DELETE FROM tokens WHERE accountid NOT IN (SELECT accountid FROM accounts)");
+        $dbh->do("DELETE FROM push_subscriptions WHERE accountid NOT IN (SELECT accountid FROM accounts)");
         unlink "$datadir/$aid.sqlite3";
         unlink "$datadir/$aid.lock";
         return ['delete_account', { deleted => $aid }];
@@ -1821,10 +1910,12 @@ sub _do_jmap_request {
       my $batch = $batches->[$i++];
 
       # Cross-upstream copy batch (Task 6): single copy call routed to orchestration.
+      # PushSubscription calls come this way too, they aren't account scoped at all.
       if ($batch->{key} eq 'orchestrate') {
         my ($pos, $call) = @{ $batch->{calls}[0] };
         return $next_batch->() if defined $responses[$pos];   # rejected by check_accounts
-        _do_copy_call($call->[0], $call->[1], $call->[2], $accountid, sub {
+        my $handler = JMAP::Dispatch::is_push_method($call->[0]) ? \&_do_push_call : \&_do_copy_call;
+        $handler->($call->[0], $call->[1], $call->[2], $accountid, sub {
           my $resp = shift;
           # An array of triples: primary response at $pos, extras (e.g. the
           # Email/set for onSuccessDestroyOriginal) appended after all responses.
@@ -1912,6 +2003,128 @@ sub _do_jmap_request {
     $req->respond([200, 'ok', { 'Content-Type' => 'application/json' },
       $json->encode({ methodResponses => [['error', { type => 'serverFail', description => "$err" }, 'a']] })]);
   });
+}
+
+# PushSubscription/get and /set (RFC 8620 §7.2).
+sub _do_push_call {
+  my ($method, $args, $tag, $auth_aid, $cb, $errcb) = @_;
+
+  if ($method eq 'PushSubscription/get') {
+    send_backend_request('__accounts__', 'push_list', { accountid => $auth_aid }, sub {
+      my $subs = shift;
+      my $properties = ref $args->{properties} eq 'ARRAY' ? $args->{properties} : undef;
+      return $cb->(['error', { type => 'forbidden', description => 'url and keys are never returned' }, $tag])
+        if grep { $_ eq 'url' or $_ eq 'keys' } @{$properties || []};
+      my %byid = map { $_->{id} => $_ } @$subs;
+      my @ids = ref $args->{ids} eq 'ARRAY' ? @{$args->{ids}} : map { $_->{id} } @$subs;
+      $cb->(['PushSubscription/get', {
+        list     => [map { JMAP::Push::public_view($byid{$_}, $properties) } grep { $byid{$_} } @ids],
+        notFound => [grep { not $byid{$_} } @ids],
+      }, $tag]);
+    }, $errcb);
+    return;
+  }
+
+  send_backend_request('__accounts__', 'push_set',
+    { accountid => $auth_aid, set => $args, now => time() }, sub {
+    my $result = shift;
+    _push_post($_, {
+      '@type'            => 'PushVerification',
+      pushSubscriptionId => $_->{id},
+      verificationCode   => $_->{verificationCode},
+    }) for @{$result->{verify} || []};
+    _push_refresh();
+    $cb->(['PushSubscription/set', $result->{response}, $tag]);
+  }, $errcb);
+}
+
+# Forward a state change to the subscriptions that asked for one of its types.
+# Most changes stop at the first line, so a sync doesn't cost a database query.
+sub _push_state_change {
+  my ($accountid, $changed) = @_;
+  $accountid =~ s/:[^:]+$//;
+  return unless $push_accounts{$accountid};
+  send_backend_request('__accounts__', 'push_targets', { accountid => $accountid }, sub {
+    foreach my $sub (@{$_[0] || []}) {
+      my $wanted = JMAP::Push::filter_changed($changed, $sub->{types});
+      next unless %$wanted;
+      _push_post($sub, { '@type' => 'StateChange', changed => { $accountid => $wanted } });
+    }
+  }, sub { warn "PUSH: can't list subscriptions for $accountid: $_[0]\n" });
+}
+
+# Seconds to wait before each further attempt. Verification has to fit in the
+# 75 seconds the Bulwark app waits for the code.
+my @PUSH_RETRY_DELAYS = (5, 30);
+
+sub _push_post {
+  my ($sub, $body, $attempt) = @_;
+  $attempt //= 0;
+  # The rest of the URL is the device's id at the relay, so keep it out of the log
+  my ($host) = $sub->{url} =~ m{^https://([^/?#]+)}i;
+
+  AnyEvent::HTTP::http_request('POST', $sub->{url},
+    headers     => { 'Content-Type' => 'application/json', 'TTL' => 86400 },
+    body        => JSON::XS::encode_json($body),
+    timeout     => 10,
+    recurse     => 0,
+    persistent  => 0,
+    tls_ctx     => 'high',
+    tcp_connect => \&_push_tcp_connect,
+    sub {
+      my (undef, $hdr) = @_;
+      my $status = $hdr->{Status};
+      return if $status >= 200 and $status < 300;
+
+      # The relay says this device is gone, which no later attempt will change
+      if ($status == 404 or $status == 410) {
+        warn "PUSH: $host answered $status for subscription $sub->{id}, removing it\n";
+        send_backend_request('__accounts__', 'push_delete', { id => $sub->{id} }, sub { _push_refresh() }, sub {});
+        return;
+      }
+
+      my $delay = $PUSH_RETRY_DELAYS[$attempt];
+      warn "PUSH: $body->{'@type'} to $host failed ($status $hdr->{Reason}), "
+         . (defined $delay ? "retrying in ${delay}s\n" : "giving up\n");
+      return unless defined $delay;
+      my $timer;
+      $timer = AnyEvent->timer(after => $delay, cb => sub {
+        undef $timer;
+        _push_post($sub, $body, $attempt + 1);
+      });
+    },
+  );
+  return;
+}
+
+# A subscription URL is whatever a client asked for, so without this any account
+# could make the proxy POST into its own network. The address is checked after
+# connecting, not resolved beforehand, because a second lookup could answer
+# differently. Nothing has been written to the socket at this point.
+sub _push_tcp_connect {
+  my ($host, $port, $connect_cb, $prepare_cb) = @_;
+  return AnyEvent::Socket::tcp_connect($host, $port, sub {
+    my ($fh, $ip, $peer_port, $retry) = @_;
+    return $connect_cb->() unless $fh;
+    return $connect_cb->($fh, $ip, $peer_port, $retry) if JMAP::Push::is_public_address($ip);
+    warn "PUSH: refusing to deliver to $host: $ip is not a public address\n";
+    close $fh;
+    $retry->();
+  }, $prepare_cb);
+}
+
+# A worker only exists once a client has talked to its account, and only a
+# worker notices new mail. So after a restart, or when a worker has died, a
+# subscribed account would stay silent until the app is opened again, which is
+# exactly when push isn't needed. The sync timer takes over from here.
+sub _push_refresh {
+  return if $shutting_down;
+  send_backend_request('__accounts__', 'push_accounts', { now => time() }, sub {
+    my $aids = shift;
+    %push_accounts = map { $_ => 1 } @$aids;
+    return if $shutting_down;
+    get_backend($_) for grep { not $backend{$_} } @$aids;
+  }, sub { warn "PUSH: can't refresh subscribed accounts: $_[0]\n" });
 }
 
 sub _compute_session_state {
@@ -4824,6 +5037,12 @@ my $sync_timer = AnyEvent->timer(
       send_backend_request($name, 'sync', {}, sub {}, sub {});
     }
   },
+);
+
+my $push_refresh_timer = AnyEvent->timer(
+  after    => 5,
+  interval => 60,
+  cb       => \&_push_refresh,
 );
 
 #

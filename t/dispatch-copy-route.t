@@ -81,4 +81,15 @@ my $implicit = JMAP::Dispatch::group_batches(
 is($implicit->[0]{key}, 'fp:1',
    'copy with an implicit fromAccountId still resolves to the default account');
 
+# PushSubscription/get and /set have no accountId and no worker that could answer
+# them, so the parent does; _do_jmap_request picks _do_push_call for these.
+for my $method (qw(PushSubscription/get PushSubscription/set)) {
+  my $b = JMAP::Dispatch::group_batches([[$method, {}, '0']], \%key, 'A', $route);
+  is($b->[0]{key}, 'orchestrate', "$method is orchestrated");
+  ok(JMAP::Dispatch::is_push_method($method), "$method is a push method");
+}
+my $pc = JMAP::Dispatch::group_batches(
+  [['PushSubscription/changes', {}, '0']], \%key, 'A', $route);
+is($pc->[0]{key}, 'fp:1', 'PushSubscription/changes goes to the default account\'s worker');
+
 done_testing;

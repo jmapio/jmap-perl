@@ -259,7 +259,7 @@ All referenced specs are in `specs/`.
 - [x] Unknown sort → `unsupportedSort` error (Email/query, Mailbox/query)
 - [x] `Cache-Control: no-cache, no-store` added to `/session` response (RFC 8620 §2)
 - [x] `maxCallsInRequest` (16) / `maxSizeRequest` (10MB) limits enforced in `do_jmap`
-- [x] `PushSubscription/get|set|changes`: `notImplemented` stubs (SSE covers web clients)
+- [x] `PushSubscription/get|set`: webhook push (RFC 8620 §7.2) with verification, `EmailDelivery` for new inbox mail; `PushSubscription/changes` stays a `notImplemented` stub
 - [x] `Blob/copy`: implemented via parent orchestration (filesystem hardlinks)
 - [x] Unknown filter → `unsupportedFilter` error; shared `_check_filter` helper in API.pm
       validates condition properties and operator values recursively;

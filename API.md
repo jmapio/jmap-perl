@@ -404,6 +404,29 @@ Events:
 
 ---
 
+### Webhook push: `PushSubscription/get`, `PushSubscription/set`
+
+JMAP methods for clients that aren't connected, such as a phone with the app
+closed (RFC 8620 §7.2). A subscription belongs to the account pool, not to one
+account, and is stored in `accounts.sqlite3`.
+
+- `url` must be `https://` and must not lead to a private address. Redirects
+  aren't followed and the certificate is verified.
+- A new subscription gets a `PushVerification` POST and receives nothing else
+  until the client sends that code back.
+- `expires` is capped at 90 days, and a pool can hold 15 subscriptions.
+- `keys` is refused: pushes aren't encrypted, as RFC 8291 would require.
+- A receiver answering 404 or 410 loses its subscription. Other failures are
+  retried after 5 and 30 seconds, then dropped.
+
+`EmailDelivery` changes when a new unread message reaches an inbox, as seen by
+the periodic sync, so a push can lag a delivery by up to `JMAP_SYNC_INTERVAL`.
+Accounts with a verified subscription keep their worker running, so they keep
+syncing with no client connected and across restarts. JMAP passthrough accounts
+have no local sync and send no pushes.
+
+---
+
 ## OAuth2 Endpoints
 
 These endpoints handle the web-based sign-up and OAuth2 flows. They live on

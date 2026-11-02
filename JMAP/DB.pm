@@ -222,6 +222,8 @@ sub commit {
         $dbdata{"jstate$group"} = $state;
       }
     }
+    # EmailDelivery exists only in push, so it has no table and no stored state
+    $map{EmailDelivery} = $state if $t->{email_delivered};
 
     $Self->dupdate('account', \%dbdata);
     $Self->{change_cb}->($Self, \%map, $state) unless $Self->{t}->{backfilling};

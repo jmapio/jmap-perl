@@ -71,6 +71,12 @@ is_deeply($e, {}, 'copy between two known accounts passes');
 $e = errors_for([['Core/echo', { hi => 1 }, '0']]);
 is_deeply($e, {}, 'Core/echo needs no accountId');
 
+# RFC 8620 §7.2: a PushSubscription belongs to the login, not to an account.
+for my $method (qw(PushSubscription/get PushSubscription/set PushSubscription/changes)) {
+  $e = errors_for([[$method, {}, '0']]);
+  is_deeply($e, {}, "$method needs no accountId");
+}
+
 # A "#accountId" ResultReference supplies the id later; it cannot be checked here
 # and must not be reported as missing.
 $e = errors_for([['Mailbox/get', { '#accountId' => { resultOf => 'x' } }, '0']]);
