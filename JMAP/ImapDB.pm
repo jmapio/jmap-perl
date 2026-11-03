@@ -567,7 +567,7 @@ sub do_calendars {
     my $oldtoken = $cal->{syncToken};
     my ($added, $removed, $errors, $newToken) = eval { $Self->backend_cmd('sync_event_links', $href, $oldtoken) };
 
-    unless ($newToken) {
+    unless (defined $newToken && length $newToken) {
       # try fetching from nothing
       ($added, $removed, $errors, $newToken) = $Self->backend_cmd('sync_event_links', $href);
       # calculate removed by comparing exists to fetched list
