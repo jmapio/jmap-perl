@@ -43,6 +43,25 @@ sub _imap_class { 'Mail::GmailTalk' }
 sub _imap_auth  { my $Self = shift; (Password => $Self->access_token()) }
 sub _dav_auth   { my $Self = shift; (access_token => $Self->access_token()) }
 
+# Messages name their labels in X-GM-LABELS the way XLIST names the folders:
+# \Inbox, \AllMail, \Starred, \Spam. LIST says \All, \Flagged and \Junk instead,
+# and nothing at all on INBOX, so a folder listed that way matches no message,
+# and without \AllMail the sync has nothing to read.
+my %XLIST_LABEL = ('\\all' => '\\AllMail', '\\flagged' => '\\Starred', '\\junk' => '\\Spam');
+
+sub folders {
+  my $Self = shift;
+  my $data = $Self->SUPER::folders(@_);
+  my $folders = $data->[1];
+  foreach my $name (keys %$folders) {
+    my $label = $folders->{$name}[1];
+    $label = $XLIST_LABEL{lc $label} // $label;
+    $label = '\\Inbox' if uc $name eq 'INBOX' and $label !~ /^\\/;
+    $folders->{$name}[1] = $label;
+  }
+  return $data;
+}
+
 sub _smtp_transport {
   my ($Self, $helo) = @_;
   Email::Sender::Transport::GmailSMTP->new({
