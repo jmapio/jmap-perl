@@ -396,8 +396,10 @@ sub api_Email_query {
 
   map { $_->{keywords} = decode_json($_->{keywords} || {}) } @$data;
   my $storage = {data => $data};
-  $data = $Self->_post_sort($data, $args->{sort}, $storage);
+  # Filter before sorting: $data is every message in the account, and sorting
+  # all of it to keep one mailbox was most of the query's time.
   $data = $Self->_messages_filter($data, $args->{filter}, $storage) if $args->{filter};
+  $data = $Self->_post_sort($data, $args->{sort}, $storage);
   $data = $Self->_collapse_messages($data) if $args->{collapseThreads};
 
   $Self->{db}->save_query('Email', {
@@ -487,8 +489,9 @@ sub api_Email_queryChanges {
 
   map { $_->{keywords} = decode_json($_->{keywords} || {}) } @$data;
   my $storage = { data => $data };
-  $data = $Self->_post_sort($data, $args->{sort}, $storage);
+  # filter before sorting, as in Email/query
   $data = $Self->_messages_filter($data, $args->{filter}, $storage) if $args->{filter};
+  $data = $Self->_post_sort($data, $args->{sort}, $storage);
   $data = $Self->_collapse_messages($data) if $args->{collapseThreads};
 
   my @new_ids = map { $_->{msgid} } @$data;
