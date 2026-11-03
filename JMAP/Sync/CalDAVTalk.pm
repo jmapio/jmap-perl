@@ -22,6 +22,12 @@ use Data::Dumper ();
   *Net::CalDAVTalk::Dumper = \&Data::Dumper::Dumper unless defined &Net::CalDAVTalk::Dumper;
 }
 
+# SOGo answers a sync-collection REPORT on a calendar that has never held an
+# event with the sync-token "0". SyncEventLinks tests the token for truth, so
+# it dies on "0" and the whole calendar sync fails. The token is swapped for a
+# placeholder on the way in and back to "0" on the way out.
+use constant ZERO_SYNC_TOKEN => 'jmap-proxy:sync-token-0';
+
 sub Request {
   my ($Self, $Method, $Path, $Content, @Rest) = @_;
 
@@ -30,7 +36,25 @@ sub Request {
     $Content =~ s{<D:acl\s*/>}{};
   }
 
-  return $Self->SUPER::Request($Method, $Path, $Content, @Rest);
+  my $Response = $Self->SUPER::Request($Method, $Path, $Content, @Rest);
+
+  if ($Method eq 'REPORT' and ref($Response) eq 'HASH') {
+    my $NS_D = $Self->ns('D');
+    my $Token = $Response->{"{$NS_D}sync-token"};
+    $Token->{content} = ZERO_SYNC_TOKEN
+      if ref($Token) eq 'HASH' and ($Token->{content} // '') eq '0';
+  }
+
+  return $Response;
+}
+
+sub SyncEventLinks {
+  my ($Self, @Args) = @_;
+
+  my ($Added, $Removed, $Errors, $SyncToken) = $Self->SUPER::SyncEventLinks(@Args);
+  $SyncToken = '0' if defined $SyncToken and $SyncToken eq ZERO_SYNC_TOKEN;
+
+  return ($Added, $Removed, $Errors, $SyncToken);
 }
 
 1;
