@@ -12,6 +12,16 @@ package JMAP::Sync::CalDAVTalk;
 
 use base qw(Net::CalDAVTalk);
 
+# When a sync-collection REPORT comes back without a sync-token, Net::CalDAVTalk
+# dies with "NO SYNC TOKEN RETURNED " . Dumper($Response) but never loads
+# Data::Dumper, so the log only says "Undefined subroutine
+# &Net::CalDAVTalk::Dumper" instead of what the server answered.
+use Data::Dumper ();
+{
+  no warnings 'once';
+  *Net::CalDAVTalk::Dumper = \&Data::Dumper::Dumper unless defined &Net::CalDAVTalk::Dumper;
+}
+
 sub Request {
   my ($Self, $Method, $Path, $Content, @Rest) = @_;
 
