@@ -3494,20 +3494,35 @@ sub update_messages {
                                         # new ifolderids that should contain this message
                                         my %new = map { $jmailmap{$_}{ifolderid} => 1 } @mboxes;
 
-                                        # for all the new folders
-                                        foreach my $ifolderid (sort keys %new) {
-                                                # unless there's already a matching message in it
-                                                next if delete $current{$ifolderid};
-                                                # copy from the existing message
-                                                my $newfolder = $foldermap{$ifolderid}{imapname};
-                                                $Self->backend_cmd('imap_copy', $imapname, $uidvalidity, $uid, $newfolder);
+                                        my @add = grep { !$current{$_} } sort keys %new;
+                                        my @remove = grep { !$new{$_} } sort keys %current;
+
+                                        # A plain move (into the trash, say) is one MOVE, not
+                                        # a COPY followed by a STORE and an EXPUNGE
+                                        my ($movefrom, $moveto);
+                                        if (@add and @remove) {
+                                                $movefrom = shift @remove;
+                                                $moveto = shift @add;
                                         }
-                                        foreach my $ifolderid (sort keys %current) {
-                                                # these ifolderids didn't exist in %new, so delete all matching UIDs from these folders
-                                                my $imapname = $foldermap{$ifolderid}{imapname};
-                                                my $uidvalidity = $foldermap{$ifolderid}{uidvalidity};
+
+                                        # copies first, while the source is still there
+                                        foreach my $ifolderid (@add) {
+                                                my $newfolder = $foldermap{$ifolderid}{imapname};
+                                                my $res = $Self->backend_cmd('imap_copy', $imapname, $uidvalidity, $uid, $newfolder);
+                                                # deleting the original after a failed copy loses the message
+                                                die "COPY to $newfolder failed\n" unless $res->{copied};
+                                        }
+                                        if (defined $movefrom) {
+                                                # one copy into the destination, any duplicates just go
+                                                my ($first, @dups) = sort keys %{$map{$msgid}{$movefrom}};
+                                                $Self->_remove_uids($foldermap{$movefrom}, [$first], $foldermap{$moveto}{imapname})
+                                                  or die "MOVE from $foldermap{$movefrom}{imapname} failed\n";
+                                                $Self->_remove_uids($foldermap{$movefrom}, \@dups) if @dups;
+                                        }
+                                        foreach my $ifolderid (@remove) {
                                                 my @uids = sort keys %{$map{$msgid}{$ifolderid}};
-                                                $Self->backend_cmd('imap_move', $imapname, $uidvalidity, \@uids);
+                                                $Self->_remove_uids($foldermap{$ifolderid}, \@uids)
+                                                  or die "EXPUNGE from $foldermap{$ifolderid}{imapname} failed\n";
                                         }
                                 }
                         }
@@ -3557,13 +3572,32 @@ sub destroy_messages {
     my $uidvalidity = $foldermap{$ifolderid}{uidvalidity};
     unless ($imapname) {
       $notdestroyed{$_} = {type => 'notFound', description => "No folder"} for values %{$destroymap{$ifolderid}};
+      next;
     }
     my $uids = [sort keys %{$destroymap{$ifolderid}}];
-    $Self->backend_cmd('imap_move', $imapname, $uidvalidity, $uids, undef); # no destination folder
+    $Self->_remove_uids($foldermap{$ifolderid}, $uids); # no destination folder
     push @destroyed, values %{$destroymap{$ifolderid}};
   }
 
   return (\@destroyed, \%notdestroyed);
+}
+
+# Take UIDs out of a folder, into $newname or expunged without one, and out of
+# imessages as soon as the server says they are gone. Left there, the sync
+# after the write finds the folder a message short and has to SEARCH every UID
+# in it to learn which -- on a big folder the slowest part of the write.
+sub _remove_uids {
+  my $Self = shift;
+  my ($folder, $uids, $newname) = @_;
+
+  my $res = $Self->backend_cmd('imap_move', $folder->{imapname}, $folder->{uidvalidity}, $uids, $newname);
+  return 0 unless $res->{moved};
+
+  $Self->begin();
+  $Self->deleted_record($folder->{ifolderid}, $_) for @{$res->{moved}};
+  $Self->commit();
+
+  return 1;
 }
 
 sub deleted_record {

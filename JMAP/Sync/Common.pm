@@ -843,32 +843,25 @@ sub imap_move {
     return \%res;
   }
 
-  if ($newname) {
-    # move
-    if ($imap->capability->{move}) {
-      my $res = $imap->move($uids, $newname);
-      unless ($res) {
-        $res{notMoved} = $uids;
-        return \%res;
-      }
-    }
-    else {
-      my $res = $imap->copy($uids, $newname);
-      unless ($res) {
-        $res{notMoved} = $uids;
-        return \%res;
-      }
-      $imap->store($uids, "+flags", "(\\seen \\deleted)");
-      $imap->uidexpunge($uids);
-    }
+  # Only an OK to every step counts as moved: the caller drops the messages
+  # from its cache on the strength of it.
+  my $ok;
+  if ($newname and $imap->capability->{move}) {
+    $ok = $imap->move($uids, $newname);
   }
   else {
-    $imap->store($uids, "+flags", "(\\seen \\deleted)");
-    $imap->uidexpunge($uids);
+    $ok = (!$newname or $imap->copy($uids, $newname))
+      && $imap->store($uids, "+flags", "(\\seen \\deleted)")
+      && $imap->uidexpunge($uids);
   }
   $Self->_unselect($imap);
 
-  $res{moved} = $uids;
+  if ($ok) {
+    $res{moved} = $uids;
+  }
+  else {
+    $res{notMoved} = $uids;
+  }
 
   return \%res;
 }
