@@ -564,37 +564,48 @@ sub do_calendars {
   foreach my $id (keys %exists) {
     my $cal = $exists{$id}[0];
     my $href = $cal->{href};
-    my $oldtoken = $cal->{syncToken};
-    my ($added, $removed, $errors, $newToken) = eval { $Self->backend_cmd('sync_event_links', $href, $oldtoken) };
+    # A calendar that fails to sync (no sync-collection REPORT, a fetch that
+    # dies) is skipped until the next sync. Letting it die here would leave
+    # every other calendar's changes unwritten as well.
+    my $ok = eval {
+      my $oldtoken = $cal->{syncToken};
+      my ($added, $removed, $errors, $newToken) = eval { $Self->backend_cmd('sync_event_links', $href, $oldtoken) };
 
-    unless ($newToken) {
-      # try fetching from nothing
-      ($added, $removed, $errors, $newToken) = $Self->backend_cmd('sync_event_links', $href);
-      # calculate removed by comparing exists to fetched list
-      foreach my $href (keys %{$exists{$id}[1]}) {
-        push @$removed, $href unless $added->{$href};
+      unless ($newToken) {
+        # try fetching from nothing
+        ($added, $removed, $errors, $newToken) = $Self->backend_cmd('sync_event_links', $href);
+        # without a listing, every event we hold would count as removed
+        die "no event listing\n" unless ref($added) eq 'HASH';
+        # calculate removed by comparing exists to fetched list
+        foreach my $href (keys %{$exists{$id}[1]}) {
+          push @$removed, $href unless $added->{$href};
+        }
       }
-    }
 
-    $todo{$id} = [$newToken, {}];
+      $todo{$id} = [$newToken, {}];
 
-    foreach my $href (@$removed) {
-      $todo{$id}[1]{$href} = undef;
-    }
-
-    my @toget;
-    foreach my $href (keys %$added) {
-      next if (exists $exists{$id}[1]{$href} and $exists{$id}[1]{$href}{etag} eq $added->{$href});
-      push @toget, $href;
-    }
-
-    if (@toget) {
-      my ($events, $errors, $links) = $Self->backend_cmd('get_events_multi', $href, \@toget, Full => 1);
-      foreach my $href (keys %$events) {
-        my $parsed = $Self->parse_event($events->{$href});
-        $todo{$id}[1]{$href} = [$links->{$href}, $events->{$href}, $parsed];
+      foreach my $href (@$removed) {
+        $todo{$id}[1]{$href} = undef;
       }
-    }
+
+      my @toget;
+      foreach my $href (keys %$added) {
+        next if (exists $exists{$id}[1]{$href} and $exists{$id}[1]{$href}{etag} eq $added->{$href});
+        push @toget, $href;
+      }
+
+      if (@toget) {
+        my ($events, $errors, $links) = $Self->backend_cmd('get_events_multi', $href, \@toget, Full => 1);
+        foreach my $href (keys %$events) {
+          my $parsed = $Self->parse_event($events->{$href});
+          $todo{$id}[1]{$href} = [$links->{$href}, $events->{$href}, $parsed];
+        }
+      }
+      1;
+    };
+    next if $ok;
+    delete $todo{$id};
+    warn "calendar sync of $href failed, skipped until the next sync: $@";
   }
 
   $Self->begin();
@@ -1072,36 +1083,46 @@ sub do_addressbooks {
   foreach my $id (keys %exists) {
     my $book = $exists{$id}[0];
     my $href = $book->{href};
-    my $oldtoken = $book->{syncToken};
-    my ($added, $removed, $errors, $newToken) = eval { $Self->backend_cmd('sync_card_links', $href, $oldtoken) };
-    unless ($newToken) {
-      # fake up a sync by getting everything
-      ($added, $removed, $errors, $newToken) = eval { $Self->backend_cmd('sync_card_links', $href) };
-      # calculate removed by comparing exists to fetched list
-      foreach my $href (keys %{$exists{$id}[1]}) {
-        push @$removed, $href unless $added->{$href};
+    # As in do_calendars: an address book that fails to sync is skipped until
+    # the next sync instead of costing the others their changes.
+    my $ok = eval {
+      my $oldtoken = $book->{syncToken};
+      my ($added, $removed, $errors, $newToken) = eval { $Self->backend_cmd('sync_card_links', $href, $oldtoken) };
+      unless ($newToken) {
+        # fake up a sync by getting everything
+        ($added, $removed, $errors, $newToken) = $Self->backend_cmd('sync_card_links', $href);
+        # without a listing, every card we hold would count as removed
+        die "no card listing\n" unless ref($added) eq 'HASH';
+        # calculate removed by comparing exists to fetched list
+        foreach my $href (keys %{$exists{$id}[1]}) {
+          push @$removed, $href unless $added->{$href};
+        }
       }
-    }
 
-    # token
-    $todo{$id} = [$newToken, {}];
+      # token
+      $todo{$id} = [$newToken, {}];
 
-    foreach my $href (@$removed) {
-      $todo{$id}[1]{$href} = undef;
-    }
-
-    my @toget;
-    foreach my $href (keys %$added) {
-      next if (exists $exists{$id}[1]{$href} and $exists{$id}[1]{$href}{etag} eq $added->{$href});
-      push @toget, $href;
-    }
-    if (@toget) {
-      my ($cards, $errors, $links) = $Self->backend_cmd('get_cards_multi', $href, \@toget, Full => 1);
-      foreach my $href (keys %$cards) {
-        my $parsed = $Self->parse_card($cards->{$href});
-        $todo{$id}[1]{$href} = [$links->{$href}, $cards->{$href}, $parsed];
+      foreach my $href (@$removed) {
+        $todo{$id}[1]{$href} = undef;
       }
-    }
+
+      my @toget;
+      foreach my $href (keys %$added) {
+        next if (exists $exists{$id}[1]{$href} and $exists{$id}[1]{$href}{etag} eq $added->{$href});
+        push @toget, $href;
+      }
+      if (@toget) {
+        my ($cards, $errors, $links) = $Self->backend_cmd('get_cards_multi', $href, \@toget, Full => 1);
+        foreach my $href (keys %$cards) {
+          my $parsed = $Self->parse_card($cards->{$href});
+          $todo{$id}[1]{$href} = [$links->{$href}, $cards->{$href}, $parsed];
+        }
+      }
+      1;
+    };
+    next if $ok;
+    delete $todo{$id};
+    warn "address book sync of $href failed, skipped until the next sync: $@";
   }
 
   $Self->begin();
