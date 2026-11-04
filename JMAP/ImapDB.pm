@@ -571,7 +571,7 @@ sub do_calendars {
       }
     }
 
-    $Self->dupdate('icalendars', {syncToken => $newtoken}, {jcalendarid => $id});
+    $Self->dupdate('icalendars', {syncToken => $newtoken}, {icalendarid => $id});
   }
 
   $Self->commit();
@@ -1063,7 +1063,7 @@ sub do_addressbooks {
       }
     }
 
-    $Self->dupdate('iaddressbooks', {syncToken => $newtoken}, {jaddressbookid => $id});
+    $Self->dupdate('iaddressbooks', {syncToken => $newtoken}, {iaddressbookid => $id});
   }
 
   $Self->commit();
