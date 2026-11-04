@@ -182,7 +182,10 @@ providers, then redirects to OAuth or a password form as appropriate.
 ### Gmail
 
 1. Create a project in [Google Cloud Console](https://console.cloud.google.com/).
-2. Enable the **Gmail API** and **People API**.
+2. Enable the **Gmail API**, the **CalDAV API** (`caldav.googleapis.com`) and the
+   **Google Contacts CardDAV API** (`carddav.googleapis.com`). Calendars and contacts
+   are synced over CalDAV/CardDAV, so without these two every sync fails with
+   `403 accessNotConfigured` / `SERVICE_DISABLED` while mail keeps working.
 3. Create an OAuth2 credential (web application type).
 4. Add `$BASEURL/cb/oauth` as an authorised redirect URI.
 5. Set the environment variables:
