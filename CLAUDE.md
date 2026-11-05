@@ -175,6 +175,13 @@ but a different `backendAccountId` (validated against the upstream session's `ac
   session/api/upload/download URLs, `backendAccountId`, capabilities).
   Schema version is tracked; recent additions include the `jqueries` snapshot cache
   (schema v10) used by `queryChanges`.
+- **A CalendarEvent id is not its UID.** `jevents` is keyed by the iCalendar UID, which
+  can be any string (`abc@example.com`), but an Id may only use `A-Za-z0-9-_` (RFC 8620
+  S1.2). `JMAP::EventId` maps a UID to its id (unchanged when it already is a valid Id,
+  else `_h` + sha256) and an instance to `_r<YYYYMMDD[THHMMSS]>_<event id>`; the API
+  layer converts at its edges (`_event_id_resolver` going in), while ImapDB, the
+  `jqueries` snapshots and `/set` keys handed to ImapDB keep UIDs. Account ids must be
+  valid Ids too: `POST /api/accounts` refuses any other.
 
 ## Local development & testing
 

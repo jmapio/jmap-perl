@@ -15,6 +15,7 @@ use Data::UUID::LibUUID;
 use IO::LockedFile;
 use JSON::XS qw(decode_json encode_json);
 use Digest::SHA qw(sha1_hex);
+use JMAP::EventId;
 use Email::MIME;
 # seriously, it's parsable, get over it
 $Email::MIME::ContentType::STRICT_PARAMS = 0;
@@ -1229,7 +1230,7 @@ sub get_submission_changes {
     {}, $since_modseq);
 }
 
-my $USER_SCHEMA_VERSION = 12;
+my $USER_SCHEMA_VERSION = 13;
 
 sub save_query {
   my ($Self, $type, $params, $state, $ids) = @_;
@@ -1769,6 +1770,32 @@ EOF
     };
     if ($@) { $dbh->rollback; die "user DB migration to v12 failed: $@" }
     $v = 12;
+  }
+
+  if ($v < 13) {
+    # A CalendarEvent id used to be the event's raw UID even where that is no
+    # valid Id ("abc@example.com", "UID/recurrenceId"); JMAP::EventId now
+    # hashes those.  An id that changed is a destroy plus a create no /changes
+    # can report, so an account with such an event makes every state it handed
+    # out unusable (cannotCalculateChanges) and its clients sync afresh.  The
+    # states move past the cut, or a client would be told to start over again
+    # with the very state it had just been given.
+    $dbh->begin_work;
+    eval {
+      my $uids = eval { $dbh->selectcol_arrayref("SELECT eventuid FROM jevents") } || [];
+      my ($high) = $dbh->selectrow_array("SELECT jhighestmodseq FROM account");
+      if (defined $high && grep { JMAP::EventId::master_id($_) ne $_ } @$uids) {
+        my $next = $high + 1;
+        my @states = grep { /^jstate/ }
+                     map { $_->[1] } @{ $dbh->selectall_arrayref("PRAGMA table_info(account)") };
+        $dbh->do("UPDATE account SET jdeletedmodseq = ?, jhighestmodseq = ?"
+               . join('', map { ", $_ = ?" } @states), {}, $high, $next, ($next) x @states);
+      }
+      $dbh->do('PRAGMA user_version = 13');
+      $dbh->commit;
+    };
+    if ($@) { $dbh->rollback; die "user DB migration to v13 failed: $@" }
+    $v = 13;
   }
 }
 
