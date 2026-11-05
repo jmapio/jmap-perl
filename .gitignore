@@ -2,3 +2,4 @@ config.json
 jmap-proxy.local.dhparam
 jmap-proxy.local.privatekey
 jmap-proxy.local.publiccert
+.env
