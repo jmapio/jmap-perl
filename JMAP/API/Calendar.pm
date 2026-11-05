@@ -262,14 +262,14 @@ sub api_Calendar_get {
 
     my %rec = (
       id                     => "$item->{jcalendarid}",
-      name                   => "$item->{name}",
+      name                   => _db_text($item->{name} // ''),
       color                  => "$item->{color}",
       sortOrder              => $item->{sortOrder}  || 0,
       isDefault              => $item->{isDefault}  ? $JSON::true : $JSON::false,
       isSubscribed           => $item->{isVisible} ? $JSON::true : $JSON::false,
       includeInAvailability  => $item->{includeInAvailability} || 'all',
       isVisible              => $item->{isVisible}  ? $JSON::true : $JSON::false,
-      description            => $item->{description} // JSON::null,
+      description            => _db_text($item->{description}) // JSON::null,
       timeZone               => $item->{timeZone}    // JSON::null,
       defaultAlertsWithTime    => $item->{defaultAlertsWithTime}
                                   ? $json->decode($item->{defaultAlertsWithTime}) : JSON::null,

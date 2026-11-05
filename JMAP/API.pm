@@ -392,6 +392,17 @@ sub _nullempty {
   return $val;
 }
 
+# Text read back from the account database, as characters. DBD::SQLite
+# (without sqlite_unicode) hands back the UTF-8 bytes it stored, and
+# JSON::XS->utf8 would encode each of those bytes again: a calendar named
+# "Persönlicher Kalender" reached the client as "PersÃ¶nlicher Kalender".
+# A value that is not valid UTF-8 is passed on as it is.
+sub _db_text {
+  my ($text) = @_;
+  return $text if !defined $text || utf8::is_utf8($text);
+  return eval { Encode::decode_utf8($text, Encode::FB_CROAK | Encode::LEAVE_SRC) } // $text;
+}
+
 sub push_results {
   my $Self = shift;
   my $tag = shift;

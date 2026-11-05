@@ -555,8 +555,8 @@ sub api_Addressbook_get {
 
     my %rec = (
       id           => "$item->{jaddressbookid}",
-      name         => "$item->{name}",
-      description  => defined $item->{description} ? "$item->{description}" : $JSON::null,
+      name         => _db_text($item->{name} // ''),
+      description  => _db_text($item->{description}) // $JSON::null,
       sortOrder    => $item->{sortOrder} || 0,
       shareWith    => $JSON::null,
       isDefault    => $item->{isDefault} ? $JSON::true : $JSON::false,
