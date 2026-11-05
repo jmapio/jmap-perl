@@ -1,0 +1,44 @@
+# Docker Compose template for the JMAP proxy.
+#
+#   cp .env.example .env      # fill in at least BASEURL and JMAP_SECRET_KEY
+#   docker compose up -d --build
+#
+# Then open http://localhost:8080 for the management dashboard.
+# All settings live in .env; SETUP.md describes every variable.
+
+services:
+  jmap-proxy:
+    # Builds this repository, so the image carries this fork's fixes.
+    # ghcr.io/jmapio/jmap-proxy:latest is the upstream image without them.
+    build: .
+    image: jmap-proxy:local
+    container_name: jmap-proxy
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # The management server binds 127.0.0.1 by default, which inside the
+      # container means the port mapping below cannot reach it. The mapping
+      # itself keeps it on the host's loopback interface.
+      JMAP_MGMT_HOST: 0.0.0.0
+    ports:
+      # JMAP endpoint. Put a TLS reverse proxy in front of it
+      # (SETUP.md, "TLS Termination") and set BASEURL to its public URL.
+      - "${JMAP_PUBLISH_PORT:-9000}:9000"
+      # Management API and dashboard. They have no authentication, so this
+      # stays on 127.0.0.1; use an SSH tunnel to reach it from elsewhere.
+      - "127.0.0.1:${JMAP_MGMT_PUBLISH_PORT:-8080}:8080"
+    volumes:
+      # SQLite databases: accounts.sqlite3 plus one file per account.
+      - jmap-data:/data
+    # If the reverse proxy runs in a container (Caddy, Traefik, cloudflared),
+    # join its network and point it at http://jmap-proxy:9000 instead of
+    # publishing port 9000.
+    # networks:
+    #   - proxy
+
+volumes:
+  jmap-data:
+
+# networks:
+#   proxy:
+#     external: true
