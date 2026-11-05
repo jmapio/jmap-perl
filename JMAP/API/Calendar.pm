@@ -2,6 +2,7 @@ package JMAP::API;
 use strict;
 use JMAP::Collation;
 use JMAP::QueryChanges;
+use JMAP::EventId;
 use warnings;
 
 use JSON::XS;
@@ -131,7 +132,8 @@ sub _jscal_rule_to_ical {
 }
 
 # Expand a recurring event's occurrences within [after, before).
-# Returns list of hashrefs: {id => "uid/rid", start => "local-datetime"}.
+# Returns list of hashrefs: {id => instance id, rid => recurrence id,
+# start => "local-datetime"}.
 sub _expand_event_occurrences {
   my ($Self, $row, $master, $after_str, $before_str) = @_;
 
@@ -187,7 +189,8 @@ sub _expand_event_occurrences {
       next if $after_cmp  && $actual_start lt $after_cmp;
       next if $before_cmp && $actual_start ge $before_cmp;
 
-      push @items, { id => "$row->{eventuid}/$rid", start => $actual_start };
+      push @items, { id => JMAP::EventId::instance_id($row->{eventuid}, $rid),
+                     rid => $rid, start => $actual_start };
     }
   }
 
@@ -200,10 +203,34 @@ sub _expand_event_occurrences {
     my $actual_start = $overrides->{$rid}{start} // $rid;
     next if $after_cmp  && $actual_start lt $after_cmp;
     next if $before_cmp && $actual_start ge $before_cmp;
-    push @items, { id => "$row->{eventuid}/$rid", start => $actual_start };
+    push @items, { id => JMAP::EventId::instance_id($row->{eventuid}, $rid),
+                   rid => $rid, start => $actual_start };
   }
 
   return @items;
+}
+
+# CalendarEvent ids are not the UIDs events are stored under (JMAP::EventId).
+# Returns a sub turning an id into ($uid) for an event or ($uid, $rid) for one
+# instance of it, and () when no id we hand out looks like that.  A hashed id
+# takes every UID, read once on first use, so call it inside the transaction.
+sub _event_id_resolver {
+  my $Self = shift;
+  my $hashed;
+  return sub {
+    my $id = shift;
+    my ($event, $rid) = JMAP::EventId::parse_id($id);
+    return () unless defined $event;
+    my $uid = $event;
+    if (JMAP::EventId::is_hashed($event)) {
+      $uid = $hashed->{$event} //= $Self->{db}->dgetfield('jevents', { jeventhash => $event }, 'eventuid');
+      return () unless defined $uid;
+    }
+    # Only the id we would hand out for this event: not its raw UID, nor the
+    # "UID/recurrenceId" this proxy used to answer with.
+    return () unless (JMAP::EventId::event_id($uid, $rid) // '') eq $id;
+    return defined $rid ? ($uid, $rid) : ($uid);
+  };
 }
 
 sub _is_origin {
@@ -653,11 +680,13 @@ sub api_CalendarEvent_query {
 
       my $is_recurring = $master->{recurrenceRule};
       if ($is_recurring) {
-        push @expanded, map { { %$_, uid => $row->{eventuid},
-                                recurrenceId => ($_->{id} =~ m{/(.+)\z} ? $1 : undef) } }
+        # an instance with no id (one too long for RFC 8620 S1.2) is not offered
+        push @expanded, map { { %$_, uid => $row->{eventuid}, recurrenceId => $_->{rid} } }
+                        grep { defined $_->{id} }
                         $Self->_expand_event_occurrences($row, $master, $after, $before);
       } else {
-        push @expanded, { id => $row->{eventuid}, start => $master->{start} // '',
+        push @expanded, { id => JMAP::EventId::master_id($row->{eventuid}),
+                          start => $master->{start} // '',
                           uid => $row->{eventuid}, recurrenceId => undef };
       }
     }
@@ -698,13 +727,15 @@ sub api_CalendarEvent_query {
     $data = [_sort_calendar_events($data, $args->{sort})];
   }
 
-  my ($start, $end) = $Self->_apply_window($data, $args, sub { $_[0]{eventuid} });
+  my ($start, $end) = $Self->_apply_window($data, $args,
+    sub { JMAP::EventId::master_id($_[0]{eventuid}) });
   return $Self->_transError(['error', {type => 'anchorNotFound'}]) unless defined $start;
 
-  my @result = map { $data->[$_]{eventuid} } $start..$end;
+  my @result = map { JMAP::EventId::master_id($data->[$_]{eventuid}) } $start..$end;
 
   $Self->commit();
 
+  # The snapshot keeps UIDs; queryChanges turns them into ids as it answers.
   $Self->{db}->save_query('CalendarEvent', {
     filter => $args->{filter},
     sort   => $args->{sort},
@@ -814,29 +845,36 @@ sub api_CalendarEvent_get {
   my @list;
   # the user's participant identities (see ParticipantIdentity/get)
   my $mine = { map { lc("mailto:$_") => 1 } grep { length } $user->{email} // '' };
-  foreach my $eventuid (map { $Self->idmap($_) } @{$args->{ids}}) {
-    next if $seenids{$eventuid};
-    $seenids{$eventuid} = 1;
+  my $resolve = $Self->_event_id_resolver();
+  foreach my $id (map { $Self->idmap($_) } @{$args->{ids}}) {
+    next unless defined $id;
+    next if $seenids{$id}++;
 
-    # Occurrence ID: masterUid/recurrenceId
-    if ($eventuid =~ m{^([^/]+)/(.+)$}) {
-      my ($master_uid, $recurrence_id) = ($1, $2);
+    my ($eventuid, $recurrence_id) = $resolve->($id);
+    unless (defined $eventuid) {
+      $missingids{$id} = 1;
+      next;
+    }
+
+    # One instance of a recurring event
+    if (defined $recurrence_id) {
+      my $master_uid = $eventuid;
 
       my $data = $Self->{db}->dgetone('jevents', { eventuid => $master_uid, active => 1 }, 'jcalendarid');
       unless ($data) {
-        $missingids{$eventuid} = 1;
+        $missingids{$id} = 1;
         next;
       }
 
       my $master = $Self->{db}->read_jevent_payload($master_uid);
       unless ($master) {
-        $missingids{$eventuid} = 1;
+        $missingids{$id} = 1;
         next;
       }
 
       my $item = _expand_occurrence($master, $recurrence_id);
       unless ($item) {
-        $missingids{$eventuid} = 1;  # excluded occurrence
+        $missingids{$id} = 1;  # excluded occurrence
         next;
       }
 
@@ -849,13 +887,13 @@ sub api_CalendarEvent_get {
       # S5.8: on an expanded instance these "MUST be returned as null if requested"
       $item->{$_} = undef for grep { _prop_wanted($args, $_) } qw(recurrenceRule recurrenceOverrides);
       %$item = (%$item, %computed);
-      $item->{id}          = $eventuid;
+      $item->{id}          = $id;
       $item->{calendarIds} = { "$data->{jcalendarid}" => JSON::true } if _prop_wanted($args, 'calendarIds');
       $item->{isOrigin}    = _is_origin($organizer, $user->{email})   if _prop_wanted($args, 'isOrigin');
       $item->{isDraft}     = $JSON::false if _prop_wanted($args, 'isDraft');
       # draft-ietf-jmap-calendars S10.9.2: set only on a synthetic instance id,
       # and it names the real event the instance was generated from.
-      $item->{baseEventId} = $master_uid  if _prop_wanted($args, 'baseEventId');
+      $item->{baseEventId} = JMAP::EventId::master_id($master_uid) if _prop_wanted($args, 'baseEventId');
       push @list, $item;
       next;
     }
@@ -863,13 +901,13 @@ sub api_CalendarEvent_get {
     # Master event
     my $data = $Self->{db}->dgetone('jevents', { eventuid => $eventuid, active => 1 }, 'jcalendarid');
     unless ($data) {
-      $missingids{$eventuid} = 1;
+      $missingids{$id} = 1;
       next;
     }
 
     my $item = $Self->{db}->read_jevent_payload($eventuid);
     unless ($item) {
-      $missingids{$eventuid} = 1;
+      $missingids{$id} = 1;
       next;
     }
 
@@ -883,7 +921,7 @@ sub api_CalendarEvent_get {
     }
     %$item = (%$item, %computed);
 
-    $item->{id}          = $eventuid;
+    $item->{id}          = $id;
     $item->{calendarIds} = { "$data->{jcalendarid}" => JSON::true } if _prop_wanted($args, 'calendarIds');
     $item->{isOrigin}    = _is_origin($organizer, $user->{email})   if _prop_wanted($args, 'isOrigin');
     $item->{isDraft}     = $JSON::false if _prop_wanted($args, 'isDraft');
@@ -913,6 +951,9 @@ sub api_CalendarEvent_changes {
 
   my @e = $Self->_check_since_state($args, $user, $newState);
   return @e if @e;
+  # an event's id changed past this state (schema v13): ids are not reportable
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
+    if $user->{jeventidcut} && $args->{sinceState} =~ /\A\d+\z/ && $args->{sinceState} <= $user->{jeventidcut};
 
   my $data = $Self->{db}->dget('jevents', { jmodseq => ['>', $args->{sinceState}] }, 'eventuid,active,jcreated');
 
@@ -923,15 +964,16 @@ sub api_CalendarEvent_changes {
   $Self->commit();
 
   my ($created, $updated, $destroyed) = $Self->_classify_changes($data, $args->{sinceState}, 'eventuid');
+  my $ids = sub { [ map { JMAP::EventId::master_id($_) } @{$_[0]} ] };
 
   my @res;
   push @res, ['CalendarEvent/changes', {
     accountId => $accountid,
     oldState => "$args->{sinceState}",
     newState => $newState,
-    created => [map { "$_" } @$created],
-    updated => [map { "$_" } @$updated],
-    destroyed => [map { "$_" } @$destroyed],
+    created => $ids->($created),
+    updated => $ids->($updated),
+    destroyed => $ids->($destroyed),
     hasMoreChanges => JSON::false,
   }];
 
@@ -955,7 +997,8 @@ sub api_CalendarEvent_queryChanges {
   return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceQueryState']}])
     unless $sinceQueryState;
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newQueryState => $newQueryState}])
-    if ($user->{jdeletedmodseq} and $sinceQueryState <= $user->{jdeletedmodseq});
+    if ($user->{jdeletedmodseq} and $sinceQueryState <= $user->{jdeletedmodseq})
+    or ($user->{jeventidcut} and $sinceQueryState <= $user->{jeventidcut});
 
   my $data = $Self->{db}->dget('jevents', { active => 1 }, 'eventuid,jcalendarid,jmodseq');
 
@@ -1009,8 +1052,9 @@ sub api_CalendarEvent_queryChanges {
     oldQueryState => "$sinceQueryState",
     newQueryState => $newQueryState,
     total         => scalar(@new_ids),
-    removed       => [map { "$_" } @$removed],
-    added         => $added,
+    # The snapshots hold UIDs; the answer holds ids.
+    removed       => [map { JMAP::EventId::master_id($_) } @$removed],
+    added         => [map { +{ %$_, id => JMAP::EventId::master_id($_->{id}) } } @$added],
   }];
 }
 
@@ -1130,7 +1174,7 @@ sub api_Principal_getAvailability {
     if ($is_recurring) {
       my @occurrences = $Self->_expand_event_occurrences($row, $payload, $range_start, $range_end);
       for my $occ (@occurrences) {
-        my (undef, $rid) = split('/', $occ->{id}, 2);
+        my $rid = $occ->{rid};
         my $op = $rid ? (_expand_occurrence($payload, $rid) // next) : $payload;
         next if ($op->{freeBusyStatus} // $payload->{freeBusyStatus} // 'busy') eq 'free';
         next if ($op->{status}         // $payload->{status} // 'confirmed') eq 'cancelled';
@@ -1237,11 +1281,49 @@ sub api_CalendarEvent_set {
   $Self->commit();
 
   ($created, $notCreated) = $Self->{db}->create_calendar_events($create);
-  $Self->setid($_, $created->{$_}{id}) for keys %$created;
+  for my $cid (keys %$created) {
+    $created->{$cid}{id} = JMAP::EventId::master_id($created->{$cid}{id});
+    $Self->setid($cid, $created->{$cid}{id});
+  }
   my $patchInvalid = $Self->_resolve_patch($update, 'api_CalendarEvent_get');
-  ($updated, $notUpdated) = $Self->{db}->update_calendar_events($update, sub { $Self->idmap(shift) });
-  $notUpdated = { %{$notUpdated || {}}, %$patchInvalid } if %$patchInvalid;   # RFC 8620 S5.3
-  ($destroyed, $notDestroyed) = $Self->{db}->destroy_calendar_events($destroy);
+
+  # The client's ids become what ImapDB works on: the UID, or "UID/recurrenceId"
+  # for one instance.  The results go back under the ids the client sent.
+  my (%update_by_key, %update_id, @destroy_keys, %destroy_id);
+  my (%unknown_update, %unknown_destroy);
+  $Self->begin();
+  my $resolve = $Self->_event_id_resolver();
+  for my $id (keys %$update) {
+    my ($uid, $rid) = $resolve->($Self->idmap($id));
+    unless (defined $uid) {
+      $unknown_update{$id} = { type => 'notFound', description => 'No such event' };
+      next;
+    }
+    my $key = defined $rid ? "$uid/$rid" : $uid;
+    $update_by_key{$key} = $update->{$id};
+    $update_id{$key} = $id;
+  }
+  for my $id (@$destroy) {
+    my ($uid, $rid) = $resolve->($Self->idmap($id));
+    unless (defined $uid) {
+      $unknown_destroy{$id} = { type => 'notFound', description => 'No such event' };
+      next;
+    }
+    my $key = defined $rid ? "$uid/$rid" : $uid;
+    push @destroy_keys, $key;
+    $destroy_id{$key} = $id;
+  }
+  $Self->commit();
+
+  ($updated, $notUpdated) = $Self->{db}->update_calendar_events(\%update_by_key, sub { $Self->idmap(shift) });
+  $updated    = { map { ($update_id{$_} // $_) => $updated->{$_} } keys %$updated };
+  $notUpdated = { %unknown_update,
+                  (map { ($update_id{$_} // $_) => $notUpdated->{$_} } keys %{$notUpdated || {}}),
+                  %$patchInvalid };   # RFC 8620 S5.3
+  ($destroyed, $notDestroyed) = $Self->{db}->destroy_calendar_events(\@destroy_keys);
+  $destroyed    = [ map { $destroy_id{$_} // $_ } @$destroyed ];
+  $notDestroyed = { %unknown_destroy,
+                    map { ($destroy_id{$_} // $_) => $notDestroyed->{$_} } keys %$notDestroyed };
 
   # XXX - cheap dumb racy version
   $Self->{db}->sync_calendars();

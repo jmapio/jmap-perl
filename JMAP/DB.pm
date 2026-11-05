@@ -15,6 +15,7 @@ use Data::UUID::LibUUID;
 use IO::LockedFile;
 use JSON::XS qw(decode_json encode_json);
 use Digest::SHA qw(sha1_hex);
+use JMAP::EventId;
 use Email::MIME;
 # seriously, it's parsable, get over it
 $Email::MIME::ContentType::STRICT_PARAMS = 0;
@@ -876,9 +877,11 @@ sub set_event {
   my $eventuid = delete $event->{uid};
   $Self->write_jevent_payload($eventuid, $event);
   if ($Self->dgetfield('jevents', { eventuid => $eventuid }, 'eventuid')) {
-    $Self->ddirty('jevents', { active => 1, jcalendarid => $jcalendarid }, { eventuid => $eventuid });
+    $Self->ddirty('jevents', { active => 1, jcalendarid => $jcalendarid,
+                               jeventhash => JMAP::EventId::hash_id($eventuid) }, { eventuid => $eventuid });
   } else {
-    $Self->dmake('jevents', { eventuid => $eventuid, jcalendarid => $jcalendarid });
+    $Self->dmake('jevents', { eventuid => $eventuid, jcalendarid => $jcalendarid,
+                              jeventhash => JMAP::EventId::hash_id($eventuid) });
   }
 }
 
@@ -1240,7 +1243,7 @@ sub get_submission_changes {
     {}, $since_modseq);
 }
 
-my $USER_SCHEMA_VERSION = 12;
+my $USER_SCHEMA_VERSION = 13;
 
 sub save_query {
   my ($Self, $type, $params, $state, $ids) = @_;
@@ -1366,6 +1369,7 @@ CREATE TABLE IF NOT EXISTS account (
   displayname TEXT,
   picture TEXT,
   jdeletedmodseq INTEGER NOT NULL DEFAULT 1,
+  jeventidcut INTEGER,
   jhighestmodseq INTEGER NOT NULL DEFAULT 1,
   jstateMailbox TEXT NOT NULL DEFAULT 1,
   jstateThread TEXT NOT NULL DEFAULT 1,
@@ -1430,6 +1434,7 @@ EOF
   $dbh->do(<<EOF);
 CREATE TABLE IF NOT EXISTS jevents (
   eventuid TEXT PRIMARY KEY,
+  jeventhash TEXT,
   jcalendarid INTEGER,
   firststart DATE,
   lastend DATE,
@@ -1780,6 +1785,41 @@ EOF
     };
     if ($@) { $dbh->rollback; die "user DB migration to v12 failed: $@" }
     $v = 12;
+  }
+
+  if ($v < 13) {
+    # A CalendarEvent id used to be the event's raw UID even where that is no
+    # valid Id ("abc@example.com", "UID/recurrenceId"); JMAP::EventId now
+    # hashes those. An id that changed is a destroy plus a create no /changes
+    # can report, so where an event's id changes, every CalendarEvent state
+    # handed out so far must answer cannotCalculateChanges (jeventidcut) and
+    # the CalendarEvent state moves past it. Only CalendarEvent: the global
+    # jdeletedmodseq would send clients into a full resync of mail and
+    # contacts too. Every event also gets its hashed id, indexed, so a hashed
+    # id is found by lookup rather than by hashing every UID.
+    $dbh->begin_work;
+    eval {
+      my %cols = map { $_->[1] => 1 } @{ $dbh->selectall_arrayref("PRAGMA table_info(jevents)") || [] };
+      if (%cols) {
+        $dbh->do("ALTER TABLE jevents ADD COLUMN jeventhash TEXT") unless $cols{jeventhash};
+        my $uids = $dbh->selectcol_arrayref("SELECT eventuid FROM jevents") || [];
+        my $set = $dbh->prepare("UPDATE jevents SET jeventhash = ? WHERE eventuid = ?");
+        $set->execute(JMAP::EventId::hash_id($_), $_) for @$uids;
+        $dbh->do("CREATE INDEX IF NOT EXISTS jeventhash ON jevents (jeventhash)");
+        my %acols = map { $_->[1] => 1 } @{ $dbh->selectall_arrayref("PRAGMA table_info(account)") || [] };
+        $dbh->do("ALTER TABLE account ADD COLUMN jeventidcut INTEGER") if %acols && !$acols{jeventidcut};
+        my ($high) = %acols ? $dbh->selectrow_array("SELECT jhighestmodseq FROM account") : ();
+        if (defined $high && grep { JMAP::EventId::master_id($_) ne $_ } @$uids) {
+          my $next = $high + 1;
+          $dbh->do("UPDATE account SET jeventidcut = ?, jhighestmodseq = ?, jstateCalendarEvent = ?",
+                   {}, $high, $next, $next);
+        }
+      }
+      $dbh->do('PRAGMA user_version = 13');
+      $dbh->commit;
+    };
+    if ($@) { $dbh->rollback; die "user DB migration to v13 failed: $@" }
+    $v = 13;
   }
 }
 

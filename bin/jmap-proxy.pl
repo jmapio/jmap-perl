@@ -4530,6 +4530,12 @@ sub mgmt_api_accounts {
     return $req->respond([400, 'bad request', {}, '{"error":"invalid JSON"}']) unless $data;
     return $req->respond([400, 'bad request', {}, '{"error":"accountid required"}'])
       unless $data->{accountid};
+    # RFC 8620 S1.2: an accountId is an Id.  Clients that hold ids to that
+    # (Bulwark's device sync) reject everything in an account named, say,
+    # "user@example.com".
+    return $req->respond([400, 'bad request', {},
+      '{"error":"accountid may only use A-Z, a-z, 0-9, - and _ (at most 255 characters)"}'])
+      unless $data->{accountid} =~ /\A[A-Za-z0-9_-]{1,255}\z/;
 
     my $aid = $data->{accountid};
     $httpd->stop_request();
@@ -4725,7 +4731,7 @@ sub mgmt_dashboard {
 
   <div id="add-form" class="card hidden" style="margin-top: 20px;">
     <h2>Add Account</h2>
-    <div class="form-group"><label>Account ID</label><input id="f-aid" placeholder="user1"></div>
+    <div class="form-group"><label>Account ID (A-Z, a-z, 0-9, - and _ only)</label><input id="f-aid" placeholder="user1" pattern="[A-Za-z0-9_-]{1,255}"></div>
     <div class="form-group"><label>Type</label><input id="f-type" value="imap"></div>
     <div class="form-group"><label>IMAP Host</label><input id="f-host" placeholder="imap.example.com"></div>
     <div class="form-group"><label>IMAP Port</label><input id="f-port" value="993"></div>
