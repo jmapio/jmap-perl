@@ -49,7 +49,7 @@ Hard rules that are easy to violate:
 - `JMAP/DB.pm` — base DB class (SQLite schema, transactions, sync state, query snapshot cache).
   - `JMAP/ImapDB.pm` (← DB) — IMAP/CalDAV/CardDAV/WebDAV sync, including the FileNode mirror,
     its writes and `shareWith` (`set_filenode_sharewith` and its propagation).
-    `FastmailDB`, `GmailDB`, `AOLDB` extend it.
+    `FastmailDB` and `GmailDB` extend it.
   - `JMAP/JmapDB.pm` — standalone, for JMAP passthrough backends.
 - `JMAP/Dispatch.pm` — pure, unit-testable dispatch core: the method → capability table,
   `check_accounts` (a missing

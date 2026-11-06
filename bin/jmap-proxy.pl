@@ -1454,7 +1454,7 @@ sub send_backend_request {
 }
 
 #
-# HTTP handlers (from server.pl)
+# HTTP handlers
 #
 
 sub invalid_request {
@@ -4731,9 +4731,8 @@ my $token_flush_timer = AnyEvent->timer(
 my $SYNC_INTERVAL = $ENV{JMAP_SYNC_INTERVAL} || 30;
 
 # prod_backfill: repeatedly send 'backfill' to a dedicated backfill child
-# until backfill() returns false (nothing left to backfill). Mirrors
-# server.pl's prod_backfill() which uses "$accountid:backfill" as the
-# backend name to guarantee a separate process from the sync/jmap worker.
+# until backfill() returns false (nothing left to backfill). The backend name
+# "$accountid:backfill" guarantees a separate process from the sync/jmap worker.
 sub prod_backfill {
   my ($accountid) = @_;
   return if $backfilling{$accountid};

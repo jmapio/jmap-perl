@@ -36,7 +36,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN cpanm --notest \
     AnyEvent::HTTP                  \
     AnyEvent::HTTPD::CookiePatch    \
-    AnyEvent::IMAP                  \
     Cookie::Baker                   \
     Date::Parse                     \
     Email::MIME::Header::AddressList \
@@ -49,7 +48,6 @@ RUN cpanm --notest \
     Net::CalDAVTalk                 \
     Net::CardDAVTalk                \
     Net::DNS                        \
-    Net::Server::Fork               \
     Template                        \
     MIME::Base64::URLSafe           \
     Data::JSEmail                   \

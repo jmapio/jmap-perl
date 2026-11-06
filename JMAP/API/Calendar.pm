@@ -404,34 +404,6 @@ sub api_Calendar_set {
   return @res;
 }
 
-# Parse an ISO 8601 duration string into seconds (approximate for Y/M).
-sub _iso_duration_to_seconds {
-  my ($dur) = @_;
-  return 0 unless defined $dur && $dur =~ /^P/;
-  my ($date_part, $time_part) = split(/T/, $dur, 2);
-  $date_part //= '';
-  my $s = 0;
-  $s += $1 * 365 * 86400 if $date_part =~ /(\d+)Y/;
-  $s += $1 *  30 * 86400 if $date_part =~ /(\d+)M/;  # months (date part, before T)
-  $s += $1*   7 * 86400  if $date_part =~ /(\d+)W/;
-  $s += $1 *     86400   if $date_part =~ /(\d+)D/;
-  if (defined $time_part) {
-    $s += $1 *  3600 if $time_part =~ /(\d+)H/;
-    $s += $1 *    60 if $time_part =~ /(\d+)M/;  # minutes (time part, after T)
-    $s += $1         if $time_part =~ /(\d+(?:\.\d+)?)S/;
-  }
-  return int($s);
-}
-
-# Return a floating ISO datetime string for start + duration, or undef on parse failure.
-sub _event_end_dt {
-  my ($start, $duration) = @_;
-  my $dt = _parse_jscal_dt($start, 'floating');
-  return undef unless $dt;
-  $dt->add(seconds => _iso_duration_to_seconds($duration // 'PT0S'));
-  return $dt->strftime('%Y-%m-%dT%H:%M:%S');
-}
-
 sub _event_match {
   my $Self = shift;
   my ($item, $condition, $storage) = @_;

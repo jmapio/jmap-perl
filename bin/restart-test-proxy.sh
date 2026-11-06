@@ -40,7 +40,7 @@ CYRUS_CONTAINER="${CYRUS_CONTAINER:-cyrus-test}"
 
 # Kill old servers (including forked children) by port
 lsof -ti :"$FRONTEND_PORT" 2>/dev/null | xargs kill -9 2>/dev/null || true
-pkill -9 -f 'jmap-proxy.pl|apiendpoint.pl|bin/server.pl' 2>/dev/null || true
+pkill -9 -f 'jmap-proxy.pl' 2>/dev/null || true
 sleep 2
 
 mkdir -p "$DATADIR"
