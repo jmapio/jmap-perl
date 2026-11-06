@@ -13,6 +13,10 @@ FRONTEND_PORT=9000
 JMAP_HOME="${JMAP_HOME:-$(cd "$(dirname "$0")/.." && pwd)}"
 CYRUS_USER="${CYRUS_USER:-user1}"
 CYRUS_PASS="${CYRUS_PASS:-password}"
+# The test image puts its users in example.com (virtdomains: userid), and its
+# Postfix takes submissions with AUTH PLAIN on 8587 (no TLS needed).
+CYRUS_DOMAIN="${CYRUS_DOMAIN:-example.com}"
+CYRUS_SMTP_PORT="${CYRUS_SMTP_PORT:-8587}"
 CYRUS_IMAP_PORT="${CYRUS_IMAP_PORT:-8143}"
 CYRUS_URL="${CYRUS_URL:-http://localhost:8080}"
 
@@ -74,6 +78,8 @@ if [ "$CLEAN" = "1" ]; then
         -p ${CYRUS_IMAP_PORT}:8143 \
         -p 8080:8080 \
         -p 8001:8001 \
+        -p ${CYRUS_SMTP_PORT}:8587 \
+        -p 8025:8025 \
         "$WEBDAV_IMAGE" >/dev/null
 
     # Wait for Cyrus IMAP to be ready
@@ -127,7 +133,7 @@ if [ "$CLEAN" = "1" ]; then
             -H 'Content-Type: application/json' \
             -d "{
                 \"accountid\": \"$CYRUS_USER\",
-                \"email\":     \"$CYRUS_USER\",
+                \"email\":     \"$CYRUS_USER@$CYRUS_DOMAIN\",
                 \"type\":      \"imap\",
                 \"username\":  \"$CYRUS_USER\",
                 \"password\":  \"$CYRUS_PASS\",
@@ -135,7 +141,7 @@ if [ "$CLEAN" = "1" ]; then
                 \"imapPort\":  $CYRUS_IMAP_PORT,
                 \"imapSSL\":   1,
                 \"smtpHost\":  \"localhost\",
-                \"smtpPort\":  25,
+                \"smtpPort\":  $CYRUS_SMTP_PORT,
                 \"smtpSSL\":   1,
                 \"caldavURL\": \"$CYRUS_URL\",
                 \"carddavURL\":\"$CYRUS_URL\",
@@ -160,6 +166,7 @@ cat > "$DATADIR/test-config.json" <<TESTCONFIG
   "cyrus_admin_user"           : "admin",
   "cyrus_admin_pass"           : "admin",
   "cyrus_hierarchy_separator"  : ".",
+$( [ "$BACKEND" = "jmap" ] || printf '  "mail_domain"                : "%s",\n  "smtp_host"                  : "localhost",\n  "smtp_port"                  : %s,\n' "$CYRUS_DOMAIN" "$CYRUS_SMTP_PORT" )
   "cyrus_backend"              : $( [ "$BACKEND" = "jmap" ] && echo true || echo false ),
   "passthrough"                : $( [ "$BACKEND" = "jmap" ] && echo true || echo false )
 }

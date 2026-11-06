@@ -715,6 +715,7 @@ sub run_backend_worker {
         my $smtp_ssl = $args->{smtpSSL} // 3;
         $db->setuser({
           username   => $args->{username}   || $accountid,
+          email      => $args->{email},
           password   => $args->{password}   || '',
           imapHost   => $args->{imapHost},
           imapPort   => $args->{imapPort}   || 993,
@@ -1286,8 +1287,9 @@ sub run_accounts_worker {
           return ['auth', undef] unless $actual eq $password;
         }
         else {
-          my $stored = $udb->selectrow_hashref(
-            "SELECT password FROM iserver WHERE username = ?", {}, $email);
+          # One iserver row per account DB. Do NOT key it on $email: the IMAP
+          # username is its own setting and need not be the address (API.md).
+          my $stored = $udb->selectrow_hashref("SELECT password FROM iserver LIMIT 1");
           return ['auth', undef] unless $stored;
           # Stored encrypted (ImapDB::setuser); decrypt passes plaintext through.
           require JMAP::CredentialStore;

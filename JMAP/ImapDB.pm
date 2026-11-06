@@ -78,6 +78,7 @@ sub setuser {
   my %column = map { $_->[1] => 1 }
     @{ $Self->dbh->selectall_arrayref("PRAGMA table_info(iserver)") };
   my %iserver = map { $_ => $args->{$_} } grep { $column{$_} } keys %$args;
+  my $given_email = $args->{email};
   $args = \%iserver;
 
   # Encrypt the credential before writing
@@ -92,13 +93,21 @@ sub setuser {
     $Self->dinsert('iserver', $args);
   }
 
+  # The account's address is what Identity/get and ParticipantIdentity/get
+  # report, and clients send From it (RFC 8621 S6), so it must be an address:
+  # the configured email when it is one, else one already stored, else the
+  # login name (often the address itself).
   my $user = $Self->dgetone('account');
+  my $username = $args->{username} // ($data && $data->{username});
+  my $email = (defined $given_email && $given_email =~ /\@/) ? $given_email
+            : ($user && ($user->{email} // '') =~ /\@/ && ($username // '') !~ /\@/) ? $user->{email}
+            : $username;
   if ($user) {
-    $Self->dmaybeupdate('account', {email => $args->{username}});
+    $Self->dmaybeupdate('account', {email => $email});
   }
   else {
     $Self->dinsert('account', {
-      email => $args->{username},
+      email => $email,
       jdeletedmodseq => 0,
       jhighestmodseq => 1,
     });
@@ -5538,6 +5547,14 @@ sub create_submissions {
     unless ($thrid) {
       $notcreated{$cid} = { type => 'invalidProperties', properties => ['emailId'],
                             description => 'no such Email' };
+      next;
+    }
+    # RFC 8621 S7.5: "If the Email or Identity id given cannot be found, the
+    # submission creation is rejected with a standard invalidProperties
+    # SetError." The account's one Identity is id1 (Identity/get).
+    unless (($sub->{identityId} // '') eq 'id1') {
+      $notcreated{$cid} = { type => 'invalidProperties', properties => ['identityId'],
+                            description => 'no such Identity' };
       next;
     }
     # RFC 8621 S7: sendAt and undoStatus are server-set on create

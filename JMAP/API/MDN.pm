@@ -9,6 +9,8 @@ use Email::Simple;
 use Email::MIME;
 use POSIX qw(strftime);
 
+sub _is_true_json { my $v = shift; return JSON::is_bool($v) && $v }
+
 sub api_MDN_send {
   my $Self = shift;
   my $args = shift;
@@ -17,8 +19,27 @@ sub api_MDN_send {
   return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
   $Self->commit();
 
+  # RFC 9007 S2.1: "If the accountId or identityId given cannot be found,
+  # the method call is rejected with an invalidArguments error." The
+  # account's one Identity is id1 (Identity/get).
   return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['identityId']}])
-    unless $args->{identityId};
+    unless ($args->{identityId} // '') eq 'id1';
+
+  # RFC 9007 S2.1: "the server MUST reject an MDN/send that does not result
+  # in setting the keyword $mdnsent ... MUST check that the
+  # onSuccessUpdateEmail property of the method is correctly set".
+  my $osue = $args->{onSuccessUpdateEmail};
+  for my $cid (keys %{ $args->{send} || {} }) {
+    my $patch = ref $osue eq 'HASH'
+      ? ($osue->{"#$cid"} // $osue->{ $Self->idmap($args->{send}{$cid}{forEmailId} // '') })
+      : undef;
+    my $sets = ref $patch eq 'HASH'
+      && ( _is_true_json($patch->{'keywords/$mdnsent'})
+        || (ref $patch->{keywords} eq 'HASH' && _is_true_json($patch->{keywords}{'$mdnsent'})) );
+    return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['onSuccessUpdateEmail'],
+        description => "onSuccessUpdateEmail must set \$mdnsent on the Email for $cid"}])
+      unless $sets;
+  }
 
   my $from_email = $user->{email} // '';
   my $from_name  = $user->{displayname} || $from_email;
@@ -64,12 +85,13 @@ sub api_MDN_send {
 
     my $orig_email = Email::Simple->new($rfc822);
     my $orig_msgid = $orig_email->header('Message-ID') // '';
-    my $notif_to   = $orig_email->header('Disposition-Notification-To')
-                  // $orig_email->header('Return-Path')
-                  // $orig_email->header('From')
-                  // '';
+    # RFC 9007 S2.1: notFound when the Email "has no valid
+    # Disposition-Notification-To header field" -- no falling back to the
+    # Return-Path or From, which the recipient never asked to be told
+    my $notif_to   = $orig_email->header('Disposition-Notification-To') // '';
+    $notif_to =~ s/^\s+|\s+$//g;
 
-    unless ($notif_to) {
+    unless ($notif_to =~ /\@/) {
       $notSent{$cid} = { type => 'notFound',
         description => 'Original message has no Disposition-Notification-To header' };
       next;
