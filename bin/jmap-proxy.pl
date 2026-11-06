@@ -8,6 +8,20 @@ use lib $ENV{JMAP_HOME} || '/home/jmap/jmap-perl';
 
 use strict;
 use warnings;
+# A warn() of a string holding a character above U+00FF (routine in real
+# mail/calendar/contact data) emits "Wide character in warn", which a callee's
+# own `use warnings FATAL => 'all'` scope (Text::JSCalendar has one) turns
+# into a die that kills the account's worker. With a __WARN__ handler the
+# write happens here, outside that scope; encode only wide strings, so byte
+# strings -- the JMAP_DEBUG request and response bodies are already UTF-8 --
+# are not encoded twice. Not binmode(STDERR, ':encoding(UTF-8)'), which would
+# double-encode them, nor `use open ':std'`, which also changes the layer of
+# the worker socketpairs created below.
+$SIG{__WARN__} = sub {
+  my $msg = join '', @_;
+  utf8::encode($msg) if $msg =~ /[^\x00-\xff]/;
+  print STDERR $msg;
+};
 use AnyEvent;
 use AnyEvent::HTTPD;
 use AnyEvent::Handle;
