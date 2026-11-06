@@ -63,20 +63,39 @@ sub _prop_explicitly_wanted {
 }
 
 # Set server-computed properties on a calendar event item hash.
-sub _add_calendar_event_computed_props {
+# utcStart and utcEnd, when asked for, from the event's start, timeZone and
+# duration. Run it before the unrequested properties are deleted. A floating
+# event is read in the request's timeZone (draft-ietf-jmap-calendars S5.8,
+# "default Etc/UTC"); duration defaults to PT0S (JSCalendar).
+sub _calendar_event_computed_props {
   my ($item, $args) = @_;
-  if (_prop_explicitly_wanted($args, 'utcStart')) {
-    $item->{utcStart} = _utc_start($item->{start}, $item->{timeZone});
+  my %out;
+  my $want_start = _prop_explicitly_wanted($args, 'utcStart');
+  my $want_end   = _prop_explicitly_wanted($args, 'utcEnd');
+  return () unless $want_start || $want_end;
+  my $tz = $item->{timeZone} // $args->{timeZone} // 'Etc/UTC';
+  my $us = _utc_start($item->{start}, $tz);
+  $out{utcStart} = $us if $want_start;
+  if ($want_end) {
+    my $dt  = $us ? _parse_jscal_dt(substr($us, 0, 19), 'UTC') : undef;
+    my $end = $dt ? _dt_add_duration($dt, $item->{duration} // 'PT0S') : undef;
+    $out{utcEnd} = $end ? $end->strftime('%Y-%m-%dT%H:%M:%SZ') : undef;
   }
-  if (_prop_explicitly_wanted($args, 'utcEnd')) {
-    my $us = _utc_start($item->{start}, $item->{timeZone});
-    if ($us && $item->{duration}) {
-      my $dt = _parse_jscal_dt(substr($us, 0, 19), 'UTC');
-      my $end = $dt ? _dt_add_duration($dt, $item->{duration}) : undef;
-      $item->{utcEnd} = $end ? $end->strftime('%Y-%m-%dT%H:%M:%SZ') : undef;
-    } else {
-      $item->{utcEnd} = undef;
-    }
+  return %out;
+}
+
+# draft-ietf-jmap-calendars S5.8: with recurrenceOverridesBefore/After, only
+# the overrides whose recurrence id, "translated into UTC", is before (or on
+# or after) the given time are returned.
+sub _window_overrides {
+  my ($item, $args) = @_;
+  my ($after, $before) = @$args{qw(recurrenceOverridesAfter recurrenceOverridesBefore)};
+  return unless (defined $after || defined $before) && ref $item->{recurrenceOverrides} eq 'HASH';
+  my $tz = $item->{timeZone} // $args->{timeZone} // 'Etc/UTC';
+  for my $rid (keys %{$item->{recurrenceOverrides}}) {
+    my $u = _utc_start($rid =~ /T/ ? $rid : "${rid}T00:00:00", $tz) // next;
+    delete $item->{recurrenceOverrides}{$rid}
+      if (defined $after && $u lt $after) || (defined $before && $u ge $before);
   }
 }
 
@@ -745,6 +764,21 @@ sub api_CalendarEvent_get {
 
   return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['ids']}])
     unless $args->{ids};
+  for my $arg (qw(recurrenceOverridesBefore recurrenceOverridesAfter)) {
+    next unless defined $args->{$arg};
+    return $Self->_transError(['error', {type => 'invalidArguments', arguments => [$arg]}])
+      unless !ref $args->{$arg} && $args->{$arg} =~ /\A\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z\z/;
+  }
+  if (defined $args->{timeZone}) {
+    require DateTime::TimeZone;
+    return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['timeZone']}])
+      unless !ref $args->{timeZone} && eval { DateTime::TimeZone->new(name => $args->{timeZone}) };
+  }
+  # compare as UTC strings without fractions
+  local $args->{recurrenceOverridesBefore} = defined $args->{recurrenceOverridesBefore}
+    ? substr($args->{recurrenceOverridesBefore}, 0, 19) . 'Z' : undef;
+  local $args->{recurrenceOverridesAfter} = defined $args->{recurrenceOverridesAfter}
+    ? substr($args->{recurrenceOverridesAfter}, 0, 19) . 'Z' : undef;
 
   my %seenids;
   my %missingids;
@@ -779,9 +813,13 @@ sub api_CalendarEvent_get {
 
       my $organizer = $item->{organizerCalendarAddress};
       _reduce_participants($item, $mine) if $args->{reduceParticipants};
+      my %computed = _calendar_event_computed_props($item, $args);
       foreach my $key (keys %$item) {
         delete $item->{$key} unless _prop_wanted($args, $key);
       }
+      # S5.8: on an expanded instance these "MUST be returned as null if requested"
+      $item->{$_} = undef for grep { _prop_wanted($args, $_) } qw(recurrenceRule recurrenceOverrides);
+      %$item = (%$item, %computed);
       $item->{id}          = $eventuid;
       $item->{calendarIds} = { "$data->{jcalendarid}" => JSON::true } if _prop_wanted($args, 'calendarIds');
       $item->{isOrigin}    = _is_origin($organizer, $user->{email})   if _prop_wanted($args, 'isOrigin');
@@ -789,7 +827,6 @@ sub api_CalendarEvent_get {
       # draft-ietf-jmap-calendars S10.9.2: set only on a synthetic instance id,
       # and it names the real event the instance was generated from.
       $item->{baseEventId} = $master_uid  if _prop_wanted($args, 'baseEventId');
-      _add_calendar_event_computed_props($item, $args);
       push @list, $item;
       next;
     }
@@ -810,16 +847,18 @@ sub api_CalendarEvent_get {
     my $organizer = $item->{organizerCalendarAddress};
     $item->{uid} //= $eventuid;
     _reduce_participants($item, $mine) if $args->{reduceParticipants};
+    _window_overrides($item, $args);
+    my %computed = _calendar_event_computed_props($item, $args);
     foreach my $key (keys %$item) {
       delete $item->{$key} unless _prop_wanted($args, $key);
     }
+    %$item = (%$item, %computed);
 
     $item->{id}          = $eventuid;
     $item->{calendarIds} = { "$data->{jcalendarid}" => JSON::true } if _prop_wanted($args, 'calendarIds');
     $item->{isOrigin}    = _is_origin($organizer, $user->{email})   if _prop_wanted($args, 'isOrigin');
     $item->{isDraft}     = $JSON::false if _prop_wanted($args, 'isDraft');
     $item->{baseEventId} = undef        if _prop_wanted($args, 'baseEventId');
-    _add_calendar_event_computed_props($item, $args);
 
     push @list, $item;
   }
