@@ -7,6 +7,7 @@ package JMAP::ImapDB;
 use base qw(JMAP::DB);
 
 use DBI;
+use MIME::Base64 ();
 use Date::Parse;
 use JSON::XS qw(decode_json);
 use Data::UUID::LibUUID;
@@ -5056,6 +5057,63 @@ sub destroy_contacts {
   return (\@destroyed, \%notdestroyed);
 }
 
+# The image types a photo or logo may be, by their first bytes: PNG, JPEG,
+# GIF, WebP, BMP, TIFF, ICO, SVG.
+sub _sniff_image_type {
+  my ($bytes) = @_;
+  return 'image/png'  if $bytes =~ /\A\x89PNG\r\n\x1a\n/;
+  return 'image/jpeg' if $bytes =~ /\A\xff\xd8\xff/;
+  return 'image/gif'  if $bytes =~ /\AGIF8[79]a/;
+  return 'image/webp' if $bytes =~ /\ARIFF....WEBP/s;
+  return 'image/bmp'  if $bytes =~ /\ABM/;
+  return 'image/tiff' if $bytes =~ /\A(?:II\x2a\x00|MM\x00\x2a)/;
+  return 'image/vnd.microsoft.icon' if $bytes =~ /\A\x00\x00\x01\x00/;
+  return 'image/svg+xml' if $bytes =~ /\A(?:\xef\xbb\xbf)?\s*(?:<\?xml[^>]*>\s*)?(?:<!--.*?-->\s*)*<svg[\s>]/s;
+  return undef;
+}
+
+# Check a ContactCard the way RFC 9553/9610 require before it is written, and
+# turn each Media given by blobId into a data: URI the vCard can carry.
+# Returns a SetError, or undef with $card ready to write.
+sub _card_check_and_resolve {
+  my ($Self, $card) = @_;
+  # RFC 9553 S2.1.6: if members is set, "the value of the kind property MUST
+  # be group" (kind defaults to individual, S2.1.4)
+  if (ref $card->{members} eq 'HASH' && %{$card->{members}}
+      && ($card->{kind} // 'individual') ne 'group') {
+    return { type => 'invalidProperties', properties => ['members', 'kind'],
+             description => 'members needs kind "group"' };
+  }
+  my $media = $card->{media};
+  return undef unless ref $media eq 'HASH';
+  for my $mid (sort keys %$media) {
+    my $m = $media->{$mid};
+    next unless ref $m eq 'HASH';
+    my $kind = $m->{kind} // '';
+    my $image = ($kind eq 'photo' || $kind eq 'logo');
+    if (defined $m->{blobId} && !defined $m->{uri}) {
+      # RFC 9610 S3: a client "MAY send a blobId instead of the uri"
+      my ($type, $bytes) = $Self->get_blob($m->{blobId});
+      return { type => 'invalidProperties', properties => ["media/$mid/blobId"],
+               description => 'no such blob' } unless defined $bytes;
+      my $sniffed = _sniff_image_type($bytes);
+      # RFC 9610 S3.5: "The server MUST reject attempts to set a file that is
+      # not a recognised image type as the photo for a card."
+      return { type => 'invalidProperties', properties => ["media/$mid/blobId"],
+               description => "not a recognised image type" } if $image && !$sniffed;
+      my $mt = $m->{mediaType} // ($image ? $sniffed : $type) // 'application/octet-stream';
+      $m->{uri} = "data:$mt;base64," . MIME::Base64::encode_base64($bytes, '');
+      delete $m->{blobId};
+    }
+    elsif ($image && ($m->{uri} // '') =~ m{\Adata:([^;,]*)}i) {
+      my $mt = lc($1 || 'text/plain');
+      return { type => 'invalidProperties', properties => ["media/$mid/uri"],
+               description => "not a recognised image type" } unless $mt =~ m{\Aimage/};
+    }
+  }
+  return undef;
+}
+
 sub create_contacts_jscontact {
   my $Self = shift;
   my $new  = shift;
@@ -5112,6 +5170,10 @@ sub create_contacts_jscontact {
       $notcreated{$cid} = { type => 'invalidProperties',
         properties => ['version'],
         description => 'version must be a registered JSContact version ("1.0" or "2.0")' };
+      next;
+    }
+    if (my $err = $Self->_card_check_and_resolve($card)) {
+      $notcreated{$cid} = $err;
       next;
     }
     my $client_uid = defined $card->{uid};
@@ -5237,6 +5299,11 @@ sub update_contacts_jscontact {
         } else {
           delete $card->{$key};
         }
+      }
+      # the card as it would be after the patch must still be valid
+      if (my $err = $Self->_card_check_and_resolve($card)) {
+        $notchanged{$carduid} = $err;
+        next;
       }
 
       eval { $Self->backend_cmd('update_card', $icard->{href}, $card) };
