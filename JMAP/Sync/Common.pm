@@ -144,14 +144,26 @@ sub connection_lost {
   return 1;
 }
 
+# A DAV client is built once and kept for the life of the worker, with the
+# credential it was built with. An OAuth access token lasts about an hour and
+# the sync timer keeps a worker alive for days, so a kept client of a Gmail,
+# Fastmail or AOL account answered 401 to every sync after its first hour.
+# Hand it the current credential each time it is used: Net::DAVTalk builds
+# the Authorization header per request, and _cached_access_token renews the
+# token shortly before it expires. For a password account this is a no-op.
+sub _kept_dav {
+  my ($Self, $dav) = @_;
+  my %auth = $Self->_dav_auth();
+  @$dav{keys %auth} = values %auth;
+  $Self->{lastused} = time();
+  return $dav;
+}
+
 sub connect_calendars {
   my $Self = shift;
   my $url  = $Self->_caldav_url() or return;
 
-  if ($Self->{calendars}) {
-    $Self->{lastused} = time();
-    return $Self->{calendars};
-  }
+  return $Self->_kept_dav($Self->{calendars}) if $Self->{calendars};
 
   $Self->{calendars} = JMAP::Sync::CalDAVTalk->new(
     user      => $Self->{auth}{username},
@@ -167,10 +179,7 @@ sub connect_contacts {
   my $Self = shift;
   my $url  = $Self->_carddav_url() or return;
 
-  if ($Self->{contacts}) {
-    $Self->{lastused} = time();
-    return $Self->{contacts};
-  }
+  return $Self->_kept_dav($Self->{contacts}) if $Self->{contacts};
 
   $Self->{contacts} = Net::CardDAVTalk->new(
     user      => $Self->{auth}{username},
@@ -186,10 +195,7 @@ sub connect_files {
   my $Self = shift;
   my $url  = $Self->_webdav_url() or return;
 
-  if ($Self->{files}) {
-    $Self->{lastused} = time();
-    return $Self->{files};
-  }
+  return $Self->_kept_dav($Self->{files}) if $Self->{files};
 
   require JMAP::Sync::WebDAVTalk;
   $Self->{files} = JMAP::Sync::WebDAVTalk->new(
