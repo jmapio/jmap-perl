@@ -149,8 +149,33 @@ sub backend_cmd {
     $Self->{backend} = $backend;
   }
 
+  return $Self->_backend_call($cmd, @args);
+}
+
+sub _backend_call {
+  my ($Self, $cmd, @args) = @_;
+
   die "No such command $cmd" unless $Self->{backend}->can($cmd);
-  return $Self->{backend}->$cmd(@args);
+  # Our caller's context, not the eval's: inside the block wantarray is false
+  my $list = wantarray;
+  my @res;
+  my $ok = eval {
+    @res = $list ? $Self->{backend}->$cmd(@args) : scalar $Self->{backend}->$cmd(@args);
+    1;
+  };
+  my $err = $@;
+
+  # Checked whether or not the command died: many die on the undef a broken
+  # read returns ("SELECT FAILED"), and the dead connection must still be
+  # dropped, or the next command -- even a DAV one -- would find it first.
+  my $lost = $Self->{backend}->connection_lost();
+  die $err unless $ok;
+
+  # Has to fail here: a fetch that broke off comes back empty, and do_folder would
+  # store the new uidnext for it and never look at the skipped messages again.
+  die "IMAP connection lost during $cmd\n" if $lost;
+
+  return wantarray ? @res : $res[0];
 }
 
 # synchronise list from IMAP server to local folder cache

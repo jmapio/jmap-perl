@@ -7,6 +7,7 @@ package JMAP::Sync::Common;
 
 use Data::UUID::LibUUID;
 use JMAP::Sync::CalDAVTalk;
+use JMAP::Sync::IMAPSocket;
 use JSON ();
 use Mail::IMAPTalk;
 use Email::Simple;
@@ -25,6 +26,9 @@ use Sys::Hostname;
 # \NonExistent, \Remote, ...) is structural/state metadata, not a role.
 my %SPECIAL_USE = map { lc $_ => 1 } qw(\\All \\Archive \\Drafts \\Flagged \\Junk
   \\Sent \\Trash \\Inbox \\Spam \\AllMail \\Starred \\Important);
+
+# Seconds of silence after which an IMAP connection counts as dead
+our $IMAP_TIMEOUT = $ENV{JMAP_IMAP_TIMEOUT} || 120;
 
 sub new {
   my $Class = shift;
@@ -88,16 +92,23 @@ sub connect_imap {
   }
 
   my $usessl = $Self->_imap_ssl();
+  my %extra = $Self->_imap_extra();
+  my @ssl = map { $_ => $extra{$_} } grep { /^SSL_/ } keys %extra;
   for (1..3) {
+    # Our own socket, because Server => would have IMAPTalk open one that we
+    # could only put a timeout on after the greeting and login are over
+    my $socket = JMAP::Sync::IMAPSocket::connect_to($usessl, $IMAP_TIMEOUT,
+      PeerHost => $Self->{auth}{imapHost},
+      PeerPort => $Self->{auth}{imapPort} || ($usessl ? 993 : 143),
+      @ssl,
+    ) or next;
     $Self->{imap} = $Self->_imap_class()->new(
-      Server        => $Self->{auth}{imapHost},
-      Port          => $Self->{auth}{imapPort},
-      Username      => $Self->{auth}{username},
+      Socket         => $socket,
+      ExpectGreeting => 1,
+      Username       => $Self->{auth}{username},
       $Self->_imap_auth(),
-      UseSSL        => $usessl,
-      UseBlocking   => $usessl,
-      PreserveINBOX => 1,
-      $Self->_imap_extra(),
+      UseBlocking    => 1,
+      PreserveINBOX  => 1,
     );
     next unless $Self->{imap};
     $Self->{lastused} = time();
@@ -105,6 +116,19 @@ sub connect_imap {
   }
 
   die "Could not connect to IMAP server: $@";
+}
+
+# IMAPTalk reports a failed read or write by returning undef, which callers can't
+# tell from an empty result. True once per lost connection, and drops it, so the
+# next command connects again.
+sub connection_lost {
+  my $Self = shift;
+  my $imap = $Self->{imap} or return 0;
+  return 0 unless $imap->state == Mail::IMAPTalk::Unconnected()
+    or ($imap->get_last_error // '') =~ /Error writing data/;
+  $imap->release_socket(1);
+  delete $Self->{imap};
+  return 1;
 }
 
 sub connect_calendars {
