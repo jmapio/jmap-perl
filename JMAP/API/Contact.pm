@@ -5,6 +5,7 @@ use warnings;
 use JSON::XS;
 use JSON;
 use JMAP::Collation;
+use JMAP::QueryChanges;
 
 my $json = JSON::XS->new->utf8->canonical();
 
@@ -866,16 +867,18 @@ sub api_ContactCard_queryChanges {
   }
 
   my @new_ids = map { $_->{contactuid} } @$data;
-  my %new_idx;
-  $new_idx{$new_ids[$_]} = $_ for 0..$#new_ids;
 
-  my @removed = grep { !exists $new_idx{$_} } @$old_ids;
-  my %old_set  = map { $_ => 1 } @$old_ids;
-  my @added;
-  for my $i (0..$#new_ids) {
-    push @added, { id => "$new_ids[$i]", index => $i }
-      unless exists $old_set{$new_ids[$i]};
+  # Every ContactCard property the sort and filter use is mutable, so with
+  # either, each card changed since the old state is reported (RFC 8620 S5.6).
+  my %changed;
+  if ($args->{filter} or @{$args->{sort} || []}) {
+    %changed = map { $_->{contactuid} => 1 }
+               grep { ($_->{jmodseq} // 0) > $sinceQueryState } @$data;
   }
+  my ($removed, $added) = JMAP::QueryChanges::diff($old_ids, \@new_ids, \%changed);
+
+  return $Self->_transError(['error', {type => 'tooManyChanges', newQueryState => $newQueryState}])
+    if $args->{maxChanges} and @$removed + @$added > $args->{maxChanges};
 
   $Self->{db}->save_query('ContactCard', $qparams, $newQueryState, \@new_ids);
 
@@ -886,8 +889,8 @@ sub api_ContactCard_queryChanges {
     oldQueryState => "$sinceQueryState",
     newQueryState => $newQueryState,
     total         => scalar(@new_ids),
-    removed       => [map { "$_" } @removed],
-    added         => \@added,
+    removed       => [map { "$_" } @$removed],
+    added         => $added,
   }];
 }
 

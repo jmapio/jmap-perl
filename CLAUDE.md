@@ -61,6 +61,10 @@ Hard rules that are easy to violate:
   `i;unicode-casemap`) advertised in `collationAlgorithms`. Every string comparator in a
   `/query` sort goes through `JMAP::Collation::compare` with the Comparator's `collation`;
   a bare `cmp` there ignores it. Pure, like `Dispatch`; `t/collation.t` covers it.
+- `JMAP/QueryChanges.pm` — the `removed`/`added` lists of a `/queryChanges` from the old
+  snapshot, the new results and the set of results that may have changed; also reports
+  ids that moved without changing (the fewest: those outside the longest run that kept its
+  order). Email, Mailbox, CalendarEvent and ContactCard use it. Pure; `t/query-changes.t`.
 - `JMAP/FileNode.pm` — pure FileNode logic: ids, blob ids, name rules, globs, rights,
   reconciliation, `/set` ordering, filters and sorts. No I/O, no DB; `t/filenode-*.t`.
 - `JMAP/Sync/WebDAVTalk.pm` — a `Net::DAVTalk` subclass for FileNode: PROPFIND normalised to

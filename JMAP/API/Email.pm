@@ -1,6 +1,7 @@
 package JMAP::API;
 use strict;
 use JMAP::Collation;
+use JMAP::QueryChanges;
 use warnings;
 
 use JSON::XS;
@@ -495,8 +496,6 @@ sub api_Email_queryChanges {
   $data = $Self->_collapse_messages($data) if $args->{collapseThreads};
 
   my @new_ids = map { $_->{msgid} } @$data;
-  my %new_idx;
-  $new_idx{$new_ids[$_]} = $_ for 0..$#new_ids;
 
   # RFC 8620 S5.6: "If the filter or sort includes a mutable property, the
   # server MUST include all objects in the current results for which this
@@ -507,16 +506,9 @@ sub api_Email_queryChanges {
                grep { ($_->{jmodseq} // 0) > $args->{sinceQueryState} } @$data;
   }
 
-  my %old_set  = map { $_ => 1 } @$old_ids;
-  my @removed = grep { !exists $new_idx{$_} } @$old_ids;
-  push @removed, grep { $changed{$_} } @new_ids;
-  my @added;
-  for my $i (0..$#new_ids) {
-    push @added, { id => "$new_ids[$i]", index => $i }
-      if !exists $old_set{$new_ids[$i]} || $changed{$new_ids[$i]};
-  }
+  my ($removed, $added) = JMAP::QueryChanges::diff($old_ids, \@new_ids, \%changed);
 
-  if ($args->{maxChanges} and (@removed + @added) > $args->{maxChanges}) {
+  if ($args->{maxChanges} and (@$removed + @$added) > $args->{maxChanges}) {
     return $Self->_transError(['error', {type => 'tooManyChanges', newQueryState => $newQueryState}]);
   }
 
@@ -529,8 +521,8 @@ sub api_Email_queryChanges {
     collapseThreads => $args->{collapseThreads},
     oldQueryState   => "$args->{sinceQueryState}",
     newQueryState   => $newQueryState,
-    removed         => [map { "$_" } @removed],
-    added           => \@added,
+    removed         => [map { "$_" } @$removed],
+    added           => $added,
     total           => scalar(@new_ids),
   }];
 }

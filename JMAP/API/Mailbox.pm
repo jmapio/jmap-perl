@@ -8,6 +8,7 @@ use JSON;
 use Carp;
 use Encode;
 use JMAP::Collation;
+use JMAP::QueryChanges;
 
 my $json = JSON::XS->new->utf8->canonical();
 
@@ -510,21 +511,17 @@ sub api_Mailbox_queryChanges {
   $data = _sort_as_tree($data) if $args->{sortAsTree};
 
   my @new_ids = map { $_->{jmailboxid} } @$data;
-  my %new_idx;
-  $new_idx{$new_ids[$_]} = $_ for 0..$#new_ids;
-  my %old_idx;
-  $old_idx{$old_ids->[$_]} = $_ for 0..$#$old_ids;
 
-  # An id that stayed in the results but changed index (e.g. sort on a
-  # mutable property like sortOrder/name) must be reported in both removed
-  # and added per RFC 8620 5.6, or the client's cached order goes stale.
-  my @removed = grep { !exists $new_idx{$_} || $new_idx{$_} != $old_idx{$_} } @$old_ids;
-  my @added;
-  for my $i (0..$#new_ids) {
-    my $id = $new_ids[$i];
-    push @added, { id => "$id", index => $i }
-      if !exists $old_idx{$id} || $old_idx{$id} != $i;
-  }
+  # Every Mailbox property the sort and filter use (name, sortOrder, parentId,
+  # role, isSubscribed) is mutable, so each mailbox changed since the old
+  # state is reported (RFC 8620 S5.6). The counts don't take part, so a
+  # mailbox that only got new mail (jmodseq, not jnoncountsmodseq) doesn't.
+  my %changed = map { $_->{jmailboxid} => 1 }
+                grep { ($_->{jnoncountsmodseq} // $_->{jmodseq} // 0) > $sinceQueryState } @$data;
+  my ($removed, $added) = JMAP::QueryChanges::diff($old_ids, \@new_ids, \%changed);
+
+  return $Self->_transError(['error', {type => 'tooManyChanges', newQueryState => $newQueryState}])
+    if $args->{maxChanges} and @$removed + @$added > $args->{maxChanges};
 
   $Self->{db}->save_query('Mailbox', $qparams, $newQueryState, \@new_ids);
 
@@ -535,8 +532,8 @@ sub api_Mailbox_queryChanges {
     oldQueryState => "$sinceQueryState",
     newQueryState => $newQueryState,
     total         => scalar(@new_ids),
-    removed       => [map { "$_" } @removed],
-    added         => \@added,
+    removed       => [map { "$_" } @$removed],
+    added         => $added,
   }];
 }
 

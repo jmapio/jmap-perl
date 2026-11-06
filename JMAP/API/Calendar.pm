@@ -1,6 +1,7 @@
 package JMAP::API;
 use strict;
 use JMAP::Collation;
+use JMAP::QueryChanges;
 use warnings;
 
 use JSON::XS;
@@ -931,16 +932,18 @@ sub api_CalendarEvent_queryChanges {
   }
 
   my @new_ids = map { $_->{eventuid} } @$data;
-  my %new_idx;
-  $new_idx{$new_ids[$_]} = $_ for 0..$#new_ids;
 
-  my @removed = grep { !exists $new_idx{$_} } @$old_ids;
-  my %old_set  = map { $_ => 1 } @$old_ids;
-  my @added;
-  for my $i (0..$#new_ids) {
-    push @added, { id => "$new_ids[$i]", index => $i }
-      unless exists $old_set{$new_ids[$i]};
+  # Only the uid is immutable: with any filter, or a sort on anything else,
+  # each event changed since the old state is reported (RFC 8620 S5.6).
+  my %changed;
+  if ($args->{filter} or grep { ($_->{property} // '') ne 'uid' } @{$args->{sort} || []}) {
+    %changed = map { $_->{eventuid} => 1 }
+               grep { ($_->{jmodseq} // 0) > $sinceQueryState } @$data;
   }
+  my ($removed, $added) = JMAP::QueryChanges::diff($old_ids, \@new_ids, \%changed);
+
+  return $Self->_transError(['error', {type => 'tooManyChanges', newQueryState => $newQueryState}])
+    if $args->{maxChanges} and @$removed + @$added > $args->{maxChanges};
 
   $Self->{db}->save_query('CalendarEvent', $qparams, $newQueryState, \@new_ids);
 
@@ -951,8 +954,8 @@ sub api_CalendarEvent_queryChanges {
     oldQueryState => "$sinceQueryState",
     newQueryState => $newQueryState,
     total         => scalar(@new_ids),
-    removed       => [map { "$_" } @removed],
-    added         => \@added,
+    removed       => [map { "$_" } @$removed],
+    added         => $added,
   }];
 }
 
