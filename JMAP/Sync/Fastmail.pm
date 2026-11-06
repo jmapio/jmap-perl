@@ -60,15 +60,7 @@ sub _get_oauth {
   return $Self->{oauth};
 }
 
-sub access_token {
-  my $Self = shift;
-  unless ($Self->{access_token}) {
-    my $refresh_token = $Self->{auth}{password};
-    my $data = $Self->_get_oauth()->refresh($refresh_token);
-    $Self->{access_token} = $data->{access_token};
-  }
-  return $Self->{access_token};
-}
+sub access_token { my $Self = shift; $Self->_cached_access_token(sub { $Self->_get_oauth() }) }
 
 sub _imap_class  { 'Mail::OAuthBearerTalk' }
 sub _imap_auth   { my $Self = shift; (Password => $Self->access_token()) }

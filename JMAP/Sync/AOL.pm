@@ -25,16 +25,7 @@ sub O {
   return $O;
 }
 
-sub access_token {
-  my $Self = shift;
-  unless ($Self->{access_token}) {
-    my $refresh_token = $Self->{auth}{password};
-    my $O = $Self->O();
-    my $data = $O->refresh($refresh_token);
-    $Self->{access_token} = $data->{access_token};
-  }
-  return $Self->{access_token};
-}
+sub access_token { my $Self = shift; $Self->_cached_access_token(sub { $Self->O() }) }
 
 sub _imap_class { 'Mail::GmailTalk' }
 sub _imap_auth  { my $Self = shift; (Password => $Self->access_token()) }

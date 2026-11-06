@@ -75,6 +75,19 @@ sub _carddav_url { $_[0]->{auth}{carddavURL} }
 sub _webdav_url  { $_[0]->{auth}{webdavURL} }
 sub _dav_auth    { my $Self = shift; (password => $Self->{auth}{password}) }
 
+# An OAuth access token from the stored refresh token, renewed a minute before
+# it expires: a token lasts about an hour, but the sync timer keeps a worker
+# alive for days. $oauth returns the provider's OAuth2::Tiny, only when needed.
+sub _cached_access_token {
+  my ($Self, $oauth) = @_;
+  unless ($Self->{access_token} and time() < ($Self->{access_token_expires} // 0)) {
+    my $data = $oauth->()->refresh($Self->{auth}{password});
+    $Self->{access_token} = $data->{access_token};
+    $Self->{access_token_expires} = time() + ($data->{expires_in} || 3600) - 60;
+  }
+  return $Self->{access_token};
+}
+
 # --- Connection methods ---
 
 sub connect_imap {
