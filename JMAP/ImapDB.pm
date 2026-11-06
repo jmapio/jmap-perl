@@ -3019,7 +3019,10 @@ sub sync_imap {
   $Self->sync_jmap();
 }
 
-sub backfill {
+# The folders backfill() still has to page in: those whose oldest message
+# hasn't been fetched yet. On Gmail only All Mail and Trash are fetched (the
+# other labels are the same messages again), so only they count.
+sub _backfill_folders {
   my $Self = shift;
 
   $Self->begin();
@@ -3029,7 +3032,21 @@ sub backfill {
   if ($Self->{is_gmail}) {
     $data = [ grep { lc $_->{label} eq '\\allmail' or lc $_->{label} eq '\\trash' } @$data ];
   }
+  return $data;
+}
 
+# Cheap check for whether backfill() has anything to do, without doing any
+# of it. The proxy uses it to notice folders a sync turned up after the
+# account's one-shot needs_backfill flag was already cleared.
+sub has_pending_backfill {
+  my $Self = shift;
+  return scalar @{ $Self->_backfill_folders() };
+}
+
+sub backfill {
+  my $Self = shift;
+
+  my $data = $Self->_backfill_folders();
   return unless @$data;
 
   #DB::enable_profile();
