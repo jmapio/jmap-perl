@@ -1371,11 +1371,12 @@ sub api_Email_parse {
     $parsed{$blobId} = \%item;
   }
 
+  # RFC 8621 S4.9: each of these is null "if none"
   return ['Email/parse', {
     accountId  => $accountid,
-    parsed     => \%parsed,
-    notParsable => \@notParsable,
-    notFound   => \@notFound,
+    parsed      => (%parsed      ? \%parsed      : undef),
+    notParsable => (@notParsable ? \@notParsable : undef),
+    notFound    => (@notFound    ? \@notFound    : undef),
   }];
 }
 

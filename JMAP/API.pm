@@ -34,7 +34,7 @@ my %PARAM_SCHEMA = (
     fetchTextBodyValues  => 'bool?',
     fetchHTMLBodyValues  => 'bool?',
     fetchAllBodyValues   => 'bool?',
-    maxBodyValueBytes    => 'posint!',
+    maxBodyValueBytes    => 'uint!',   # RFC 8621 S4.2: default 0, "no truncation"
   },
   'Email/query' => {
     accountId          => 'string?',
@@ -67,7 +67,7 @@ my %PARAM_SCHEMA = (
     fetchTextBodyValues  => 'bool?',
     fetchHTMLBodyValues  => 'bool?',
     fetchAllBodyValues   => 'bool?',
-    maxBodyValueBytes    => 'posint!',
+    maxBodyValueBytes    => 'uint!',   # RFC 8621 S4.2: default 0, "no truncation"
   },
   # RFC 9404 and draft-ietf-jmap-blobext (JMAP/API/Blob.pm)
   'Blob/upload' => {
