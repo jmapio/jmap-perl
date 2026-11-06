@@ -45,7 +45,7 @@
   <div class="login-form">
     <h2>Sign in / Register</h2>
     [% IF error %]
-    <div class="error-box">[% error %]</div>
+    <div class="error-box">[% error | html %]</div>
     [% END %]
     [% IF step == 2 %]
     <form action="/signup" method="post">
@@ -129,7 +129,7 @@
       <li>Use any JMAP-compatible client, including <a href="https://webmail.jmap.io">Bulwark webmail</a></li>
       <li>Add multiple accounts and access them through a single JMAP session</li>
     </ul>
-    <p>The JMAP session URL is <code>[% baseurl %]/.well-known/jmap</code></p>
+    <p>The JMAP session URL is <code>[% baseurl | html %]/.well-known/jmap</code></p>
     <p style="font-size:13px;color:#888;">Source code is <a href="https://github.com/jmapio/jmap-perl">available on GitHub</a> under the MIT licence.</p>
   </div>
 

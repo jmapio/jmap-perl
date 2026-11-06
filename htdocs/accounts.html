@@ -51,20 +51,20 @@
 <tbody>
 [% FOREACH a IN accounts %]
   <tr>
-    <td><a href="[% baseurl %]/jmap/[% a.accountid %]">[% a.email || a.accountid %]</a>[% IF a.accountid == auth_aid %]<span class="current-session">&#x2714; active</span>[% END %]</td>
-    <td>[% a.imapHost || '-' %]:[% a.imapPort || '' %]</td>
-    <td>[% a.folders || 0 %]</td>
-    <td>[% a.messages || 0 %]</td>
+    <td><a href="[% baseurl | html %]/jmap/[% a.accountid | html %]">[% a.email || a.accountid | html %]</a>[% IF a.accountid == auth_aid %]<span class="current-session">&#x2714; active</span>[% END %]</td>
+    <td>[% a.imapHost || '-' | html %]:[% a.imapPort || '' | html %]</td>
+    <td>[% a.folders || 0 | html %]</td>
+    <td>[% a.messages || 0 | html %]</td>
     <td class="actions">
-      <a class="edit-btn" href="/accounts/edit?accountid=[% a.accountid %]">Edit</a>
+      <a class="edit-btn" href="/accounts/edit?accountid=[% a.accountid | uri | html %]">Edit</a>
       [% UNLESS a.accountid == auth_aid %]
       <form method="post" action="/accounts/detach">
-        <input type="hidden" name="accountid" value="[% a.accountid %]">
+        <input type="hidden" name="accountid" value="[% a.accountid | html %]">
         <button class="detach" type="submit">Detach</button>
       </form>
       [% END %]
-      <form method="post" action="/accounts/delete" onsubmit="return confirm('Delete account [% a.email || a.accountid %]? This removes all data.')">
-        <input type="hidden" name="accountid" value="[% a.accountid %]">
+      <form method="post" action="/accounts/delete" onsubmit="return confirm('Delete account [% a.email || a.accountid | js %]? This removes all data.')">
+        <input type="hidden" name="accountid" value="[% a.accountid | html %]">
         <button class="delete" type="submit">Delete</button>
       </form>
     </td>
@@ -84,19 +84,19 @@
   [% SET is_current = (t.token == token) %]
   <tr>
     <td>
-      <code class="token-preview">[% t.token.substr(0, 12) %]…</code>
+      <code class="token-preview">[% t.token.substr(0, 12) | html %]…</code>
       [% IF is_current %]<span class="current-session">&#x2714; this session</span>[% END %]
     </td>
-    <td>[% human_time(t.last_used) %]</td>
-    <td>[% t.last_ip || '-' %]</td>
+    <td>[% human_time(t.last_used) | html %]</td>
+    <td>[% t.last_ip || '-' | html %]</td>
     <td>
       [% IF is_current %]
       <form method="post" action="/accounts/tokens/delete">
-        <input type="hidden" name="token" value="[% t.token %]">
+        <input type="hidden" name="token" value="[% t.token | html %]">
         <button class="logout" type="submit">Log out</button>
       </form>
       [% ELSE %]
-      <button class="delete" onclick="revokeToken(this, '[% t.token %]')">Revoke</button>
+      <button class="delete" onclick="revokeToken(this, '[% t.token | js %]')">Revoke</button>
       [% END %]
     </td>
   </tr>
@@ -113,15 +113,15 @@
   <p>Use this token with JMAP clients that support Bearer authentication.
   It is this browser session's token, so it stops working when you log out
   here or revoke the session above.</p>
-  <p><strong>Session URL:</strong> <code>[% baseurl %]/.well-known/jmap</code></p>
-  <p><strong>Bearer Token:</strong> <code style="word-break:break-all">[% token %]</code></p>
+  <p><strong>Session URL:</strong> <code>[% baseurl | html %]/.well-known/jmap</code></p>
+  <p><strong>Bearer Token:</strong> <code style="word-break:break-all">[% token | html %]</code></p>
 </div>
 [% END %]
 
 <h2>Add Another Account</h2>
 
 [% IF jmap_error %]
-<div style="background:#fdecea;border:1px solid #e74c3c;color:#c0392b;padding:10px 14px;border-radius:4px;margin-bottom:16px">[% jmap_error %]</div>
+<div style="background:#fdecea;border:1px solid #e74c3c;color:#c0392b;padding:10px 14px;border-radius:4px;margin-bottom:16px">[% jmap_error | html %]</div>
 [% END %]
 
 <div class="add-form" style="max-width:400px">

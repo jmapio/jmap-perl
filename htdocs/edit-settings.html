@@ -44,15 +44,15 @@
 <div class="edit-form">
 
 [% IF error %]
-<div class="error-box">[% error %]</div>
+<div class="error-box">[% error | html %]</div>
 [% END %]
 
 <form method="post" action="/accounts/update">
-<input type="hidden" name="accountid" value="[% accountid %]">
+<input type="hidden" name="accountid" value="[% accountid | html %]">
 <table>
   <tr>
     <th>Email</th>
-    <td><input type="text" class="host" name="username" value="[% settings.username || '' %]" required></td>
+    <td><input type="text" class="host" name="username" value="[% settings.username || '' | html %]" required></td>
   </tr>
   <tr>
     <th>Password</th>
@@ -63,7 +63,7 @@
   <tr><td colspan="2" class="section-head">JMAP</td></tr>
   <tr>
     <th>Session URL</th>
-    <td><input type="url" class="url" name="sessionUrl" value="[% settings.sessionUrl || '' %]" required></td>
+    <td><input type="url" class="url" name="sessionUrl" value="[% settings.sessionUrl || '' | html %]" required></td>
   </tr>
   <tr>
     <th>Auth type</th>
@@ -79,8 +79,8 @@
   <tr>
     <th>Host</th>
     <td>
-      <input type="text" class="host" name="imapHost" value="[% settings.imapHost || '' %]" required>
-      <input type="number" class="port" name="imapPort" value="[% settings.imapPort || 993 %]">
+      <input type="text" class="host" name="imapHost" value="[% settings.imapHost || '' | html %]" required>
+      <input type="number" class="port" name="imapPort" value="[% settings.imapPort || 993 | html %]">
       <select name="imapSSL">
         <option value="1"[% IF settings.imapSSL == 1 %] selected[% END %]>Plaintext</option>
         <option value="2"[% IF settings.imapSSL == 2 OR !settings.imapSSL %] selected[% END %]>SSL</option>
@@ -93,8 +93,8 @@
   <tr>
     <th>Host</th>
     <td>
-      <input type="text" class="host" name="smtpHost" value="[% settings.smtpHost || '' %]">
-      <input type="number" class="port" name="smtpPort" value="[% settings.smtpPort || 587 %]">
+      <input type="text" class="host" name="smtpHost" value="[% settings.smtpHost || '' | html %]">
+      <input type="number" class="port" name="smtpPort" value="[% settings.smtpPort || 587 | html %]">
       <select name="smtpSSL">
         <option value="1"[% IF settings.smtpSSL == 1 %] selected[% END %]>Plaintext</option>
         <option value="2"[% IF settings.smtpSSL == 2 %] selected[% END %]>SSL</option>
@@ -106,11 +106,11 @@
   <tr><td colspan="2" class="section-head">CalDAV / CardDAV (optional)</td></tr>
   <tr>
     <th>CalDAV URL</th>
-    <td><input type="text" class="url" name="caldavURL" value="[% settings.caldavURL || '' %]"></td>
+    <td><input type="text" class="url" name="caldavURL" value="[% settings.caldavURL || '' | html %]"></td>
   </tr>
   <tr>
     <th>CardDAV URL</th>
-    <td><input type="text" class="url" name="carddavURL" value="[% settings.carddavURL || '' %]"></td>
+    <td><input type="text" class="url" name="carddavURL" value="[% settings.carddavURL || '' | html %]"></td>
   </tr>
 [% END %]
 </table>

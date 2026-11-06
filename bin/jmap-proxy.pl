@@ -69,7 +69,19 @@ my $datadir = $ENV{JMAP_DATADIR} || '/data';
 
 mkdir "$datadir/tmp" unless -d "$datadir/tmp";
 
-my $TT = Template->new(INCLUDE_PATH => "$jmaphome/htdocs");
+# Templates escape every value they print: `| html` in markup and attributes,
+# `| js` inside a JavaScript string (an onclick, say). js leaves none of
+# \ ' " < > & or a line break, so its output is also safe in an attribute.
+my $TT = Template->new(
+  INCLUDE_PATH => "$jmaphome/htdocs",
+  FILTERS => {
+    js => sub {
+      my $s = shift // '';
+      $s =~ s/([\\'"<>&\r\n\x{2028}\x{2029}])/sprintf('\\u%04x', ord $1)/ge;
+      return $s;
+    },
+  },
+);
 my $json = JSON::XS->new->utf8->canonical->pretty();
 
 sub _oidc_rsa_key { JMAP::OAuth::OIDC->rsa_key("$datadir/oidc_key.pem") }
