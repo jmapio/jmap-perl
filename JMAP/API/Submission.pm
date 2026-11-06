@@ -357,8 +357,9 @@ sub api_EmailSubmission_set {
 
   ($created, $notCreated) = $Self->{db}->create_submissions($create, sub { $Self->idmap(shift) });
   $Self->setid($_, $created->{$_}{id}) for keys %$created;
-  $Self->_resolve_patch($update, 'api_EmailSubmission_get');
+  my $patchInvalid = $Self->_resolve_patch($update, 'api_EmailSubmission_get');
   ($updated, $notUpdated) = $Self->{db}->update_submissions($update, sub { $Self->idmap(shift) });
+  $notUpdated = { %{$notUpdated || {}}, %$patchInvalid } if %$patchInvalid;   # RFC 8620 S5.3
 
   my @possible = ((map { $_->{id} } values %$created), (keys %$updated), @$destroy);
 

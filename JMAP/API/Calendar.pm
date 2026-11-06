@@ -355,8 +355,9 @@ sub api_Calendar_set {
 
   ($created, $notCreated) = $Self->{db}->create_calendars($create);
   $Self->setid($_, $created->{$_}{id}) for keys %$created;
-  $Self->_resolve_patch($update, 'api_Calendar_get');
+  my $patchInvalid = $Self->_resolve_patch($update, 'api_Calendar_get');
   ($updated, $notUpdated) = $Self->{db}->update_calendars($update, sub { $Self->idmap(shift) });
+  $notUpdated = { %{$notUpdated || {}}, %$patchInvalid } if %$patchInvalid;   # RFC 8620 S5.3
 
   my $onDestroyRemoveEvents = $args->{onDestroyRemoveEvents} ? 1 : 0;
   my (@safe_destroy, %notDestroyed_pre);
@@ -1155,8 +1156,9 @@ sub api_CalendarEvent_set {
 
   ($created, $notCreated) = $Self->{db}->create_calendar_events($create);
   $Self->setid($_, $created->{$_}{id}) for keys %$created;
-  $Self->_resolve_patch($update, 'api_CalendarEvent_get');
+  my $patchInvalid = $Self->_resolve_patch($update, 'api_CalendarEvent_get');
   ($updated, $notUpdated) = $Self->{db}->update_calendar_events($update, sub { $Self->idmap(shift) });
+  $notUpdated = { %{$notUpdated || {}}, %$patchInvalid } if %$patchInvalid;   # RFC 8620 S5.3
   ($destroyed, $notDestroyed) = $Self->{db}->destroy_calendar_events($destroy);
 
   # XXX - cheap dumb racy version

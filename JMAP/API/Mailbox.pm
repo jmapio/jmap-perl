@@ -237,11 +237,43 @@ sub _patchitem {
   }
 }
 
+# True if a PatchObject breaks a rule of RFC 8620 S5.3, which "MUST be
+# rejected with an invalidPatch error": a pointer that is the prefix of
+# another, a part before the last that does not "already exist on the object
+# being patched", or a pointer that references inside an array. $current
+# holds (at least) the object's values for the top-level properties named.
+sub _patch_invalid {
+  my ($patch, $current) = @_;
+  for my $key (keys %$patch) {
+    my @parts = map { s{~1}{/}gr =~ s{~0}{~}gr } split m{/}, $key, -1;
+    next if @parts < 2;
+    # an ancestor of this pointer patched too
+    my @raw = split m{/}, $key, -1;
+    for my $n (1 .. $#raw) {
+      return 1 if exists $patch->{ join '/', @raw[0 .. $n - 1] };
+    }
+    my $target = $current;
+    pop @parts;
+    for my $part (@parts) {
+      return 1 unless ref $target eq 'HASH' && defined $target->{$part};
+      $target = $target->{$part};
+    }
+    return 1 unless ref $target eq 'HASH';   # inside an array, or a scalar
+  }
+  return 0;
+}
+
+# Turn each PatchObject in $update into a full value for every top-level
+# property it patches. Returns { id => SetError } for the patches that break
+# RFC 8620 S5.3's rules; those are taken out of $update, and the caller puts
+# them in notUpdated.
 sub _resolve_patch {
   my $Self = shift;
   my $update = shift;
   my $method = shift;
+  my %invalid;
   foreach my $id (keys %$update) {
+    next unless ref $update->{$id} eq 'HASH';
     my %keys;
     foreach my $key (sort keys %{$update->{$id}}) {
       next unless $key =~ m{([^/]+)/};
@@ -252,11 +284,17 @@ sub _resolve_patch {
     my $list = $data->[1]{list};
     # XXX - if nothing in the list we SHOULD abort
     next unless $list->[0];
+    if (_patch_invalid($update->{$id}, $list->[0])) {
+      delete $update->{$id};
+      $invalid{$id} = { type => 'invalidPatch' };
+      next;
+    }
     foreach my $key (keys %keys) {
       $update->{$id}{$key} = $list->[0]{$key};
       _patchitem($update->{$id}, $_ => delete $update->{$id}{$_}) for @{$keys{$key}};
     }
   }
+  return \%invalid;
 }
 
 sub api_Mailbox_get {
@@ -641,7 +679,7 @@ sub api_Mailbox_set {
     $roles{$role} = $created->{$cid}{id};
   }
 
-  $Self->_resolve_patch($update, 'api_Mailbox_get');
+  my $patchInvalid = $Self->_resolve_patch($update, 'api_Mailbox_get');
   $update = { %$update };
   for my $jid (sort keys %$update) {
     next unless ref $update->{$jid} eq 'HASH';
@@ -666,6 +704,7 @@ sub api_Mailbox_set {
   ($destroyed, $notDestroyed) = $Self->{db}->destroy_mailboxes($destroy, $args->{onDestroyRemoveEmails});
   $notCreated = { %{$notCreated || {}}, %badCreate };
   $notUpdated = { %{$notUpdated || {}}, %badUpdate };
+  $notUpdated = { %{$notUpdated || {}}, %$patchInvalid } if %$patchInvalid;   # RFC 8620 S5.3
 
   # RFC 8620 S5.3: created carries every property the server set or
   # defaulted, which here is everything the client did not send.

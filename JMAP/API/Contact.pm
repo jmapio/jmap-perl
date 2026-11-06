@@ -354,8 +354,9 @@ sub api_Contact_set {
 
   ($created, $notCreated) = $Self->{db}->create_contacts($create);
   $Self->setid($_, $created->{$_}{id}) for keys %$created;
-  $Self->_resolve_patch($update, 'api_Contact_get');
+  my $patchInvalid = $Self->_resolve_patch($update, 'api_Contact_get');
   ($updated, $notUpdated) = $Self->{db}->update_contacts($update, sub { $Self->idmap(shift) });
+  $notUpdated = { %{$notUpdated || {}}, %$patchInvalid } if %$patchInvalid;   # RFC 8620 S5.3
   ($destroyed, $notDestroyed) = $Self->{db}->destroy_contacts($destroy);
 
   # XXX - cheap dumb racy version
@@ -498,8 +499,9 @@ sub api_ContactGroup_set {
 
   ($created, $notCreated) = $Self->{db}->create_contact_groups($create);
   $Self->setid($_, $created->{$_}{id}) for keys %$created;
-  $Self->_resolve_patch($update, 'api_ContactGroup_get');
+  my $patchInvalid = $Self->_resolve_patch($update, 'api_ContactGroup_get');
   ($updated, $notUpdated) = $Self->{db}->update_contact_groups($update, sub { $Self->idmap(shift) });
+  $notUpdated = { %{$notUpdated || {}}, %$patchInvalid } if %$patchInvalid;   # RFC 8620 S5.3
   ($destroyed, $notDestroyed) = $Self->{db}->destroy_contact_groups($destroy);
 
   # XXX - cheap dumb racy version
@@ -666,8 +668,9 @@ sub api_AddressBook_set {
 
   ($created, $notCreated) = $Self->{db}->create_addressbooks($create);
   $Self->setid($_, $created->{$_}{id}) for keys %$created;
-  $Self->_resolve_patch($update, 'api_AddressBook_get');
+  my $patchInvalid = $Self->_resolve_patch($update, 'api_AddressBook_get');
   ($updated, $notUpdated) = $Self->{db}->update_addressbooks($update);
+  $notUpdated = { %{$notUpdated || {}}, %$patchInvalid } if %$patchInvalid;   # RFC 8620 S5.3
 
   my (@safe_destroy, %pre_notDestroyed);
   for my $id (@$destroy) {
@@ -777,11 +780,12 @@ sub api_ContactCard_set {
   $Self->commit();
 
   # Resolve JSON Pointer patches against ContactCard/get (JSContact format)
-  $Self->_resolve_patch($update, 'api_ContactCard_get');
+  my $patchInvalid = $Self->_resolve_patch($update, 'api_ContactCard_get');
 
   my ($created, $notCreated) = $Self->{db}->create_contacts_jscontact($create);
   $Self->setid($_, $created->{$_}{id}) for keys %$created;
   my ($updated, $notUpdated) = $Self->{db}->update_contacts_jscontact($update);
+  $notUpdated = { %{$notUpdated || {}}, %$patchInvalid } if %$patchInvalid;   # RFC 8620 S5.3
   my ($destroyed, $notDestroyed) = $Self->{db}->destroy_contacts($destroy);
 
   $Self->{db}->sync_addressbooks();

@@ -1062,8 +1062,9 @@ sub api_Email_set {
 
   ($created, $notCreated) = $Self->{db}->create_messages($create, sub { $Self->idmap(shift) });
   $Self->setid($_, $created->{$_}{id}) for keys %$created;
-  $Self->_resolve_patch($update, 'api_Email_get');
+  my $patchInvalid = $Self->_resolve_patch($update, 'api_Email_get');
   ($updated, $notUpdated) = $Self->{db}->update_messages($update, sub { $Self->idmap(shift) });
+  $notUpdated = { %{$notUpdated || {}}, %$patchInvalid } if %$patchInvalid;   # RFC 8620 S5.3
   $notCreated->{$_} = { type => 'invalidProperties', properties => ['keywords'] } for keys %badCreate;
   $notUpdated->{$_} = { type => 'invalidProperties', properties => ['keywords'] } for keys %badUpdate;
   ($destroyed, $notDestroyed) = $Self->{db}->destroy_messages($destroy);
