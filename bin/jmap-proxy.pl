@@ -1124,7 +1124,18 @@ sub run_accounts_worker {
       if ($cmd eq 'create_account') {
         my $aid = $args->{accountid};
         my $type = $args->{type} || 'imap';
-        my $email = $args->{email} || $aid;
+        # 'email' is what JMAP Basic Auth looks clients up by -- default to the
+        # actual mailbox username, not the internal accountid, when omitted.
+        # It is the primary key and this is INSERT OR REPLACE, so a username
+        # another account already logs in with must not be taken over: that
+        # account falls back to its accountid, as before.
+        my $email = $args->{email};
+        unless ($email) {
+          my $u = $args->{username};
+          my ($holder) = $u ? $dbh->selectrow_array(
+            "SELECT accountid FROM accounts WHERE email = ?", {}, $u) : ();
+          $email = ($u && (!$holder || $holder eq $aid)) ? $u : $aid;
+        }
         my $poolid = $args->{poolid} || $aid;
         $dbh->do("INSERT OR REPLACE INTO accounts (email, accountid, type, poolid, needs_backfill) VALUES (?, ?, ?, ?, 1)",
           {}, $email, $aid, $type, $poolid);
