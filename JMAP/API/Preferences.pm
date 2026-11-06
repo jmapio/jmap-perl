@@ -122,7 +122,7 @@ sub api_UserPreferences_set {
   my $destroy = $args->{destroy} || [];
 
   my $created = {};
-  my $notCreated = { map { $_ => "Can't create singleton types" } keys %$create };
+  my $notCreated = { map { $_ => { type => "singleton" } } keys %$create };
   my $updated = {};
   my $notUpdated = {};
   foreach my $key (keys %$update) {
@@ -130,18 +130,20 @@ sub api_UserPreferences_set {
       my $value = $Self->update_singleton_value('api_UserPreferences_get', $update->{singleton});
       eval { $Self->{db}->update_prefs('UserPreferences', $value) };
       if ($@) {
-        $notUpdated->{singleton} = "$@";
+        my $err = "$@";
+        $Self->{db}->reset();
+        $notUpdated->{singleton} = { type => "serverFail", description => $err };
       }
       else {
         $updated->{singleton} = $JSON::true,
       }
     }
     else {
-      $notUpdated->{$key} = "Can't update anything except singleton";
+      $notUpdated->{$key} = { type => "notFound" };
     }
   }
   my $destroyed = [];
-  my $notDestroyed = { map { $_ => "Can't delete singleton types" } @$destroy };
+  my $notDestroyed = { map { $_ => { type => "singleton" } } @$destroy };
 
   $Self->begin();
   $user = $Self->{db}->get_user();
@@ -261,21 +263,22 @@ sub api_ClientPreferences_set {
   my $oldState = "$user->{jstateClientPreferences}";
 
   my $created = {};
-  my $notCreated = { map { $_ => "Can't create singleton types" } keys %$create };
+  my $notCreated = { map { $_ => { type => "singleton" } } keys %$create };
   my $updated = {};
   my $notUpdated = {};
   foreach my $key (keys %$update) {
     if ($key eq 'singleton') {
       my $value = $Self->update_singleton_value('api_ClientPreferences_get', $update->{singleton});
-      $updated->{singleton} = eval { $Self->{db}->update_prefs('ClientPreferences', $value) };
-      $notUpdated->{singleton} = $@ if $@;
+      my $res = eval { $Self->{db}->update_prefs('ClientPreferences', $value) };
+      if ($@) { my $err = "$@"; $Self->{db}->reset(); $notUpdated->{singleton} = { type => "serverFail", description => $err } }
+      else    { $updated->{singleton}    = $res }
     }
     else {
-      $notUpdated->{$key} = "Can't update anything except singleton";
+      $notUpdated->{$key} = { type => "notFound" };
     }
   }
   my $destroyed = [];
-  my $notDestroyed = { map { $_ => "Can't delete singleton types" } @$destroy };
+  my $notDestroyed = { map { $_ => { type => "singleton" } } @$destroy };
 
   $Self->begin();
   $user = $Self->{db}->get_user();
@@ -394,21 +397,22 @@ sub api_CalendarPreferences_set {
   my $destroy = $args->{destroy} || [];
 
   my $created = {};
-  my $notCreated = { map { $_ => "Can't create singleton types" } keys %$create };
+  my $notCreated = { map { $_ => { type => "singleton" } } keys %$create };
   my $updated = {};
   my $notUpdated = {};
   foreach my $key (keys %$update) {
     if ($key eq 'singleton') {
       my $value = $Self->update_singleton_value('api_CalendarPreferences_get', $update->{singleton});
-      $updated->{singleton} = eval { $Self->{db}->update_prefs('CalendarPreferences', $value) };
-      $notUpdated->{singleton} = $@ if $@;
+      my $res = eval { $Self->{db}->update_prefs('CalendarPreferences', $value) };
+      if ($@) { my $err = "$@"; $Self->{db}->reset(); $notUpdated->{singleton} = { type => "serverFail", description => $err } }
+      else    { $updated->{singleton}    = $res }
     }
     else {
-      $notUpdated->{$key} = "Can't update anything except singleton";
+      $notUpdated->{$key} = { type => "notFound" };
     }
   }
   my $destroyed = [];
-  my $notDestroyed = { map { $_ => "Can't delete singleton types" } @$destroy };
+  my $notDestroyed = { map { $_ => { type => "singleton" } } @$destroy };
 
   $Self->begin();
   $user = $Self->{db}->get_user();
