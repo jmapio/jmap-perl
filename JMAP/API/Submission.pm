@@ -25,7 +25,7 @@ sub _mk_submission_sort {
       push @res, "thrid $order";
     }
     elsif ($field eq 'sentAt') {
-      push @res, "sentat $order";
+      push @res, "sendat $order";   # the column; RFC 8621 S7.3 sentAt
     }
     else {
       return undef; # invalid sort

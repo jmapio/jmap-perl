@@ -1195,16 +1195,26 @@ sub api_ParticipantIdentity_get {
   my @identities;
   my @notFound;
 
+  # The account's one identity. draft-ietf-jmap-calendars S4.1: isDefault
+  # "SHOULD be true for exactly one participant identity".
+  my $identity = sub {
+    my %id = (id => 'id1', name => '', calendarAddress => "mailto:$email",
+              isDefault => JSON::true);
+    return \%id unless $args->{properties};
+    my %want = map { $_ => 1 } @{$args->{properties}}, 'id';   # RFC 8620 S5.1
+    return { map { $_ => $id{$_} } grep { $want{$_} } keys %id };
+  };
+
   if ($args->{ids}) {
     for my $id (@{$args->{ids}}) {
       if ($email && $id eq 'id1') {
-        push @identities, { id => 'id1', name => '', calendarAddress => "mailto:$email" };
+        push @identities, $identity->();
       } else {
         push @notFound, "$id";
       }
     }
   } elsif ($email) {
-    push @identities, { id => 'id1', name => '', calendarAddress => "mailto:$email" };
+    push @identities, $identity->();
   }
 
   return ['ParticipantIdentity/get', {
