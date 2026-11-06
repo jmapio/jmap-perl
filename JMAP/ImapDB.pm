@@ -68,16 +68,20 @@ sub setuser {
   my $args = shift;
   require JMAP::CredentialStore;
 
-  # Strip fields that belong to accounts.sqlite3, not the per-account iserver table
-  my %iserver = %$args;
-  delete $iserver{$_} for qw(poolid accountid force);
+  $Self->begin();
+
+  # Only the iserver table's own columns: anything else (accountid, poolid,
+  # force, ...) belongs to accounts.sqlite3 or is request metadata, and would
+  # fail the INSERT with "no such column". Read from the schema, so a column
+  # added later is stored without anyone having to remember this list.
+  my %column = map { $_->[1] => 1 }
+    @{ $Self->dbh->selectall_arrayref("PRAGMA table_info(iserver)") };
+  my %iserver = map { $_ => $args->{$_} } grep { $column{$_} } keys %$args;
   $args = \%iserver;
 
   # Encrypt the credential before writing
   $args->{password} = JMAP::CredentialStore->encrypt($args->{password})
     if defined $args->{password};
-
-  $Self->begin();
 
   my $data = $Self->dgetone('iserver');
   if ($data) {
