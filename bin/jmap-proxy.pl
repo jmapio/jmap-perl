@@ -1755,6 +1755,10 @@ sub _do_jmap_request {
     my %created_ids = %{ $data->{createdIds} || {} };
     my %resp_by_tag;   # tag => response triple (for cross-batch ResultReference)
     my @extra_responses;  # server-injected responses (e.g. Email/set from onSuccessDestroyOriginal)
+    # A call can answer with more than one response (EmailSubmission/set and
+    # MDN/send add an implicit Email/set, RFC 8621 S7.5, RFC 9007 S2.1); the
+    # first goes in @responses, the rest right after it, in order.
+    my @more_responses;
 
     # A call with no accountId, or one naming an account outside this session,
     # is answered here (invalidArguments / accountNotFound, RFC 8620 §3.6.2) and
@@ -1793,7 +1797,9 @@ sub _do_jmap_request {
     };
 
     my $finish = sub {
-      my @flat = ((grep { defined } @responses), @extra_responses);
+      my @flat = ((map { defined $responses[$_] ? ($responses[$_], @{ $more_responses[$_] || [] }) : () }
+                   0 .. $#responses),
+                  @extra_responses);
       $stat{jmap_method_errors} += grep { $_->[0] eq 'error' } @flat;
       my $result = {
         methodResponses => \@flat,
@@ -1883,7 +1889,12 @@ sub _do_jmap_request {
         my %pos_by_tag = map { $calls[$_][2] => $positions[$_] } 0..$#calls;
         for my $resp (@{ $r->{methodResponses} || [] }) {
           my $pos = $pos_by_tag{ $resp->[2] };
-          if (defined $pos) { $responses[$pos] = $resp; $resp_by_tag{ $resp->[2] } = $resp; }
+          next unless defined $pos;
+          # RFC 8620 S3.7: a ResultReference names the FIRST response with
+          # that method call id; a later one must not overwrite it
+          if (defined $responses[$pos]) { push @{ $more_responses[$pos] }, $resp; next }
+          $responses[$pos] = $resp;
+          $resp_by_tag{ $resp->[2] } = $resp;
         }
         $created_ids{$_} = $r->{createdIds}{$_} for keys %{ $r->{createdIds} || {} };
         $next_batch->();
