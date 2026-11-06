@@ -3223,9 +3223,28 @@ sub do_folder {
   }, \%fetches);
 
   if ($res->{newstate}{uidvalidity} != $uidvalidity) {
-    # going to want to nuke everything for the existing folder and create this - but for now, just die
-    use Data::Dumper;
-    die "UIDVALIDITY CHANGED $imapname: $uidvalidity => $res->{newstate}{uidvalidity}" . Dumper($data);
+    # The server's UIDVALIDITY no longer matches ours: every UID we had for
+    # this folder is meaningless (the mailbox was recreated or reindexed), and
+    # imap_update fetched nothing (uidfail). Forget the folder's messages,
+    # marking each msgid for sync_jmap so an Email that is really gone is
+    # destroyed (as deleted_record does), and start the folder again the way
+    # sync_folders starts a new one: at the server's current uidnext, so the
+    # backfill worker pages its old messages in rather than this worker.
+    my $new = $res->{newstate};
+    warn "UIDVALIDITY CHANGED for $imapname: $uidvalidity => $new->{uidvalidity}, resetting folder state\n";
+    $Self->begin();
+    my $msgids = $Self->dbh->selectcol_arrayref(
+      "SELECT DISTINCT msgid FROM imessages WHERE ifolderid = ?", {}, $ifolderid);
+    $Self->ddelete('imessages', {ifolderid => $ifolderid});
+    $Self->mark_sync($_) for @$msgids;
+    $Self->dupdate('ifolders', {
+      uidvalidity   => $new->{uidvalidity},
+      uidfirst      => $new->{uidnext},
+      uidnext       => $new->{uidnext},
+      highestmodseq => $new->{highestmodseq},
+    }, {ifolderid => $ifolderid});
+    $Self->commit();
+    return 0;
   }
 
   $Self->begin();
