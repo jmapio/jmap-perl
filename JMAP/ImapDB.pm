@@ -55,6 +55,8 @@ my %ROLE_MAP = (
   'deleted messages' => 'trash',
   'trash' => 'trash',
 
+  'spam' => 'junk',
+
   '\\inbox' => 'inbox',
   '\\trash' => 'trash',
   '\\sent' => 'sent',
@@ -62,7 +64,38 @@ my %ROLE_MAP = (
   '\\spam' => 'junk',
   '\\archive' => 'archive',
   '\\drafts' => 'drafts',
+
+  # Localised names. A server that doesn't advertise RFC 6154 special-use
+  # attributes in its LIST response leaves the folder name as the only role
+  # signal, and a client with no mailbox in the 'drafts'/'sent' role refuses to
+  # compose at all. Non-ASCII is written as \x{} escapes on purpose: the keys
+  # are matched against decoded character strings, and 'use utf8' here would
+  # reinterpret every other literal in this file.
+  # Not here: 'Posteingang' (IMAP always calls the inbox INBOX, so a folder of
+  # that name is a different one) and 'Werbung' (a folder people keep
+  # newsletters in to read them, not junk).
+  "entw\x{fc}rfe" => 'drafts',
+
+  'gesendet' => 'sent',
+  'gesendete objekte' => 'sent',
+  'gesendete elemente' => 'sent',
+  'gesendete nachrichten' => 'sent',
+
+  'papierkorb' => 'trash',
+  "gel\x{f6}schte objekte" => 'trash',
+  "gel\x{f6}schte elemente" => 'trash',
+
+  'archiv' => 'archive',
+
+  'junk-e-mail' => 'junk',
+  "unerw\x{fc}nscht" => 'junk',
 );
+
+# The localised names above: when two folders claim a role by name, an
+# English one is preferred (sync_jmailboxes).
+my %LOCALISED_ROLE_NAME = map { $_ => 1 } ("entw\x{fc}rfe", 'gesendet', 'gesendete objekte',
+  'gesendete elemente', 'gesendete nachrichten', 'papierkorb', "gel\x{f6}schte objekte",
+  "gel\x{f6}schte elemente", 'archiv', 'junk-e-mail', "unerw\x{fc}nscht");
 
 sub setuser {
   my $Self = shift;
@@ -335,11 +368,38 @@ sub sync_jmailboxes {
   # one folder claims it (see below).
   my %rolecount;
   my %folderrole;
+  my (%byattr, %guessers);
   foreach my $folder (@$ifolders) {
     next if lc $folder->{label} eq "\\allmail";
     my ($role, $byname) = _folder_role($folder);
     next unless $role;
     $folderrole{$folder->{ifolderid}} = [$role, $byname];
+    if ($byname) { push @{$guessers{$role}}, $folder } else { $byattr{$role}++ }
+  }
+  # A role guessed from a name goes to one folder only: with "Sent" and
+  # "Gesendet" side by side, a second claimant would be merged onto the first
+  # folder's mailbox below and vanish from view; with none chosen, the account
+  # would have no sent mailbox at all. A special-use attribute is the server's
+  # own word and beats any guess. Otherwise the folder whose mailbox already
+  # holds the role keeps it, then the folder named exactly after the role,
+  # then other English names, then localised ones, then by name.
+  my %guess_winner;
+  for my $role (keys %guessers) {
+    next if $byattr{$role};
+    my @c = @{$guessers{$role}};
+    my ($holder) = grep { my $m = $_->{jmailboxid} && $jbyid{$_->{jmailboxid}};
+                          $m && ($m->{role} // '') eq $role } @c;
+    my $rank = sub {
+      my $n = lc(eval { decode('IMAP-UTF-7', $_[0]{label}) } // $_[0]{label});
+      return ($n eq $role ? 0 : $LOCALISED_ROLE_NAME{$n} ? 2 : 1, $n);
+    };
+    ($holder) = sort { my @x = $rank->($a); my @y = $rank->($b);
+                       $x[0] <=> $y[0] || $x[1] cmp $y[1] } @c unless $holder;
+    $guess_winner{$role} = $holder->{ifolderid};
+  }
+  for my $fid (keys %folderrole) {
+    my ($role, $byname) = @{$folderrole{$fid}};
+    if ($byname && (($guess_winner{$role} // '') ne $fid)) { delete $folderrole{$fid}; next }
     $rolecount{$role}++;
   }
 
@@ -353,12 +413,8 @@ sub sync_jmailboxes {
     shift @bits if ($bits[0] eq 'INBOX' and $bits[1]); # really we should be stripping the actual prefix, if any
     shift @bits if $bits[0] eq '[Gmail]'; # we special case this GMail magic
     next unless @bits; # also skip the magic '[Gmail]' top-level
+    # (only the folder chosen above still has a role it guessed by name)
     my ($role, $byname) = @{ $folderrole{$folder->{ifolderid}} || [] };
-    # A role guessed from a name is only taken when no other folder claims
-    # it: with "Sent" and "Gesendet" side by side, the second would be
-    # merged onto the first folder's mailbox below and vanish from view.
-    # A special-use attribute is the server's own word and always counts.
-    undef $role if $byname and $rolecount{$role} > 1;
     my $id = undef;
     my $parentId = undef;
     my $name;
