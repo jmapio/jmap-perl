@@ -299,6 +299,21 @@ sub _make_json_io {
   return ($read_json, $write_json);
 }
 
+# CalDAV/CardDAV are optional extras: a broken or unsupported DAV server
+# (e.g. SOGo rejecting a PROPFIND) must not abort the whole 'sync' command,
+# which would kill the worker and take mail sync down with it every tick.
+# A failure can leave a transaction open, so roll it back before going on,
+# or the next begin() confesses ALREADY IN TRANSACTION.
+sub _dav_sync_safely {
+  my ($db, $accountid) = @_;
+  for my $what (qw(sync_calendars sync_addressbooks)) {
+    next if eval { $db->$what(); 1 };
+    my $err = $@;
+    $db->reset();
+    warn "$what failed for $accountid: $err";
+  }
+}
+
 sub run_backend_worker {
   my ($sock, $name) = @_;
 
@@ -866,8 +881,7 @@ sub run_backend_worker {
         return ['sync', $JSON::true] if $db->can('handle_jmap');
         $db->sync_folders();
         $db->sync_imap();
-        $db->sync_calendars();
-        $db->sync_addressbooks();
+        _dav_sync_safely($db, $accountid);
         # A full WebDAV walk costs a request per collection, so the periodic
         # tick only runs it every 300s (spec "Sync"); an explicit sync from
         # the management API ({force => 1}) always does.
@@ -896,8 +910,7 @@ sub run_backend_worker {
         return ['send_due', $db->send_due()];
       }
       if ($cmd eq 'davsync') {
-        $db->sync_calendars();
-        $db->sync_addressbooks();
+        _dav_sync_safely($db, $accountid);
         return ['davsync', $JSON::true];
       }
       if ($cmd eq 'session_caps') {
