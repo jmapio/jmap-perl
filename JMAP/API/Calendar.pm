@@ -353,10 +353,28 @@ sub api_Calendar_set {
   $oldState = "$user->{jstateCalendar}";
   $Self->commit();
 
+  $create = { %$create };
+  my ($badCreate) = $Self->_collection_precheck($create, {}, 'api_Calendar_get');
   ($created, $notCreated) = $Self->{db}->create_calendars($create);
+  $notCreated = { %{$notCreated || {}}, %$badCreate } if %$badCreate;
   $Self->setid($_, $created->{$_}{id}) for keys %$created;
+  # RFC 8620 S5.3: created holds every property the client did not send --
+  # the server-set ones and those the server defaulted
+  if (%$created) {
+    my $res = $Self->api_Calendar_get({ ids => [map { $_->{id} } values %$created] });
+    my %got = map { $_->{id} => $_ } @{ $res->[1]{list} || [] };
+    for my $cid (keys %$created) {
+      my $rec = $got{ $created->{$cid}{id} } or next;
+      for my $prop (keys %$rec) {
+        $created->{$cid}{$prop} = $rec->{$prop} unless exists $create->{$cid}{$prop};
+      }
+    }
+  }
   my $patchInvalid = $Self->_resolve_patch($update, 'api_Calendar_get');
+  # after _resolve_patch, so a myRights/... patch is checked as a whole
+  my (undef, $badUpdate) = $Self->_collection_precheck({}, $update, 'api_Calendar_get');
   ($updated, $notUpdated) = $Self->{db}->update_calendars($update, sub { $Self->idmap(shift) });
+  $notUpdated = { %{$notUpdated || {}}, %$badUpdate } if %$badUpdate;
   $notUpdated = { %{$notUpdated || {}}, %$patchInvalid } if %$patchInvalid;   # RFC 8620 S5.3
 
   my $onDestroyRemoveEvents = $args->{onDestroyRemoveEvents} ? 1 : 0;

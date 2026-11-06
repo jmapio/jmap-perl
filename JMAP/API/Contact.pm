@@ -666,10 +666,28 @@ sub api_AddressBook_set {
 
   $Self->{db}->sync_addressbooks();
 
+  $create = { %$create };
+  my ($badCreate) = $Self->_collection_precheck($create, {}, 'api_AddressBook_get');
   ($created, $notCreated) = $Self->{db}->create_addressbooks($create);
+  $notCreated = { %{$notCreated || {}}, %$badCreate } if %$badCreate;
   $Self->setid($_, $created->{$_}{id}) for keys %$created;
+  # RFC 8620 S5.3: created holds every property the client did not send --
+  # the server-set ones and those the server defaulted
+  if (%$created) {
+    my $res = $Self->api_AddressBook_get({ ids => [map { $_->{id} } values %$created] });
+    my %got = map { $_->{id} => $_ } @{ $res->[1]{list} || [] };
+    for my $cid (keys %$created) {
+      my $rec = $got{ $created->{$cid}{id} } or next;
+      for my $prop (keys %$rec) {
+        $created->{$cid}{$prop} = $rec->{$prop} unless exists $create->{$cid}{$prop};
+      }
+    }
+  }
   my $patchInvalid = $Self->_resolve_patch($update, 'api_AddressBook_get');
+  # after _resolve_patch, so a myRights/... patch is checked as a whole
+  my (undef, $badUpdate) = $Self->_collection_precheck({}, $update, 'api_AddressBook_get');
   ($updated, $notUpdated) = $Self->{db}->update_addressbooks($update);
+  $notUpdated = { %{$notUpdated || {}}, %$badUpdate } if %$badUpdate;
   $notUpdated = { %{$notUpdated || {}}, %$patchInvalid } if %$patchInvalid;   # RFC 8620 S5.3
 
   my (@safe_destroy, %pre_notDestroyed);
@@ -709,8 +727,16 @@ sub api_AddressBook_set {
       my $before = $defaults->();
       $Self->{db}->set_default_addressbook($Self->idmap($osis));
       my $after = $defaults->();
+      # One created in this call is reported in created, not updated (RFC
+      # 9610 S2.3: "in either the created or updated argument ... as
+      # appropriate").
+      my %createdId = map { $created->{$_}{id} => $_ } keys %$created;
       for my $id (keys %$after) {
         next if ($before->{$id} // 0) == $after->{$id};
+        if (my $cid = $createdId{$id}) {
+          $created->{$cid}{isDefault} = $after->{$id} ? JSON::true : JSON::false;
+          next;
+        }
         $updated->{$id}{isDefault} = $after->{$id} ? JSON::true : JSON::false;
       }
     }

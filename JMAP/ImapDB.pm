@@ -922,6 +922,16 @@ sub create_addressbooks {
     $Self->commit();
 
     if ($found && $found->{jaddressbookid}) {
+      # The properties CardDAV doesn't carry live only here, as update does
+      my %local;
+      $local{description} = $ab->{description} if exists $ab->{description};
+      $local{sortOrder}   = $ab->{sortOrder}   if exists $ab->{sortOrder};
+      $local{isVisible}   = $ab->{isSubscribed} ? 1 : 0 if exists $ab->{isSubscribed};
+      if (%local) {
+        $Self->begin();
+        $Self->ddirty('jaddressbooks', \%local, { jaddressbookid => $found->{jaddressbookid} });
+        $Self->commit();
+      }
       $createmap{$cid} = { id => "$found->{jaddressbookid}" };
     } else {
       $notcreated{$cid} = { type => 'serverFail', description => 'addressbook created but not found after sync' };
@@ -1022,6 +1032,12 @@ sub destroy_addressbooks {
 sub set_default_addressbook {
   my ($Self, $jaddressbookid) = @_;
   $Self->begin();
+  # RFC 9610 S2.3: an id that is not found "MUST be ignored and the current
+  # default AddressBook (if any) will remain as such"
+  unless ($Self->dgetone('jaddressbooks', { jaddressbookid => $jaddressbookid, active => 1 }, 'jaddressbookid')) {
+    $Self->commit();
+    return;
+  }
   $Self->dbh->do("UPDATE jaddressbooks SET isDefault = 0 WHERE active = 1");
   $Self->dbh->do("UPDATE jaddressbooks SET isDefault = 1 WHERE jaddressbookid = ? AND active = 1", {}, $jaddressbookid);
   $Self->commit();

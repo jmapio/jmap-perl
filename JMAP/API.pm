@@ -781,4 +781,74 @@ require JMAP::API::Quota;
 require JMAP::API::Principal;
 require JMAP::API::Blob;
 
+# The properties a Calendar or AddressBook create ($current undef) or update
+# ($current = the record as /get returns it) gets wrong:
+# - name "MUST NOT be the empty string and MUST NOT be greater than 255
+#   octets in size when encoded as UTF-8" (draft-ietf-jmap-calendars S4,
+#   RFC 9610 S2), and a create must give one;
+# - sortOrder "MUST be an integer in the range 0 <= sortOrder < 2^31";
+# - isDefault and myRights are server-set: RFC 8620 S5.3, the client "MUST
+#   omit" them on create (isDefault false, what a new one gets, is let pass),
+#   and on update they may appear only with their current value, "Otherwise,
+#   the update MUST be rejected with an invalidProperties SetError".
+my $CANON = JSON::XS->new->canonical->allow_nonref;
+sub _collection_bad_props {
+  my ($patch, $current) = @_;
+  my @bad;
+  if (exists $patch->{name}) {
+    my $n = $patch->{name};
+    push @bad, 'name'
+      unless defined $n && !ref $n && length $n && length(Encode::encode_utf8($n)) <= 255;
+  }
+  elsif (!$current) {
+    push @bad, 'name';
+  }
+  if (exists $patch->{sortOrder}) {
+    my $v = $patch->{sortOrder};
+    push @bad, 'sortOrder'
+      unless defined $v && !ref $v && $v =~ /^\d+$/ && $v < 2**31;
+  }
+  for my $prop (qw(isDefault myRights)) {
+    next unless exists $patch->{$prop};
+    if ($current) {
+      push @bad, $prop
+        unless $CANON->encode($patch->{$prop}) eq $CANON->encode($current->{$prop});
+    }
+    else {
+      push @bad, $prop
+        unless $prop eq 'isDefault' && JSON::XS::is_bool($patch->{$prop}) && !$patch->{$prop};
+    }
+  }
+  return @bad;
+}
+
+# Take the creates and updates _collection_bad_props rejects out of $create
+# and $update; returns (\%notCreated, \%notUpdated) for them. $get is the
+# /get method that gives an update's current values.
+sub _collection_precheck {
+  my ($Self, $create, $update, $get) = @_;
+  my (%notCreated, %notUpdated);
+  for my $cid (keys %$create) {
+    next unless ref $create->{$cid} eq 'HASH';
+    my @bad = _collection_bad_props($create->{$cid}, undef);
+    next unless @bad;
+    delete $create->{$cid};
+    $notCreated{$cid} = { type => 'invalidProperties', properties => \@bad };
+  }
+  my @ids = grep { ref $update->{$_} eq 'HASH' } keys %$update;
+  if (@ids) {
+    my $res = $Self->$get({ ids => [map { $Self->idmap($_) } @ids],
+                            properties => [qw(id isDefault myRights)] });
+    my %current = map { $_->{id} => $_ } @{ $res->[1]{list} || [] };
+    for my $id (@ids) {
+      my $cur = $current{ $Self->idmap($id) } or next;   # notFound comes later
+      my @bad = _collection_bad_props($update->{$id}, $cur);
+      next unless @bad;
+      delete $update->{$id};
+      $notUpdated{$id} = { type => 'invalidProperties', properties => \@bad };
+    }
+  }
+  return (\%notCreated, \%notUpdated);
+}
+
 1;
