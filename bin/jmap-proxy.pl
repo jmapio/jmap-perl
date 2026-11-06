@@ -3926,8 +3926,21 @@ sub _do_accounts_authed {
 sub do_logout {
   my ($httpd, $req) = @_;
   my $cookie = bake_cookie("jmap_proxy", { value => '', path => '/', expires => '-1d' });
-  $req->respond([301, 'redirected',
-    { 'Set-Cookie' => $cookie, Location => "$BASEURL/" }, "Redirected"]);
+  my $finish = sub {
+    $req->respond([301, 'redirected',
+      { 'Set-Cookie' => $cookie, Location => "$BASEURL/" }, "Redirected"]);
+  };
+
+  my $cookies = crush_cookie($req->headers->{cookie} || '');
+  my $my_token = $cookies->{jmap_proxy};
+  return $finish->() unless $my_token;
+
+  # End the session for real: only clearing the cookie would leave the token
+  # valid, and each new login would add another row to the session list.
+  $httpd->stop_request();
+  delete $auth_cache{"bearer:$my_token"};
+  delete $token_touch{$my_token};
+  send_backend_request('__accounts__', 'delete_token', { token => $my_token }, $finish, $finish);
 }
 
 # GET /eventsource — Server-Sent Events endpoint (RFC 8620 §7.3)
