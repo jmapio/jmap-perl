@@ -123,7 +123,9 @@ my %NO_ACCOUNT_METHOD = ('Core/echo' => 1);
 # Returns { position => error_arguments } for the calls that must not be
 # forwarded. RFC 8620 §3.6.2: a missing (or non-string) required argument is
 # invalidArguments, and an accountId that is not one of the session's accounts
-# is accountNotFound. $known is a hashref whose keys are the valid accountIds.
+# is accountNotFound -- or, for a /copy's fromAccountId, fromAccountNotFound
+# (RFC 8620 S5.4; an unknown accountId wins when both are unknown).
+# $known is a hashref whose keys are the valid accountIds.
 #
 # A call may omit accountId only via a "#accountId" ResultReference, which is
 # resolved later; that is left alone here. The proxy used to fill in the
@@ -139,15 +141,16 @@ sub check_accounts {
         next if $NO_ACCOUNT_METHOD{ $call->[0] // '' };
         my $args   = $call->[1];
         my @fields = is_copy_method($call->[0]) ? qw(fromAccountId accountId) : qw(accountId);
-        my (@missing, $unknown);
+        my (@missing, %unknown);
         for my $f (@fields) {
             next if exists $args->{"#$f"};
             my $v = $args->{$f};
             if (!defined $v || ref $v) { push @missing, $f; next }
-            $unknown = 1 unless $known->{$v};
+            $unknown{$f} = 1 unless $known->{$v};
         }
-        if (@missing)    { $errors{$pos} = { type => 'invalidArguments', arguments => \@missing } }
-        elsif ($unknown) { $errors{$pos} = { type => 'accountNotFound' } }
+        if (@missing)                   { $errors{$pos} = { type => 'invalidArguments', arguments => \@missing } }
+        elsif ($unknown{accountId})     { $errors{$pos} = { type => 'accountNotFound' } }
+        elsif ($unknown{fromAccountId}) { $errors{$pos} = { type => 'fromAccountNotFound' } }
     }
     return \%errors;
 }

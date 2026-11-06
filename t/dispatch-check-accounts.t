@@ -61,7 +61,9 @@ is_deeply($e, { 0 => { type => 'invalidArguments', arguments => ['fromAccountId'
 $e = errors_for([['Email/copy', { fromAccountId => 'ACCT', accountId => 'NOPE' }, '0']]);
 is_deeply($e, { 0 => { type => 'accountNotFound' } }, 'copy to an unknown account is accountNotFound');
 $e = errors_for([['Email/copy', { fromAccountId => 'NOPE', accountId => 'ACCT' }, '0']]);
-is_deeply($e, { 0 => { type => 'accountNotFound' } }, 'copy from an unknown account is accountNotFound');
+is_deeply($e, { 0 => { type => 'fromAccountNotFound' } }, 'copy from an unknown account is fromAccountNotFound (RFC 8620 S5.4)');
+$e = errors_for([['Email/copy', { fromAccountId => 'NOPE', accountId => 'NOPE2' }, '0']]);
+is_deeply($e, { 0 => { type => 'accountNotFound' } }, 'both unknown: accountNotFound wins');
 $e = errors_for([['Email/copy', { fromAccountId => 'ACCT', accountId => 'OTHER' }, '0']]);
 is_deeply($e, {}, 'copy between two known accounts passes');
 
