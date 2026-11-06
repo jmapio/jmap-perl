@@ -4451,6 +4451,105 @@ sub _set_schedule_agent_client {
   }
 }
 
+# --- CalendarEvent/set checks (draft-ietf-jmap-calendars S5.9, JSCalendar) ---
+
+# calendarIds: "An event MUST belong to one or more Calendars at all times
+# ... The value for each key in the object MUST be true" (S5), and an id
+# that is not a calendar is an invalid foreign key (RFC 8620 S5.3).
+sub _event_calendarids_ok {
+  my ($Self, $cids) = @_;
+  return 0 unless ref $cids eq 'HASH' && %$cids;
+  for my $id (keys %$cids) {
+    return 0 unless JSON::XS::is_bool($cids->{$id}) && $cids->{$id};
+    return 0 unless $Self->dgetfield('icalendars', { jcalendarid => $id }, 'href');
+  }
+  return 1;
+}
+
+# The recurrenceOverrides problems: an excluded one "MUST be a JSON object
+# with a single member ... excluded ... true" (jscalendarbis S3.3.4 /
+# RFC 8984 S4.3.5), and utcStart/utcEnd "cannot be set inside
+# recurrenceOverrides" (S5.9). Pointers the JSCalendar rules say to ignore
+# (uid, @type, ...) are left alone.
+sub _event_override_bad {
+  my ($ov) = @_;
+  return () unless ref $ov eq 'HASH';
+  my @bad;
+  for my $rid (sort keys %$ov) {
+    my $patch = $ov->{$rid};
+    next unless ref $patch eq 'HASH';
+    if (exists $patch->{excluded}) {
+      my $x = $patch->{excluded};
+      push @bad, "recurrenceOverrides/$rid"
+        unless JSON::XS::is_bool($x) && (!$x || keys %$patch == 1);
+    }
+    push @bad, "recurrenceOverrides/$rid"
+      if grep { exists $patch->{$_} } qw(utcStart utcEnd);
+  }
+  my %u; return grep { !$u{$_}++ } @bad;
+}
+
+# An exact duration in hours, minutes and seconds (no nominal days, which a
+# DST change would stretch), e.g. PT1H30M.
+sub _seconds_to_duration {
+  my ($secs) = @_;
+  my ($h, $m, $s) = (int($secs / 3600), int(($secs % 3600) / 60), $secs % 60);
+  my $d = 'PT' . ($h ? "${h}H" : '') . ($m ? "${m}M" : '') . ($s || !($h || $m) ? "${s}S" : '');
+  return $d;
+}
+
+# utcStart and utcEnd (S5.9): each "is translated into" start/duration in
+# the event's time zone; it "MUST NOT be set in addition to" start/duration,
+# and a floating event gets the server's timeZone ("MUST also set this
+# property", S5). $ev is the create, or the update over $current (the stored
+# event). Returns (\@bad, \%server_set); on success $ev has start/duration
+# and no utcStart/utcEnd.
+sub _event_translate_utc {
+  my ($Self, $ev, $current, $jcalendarid) = @_;
+  my (@bad, %server_set);
+  return (\@bad, \%server_set) unless exists $ev->{utcStart} || exists $ev->{utcEnd};
+  push @bad, 'utcStart' if exists $ev->{utcStart} && exists $ev->{start};
+  push @bad, 'utcEnd'   if exists $ev->{utcEnd}   && exists $ev->{duration};
+  return (\@bad, \%server_set) if @bad;
+
+  require DateTime;
+  require DateTime::Format::ISO8601;
+  my $parse_utc = sub {
+    my ($v) = @_;
+    return undef unless defined $v && !ref $v
+      && $v =~ /\A(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(?:\.\d+)?Z\z/;
+    return eval { DateTime->new(year => $1, month => $2, day => $3, hour => $4,
+                                minute => $5, second => $6, time_zone => 'UTC') };
+  };
+
+  my $tz = exists $ev->{timeZone} ? $ev->{timeZone} : $current->{timeZone};
+  unless (defined $tz) {
+    $tz = ($jcalendarid && $Self->dgetfield('jcalendars', { jcalendarid => $jcalendarid }, 'timeZone'))
+        || 'Etc/UTC';
+    $ev->{timeZone} = $server_set{timeZone} = $tz;
+  }
+  return (['timeZone'], {}) unless eval { DateTime::TimeZone->new(name => $tz) };
+
+  my $start_utc;
+  if (exists $ev->{utcStart}) {
+    $start_utc = $parse_utc->(delete $ev->{utcStart}) or return (['utcStart'], {});
+    $ev->{start} = $start_utc->clone->set_time_zone($tz)->strftime('%Y-%m-%dT%H:%M:%S');
+  }
+  if (exists $ev->{utcEnd}) {
+    my $end = $parse_utc->(delete $ev->{utcEnd}) or return (['utcEnd'], {});
+    unless ($start_utc) {
+      my $start = $ev->{start} // $current->{start};
+      $start_utc = defined $start && eval {
+        DateTime::Format::ISO8601->parse_datetime($start)->set_time_zone($tz)->set_time_zone('UTC')
+      } or return (['utcEnd'], {});
+    }
+    my $secs = $end->epoch - $start_utc->epoch;
+    return (['utcEnd'], {}) if $secs < 0;
+    $ev->{duration} = _seconds_to_duration($secs);
+  }
+  return (\@bad, \%server_set);
+}
+
 sub create_calendar_events {
   my $Self = shift;
   my $new = shift;
@@ -4468,6 +4567,14 @@ sub create_calendar_events {
     # draft-ietf-jmap-calendars S5.9: "The method property MUST NOT be set."
     if (exists $calendar->{method}) {
       $notcreated{$cid} = { type => 'invalidProperties', properties => ['method'] };
+      next;
+    }
+    unless ($Self->_event_calendarids_ok($calendar->{calendarIds})) {
+      $notcreated{$cid} = { type => 'invalidProperties', properties => ['calendarIds'] };
+      next;
+    }
+    if (my @bad = _event_override_bad($calendar->{recurrenceOverrides})) {
+      $notcreated{$cid} = { type => 'invalidProperties', properties => \@bad };
       next;
     }
     my @cal_ids = grep { ($calendar->{calendarIds} || {})->{$_} }
@@ -4491,10 +4598,15 @@ sub create_calendar_events {
     my %ev = (%$calendar, uid => $uid);
     delete $ev{calendarIds};
     delete $ev{calendarId};
+    my ($utc_bad, $utc_set) = $Self->_event_translate_utc(\%ev, {}, $jcalendarid);
+    if (@$utc_bad) {
+      $notcreated{$cid} = { type => 'invalidProperties', properties => $utc_bad };
+      next;
+    }
     # S5.9: if omitted the server sets @type, uid and created; on an event
     # this server originates, updated is always the server's time, and a
     # client created later than that is reset with it.
-    my %server_set;
+    my %server_set = %$utc_set;
     $server_set{uid} = $uid unless defined $calendar->{uid};
     $server_set{'@type'} = $ev{'@type'} = 'Event' unless defined $ev{'@type'};
     $server_set{created} = $ev{created} = $now unless defined $ev{created};
@@ -4577,6 +4689,15 @@ sub update_calendar_events {
       next;
     }
 
+    if (exists $calendar->{calendarIds}
+        && !$Self->_event_calendarids_ok($calendar->{calendarIds})) {
+      $notchanged{$uid} = { type => 'invalidProperties', properties => ['calendarIds'] };
+      next;
+    }
+    if (my @bad = _event_override_bad($calendar->{recurrenceOverrides})) {
+      $notchanged{$uid} = { type => 'invalidProperties', properties => \@bad };
+      next;
+    }
     if (my $cids = $calendar->{calendarIds}) {
       my @active = grep { $cids->{$_} } keys %$cids;
       if (@active > 1) {
@@ -4589,7 +4710,7 @@ sub update_calendar_events {
         my $new_jcal_id = $active[0];
         my $new_ical = $Self->dgetone('icalendars', {jcalendarid => $new_jcal_id});
         unless ($new_ical) {
-          $notchanged{$uid} = {type => 'notFound', description => 'Target calendar not found'};
+          $notchanged{$uid} = { type => 'invalidProperties', properties => ['calendarIds'] };
           next;
         }
         my $cur_icalid = $Self->dgetfield('ievents', {href => $href}, 'icalendarid');
@@ -4601,6 +4722,15 @@ sub update_calendar_events {
     my %ev = %$calendar;
     delete $ev{calendarIds};
     delete $ev{calendarId};
+    if (exists $ev{utcStart} || exists $ev{utcEnd}) {
+      my $current = $Self->read_jevent_payload($uid) // {};
+      my ($cur_cal) = keys %{ $current->{calendarIds} || {} };
+      my ($utc_bad) = $Self->_event_translate_utc(\%ev, $current, $cur_cal);
+      if (@$utc_bad) {
+        $notchanged{$uid} = { type => 'invalidProperties', properties => $utc_bad };
+        next;
+      }
+    }
     $ev{updated} //= _utcnow();
     my $no_sched = defined $ev{sendSchedulingMessages} ? !$ev{sendSchedulingMessages} : 0;
     delete $ev{sendSchedulingMessages};
