@@ -405,13 +405,8 @@ sub api_Email_query {
   # defaults to 0; without one, anchorOffset is ignored.
   my $start = $args->{position} || 0;
 
-  my %valid_sort = map { $_ => 1 } qw(
-    id receivedAt sentAt size subject from to
-    hasKeyword allInThreadHaveKeyword someInThreadHaveKeyword
-  );
-  for my $arg (@{$args->{sort} // []}) {
-    return $Self->_transError(['error', {type => 'unsupportedSort', sort => $arg}])
-      unless $valid_sort{$arg->{property} // ''};
+  if (my $err = _email_sort_error($args->{sort})) {
+    return $Self->_transError(['error', $err]);
   }
 
   my $data = $Self->{db}->dget('jmessages', { active => 1 });
@@ -495,6 +490,9 @@ sub api_Email_queryChanges {
 
   return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['sinceQueryState']}])
     if not $args->{sinceQueryState};
+  if (my $err = _email_sort_error($args->{sort})) {
+    return $Self->_transError(['error', $err]);
+  }
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newQueryState => $newQueryState}])
     if ($user->{jdeletedmodseq} and $args->{sinceQueryState} <= $user->{jdeletedmodseq});
 
@@ -968,6 +966,28 @@ sub api_Email_changes {
 
 # RFC 8621 S4.1.1: a keyword is 1-255 characters of %x21-%x7e, none of
 # ( ) { ] % * " \ -- and in the keywords object every value MUST be true.
+# The error for an Email/query or Email/queryChanges sort, or undef if it is
+# fine. RFC 8621 S4.4.2: a hasKeyword, allInThreadHaveKeyword or
+# someInThreadHaveKeyword Comparator "MUST also have a keyword property";
+# without one it is invalidArguments (RFC 8620 S3.6.2, "a required argument
+# is missing").
+my %EMAIL_SORT = map { $_ => 1 } qw(
+  id receivedAt sentAt size subject from to
+  hasKeyword allInThreadHaveKeyword someInThreadHaveKeyword
+);
+my %KEYWORD_SORT = map { $_ => 1 } qw(hasKeyword allInThreadHaveKeyword someInThreadHaveKeyword);
+sub _email_sort_error {
+  my ($sort) = @_;
+  for my $arg (@{$sort // []}) {
+    my $prop = ref $arg eq 'HASH' ? ($arg->{property} // '') : '';
+    return { type => 'unsupportedSort', sort => $arg } unless $EMAIL_SORT{$prop};
+    return { type => 'invalidArguments', arguments => ['sort'],
+             description => "a $prop sort needs a valid keyword" }
+      if $KEYWORD_SORT{$prop} and not _keyword_ok($arg->{keyword});
+  }
+  return undef;
+}
+
 sub _keyword_ok {
   my $k = shift;
   return defined $k && $k =~ /^[\x21-\x7e]{1,255}$/ && $k !~ /[(){\]%*"\\]/;
