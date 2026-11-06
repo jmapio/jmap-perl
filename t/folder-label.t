@@ -31,6 +31,12 @@ is($label->('INBOX.', [['\\HasNoChildren', '\\Sent'], '.', 'INBOX.Sent']), '\\Se
 is($label->('INBOX.', [['\\HasChildren', '\\NoSelect'], '.', 'INBOX.Stuff']), 'Stuff',
    'structural flags alone are not treated as a role');
 
+is($label->('INBOX.', [['\\Unmarked', '\\Subscribed'], '.', 'INBOX.Stuff']), 'Stuff',
+   'state flags are not a role either, only special-use ones are');
+
+is($label->('', [['\\HasNoChildren', '\\AllMail'], '/', '[Gmail]/All Mail']), '\\AllMail',
+   "Gmail XLIST's \\AllMail is still a role: the Gmail sync keys on it");
+
 # --- the crash: NIL separator ----------------------------------------------
 
 {
