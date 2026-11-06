@@ -1005,6 +1005,9 @@ sub _keywords_ok {
   return 1;
 }
 
+# The Email properties only the server sets (RFC 8621 S4.1.1)
+my %EMAIL_SERVER_SET = map { $_ => 1 } qw(id blobId threadId size);
+
 sub api_Email_set {
   my $Self = shift;
   my $args = shift;
@@ -1060,6 +1063,32 @@ sub api_Email_set {
     $badUpdate{$id} = delete $update->{$id} unless $ok;
   }
 
+  # Only keywords and mailboxIds may change on an Email: every other property
+  # is immutable (RFC 8621 S4.1; RFC 8620 S1.1: "MUST NOT change after the
+  # object is created"), and a server-set one may be in a patch only with its
+  # current value, "Otherwise, the update MUST be rejected with an
+  # invalidProperties SetError" (RFC 8620 S5.3). They used to be ignored and
+  # the Email reported updated.
+  my %immutable;
+  for my $id (keys %$update) {
+    my $patch = $update->{$id};
+    next unless ref $patch eq 'HASH';
+    my %props = map { (m{^([^/]+)} ? $1 : $_) => 1 } keys %$patch;
+    delete @props{qw(keywords mailboxIds)};
+    next unless %props;
+    my @serverset = grep { $EMAIL_SERVER_SET{$_} && exists $patch->{$_} } keys %props;
+    my $current = @serverset
+      ? ($Self->api_Email_get({ ids => [$id], properties => \@serverset })->[1]{list}[0] // {})
+      : {};
+    my @bad = sort grep {
+      !($EMAIL_SERVER_SET{$_} && exists $patch->{$_} && defined $patch->{$_}
+        && !ref $patch->{$_} && defined $current->{$_} && "$patch->{$_}" eq "$current->{$_}")
+    } keys %props;
+    next unless @bad;
+    delete $update->{$id};
+    $immutable{$id} = { type => 'invalidProperties', properties => \@bad };
+  }
+
   ($created, $notCreated) = $Self->{db}->create_messages($create, sub { $Self->idmap(shift) });
   $Self->setid($_, $created->{$_}{id}) for keys %$created;
   my $patchInvalid = $Self->_resolve_patch($update, 'api_Email_get');
@@ -1067,6 +1096,7 @@ sub api_Email_set {
   $notUpdated = { %{$notUpdated || {}}, %$patchInvalid } if %$patchInvalid;   # RFC 8620 S5.3
   $notCreated->{$_} = { type => 'invalidProperties', properties => ['keywords'] } for keys %badCreate;
   $notUpdated->{$_} = { type => 'invalidProperties', properties => ['keywords'] } for keys %badUpdate;
+  $notUpdated = { %{$notUpdated || {}}, %immutable } if %immutable;
   ($destroyed, $notDestroyed) = $Self->{db}->destroy_messages($destroy);
 
   # XXX - cheap dumb racy version
