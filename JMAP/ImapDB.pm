@@ -272,6 +272,16 @@ sub sync_jmailboxes {
     $byname{$mailbox->{parentId} // ''}{$mailbox->{name}} = $mailbox->{jmailboxid};
   }
 
+  # How many folders claim each role: "Sent" and "Sent Items" both map to
+  # sent, and a role is only filled in on an existing mailbox when exactly
+  # one folder claims it (see below).
+  my %rolecount;
+  foreach my $folder (@$ifolders) {
+    next if lc $folder->{label} eq "\\allmail";
+    my $role = $ROLE_MAP{lc $folder->{label}};
+    $rolecount{$role}++ if $role;
+  }
+
   my %seen;
   foreach my $folder (@$ifolders) {
     next if lc $folder->{label} eq "\\allmail"; # we don't show this folder
@@ -348,6 +358,21 @@ sub sync_jmailboxes {
       mayAdmin        => $has_rights ? ($r{a} ? 1 : 0) : 1,
     );
     if ($id) {
+      # %details carries no 'role', so a role is only ever written by the
+      # dmake() below — at creation time. A mailbox that existed before its
+      # name became recognisable (a new %ROLE_MAP entry, or the server starting
+      # to report special-use attributes) would therefore keep role=NULL for
+      # good, no matter how often it re-syncs. Fill it in, but never overwrite
+      # an existing role: that may be a deliberate Mailbox/set from a client,
+      # and don't steal a role another mailbox already claims this round.
+      # Only when this is the one folder claiming the role: with two ("Sent"
+      # and "Sent Items"), the second would then be merged onto the first
+      # mailbox by the branch below, and its own mailbox would disappear.
+      if ($role and $rolecount{$role} == 1 and not $roletoid{$role}
+          and not ($jbyid{$id} and $jbyid{$id}{role})) {
+        $Self->dmaybedirty('jmailboxes', {role => $role}, {jmailboxid => $id}, 'jnoncountsmodseq');
+        $roletoid{$role} = $id;
+      }
       if ($role and $roletoid{$role} and $roletoid{$role} ne $id) {
         # still gotta move it
         $id = $roletoid{$role};
