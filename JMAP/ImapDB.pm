@@ -55,6 +55,8 @@ my %ROLE_MAP = (
   'deleted messages' => 'trash',
   'trash' => 'trash',
 
+  'spam' => 'junk',
+
   '\\inbox' => 'inbox',
   '\\trash' => 'trash',
   '\\sent' => 'sent',
@@ -62,6 +64,31 @@ my %ROLE_MAP = (
   '\\spam' => 'junk',
   '\\archive' => 'archive',
   '\\drafts' => 'drafts',
+
+  # Localised names. A server that doesn't advertise RFC 6154 special-use
+  # attributes in its LIST response leaves the folder name as the only role
+  # signal, and a client with no mailbox in the 'drafts'/'sent' role refuses to
+  # compose at all. Non-ASCII is written as \x{} escapes on purpose: the keys
+  # are matched against decoded character strings, and 'use utf8' here would
+  # reinterpret every other literal in this file.
+  # Not here: 'Posteingang' (IMAP always calls the inbox INBOX, so a folder of
+  # that name is a different one) and 'Werbung' (a folder people keep
+  # newsletters in to read them, not junk).
+  "entw\x{fc}rfe" => 'drafts',
+
+  'gesendet' => 'sent',
+  'gesendete objekte' => 'sent',
+  'gesendete elemente' => 'sent',
+  'gesendete nachrichten' => 'sent',
+
+  'papierkorb' => 'trash',
+  "gel\x{f6}schte objekte" => 'trash',
+  "gel\x{f6}schte elemente" => 'trash',
+
+  'archiv' => 'archive',
+
+  'junk-e-mail' => 'junk',
+  "unerw\x{fc}nscht" => 'junk',
 );
 
 sub setuser {

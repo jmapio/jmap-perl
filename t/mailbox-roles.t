@@ -60,4 +60,27 @@ sub roles_for {
   is($count, 3, '... so it stays visible');
 }
 
+{
+  # 'Entwürfe' and 'Gelöschte Objekte' as a server lists them
+  my ($role) = roles_for(['Entw&APw-rfe', 'Entw&APw-rfe'], ['Gesendet', 'Gesendet'],
+                         ['Gel&APY-schte Objekte', 'Gel&APY-schte Objekte'], ['Papierkorb-alt', 'Papierkorb-alt']);
+  is($role->{'Entw&APw-rfe'}, 'drafts', 'a modified UTF-7 name is decoded before the lookup');
+  is($role->{'Gesendet'}, 'sent', 'German names give their roles');
+  is($role->{'Gel&APY-schte Objekte'}, 'trash', '... non-ASCII ones too');
+  is($role->{'Papierkorb-alt'}, undef, 'a name that only starts like one gives nothing');
+}
+
+{
+  my ($role, $box, $count) = roles_for(['INBOX', 'INBOX'], ['Sent', 'Sent'], ['Gesendet', 'Gesendet']);
+  isnt($box->{Sent}, $box->{Gesendet}, '"Sent" and "Gesendet" keep a mailbox each');
+  is($count, 3, '... so neither vanishes');
+}
+
+{
+  my ($role) = roles_for(['INBOX', 'INBOX'], ['Posteingang', 'Posteingang'], ['Werbung', 'Werbung']);
+  is($role->{INBOX}, 'inbox', 'a folder called "Posteingang" does not take the inbox role from INBOX');
+  is($role->{Posteingang}, undef, '... nor get it');
+  is($role->{Werbung}, undef, '"Werbung" is a folder people read, not junk');
+}
+
 done_testing;
