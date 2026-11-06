@@ -3701,10 +3701,12 @@ sub _do_accounts_authed {
 
     _check_account_access($auth_aid, $aid, sub {
       send_backend_request($aid, 'update_settings', \%args, sub {
-        # Kill the running worker so next request gets fresh IMAP connection
-        if ($backend{$aid}) {
-          send_backend_request($aid, 'delete', {}, sub { delete $backend{$aid} }, sub { delete $backend{$aid} });
-        }
+        # Drop our end of the worker's socket so it sees EOF and exits; the
+        # next request respawns it with the new settings. NOTE: do NOT send
+        # the 'delete' RPC here -- that unlinks the account's sqlite3
+        # database and data directory (see JMAP::DB::delete), including the
+        # iserver row just written.
+        delete $backend{$aid};
         $req->respond([301, 'redirected', { Location => "$BASEURL/accounts" }, "Redirected"]);
       }, sub {
         my $err = shift;
