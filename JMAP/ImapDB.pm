@@ -294,6 +294,25 @@ sub sync_folders {
   $Self->sync_jmailboxes();
 }
 
+# The role a folder claims, and whether it was only guessed from its name.
+# A special-use attribute ('\\Sent') maps directly. Otherwise the label is
+# the folder's name below the personal prefix, still in modified UTF-7
+# ('Entw&APw-rfe' for 'Entwürfe'), so it is decoded before the lookup: lc()
+# alone could never match a non-ASCII %ROLE_MAP key, and would mangle the
+# case-sensitive base64 part on top. Only a folder at the top of the
+# personal namespace is recognised by name, as before: 'Projekte/Archiv'
+# is somebody's project folder, not the archive.
+sub _folder_role {
+  my ($folder) = @_;
+  my $label = $folder->{label} // '';
+  return ($ROLE_MAP{lc $label}, 0) if $label =~ /^\\/;
+  my $sep = $folder->{sep};
+  return () if defined $sep and length $sep and index($label, $sep) >= 0;
+  my $name = eval { decode('IMAP-UTF-7', $label) } // $label;
+  my $role = $ROLE_MAP{lc $name} or return ();
+  return ($role, 1);
+}
+
 # synchronise from the imap folder cache to the jmap mailbox listing
 # call in transaction
 sub sync_jmailboxes {
@@ -315,10 +334,13 @@ sub sync_jmailboxes {
   # sent, and a role is only filled in on an existing mailbox when exactly
   # one folder claims it (see below).
   my %rolecount;
+  my %folderrole;
   foreach my $folder (@$ifolders) {
     next if lc $folder->{label} eq "\\allmail";
-    my $role = $ROLE_MAP{lc $folder->{label}};
-    $rolecount{$role}++ if $role;
+    my ($role, $byname) = _folder_role($folder);
+    next unless $role;
+    $folderrole{$folder->{ifolderid}} = [$role, $byname];
+    $rolecount{$role}++;
   }
 
   my %seen;
@@ -331,7 +353,12 @@ sub sync_jmailboxes {
     shift @bits if ($bits[0] eq 'INBOX' and $bits[1]); # really we should be stripping the actual prefix, if any
     shift @bits if $bits[0] eq '[Gmail]'; # we special case this GMail magic
     next unless @bits; # also skip the magic '[Gmail]' top-level
-    my $role = $ROLE_MAP{lc $folder->{label}};
+    my ($role, $byname) = @{ $folderrole{$folder->{ifolderid}} || [] };
+    # A role guessed from a name is only taken when no other folder claims
+    # it: with "Sent" and "Gesendet" side by side, the second would be
+    # merged onto the first folder's mailbox below and vanish from view.
+    # A special-use attribute is the server's own word and always counts.
+    undef $role if $byname and $rolecount{$role} > 1;
     my $id = undef;
     my $parentId = undef;
     my $name;
