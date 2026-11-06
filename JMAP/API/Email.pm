@@ -320,6 +320,28 @@ sub _extract_terms {
   return @list;
 }
 
+# Cut marked-up snippet HTML to at most $max octets of UTF-8, never inside a
+# character, an entity or a tag, and closing a <mark> the cut leaves open.
+sub _trim_snippet {
+  my ($html, $max) = @_;
+  my $out = '';
+  my ($used, $open) = (0, 0);
+  my $close = '</mark>';
+  for my $piece ($html =~ m{(</?mark>|&[#\w]+;|.)}gs) {
+    my $len = length Encode::encode_utf8($piece);
+    my $opens = $piece eq '<mark>' ? 1 : $piece eq '</mark>' ? -1 : 0;
+    # room for this piece, and for the </mark> still owed afterwards
+    my $owed = ($open + $opens) > 0 ? length $close : 0;
+    last if $used + $len + $owed > $max;
+    $out .= $piece;
+    $used += $len;
+    $open += $opens;
+  }
+  $out .= $close if $open > 0;
+  $out =~ s{<mark></mark>$}{};
+  return $out;
+}
+
 sub api_SearchSnippet_get {
   my $Self = shift;
   my $args = shift;
@@ -331,21 +353,23 @@ sub api_SearchSnippet_get {
   });
 
   return $messages unless $messages->[0] eq 'Email/get';
-  $messages->[0] = 'SearchSnippet/get';
-  delete $messages->[1]{state};
-  $messages->[1]{filter} = $args->{filter};
-  $messages->[1]{collapseThreads} = $args->{collapseThreads}, # work around client bug
+  # RFC 8621 S5.1: the response is accountId, list and notFound only, and a
+  # SearchSnippet is emailId, subject and preview (S5) -- nothing else.
+  my $out = { accountId => $messages->[1]{accountId},
+              list      => $messages->[1]{list},
+              notFound  => $messages->[1]{notFound} };
+  $messages = ['SearchSnippet/get', $out];
 
-  my @terms = _extract_terms($args->{filter});
-  my $str = join("|", @terms);
+  # The terms are the user's text: match them literally, never as a regex
+  my @terms = grep { length } _extract_terms($args->{filter});
+  my $str = join("|", map { quotemeta } @terms);
   my $tag = 'mark';
-  foreach my $item (@{$messages->[1]{list}}) {
+  foreach my $item (@{$out->{list}}) {
     $item->{emailId} = delete $item->{id};
-    my $text = delete $item->{preview};
+    my $text = delete $item->{preview} // '';
     unless (@terms) {
       $item->{subject} = undef;
       $item->{preview} = undef;
-      $item->{body} = undef;
       next;
     }
     my $subj = escape_html($item->{subject} // '');
@@ -353,16 +377,16 @@ sub api_SearchSnippet_get {
     $item->{subject} = ($subj_marked ne $subj) ? $subj_marked : undef;
     $item->{preview} = undef;
     if ($text =~ m{(.{0,20}\b(?:$str)\b.*)}gsi) {
-      my $p = substr($1, 0, 200);
+      my $p = $1;
       $p =~ s{^\s+}{}gs;
       $p =~ s{\s+$}{}gs;
       $p =~ s{[\r\n]+}{ -- }gs;
       $p =~ s{\s+}{ }gs;
       $p = escape_html($p);
       $p =~ s{\b($str)\b}{<$tag>$1</$tag>}gsi;
-      $item->{preview} = $p;
+      # RFC 8621 S5: the preview "MUST NOT be bigger than 255 octets in size"
+      $item->{preview} = _trim_snippet($p, 255);
     }
-    $item->{body} = $item->{preview}; # work around client bug
   }
 
   return $messages;
