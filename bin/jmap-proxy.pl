@@ -1276,9 +1276,12 @@ sub run_accounts_worker {
         else {
           my $stored = $udb->selectrow_hashref(
             "SELECT password FROM iserver WHERE username = ?", {}, $email);
-          return ['auth', undef] unless $stored && $stored->{password} eq $password;
+          return ['auth', undef] unless $stored;
+          # Stored encrypted (ImapDB::setuser); decrypt passes plaintext through.
+          require JMAP::CredentialStore;
+          my $actual = JMAP::CredentialStore->decrypt($stored->{password} // '');
+          return ['auth', undef] unless $actual eq $password;
         }
-
 
         # Get all accounts in the pool
         my $poolid = $row->{poolid} || $aid;
