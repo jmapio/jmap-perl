@@ -568,6 +568,31 @@ sub _event_filter {
 my %CALENDAR_EVENT_FILTER_PROPS = map { $_ => 1 }
   qw(inCalendar inCalendars uid after before text title description location owner attendee);
 
+my %CALENDAR_EVENT_SORT = map { $_ => 1 } qw(start uid recurrenceId);
+
+# Sort query entries ({ id, start, uid, recurrenceId }) by a list of
+# Comparators; a null recurrenceId (a base event) sorts first, and the id
+# breaks ties so the order is total.
+sub _sort_calendar_events {
+  my ($items, $sort) = @_;
+  my %keys;
+  return sort {
+    my $res = 0;
+    for my $cmp (@$sort) {
+      my $p = $cmp->{property};
+      if ($p eq 'uid') {
+        $res = JMAP::Collation::compare($cmp->{collation}, $a->{uid}, $b->{uid}, \%keys);
+      } else {
+        my ($x, $y) = ($a->{$p}, $b->{$p});
+        $res = !defined $x ? (defined $y ? -1 : 0) : !defined $y ? 1 : $x cmp $y;
+      }
+      $res = -$res if defined($cmp->{isAscending}) && !$cmp->{isAscending};
+      last if $res;
+    }
+    $res || ($a->{id} cmp $b->{id});
+  } @$items;
+}
+
 sub api_CalendarEvent_query {
   my $Self = shift;
   my $args = shift;
@@ -589,7 +614,21 @@ sub api_CalendarEvent_query {
   return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['timeZone']}])
     unless _parse_jscal_dt('2000-01-01T00:00:00', $Self->{_query_tz});
 
+  # S5.10: start, uid and recurrenceId "MUST be supported for sorting"
+  for my $cmp (@{$args->{sort} // []}) {
+    return $Self->_transError(['error', {type => 'unsupportedSort', sort => $cmp}])
+      unless ref $cmp eq 'HASH' && $CALENDAR_EVENT_SORT{$cmp->{property} // ''};
+  }
+
   if ($args->{expandRecurrences}) {
+    # S5.10: with expandRecurrences "the filter MUST be just a FilterCondition
+    # (not a FilterOperator) and MUST include both a before and after
+    # property", so the server is never asked for infinitely many results
+    my $f = $args->{filter};
+    return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['filter'],
+        description => 'expandRecurrences needs a FilterCondition with both before and after'}])
+      unless ref $f eq 'HASH' && !exists $f->{operator}
+          && defined $f->{after} && defined $f->{before};
     my $filter  = $args->{filter} // {};
     my $after   = $filter->{after};
     my $before  = $filter->{before};
@@ -614,13 +653,16 @@ sub api_CalendarEvent_query {
 
       my $is_recurring = $master->{recurrenceRule};
       if ($is_recurring) {
-        push @expanded, $Self->_expand_event_occurrences($row, $master, $after, $before);
+        push @expanded, map { { %$_, uid => $row->{eventuid},
+                                recurrenceId => ($_->{id} =~ m{/(.+)\z} ? $1 : undef) } }
+                        $Self->_expand_event_occurrences($row, $master, $after, $before);
       } else {
-        push @expanded, { id => $row->{eventuid}, start => $master->{start} // '' };
+        push @expanded, { id => $row->{eventuid}, start => $master->{start} // '',
+                          uid => $row->{eventuid}, recurrenceId => undef };
       }
     }
 
-    @expanded = sort { $a->{start} cmp $b->{start} } @expanded;
+    @expanded = _sort_calendar_events(\@expanded, $args->{sort} || [{ property => 'start' }]);
 
     my ($wstart, $wend) = $Self->_apply_window(\@expanded, $args, sub { $_[0]{id} });
     return $Self->_transError(['error', {type => 'anchorNotFound'}]) unless defined $wstart;
@@ -646,27 +688,14 @@ sub api_CalendarEvent_query {
   $data = $Self->_event_filter($data, $args->{filter}, \%storage) if $args->{filter};
 
   if ($args->{sort}) {
-    my %valid = map { $_ => 1 } qw(start uid);
-    for my $cmp (@{$args->{sort}}) {
-      return $Self->_transError(['error', {type => 'unsupportedSort', sort => $cmp}])
-        unless $valid{$cmp->{property} // ''};
+    for my $row (@$data) {
+      $storage{$row->{eventuid}} //= $Self->{db}->read_jevent_payload($row->{eventuid}) // {};
+      $row->{start}        = $storage{$row->{eventuid}}{start} // '';
+      $row->{uid}          = $row->{eventuid};
+      $row->{recurrenceId} = undef;   # a stored event is a base event
+      $row->{id}           = $row->{eventuid};
     }
-    $data = [sort {
-      my $res = 0;
-      for my $cmp (@{$args->{sort}}) {
-        if ($cmp->{property} eq 'start') {
-          $storage{$a->{eventuid}} //= $Self->{db}->read_jevent_payload($a->{eventuid}) // {};
-          $storage{$b->{eventuid}} //= $Self->{db}->read_jevent_payload($b->{eventuid}) // {};
-          $res = ($storage{$a->{eventuid}}{start} // '') cmp ($storage{$b->{eventuid}}{start} // '');
-        } elsif ($cmp->{property} eq 'uid') {
-          $res = JMAP::Collation::compare($cmp->{collation}, $a->{eventuid}, $b->{eventuid},
-                                          $storage{"\0collation"} //= {});
-        }
-        $res = -$res if defined($cmp->{isAscending}) && !$cmp->{isAscending};
-        last if $res;
-      }
-      $res || ($a->{eventuid} cmp $b->{eventuid});
-    } @$data];
+    $data = [_sort_calendar_events($data, $args->{sort})];
   }
 
   my ($start, $end) = $Self->_apply_window($data, $args, sub { $_[0]{eventuid} });
@@ -942,23 +971,19 @@ sub api_CalendarEvent_queryChanges {
   $data = $Self->_event_filter($data, $args->{filter}, \%storage) if $args->{filter};
 
   if ($args->{sort}) {
-    my %valid = map { $_ => 1 } qw(start uid);
-    $data = [sort {
-      my $res = 0;
-      for my $cmp (@{$args->{sort}}) {
-        if ($cmp->{property} eq 'start') {
-          $storage{$a->{eventuid}} //= $Self->{db}->read_jevent_payload($a->{eventuid}) // {};
-          $storage{$b->{eventuid}} //= $Self->{db}->read_jevent_payload($b->{eventuid}) // {};
-          $res = ($storage{$a->{eventuid}}{start} // '') cmp ($storage{$b->{eventuid}}{start} // '');
-        } elsif ($cmp->{property} eq 'uid') {
-          $res = JMAP::Collation::compare($cmp->{collation}, $a->{eventuid}, $b->{eventuid},
-                                          $storage{"\0collation"} //= {});
-        }
-        $res = -$res if defined($cmp->{isAscending}) && !$cmp->{isAscending};
-        last if $res;
-      }
-      $res || ($a->{eventuid} cmp $b->{eventuid});
-    } @$data];
+    # the same order CalendarEvent/query gives
+    for my $cmp (@{$args->{sort}}) {
+      return $Self->_transError(['error', {type => 'unsupportedSort', sort => $cmp}])
+        unless ref $cmp eq 'HASH' && $CALENDAR_EVENT_SORT{$cmp->{property} // ''};
+    }
+    for my $row (@$data) {
+      $storage{$row->{eventuid}} //= $Self->{db}->read_jevent_payload($row->{eventuid}) // {};
+      $row->{start}        = $storage{$row->{eventuid}}{start} // '';
+      $row->{uid}          = $row->{eventuid};
+      $row->{recurrenceId} = undef;
+      $row->{id}           = $row->{eventuid};
+    }
+    $data = [_sort_calendar_events($data, $args->{sort})];
   }
 
   my @new_ids = map { $_->{eventuid} } @$data;
