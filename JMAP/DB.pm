@@ -72,11 +72,22 @@ sub _acct_dir {
   return $dir;
 }
 
+# The file for $key in the account's $subdir. Keys come from outside (an event
+# or card uid a client or a synced invite chose), so one that could leave the
+# directory -- a '/', a NUL, or a leading '.' -- is stored under its hash
+# instead. Any other key keeps its plain name, so existing files are found.
+sub _subdir_key {
+  my ($key) = @_;
+  return $key if length $key && $key !~ m{[/\0]} && $key !~ /\A\./;
+  require Digest::SHA;
+  return '_h_' . Digest::SHA::sha1_hex(Encode::is_utf8($key) ? Encode::encode_utf8($key) : $key);
+}
+
 sub _subdir_path {
   my ($Self, $subdir, $key) = @_;
   my $dir = $Self->_acct_dir . "/$subdir";
   mkdir $dir unless -d $dir;
-  return "$dir/$key";
+  return "$dir/" . _subdir_key($key);
 }
 
 sub read_subdir {
