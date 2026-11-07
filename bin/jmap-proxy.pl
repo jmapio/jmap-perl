@@ -43,8 +43,6 @@ use Crypt::JWT qw(encode_jwt);
 use Crypt::PK::RSA;
 use MIME::Base64 qw(decode_base64 encode_base64);
 use MIME::Base64::URLSafe;
-use IO::Compress::Zip     qw($ZipError);
-use IO::Uncompress::Unzip qw($UnzipError);
 use POSIX qw(:sys_wait_h strftime);
 use Socket;
 use Template;
@@ -456,693 +454,714 @@ sub run_backend_worker {
   my $last_activity = time();
 
   # Simple blocking request loop
+  # One worker command: also called by commands that use others (PDPA).
+  my $dispatch;
+  $dispatch = sub {
+    my ($cmd, $args, $tag) = @_;
+    if ($cmd eq 'ping') {
+      return ['pong', $accountid];
+    }
+    if ($cmd eq 'getinfo') {
+      return ['info', [$email, $type]];
+    }
+
+    # Initialize DB for commands that need it (not signup/signup_oauth/signup_jmap — they create the account first)
+    $init_db->() if $cmd ne 'signup' && $cmd ne 'signup_oauth' && $cmd ne 'signup_jmap' && !$db;
+
+    # Defensive: clean up stale transactions between commands
+    if ($db && $db->in_transaction()) {
+      warn "WORKER STALE TRANSACTION before $cmd ($tag) - rolling back\n";
+      $db->reset();
+    }
+
+    if ($cmd eq 'signup') {
+      require Net::DNS;
+      require Mail::IMAPTalk;
+
+      my $detail = { %$args };
+      my $force = delete $detail->{force};
+
+      # Reject unknown addresses up front, otherwise a locked-down server still runs
+      # the full DNS autodiscovery + IMAP login probe and drags the user through the
+      # two-step form before refusing at the INSERT.
+      if ($DISABLE_SIGNUP) {
+        my $known = $dbh->selectrow_array(
+          "SELECT accountid FROM accounts WHERE email = ?", {}, $detail->{username});
+        _deny_new_account($detail->{username}) unless $known;
+      }
+
+      $detail->{imapPort} ||= 993;
+      $detail->{imapSSL} ||= 2;
+      $detail->{smtpPort} ||= 587;
+      $detail->{smtpSSL} ||= 3;
+
+      # Well-known providers
+      if ($detail->{username} =~ m/\@icloud\.com/) {
+        $detail->{imapHost} = 'imap.mail.me.com';
+        $detail->{smtpHost} = 'smtp.mail.me.com';
+        $detail->{caldavURL} = 'https://caldav.icloud.com/';
+        $detail->{carddavURL} = 'https://contacts.icloud.com/';
+        $force = 1;
+      }
+      elsif ($detail->{username} =~ m/\@yahoo\.com/) {
+        $detail->{imapHost} = 'imap.mail.yahoo.com';
+        $detail->{smtpHost} = 'smtp.mail.yahoo.com';
+        $detail->{caldavURL} = 'https://caldav.calendar.yahoo.com';
+        $detail->{carddavURL} = 'https://carddav.address.yahoo.com';
+        $force = 1;
+      }
+      warn "SIGNUP: starting for $detail->{username} (force=" . ($force ? 1 : 0) . ")\n";
+
+      my $resolver = Net::DNS::Resolver->new;
+      my $domain = $detail->{username};
+      $domain =~ s/.*\@//;
+
+      my $srv_lookup = sub {
+        my ($name) = @_;
+        my $reply = $resolver->query($name, 'SRV') or return ();
+        return grep { $_->type eq 'SRV' && $_->target ne '.' && $_->port > 0 } $reply->answer;
+      };
+
+      unless ($detail->{imapHost}) {
+        for my $try (['_imaps._tcp', 'imapHost', 'imapPort', 2],
+                     ['_imap._tcp',  'imapHost', 'imapPort', 3]) {
+          my @d = $srv_lookup->("$try->[0].$domain");
+          if (@d) {
+            $detail->{$try->[1]} = $d[0]->target;
+            $detail->{$try->[2]} = $d[0]->port;
+            $detail->{imapSSL} = $try->[3];
+            last;
+          }
+        }
+        for my $try (['_submissions._tcp', 'smtpHost', 'smtpPort', 2],
+                     ['_smtps._tcp',       'smtpHost', 'smtpPort', 2],
+                     ['_submission._tcp',   'smtpHost', 'smtpPort', 3]) {
+          my @d = $srv_lookup->("$try->[0].$domain");
+          if (@d) {
+            $detail->{$try->[1]} = $d[0]->target;
+            $detail->{$try->[2]} = $d[0]->port;
+            $detail->{smtpSSL} = $try->[3];
+            last;
+          }
+        }
+      }
+
+      # Always look up CalDAV/CardDAV via SRV if not already provided
+      # (Mozilla autoconfig doesn't include DAV URLs)
+      for my $try (['_caldavs._tcp',  'caldavURL',  'https', 443],
+                   ['_caldav._tcp',   'caldavURL',  'http',  80 ],
+                   ['_carddavs._tcp', 'carddavURL', 'https', 443],
+                   ['_carddav._tcp',  'carddavURL', 'http',  80 ]) {
+        next if $detail->{$try->[1]};
+        my @d = $srv_lookup->("$try->[0].$domain");
+        if (@d) {
+          my $url = "$try->[2]://" . $d[0]->target;
+          $url .= ":" . $d[0]->port unless $d[0]->port == $try->[3];
+          $detail->{$try->[1]} = $url;
+        }
+      }
+
+      unless ($force) {
+        warn "SIGNUP: autodiscovery done for $detail->{username}, awaiting user confirmation "
+           . "(imapHost=" . ($detail->{imapHost} // '?') . ")\n";
+        return ['signup', ['continue', $detail]];
+      }
+
+      # Test IMAP login
+      warn "SIGNUP: testing IMAP login for $detail->{username} at "
+         . "$detail->{imapHost}:$detail->{imapPort} (ssl=$detail->{imapSSL})\n";
+      my $imap = Mail::IMAPTalk->new(
+        Server => $detail->{imapHost},
+        Port => $detail->{imapPort},
+        UseSSL => ($detail->{imapSSL} > 1),
+        UseBlocking => ($detail->{imapSSL} > 1),
+      );
+      unless ($imap) {
+        warn "SIGNUP: cannot connect to IMAP server $detail->{imapHost}:$detail->{imapPort}\n";
+        die "Cannot connect to IMAP server $detail->{imapHost}:$detail->{imapPort}\n";
+      }
+
+      my $ok = $imap->login($detail->{username}, $detail->{password});
+      unless ($ok) {
+        warn "SIGNUP: IMAP login failed for $detail->{username}\n";
+        die "Login failed for $detail->{username}\n";
+      }
+      warn "SIGNUP: IMAP login OK for $detail->{username}\n";
+      $imap->logout();
+
+      # Create account in accounts DB
+      my $existing_aid = $dbh->selectrow_array(
+        "SELECT accountid FROM accounts WHERE email = ?", {}, $detail->{username});
+      die "An account for $detail->{username} already exists: log in with its password\n"
+        if $existing_aid && !$detail->{_bind_existing};
+      delete $detail->{_bind_existing};
+      my $final_aid;
+      if ($existing_aid) {
+        $final_aid = $existing_aid;
+        warn "SIGNUP: $detail->{username} already has account $existing_aid, reusing it\n";
+        # Join pool if requested
+        if ($detail->{poolid}) {
+          $dbh->do("UPDATE accounts SET poolid = ? WHERE accountid = ?",
+            {}, $detail->{poolid}, $existing_aid);
+          warn "SIGNUP: joined pool $detail->{poolid} for $existing_aid\n";
+        }
+      } else {
+        _deny_new_account($detail->{username}) if $DISABLE_SIGNUP;
+        $final_aid = $accountid;
+        my $poolid = $detail->{poolid} || $accountid;
+        $dbh->do("INSERT INTO accounts (email, accountid, type, poolid) VALUES (?, ?, ?, ?)",
+          {}, $detail->{username}, $accountid, 'imap', $poolid);
+        warn "SIGNUP: created account $accountid (poolid=$poolid) for $detail->{username}\n";
+      }
+
+      # Initialize DB now that the account exists
+      $type = 'imap';
+      $init_db->();
+
+      # Set up the account
+      warn "SIGNUP: running setuser + firstsync for $final_aid\n";
+      $db->setuser($detail);
+      $db->firstsync();
+      warn "SIGNUP: firstsync complete for $final_aid\n";
+
+      return ['signup', ['done', $final_aid, $detail->{username}]];
+    }
+    if ($cmd eq 'signup_oauth') {
+      # Called after parent completes OAuth code exchange.
+      # $args: email, refresh_token, account_type (gmail/imap), imapHost, imapPort,
+      #        imapSSL, smtpHost, smtpPort, smtpSSL, caldavURL, carddavURL, poolid
+      my $email         = $args->{email}         or die "email required\n";
+      my $refresh_token = $args->{refresh_token} or die "refresh_token required\n";
+      my $acct_type     = $args->{account_type}  || 'gmail';
+      warn "OAUTH_SIGNUP: starting for $email (type=$acct_type, accountid=$accountid)\n";
+
+      my $existing_aid = $dbh->selectrow_array(
+        "SELECT accountid FROM accounts WHERE email = ?", {}, $email);
+      die "An account for $email already exists, and this sign-in does not prove you own it\n"
+        if $existing_aid && !$args->{_bind_existing};
+      my ($final_aid, $target_aid);
+      if ($existing_aid) {
+        $final_aid  = $existing_aid;
+        $target_aid = $existing_aid;
+        warn "OAUTH_SIGNUP: $email already has account $existing_aid, reusing it\n";
+        if ($args->{poolid}) {
+          $dbh->do("UPDATE accounts SET poolid = ? WHERE accountid = ?",
+            {}, $args->{poolid}, $existing_aid);
+        }
+      } else {
+        _deny_new_account($email) if $DISABLE_SIGNUP;
+        $final_aid  = $accountid;
+        $target_aid = $accountid;
+        my $poolid = $args->{poolid} || $accountid;
+        $dbh->do(
+          "INSERT INTO accounts (email, accountid, type, poolid) VALUES (?,?,?,?)",
+          {}, $email, $accountid, $acct_type, $poolid);
+        warn "OAUTH_SIGNUP: created account $accountid (poolid=$poolid) for $email\n";
+      }
+
+      # Create/open the per-account DB for the right account ID
+      my $target_db;
+      if ($acct_type eq 'gmail') {
+        require JMAP::GmailDB;
+        $target_db = JMAP::GmailDB->new($target_aid);
+      } elsif ($acct_type eq 'fastmail') {
+        require JMAP::FastmailDB;
+        $target_db = JMAP::FastmailDB->new($target_aid);
+      } else {
+        require JMAP::ImapDB;
+        $target_db = JMAP::ImapDB->new($target_aid);
+      }
+      warn "OAUTH_SIGNUP: running setuser for $target_aid\n";
+      $target_db->setuser({
+        username   => $email,
+        password   => $refresh_token,
+        imapHost   => $args->{imapHost}   || '',
+        imapPort   => $args->{imapPort}   || 993,
+        imapSSL    => $args->{imapSSL}    // 1,
+        smtpHost   => $args->{smtpHost}   || '',
+        smtpPort   => $args->{smtpPort}   || 587,
+        smtpSSL    => $args->{smtpSSL}    // 1,
+        caldavURL  => $args->{caldavURL}  || '',
+        carddavURL => $args->{carddavURL} || '',
+        webdavURL  => $args->{webdavURL}  || '',
+      });
+      warn "OAUTH_SIGNUP: running firstsync for $target_aid\n";
+      $target_db->firstsync();
+      warn "OAUTH_SIGNUP: firstsync complete for $target_aid ($email)\n";
+
+      # Make $db point to the right instance for subsequent commands
+      if ($target_aid eq $accountid) {
+        $type = $acct_type;
+        $db   = $target_db;
+        $api  = JMAP::API->new($db);
+      }
+
+      return ['signup_oauth', [$final_aid, $email]];
+    }
+    if ($cmd eq 'signup_jmap') {
+      require JMAP::JmapDB;
+      require MIME::Base64;
+
+      # Verify credentials by fetching the upstream JMAP session
+      my $tmp = JMAP::JmapDB->new($accountid);
+      my ($session) = $tmp->fetch_session($args);
+
+      # Resolve URLs relative to the session URL (some servers return relative paths).
+      # Do NOT use URI->new_abs here — it percent-encodes URI template variables like {accountId}.
+      # Instead: if the URL is already absolute, keep it; otherwise prepend the origin.
+      my ($session_origin) = ($args->{sessionUrl} =~ m{^(https?://[^/]+)});
+      my $abs_url = sub {
+          my $url = shift // '';
+          return $url if !$url || $url =~ m{^https?://};
+          return "$session_origin$url";  # absolute path (starts with /)
+      };
+
+      my $api_url = $session->{apiUrl}
+        or die "No apiUrl in upstream JMAP session\n";
+      $api_url = $abs_url->($api_url);
+
+      # Which upstream account does this proxy account represent?  By default the
+      # primary mail account, but a caller may bind to any account the login can
+      # see (e.g. a delegated/shared account), which is how one set of upstream
+      # credentials can back several proxy accounts.
+      my $mail_cap    = 'urn:ietf:params:jmap:mail';
+      my $primary_aid = $session->{primaryAccounts}{$mail_cap}
+        or die "No primary mail account in upstream JMAP session\n";
+      my $backend_aid = $args->{backendAccountId} // $primary_aid;
+      # Only validate an explicitly requested binding.  Servers that omit the
+      # `accounts` map (non-conformant, but previously accepted) must keep
+      # working when they are simply defaulting to the primary account.
+      die "backendAccountId '$backend_aid' is not present in the upstream JMAP session\n"
+        if defined $args->{backendAccountId} && !$session->{accounts}{$backend_aid};
+      my $capabilities = $session->{accounts}{$backend_aid} || {};
+      # `email` is the proxy-side login and must stay unique per account. Two
+      # accounts on one upstream login share a username, so fall back to the
+      # backend accountId to keep them distinct.
+      my $display_email = $args->{email}
+        // ($backend_aid eq $primary_aid ? ($args->{username} || $backend_aid)
+                                         : $backend_aid);
+
+      # Create the account entry in accounts.sqlite3
+      my $existing_aid = $dbh->selectrow_array(
+        "SELECT accountid FROM accounts WHERE email = ?", {}, $display_email);
+      # A fixed, trusted upstream (Fastmail's) proves who the login is by the
+      # username in its own session
+      my $session_proves = $args->{_bind_if_session_user}
+        && lc($session->{username} // '') eq lc $display_email;
+      die "An account for $display_email already exists: log in with its password\n"
+        if $existing_aid && !$args->{_bind_existing} && !$session_proves;
+      my $final_aid;
+      if ($existing_aid) {
+        $final_aid = $existing_aid;
+        if ($args->{poolid}) {
+          $dbh->do("UPDATE accounts SET poolid = ? WHERE accountid = ?",
+            {}, $args->{poolid}, $existing_aid);
+        }
+      } else {
+        _deny_new_account($display_email) if $DISABLE_SIGNUP && !$args->{_admin};
+        $final_aid = $accountid;
+        my $poolid = $args->{poolid} || $accountid;
+        $dbh->do(
+          "INSERT INTO accounts (email, accountid, type, poolid, needs_backfill)
+           VALUES (?,?,?,?,?)",
+          {}, $display_email, $accountid, 'jmap', $poolid, 0);
+      }
+
+      # Initialise JmapDB and store credentials
+      $type = 'jmap';
+      $init_db->();
+
+      $db->setuser({
+        username         => $args->{username} // '',
+        password         => $args->{password} // '',
+        authType         => $args->{authType} || 'basic',
+        sessionUrl       => $args->{sessionUrl},
+        apiUrl           => $api_url,
+        uploadUrl        => $abs_url->($session->{uploadUrl}   // ''),
+        downloadUrl      => $abs_url->($session->{downloadUrl} // ''),
+        backendAccountId => $backend_aid,
+        capabilities     => $capabilities,
+      });
+
+      my $fp = JMAP::JmapDB::cred_fingerprint({
+        apiUrl   => $api_url,
+        username => $args->{username} // '',
+        authType => $args->{authType} || 'basic',
+        secret   => $args->{password} // '',
+      });
+      $dbh->do("UPDATE accounts SET cred_fingerprint = ? WHERE accountid = ?", {}, $fp, $final_aid);
+
+      return ['signup_jmap', [$final_aid, $display_email]];
+    }
+    if ($cmd eq 'setup') {
+      # Default to implicit SSL/STARTTLS — plaintext on the standard SSL ports (993/587)
+      # just makes the server wait out its login-grace-time before dropping the connection.
+      my $imap_ssl = $args->{imapSSL} // 2;
+      my $smtp_ssl = $args->{smtpSSL} // 3;
+      warn "SETUP: $accountid connecting to imap host "
+         . ($args->{imapHost} // '?') . ":" . ($args->{imapPort} || 993) . "\n";
+      $db->setuser({
+        username   => $args->{username}   || $accountid,
+        email      => $args->{email},
+        password   => $args->{password}   || '',
+        imapHost   => $args->{imapHost},
+        imapPort   => $args->{imapPort}   || 993,
+        imapSSL    => $imap_ssl,
+        smtpHost   => $args->{smtpHost}   || $args->{imapHost},
+        smtpPort   => $args->{smtpPort}   || 587,
+        smtpSSL    => $smtp_ssl,
+        caldavURL  => $args->{caldavURL}  || '',
+        carddavURL => $args->{carddavURL} || '',
+        webdavURL  => $args->{webdavURL}  || '',
+      });
+      warn "SETUP: $accountid credentials stored, running firstsync\n";
+      $db->firstsync();
+      warn "SETUP: $accountid firstsync done, running sync_imap\n";
+      $db->sync_imap();
+      warn "SETUP: $accountid complete\n";
+      return ['setup', $JSON::true];
+    }
+    if ($cmd eq 'upload') {
+      my ($aid, $utype, $file) = @{$args}{qw(accountId type file)};
+      if ($db->can('proxy_upload')) {
+        my $r = $db->proxy_upload($utype, $file);
+        unlink $file;
+        return ['upload', $r];
+      }
+      my ($r) = $api->uploadFile($aid || $accountid, $utype, { file => $file });
+      return ['upload', $r];
+    }
+    if ($cmd eq 'filenode_put') {
+      my $file = $args->{file};
+      return ['filenode_put', { status => 404 }] unless $db->can('put_filenode_content');
+      my $bytes = do { local $/; open my $fh, '<:raw', $file or die "$file: $!"; <$fh> };
+      unlink $file;
+      return ['filenode_put', $db->put_filenode_content($args->{id}, $bytes, $args->{type})];
+    }
+    if ($cmd eq 'download') {
+      if ($db->can('proxy_blob')) {
+        my ($dtype, $content) = $db->proxy_blob(
+          $args->{blobId}, $args->{name}, $args->{type});
+        return ['download', [$dtype, $content]];
+      }
+      # a FileNode blob over JMAP_FILES_MAX_BYTES is refused, not read
+      # (a die here would end the worker); the parent answers 501
+      my ($dtype, $content) = eval { $api->downloadFile($args->{blobId}) };
+      return ['download', { status => 501, error => $@ =~ s/\n\z//r }] if JMAP::FileNode::is_too_large($@);
+      die $@ if $@;
+      return ['download', [$dtype, $content]];
+    }
+    if ($cmd eq 'raw') {
+      my $selector = "$args->{blobId}/$args->{name}";
+      my ($rtype, $content, $filename) = $api->getRawBlob($selector);
+      return ['raw', [$rtype, $content, $filename]];
+    }
+    if ($cmd eq 'fetch_blobs') {
+      my %result;
+      # Passthrough accounts have no local blob store: download from upstream
+      # into a temp file so the destination worker can re-upload it.
+      if ($db->can('handle_jmap')) {
+        for my $blobid (@{$args->{ids} || []}) {
+          my $up_blob = $blobid;
+          if ($blobid =~ /^m-(.+)$/) {
+            # resolve the email's upstream blobId via Email/get
+            my $eid = $1;
+            my $r = $db->handle_jmap({
+              using => ['urn:ietf:params:jmap:core','urn:ietf:params:jmap:mail'],
+              methodCalls => [['Email/get', { accountId => $accountid, ids => [$eid], properties => ['blobId'] }, 'g']],
+            });
+            my ($resp) = grep { $_->[2] eq 'g' } @{ $r->{methodResponses} || [] };
+            my $email = $resp && $resp->[0] eq 'Email/get' ? $resp->[1]{list}[0] : undef;
+            unless ($email && $email->{blobId}) { $result{$blobid} = undef; next; }
+            $up_blob = $email->{blobId};
+          }
+          my ($type, $body) = eval { $db->proxy_blob($up_blob, 'copy', 'application/octet-stream') };
+          if (!defined $body) { $result{$blobid} = undef; next; }
+          my $fh = File::Temp->new(DIR => "$datadir/tmp", UNLINK => 0, SUFFIX => '.blob');
+          binmode $fh; print $fh $body; close $fh;
+          $result{$blobid} = { type => $type || 'application/octet-stream', path => $fh->filename, is_temp => 1 };
+        }
+        return ['fetch_blobs', \%result];
+      }
+      for my $blobid (@{$args->{ids} || []}) {
+        if ($blobid =~ /^f-(.+)$/) {
+          my $fileid = $1;
+          $db->begin();
+          my $row = $db->dgetone('jfiles', { jfileid => $fileid });
+          $db->commit();
+          if ($row) {
+            my $path = $db->_subdir_path('files', $fileid);
+            $result{$blobid} = -f $path
+              ? { type => $row->{type}, path => $path, is_temp => 0 }
+              : undef;
+          }
+          else {
+            $result{$blobid} = undef;
+          }
+        }
+        elsif ($blobid =~ /^m-(.+)$/) {
+          my $msgid = $1;
+          my ($type, $raw) = $db->get_raw_message($msgid);
+          if (defined $raw) {
+            my $fh = File::Temp->new(DIR => "$datadir/tmp", UNLINK => 0, SUFFIX => '.blob');
+            print $fh $raw;
+            close $fh;
+            $result{$blobid} = {
+              type    => $type || 'message/rfc822',
+              path    => $fh->filename,
+              is_temp => 1,
+            };
+          }
+          else {
+            $result{$blobid} = undef;
+          }
+        }
+        elsif ($blobid =~ /^d-/) {
+          # a FileNode's content, read from WebDAV pinned to the ETag the
+          # blobId names: undef when the file changed since (a 412) or went;
+          # { error } for one over JMAP_FILES_MAX_BYTES, which no copy reads
+          my ($type, $content) = eval { $db->get_blob($blobid) };
+          if (JMAP::FileNode::is_too_large($@)) {
+            $result{$blobid} = { error => $@ =~ s/\n\z//r };
+          }
+          elsif (defined $content) {
+            my $fh = File::Temp->new(DIR => "$datadir/tmp", UNLINK => 0, SUFFIX => '.blob');
+            binmode $fh; print $fh $content; close $fh;
+            $result{$blobid} = { type => $type || 'application/octet-stream', path => $fh->filename, is_temp => 1 };
+          }
+          else {
+            $result{$blobid} = undef;
+          }
+        }
+        else {
+          $result{$blobid} = undef;
+        }
+      }
+      return ['fetch_blobs', \%result];
+    }
+    # PDPA: built and read here, where blocking is fine (JMAP::PDPA)
+    if ($cmd eq 'pdpa_export') {
+      require JMAP::PDPA;
+      my $zip = JMAP::PDPA::export(accountid => $accountid,
+        call => sub { my $r = $dispatch->($_[0], $_[1], $tag); die "$_[0]: $r->[1]\n" if $r->[0] eq 'error'; $r->[1] });
+      return ['pdpa_export', $zip];
+    }
+    if ($cmd eq 'pdpa_import') {
+      require JMAP::PDPA;
+      my $file = $args->{file} or die "pdpa_import: no file\n";
+      my $zip = do { local $/; open(my $fh, '<:raw', $file) or die "pdpa_import: $!\n"; <$fh> };
+      unlink $file;
+      my $n = JMAP::PDPA::import_archive(zip => $zip, prefix => $args->{prefix}, tmpdir => "$datadir/tmp",
+        call => sub { my $r = $dispatch->($_[0], $_[1], $tag); die "$_[0]: $r->[1]\n" if $r->[0] eq 'error'; $r->[1] });
+      return ['pdpa_import', $n];
+    }
+    if ($cmd eq 'store_blob') {
+      my $src     = $args->{path}    or die "store_blob: no path\n";
+      my $type    = $args->{type}    || 'application/octet-stream';
+      my $is_temp = $args->{is_temp} || 0;
+
+      # Passthrough destination: upload straight to the upstream and hand
+      # back its blobId; there is no local jfiles store to insert into.
+      if ($db->can('handle_jmap')) {
+        my $r = $db->proxy_upload($type, $src);
+        unlink $src if $is_temp;
+        return ['store_blob', { blobId => $r->{blobId} }];
+      }
+
+      my $size    = (stat($src))[7]  // 0;
+      my $expires = time() + 7 * 86400;
+
+      $db->begin();
+      $db->dbh->do(
+        'INSERT OR REPLACE INTO jfiles (type, size, expires, mtime) VALUES (?, ?, ?, ?)',
+        {}, $type, $size, $expires, time());
+      my $id = $db->dbh->last_insert_id(undef, undef, undef, undef);
+      $db->commit();
+
+      my $dest = $db->_subdir_path('files', $id);
+      unless (link($src, $dest)) {
+        require File::Copy;
+        File::Copy::copy($src, $dest) or do {
+          eval {
+            $db->begin();
+            $db->dbh->do('DELETE FROM jfiles WHERE jfileid = ?', {}, $id);
+            $db->commit();
+          };
+          die "blob copy failed: $!\n";
+        };
+      }
+      unlink $src if $is_temp;
+
+      return ['store_blob', { blobId => "f-$id" }];
+    }
+    if ($cmd eq 'jmap') {
+      my $result;
+      # Strip the routing hints unconditionally — they are internal to the
+      # parent<->worker protocol and must not reach a backend handler.
+      my $fwd = delete $args->{_fwd_map};
+      my $rev = delete $args->{_rev_map};
+      if ($db->can('handle_jmap')) {
+        $result = $db->handle_jmap($args, $fwd, $rev);
+      } else {
+        $result = $api->handle_request($args);
+        # A held (FUTURERELEASE) submission was created or canceled: tell
+        # the parent when this account next needs a send_due.
+        if (delete $db->{_sendat_changed}) {
+          my $next = $db->next_send_due;
+          eval { $write_json->(['sendat', $next]) };
+        }
+      }
+      # sessionState is the parent's: the state of the Session it served
+      return ['jmap', $result];
+    }
+    if ($cmd eq 'sync') {
+      # JMAP passthrough accounts have no local sync
+      return ['sync', $JSON::true] if $db->can('handle_jmap');
+      $db->sync_folders();
+      $db->sync_imap();
+      _dav_sync_safely($db, $accountid);
+      # A full WebDAV walk costs a request per collection, so the periodic
+      # tick only runs it every 300s (spec "Sync"); an explicit sync from
+      # the management API ({force => 1}) always does.
+      if ($db->can('sync_files')) {
+        if ($args->{force}) { $db->sync_files_safely() }
+        else                { $db->sync_files_if_due(300, { first => 0 }) }   # first walk: backfill worker
+      }
+      # sync_folders() may have turned up folders needing backfill after
+      # the account's one-shot needs_backfill flag was already cleared
+      # (new folders, or folders that previously got merged onto the
+      # wrong row and now have their own fresh uidfirst == uidnext) — tell
+      # the parent so it can (re)start the backfill loop for this account.
+      eval {
+        $write_json->(['needsbackfill', time()]) if $db->has_pending_backfill();
+      };
+      eval { $write_json->(['synced', time()]) };
+      return ['sync', $JSON::true];
+    }
+    # IMPORTANT: 'backfill' MUST only be sent to "$accountid:backfill" workers,
+    # never to the jmap/sync worker. See prod_backfill() in the parent.
+    if ($cmd eq 'backfill') {
+      # JMAP passthrough accounts have no backfill
+      return ['backfill', 0] if $db->can('handle_jmap');
+      # The account's first full WebDAV walk runs here, not in firstsync, so
+      # signup never waits for it (spec "Sync"); a no-op once any file sync
+      # has run.  Accounts with no backfill pending sync on demand instead.
+      $db->first_files_sync() if $db->can('first_files_sync');
+      my $more = $db->backfill() ? 1 : 0;
+      return ['backfill', $more];
+    }
+    if ($cmd eq 'send_due') {
+      # Send the held submissions whose time has come; answer the next due time.
+      return ['send_due', undef] unless $db->can('send_due');
+      return ['send_due', $db->send_due()];
+    }
+    if ($cmd eq 'davsync') {
+      _dav_sync_safely($db, $accountid);
+      return ['davsync', $JSON::true];
+    }
+    if ($cmd eq 'session_caps') {
+      # Passthrough only: fetch the upstream session and return the capability
+      # slice for this account, rewritten to the proxy accountId.
+      die "session_caps only valid for passthrough accounts\n"
+        unless $db->can('handle_jmap');
+      my $server     = $db->access_data();
+      my $proxy_id   = $accountid;
+      my $backend_id = $server->{backendAccountId} // '';
+      my ($session)  = $db->fetch_session({});
+      my $acct = ($session->{accounts} || {})->{$backend_id} || {};
+
+      # Rewrite backend accountId → proxy accountId in primaryAccounts values.
+      my %primary;
+      my $up_primary = $session->{primaryAccounts} || {};
+      for my $urn (keys %$up_primary) {
+        my $v = $up_primary->{$urn};
+        $primary{$urn} = (defined $v && $v eq $backend_id) ? $proxy_id : $v;
+      }
+
+      return ['session_caps', {
+        accountCapabilities => $acct->{accountCapabilities} || {},
+        capabilities        => $session->{capabilities}     || {},
+        name                => $acct->{name} // $proxy_id,
+        isReadOnly          => $acct->{isReadOnly} ? $JSON::true : $JSON::false,
+        isPersonal          => $acct->{isPersonal} ? $JSON::true : $JSON::false,
+        primaryAccounts     => \%primary,
+      }];
+    }
+    if ($cmd eq 'get_settings') {
+      my $data;
+      if ($db->can('handle_jmap')) {
+        $data = $db->access_data();  # includes type='jmap'
+      } else {
+        $db->begin();
+        $data = $db->dgetone('iserver') || {};
+        $db->commit();
+        $data->{type} = 'imap';
+      }
+      delete $data->{password};
+      return ['get_settings', $data];
+    }
+    if ($cmd eq 'update_settings') {
+      if ($db->can('handle_jmap')) {
+        # Verify new JMAP credentials then update stored settings
+        my ($session) = $db->fetch_session($args);
+        my $mail_cap  = 'urn:ietf:params:jmap:mail';
+        my $primary_aid = $session->{primaryAccounts}{$mail_cap}
+          or die "No primary mail account in upstream JMAP session\n";
+        # Keep an existing delegated binding unless the caller changes it.
+        my $backend_aid = $args->{backendAccountId}
+          // ($db->access_data()->{backendAccountId} || $primary_aid);
+        # As in signup_jmap: only validate a binding the caller asked for.
+        die "backendAccountId '$backend_aid' is not present in the upstream JMAP session\n"
+          if defined $args->{backendAccountId} && !$session->{accounts}{$backend_aid};
+        $db->setuser({
+          username         => $args->{username} // '',
+          password         => $args->{password} // '',
+          authType         => $args->{authType} || 'basic',
+          sessionUrl       => $args->{sessionUrl},
+          apiUrl           => $session->{apiUrl},
+          backendAccountId => $backend_aid,
+          capabilities     => $session->{accounts}{$backend_aid} || {},
+        });
+        my $fp = JMAP::JmapDB::cred_fingerprint({
+          apiUrl   => $session->{apiUrl},
+          username => $args->{username} // '',
+          authType => $args->{authType} || 'basic',
+          secret   => $args->{password} // '',
+        });
+        $dbh->do("UPDATE accounts SET cred_fingerprint = ? WHERE accountid = ?", {}, $fp, $accountid);
+        return ['update_settings', $JSON::true];
+      }
+      require Mail::IMAPTalk;
+      my $host = $args->{imapHost} or die "imapHost required\n";
+      my $port = $args->{imapPort} || 993;
+      my $ssl  = $args->{imapSSL} // 2;
+      my $imap = Mail::IMAPTalk->new(
+        Server      => $host,
+        Port        => $port,
+        UseSSL      => ($ssl > 1),
+        UseBlocking => ($ssl > 1),
+      );
+      die "Cannot connect to IMAP server $host:$port\n" unless $imap;
+      my $ok = $imap->login($args->{username}, $args->{password});
+      die "Login failed for $args->{username}\n" unless $ok;
+      $imap->logout();
+      $db->setuser($args);
+      return ['update_settings', $JSON::true];
+    }
+    if ($cmd eq 'delete') {
+      $db->delete() if $db;
+      return ['deleted', $JSON::true];
+    }
+    die "Unknown command: $cmd\n";
+  };
+
   while (my $request = $read_json->()) {
     my ($cmd, $args, $tag) = @$request;
     my $t0 = [Time::HiRes::gettimeofday()];
 
     warn "START $cmd ($tag) => ($accountid)\n" if $ENV{JMAP_DEBUG} && $cmd ne 'ping';
 
-    my $res = eval {
-      if ($cmd eq 'ping') {
-        return ['pong', $accountid];
-      }
-      if ($cmd eq 'getinfo') {
-        return ['info', [$email, $type]];
-      }
-
-      # Initialize DB for commands that need it (not signup/signup_oauth/signup_jmap — they create the account first)
-      $init_db->() if $cmd ne 'signup' && $cmd ne 'signup_oauth' && $cmd ne 'signup_jmap' && !$db;
-
-      # Defensive: clean up stale transactions between commands
-      if ($db && $db->in_transaction()) {
-        warn "WORKER STALE TRANSACTION before $cmd ($tag) - rolling back\n";
-        $db->reset();
-      }
-
-      if ($cmd eq 'signup') {
-        require Net::DNS;
-        require Mail::IMAPTalk;
-
-        my $detail = { %$args };
-        my $force = delete $detail->{force};
-
-        # Reject unknown addresses up front, otherwise a locked-down server still runs
-        # the full DNS autodiscovery + IMAP login probe and drags the user through the
-        # two-step form before refusing at the INSERT.
-        if ($DISABLE_SIGNUP) {
-          my $known = $dbh->selectrow_array(
-            "SELECT accountid FROM accounts WHERE email = ?", {}, $detail->{username});
-          _deny_new_account($detail->{username}) unless $known;
-        }
-
-        $detail->{imapPort} ||= 993;
-        $detail->{imapSSL} ||= 2;
-        $detail->{smtpPort} ||= 587;
-        $detail->{smtpSSL} ||= 3;
-
-        # Well-known providers
-        if ($detail->{username} =~ m/\@icloud\.com/) {
-          $detail->{imapHost} = 'imap.mail.me.com';
-          $detail->{smtpHost} = 'smtp.mail.me.com';
-          $detail->{caldavURL} = 'https://caldav.icloud.com/';
-          $detail->{carddavURL} = 'https://contacts.icloud.com/';
-          $force = 1;
-        }
-        elsif ($detail->{username} =~ m/\@yahoo\.com/) {
-          $detail->{imapHost} = 'imap.mail.yahoo.com';
-          $detail->{smtpHost} = 'smtp.mail.yahoo.com';
-          $detail->{caldavURL} = 'https://caldav.calendar.yahoo.com';
-          $detail->{carddavURL} = 'https://carddav.address.yahoo.com';
-          $force = 1;
-        }
-        warn "SIGNUP: starting for $detail->{username} (force=" . ($force ? 1 : 0) . ")\n";
-
-        my $resolver = Net::DNS::Resolver->new;
-        my $domain = $detail->{username};
-        $domain =~ s/.*\@//;
-
-        my $srv_lookup = sub {
-          my ($name) = @_;
-          my $reply = $resolver->query($name, 'SRV') or return ();
-          return grep { $_->type eq 'SRV' && $_->target ne '.' && $_->port > 0 } $reply->answer;
-        };
-
-        unless ($detail->{imapHost}) {
-          for my $try (['_imaps._tcp', 'imapHost', 'imapPort', 2],
-                       ['_imap._tcp',  'imapHost', 'imapPort', 3]) {
-            my @d = $srv_lookup->("$try->[0].$domain");
-            if (@d) {
-              $detail->{$try->[1]} = $d[0]->target;
-              $detail->{$try->[2]} = $d[0]->port;
-              $detail->{imapSSL} = $try->[3];
-              last;
-            }
-          }
-          for my $try (['_submissions._tcp', 'smtpHost', 'smtpPort', 2],
-                       ['_smtps._tcp',       'smtpHost', 'smtpPort', 2],
-                       ['_submission._tcp',   'smtpHost', 'smtpPort', 3]) {
-            my @d = $srv_lookup->("$try->[0].$domain");
-            if (@d) {
-              $detail->{$try->[1]} = $d[0]->target;
-              $detail->{$try->[2]} = $d[0]->port;
-              $detail->{smtpSSL} = $try->[3];
-              last;
-            }
-          }
-        }
-
-        # Always look up CalDAV/CardDAV via SRV if not already provided
-        # (Mozilla autoconfig doesn't include DAV URLs)
-        for my $try (['_caldavs._tcp',  'caldavURL',  'https', 443],
-                     ['_caldav._tcp',   'caldavURL',  'http',  80 ],
-                     ['_carddavs._tcp', 'carddavURL', 'https', 443],
-                     ['_carddav._tcp',  'carddavURL', 'http',  80 ]) {
-          next if $detail->{$try->[1]};
-          my @d = $srv_lookup->("$try->[0].$domain");
-          if (@d) {
-            my $url = "$try->[2]://" . $d[0]->target;
-            $url .= ":" . $d[0]->port unless $d[0]->port == $try->[3];
-            $detail->{$try->[1]} = $url;
-          }
-        }
-
-        unless ($force) {
-          warn "SIGNUP: autodiscovery done for $detail->{username}, awaiting user confirmation "
-             . "(imapHost=" . ($detail->{imapHost} // '?') . ")\n";
-          return ['signup', ['continue', $detail]];
-        }
-
-        # Test IMAP login
-        warn "SIGNUP: testing IMAP login for $detail->{username} at "
-           . "$detail->{imapHost}:$detail->{imapPort} (ssl=$detail->{imapSSL})\n";
-        my $imap = Mail::IMAPTalk->new(
-          Server => $detail->{imapHost},
-          Port => $detail->{imapPort},
-          UseSSL => ($detail->{imapSSL} > 1),
-          UseBlocking => ($detail->{imapSSL} > 1),
-        );
-        unless ($imap) {
-          warn "SIGNUP: cannot connect to IMAP server $detail->{imapHost}:$detail->{imapPort}\n";
-          die "Cannot connect to IMAP server $detail->{imapHost}:$detail->{imapPort}\n";
-        }
-
-        my $ok = $imap->login($detail->{username}, $detail->{password});
-        unless ($ok) {
-          warn "SIGNUP: IMAP login failed for $detail->{username}\n";
-          die "Login failed for $detail->{username}\n";
-        }
-        warn "SIGNUP: IMAP login OK for $detail->{username}\n";
-        $imap->logout();
-
-        # Create account in accounts DB
-        my $existing_aid = $dbh->selectrow_array(
-          "SELECT accountid FROM accounts WHERE email = ?", {}, $detail->{username});
-        die "An account for $detail->{username} already exists: log in with its password\n"
-          if $existing_aid && !$detail->{_bind_existing};
-        delete $detail->{_bind_existing};
-        my $final_aid;
-        if ($existing_aid) {
-          $final_aid = $existing_aid;
-          warn "SIGNUP: $detail->{username} already has account $existing_aid, reusing it\n";
-          # Join pool if requested
-          if ($detail->{poolid}) {
-            $dbh->do("UPDATE accounts SET poolid = ? WHERE accountid = ?",
-              {}, $detail->{poolid}, $existing_aid);
-            warn "SIGNUP: joined pool $detail->{poolid} for $existing_aid\n";
-          }
-        } else {
-          _deny_new_account($detail->{username}) if $DISABLE_SIGNUP;
-          $final_aid = $accountid;
-          my $poolid = $detail->{poolid} || $accountid;
-          $dbh->do("INSERT INTO accounts (email, accountid, type, poolid) VALUES (?, ?, ?, ?)",
-            {}, $detail->{username}, $accountid, 'imap', $poolid);
-          warn "SIGNUP: created account $accountid (poolid=$poolid) for $detail->{username}\n";
-        }
-
-        # Initialize DB now that the account exists
-        $type = 'imap';
-        $init_db->();
-
-        # Set up the account
-        warn "SIGNUP: running setuser + firstsync for $final_aid\n";
-        $db->setuser($detail);
-        $db->firstsync();
-        warn "SIGNUP: firstsync complete for $final_aid\n";
-
-        return ['signup', ['done', $final_aid, $detail->{username}]];
-      }
-      if ($cmd eq 'signup_oauth') {
-        # Called after parent completes OAuth code exchange.
-        # $args: email, refresh_token, account_type (gmail/imap), imapHost, imapPort,
-        #        imapSSL, smtpHost, smtpPort, smtpSSL, caldavURL, carddavURL, poolid
-        my $email         = $args->{email}         or die "email required\n";
-        my $refresh_token = $args->{refresh_token} or die "refresh_token required\n";
-        my $acct_type     = $args->{account_type}  || 'gmail';
-        warn "OAUTH_SIGNUP: starting for $email (type=$acct_type, accountid=$accountid)\n";
-
-        my $existing_aid = $dbh->selectrow_array(
-          "SELECT accountid FROM accounts WHERE email = ?", {}, $email);
-        die "An account for $email already exists, and this sign-in does not prove you own it\n"
-          if $existing_aid && !$args->{_bind_existing};
-        my ($final_aid, $target_aid);
-        if ($existing_aid) {
-          $final_aid  = $existing_aid;
-          $target_aid = $existing_aid;
-          warn "OAUTH_SIGNUP: $email already has account $existing_aid, reusing it\n";
-          if ($args->{poolid}) {
-            $dbh->do("UPDATE accounts SET poolid = ? WHERE accountid = ?",
-              {}, $args->{poolid}, $existing_aid);
-          }
-        } else {
-          _deny_new_account($email) if $DISABLE_SIGNUP;
-          $final_aid  = $accountid;
-          $target_aid = $accountid;
-          my $poolid = $args->{poolid} || $accountid;
-          $dbh->do(
-            "INSERT INTO accounts (email, accountid, type, poolid) VALUES (?,?,?,?)",
-            {}, $email, $accountid, $acct_type, $poolid);
-          warn "OAUTH_SIGNUP: created account $accountid (poolid=$poolid) for $email\n";
-        }
-
-        # Create/open the per-account DB for the right account ID
-        my $target_db;
-        if ($acct_type eq 'gmail') {
-          require JMAP::GmailDB;
-          $target_db = JMAP::GmailDB->new($target_aid);
-        } elsif ($acct_type eq 'fastmail') {
-          require JMAP::FastmailDB;
-          $target_db = JMAP::FastmailDB->new($target_aid);
-        } else {
-          require JMAP::ImapDB;
-          $target_db = JMAP::ImapDB->new($target_aid);
-        }
-        warn "OAUTH_SIGNUP: running setuser for $target_aid\n";
-        $target_db->setuser({
-          username   => $email,
-          password   => $refresh_token,
-          imapHost   => $args->{imapHost}   || '',
-          imapPort   => $args->{imapPort}   || 993,
-          imapSSL    => $args->{imapSSL}    // 1,
-          smtpHost   => $args->{smtpHost}   || '',
-          smtpPort   => $args->{smtpPort}   || 587,
-          smtpSSL    => $args->{smtpSSL}    // 1,
-          caldavURL  => $args->{caldavURL}  || '',
-          carddavURL => $args->{carddavURL} || '',
-          webdavURL  => $args->{webdavURL}  || '',
-        });
-        warn "OAUTH_SIGNUP: running firstsync for $target_aid\n";
-        $target_db->firstsync();
-        warn "OAUTH_SIGNUP: firstsync complete for $target_aid ($email)\n";
-
-        # Make $db point to the right instance for subsequent commands
-        if ($target_aid eq $accountid) {
-          $type = $acct_type;
-          $db   = $target_db;
-          $api  = JMAP::API->new($db);
-        }
-
-        return ['signup_oauth', [$final_aid, $email]];
-      }
-      if ($cmd eq 'signup_jmap') {
-        require JMAP::JmapDB;
-        require MIME::Base64;
-
-        # Verify credentials by fetching the upstream JMAP session
-        my $tmp = JMAP::JmapDB->new($accountid);
-        my ($session) = $tmp->fetch_session($args);
-
-        # Resolve URLs relative to the session URL (some servers return relative paths).
-        # Do NOT use URI->new_abs here — it percent-encodes URI template variables like {accountId}.
-        # Instead: if the URL is already absolute, keep it; otherwise prepend the origin.
-        my ($session_origin) = ($args->{sessionUrl} =~ m{^(https?://[^/]+)});
-        my $abs_url = sub {
-            my $url = shift // '';
-            return $url if !$url || $url =~ m{^https?://};
-            return "$session_origin$url";  # absolute path (starts with /)
-        };
-
-        my $api_url = $session->{apiUrl}
-          or die "No apiUrl in upstream JMAP session\n";
-        $api_url = $abs_url->($api_url);
-
-        # Which upstream account does this proxy account represent?  By default the
-        # primary mail account, but a caller may bind to any account the login can
-        # see (e.g. a delegated/shared account), which is how one set of upstream
-        # credentials can back several proxy accounts.
-        my $mail_cap    = 'urn:ietf:params:jmap:mail';
-        my $primary_aid = $session->{primaryAccounts}{$mail_cap}
-          or die "No primary mail account in upstream JMAP session\n";
-        my $backend_aid = $args->{backendAccountId} // $primary_aid;
-        # Only validate an explicitly requested binding.  Servers that omit the
-        # `accounts` map (non-conformant, but previously accepted) must keep
-        # working when they are simply defaulting to the primary account.
-        die "backendAccountId '$backend_aid' is not present in the upstream JMAP session\n"
-          if defined $args->{backendAccountId} && !$session->{accounts}{$backend_aid};
-        my $capabilities = $session->{accounts}{$backend_aid} || {};
-        # `email` is the proxy-side login and must stay unique per account. Two
-        # accounts on one upstream login share a username, so fall back to the
-        # backend accountId to keep them distinct.
-        my $display_email = $args->{email}
-          // ($backend_aid eq $primary_aid ? ($args->{username} || $backend_aid)
-                                           : $backend_aid);
-
-        # Create the account entry in accounts.sqlite3
-        my $existing_aid = $dbh->selectrow_array(
-          "SELECT accountid FROM accounts WHERE email = ?", {}, $display_email);
-        # A fixed, trusted upstream (Fastmail's) proves who the login is by the
-        # username in its own session
-        my $session_proves = $args->{_bind_if_session_user}
-          && lc($session->{username} // '') eq lc $display_email;
-        die "An account for $display_email already exists: log in with its password\n"
-          if $existing_aid && !$args->{_bind_existing} && !$session_proves;
-        my $final_aid;
-        if ($existing_aid) {
-          $final_aid = $existing_aid;
-          if ($args->{poolid}) {
-            $dbh->do("UPDATE accounts SET poolid = ? WHERE accountid = ?",
-              {}, $args->{poolid}, $existing_aid);
-          }
-        } else {
-          _deny_new_account($display_email) if $DISABLE_SIGNUP && !$args->{_admin};
-          $final_aid = $accountid;
-          my $poolid = $args->{poolid} || $accountid;
-          $dbh->do(
-            "INSERT INTO accounts (email, accountid, type, poolid, needs_backfill)
-             VALUES (?,?,?,?,?)",
-            {}, $display_email, $accountid, 'jmap', $poolid, 0);
-        }
-
-        # Initialise JmapDB and store credentials
-        $type = 'jmap';
-        $init_db->();
-
-        $db->setuser({
-          username         => $args->{username} // '',
-          password         => $args->{password} // '',
-          authType         => $args->{authType} || 'basic',
-          sessionUrl       => $args->{sessionUrl},
-          apiUrl           => $api_url,
-          uploadUrl        => $abs_url->($session->{uploadUrl}   // ''),
-          downloadUrl      => $abs_url->($session->{downloadUrl} // ''),
-          backendAccountId => $backend_aid,
-          capabilities     => $capabilities,
-        });
-
-        my $fp = JMAP::JmapDB::cred_fingerprint({
-          apiUrl   => $api_url,
-          username => $args->{username} // '',
-          authType => $args->{authType} || 'basic',
-          secret   => $args->{password} // '',
-        });
-        $dbh->do("UPDATE accounts SET cred_fingerprint = ? WHERE accountid = ?", {}, $fp, $final_aid);
-
-        return ['signup_jmap', [$final_aid, $display_email]];
-      }
-      if ($cmd eq 'setup') {
-        # Default to implicit SSL/STARTTLS — plaintext on the standard SSL ports (993/587)
-        # just makes the server wait out its login-grace-time before dropping the connection.
-        my $imap_ssl = $args->{imapSSL} // 2;
-        my $smtp_ssl = $args->{smtpSSL} // 3;
-        warn "SETUP: $accountid connecting to imap host "
-           . ($args->{imapHost} // '?') . ":" . ($args->{imapPort} || 993) . "\n";
-        $db->setuser({
-          username   => $args->{username}   || $accountid,
-          email      => $args->{email},
-          password   => $args->{password}   || '',
-          imapHost   => $args->{imapHost},
-          imapPort   => $args->{imapPort}   || 993,
-          imapSSL    => $imap_ssl,
-          smtpHost   => $args->{smtpHost}   || $args->{imapHost},
-          smtpPort   => $args->{smtpPort}   || 587,
-          smtpSSL    => $smtp_ssl,
-          caldavURL  => $args->{caldavURL}  || '',
-          carddavURL => $args->{carddavURL} || '',
-          webdavURL  => $args->{webdavURL}  || '',
-        });
-        warn "SETUP: $accountid credentials stored, running firstsync\n";
-        $db->firstsync();
-        warn "SETUP: $accountid firstsync done, running sync_imap\n";
-        $db->sync_imap();
-        warn "SETUP: $accountid complete\n";
-        return ['setup', $JSON::true];
-      }
-      if ($cmd eq 'upload') {
-        my ($aid, $utype, $file) = @{$args}{qw(accountId type file)};
-        if ($db->can('proxy_upload')) {
-          my $r = $db->proxy_upload($utype, $file);
-          unlink $file;
-          return ['upload', $r];
-        }
-        my ($r) = $api->uploadFile($aid || $accountid, $utype, { file => $file });
-        return ['upload', $r];
-      }
-      if ($cmd eq 'filenode_put') {
-        my $file = $args->{file};
-        return ['filenode_put', { status => 404 }] unless $db->can('put_filenode_content');
-        my $bytes = do { local $/; open my $fh, '<:raw', $file or die "$file: $!"; <$fh> };
-        unlink $file;
-        return ['filenode_put', $db->put_filenode_content($args->{id}, $bytes, $args->{type})];
-      }
-      if ($cmd eq 'download') {
-        if ($db->can('proxy_blob')) {
-          my ($dtype, $content) = $db->proxy_blob(
-            $args->{blobId}, $args->{name}, $args->{type});
-          return ['download', [$dtype, $content]];
-        }
-        # a FileNode blob over JMAP_FILES_MAX_BYTES is refused, not read
-        # (a die here would end the worker); the parent answers 501
-        my ($dtype, $content) = eval { $api->downloadFile($args->{blobId}) };
-        return ['download', { status => 501, error => $@ =~ s/\n\z//r }] if JMAP::FileNode::is_too_large($@);
-        die $@ if $@;
-        return ['download', [$dtype, $content]];
-      }
-      if ($cmd eq 'raw') {
-        my $selector = "$args->{blobId}/$args->{name}";
-        my ($rtype, $content, $filename) = $api->getRawBlob($selector);
-        return ['raw', [$rtype, $content, $filename]];
-      }
-      if ($cmd eq 'fetch_blobs') {
-        my %result;
-        # Passthrough accounts have no local blob store: download from upstream
-        # into a temp file so the destination worker can re-upload it.
-        if ($db->can('handle_jmap')) {
-          for my $blobid (@{$args->{ids} || []}) {
-            my $up_blob = $blobid;
-            if ($blobid =~ /^m-(.+)$/) {
-              # resolve the email's upstream blobId via Email/get
-              my $eid = $1;
-              my $r = $db->handle_jmap({
-                using => ['urn:ietf:params:jmap:core','urn:ietf:params:jmap:mail'],
-                methodCalls => [['Email/get', { accountId => $accountid, ids => [$eid], properties => ['blobId'] }, 'g']],
-              });
-              my ($resp) = grep { $_->[2] eq 'g' } @{ $r->{methodResponses} || [] };
-              my $email = $resp && $resp->[0] eq 'Email/get' ? $resp->[1]{list}[0] : undef;
-              unless ($email && $email->{blobId}) { $result{$blobid} = undef; next; }
-              $up_blob = $email->{blobId};
-            }
-            my ($type, $body) = eval { $db->proxy_blob($up_blob, 'copy', 'application/octet-stream') };
-            if (!defined $body) { $result{$blobid} = undef; next; }
-            my $fh = File::Temp->new(DIR => "$datadir/tmp", UNLINK => 0, SUFFIX => '.blob');
-            binmode $fh; print $fh $body; close $fh;
-            $result{$blobid} = { type => $type || 'application/octet-stream', path => $fh->filename, is_temp => 1 };
-          }
-          return ['fetch_blobs', \%result];
-        }
-        for my $blobid (@{$args->{ids} || []}) {
-          if ($blobid =~ /^f-(.+)$/) {
-            my $fileid = $1;
-            $db->begin();
-            my $row = $db->dgetone('jfiles', { jfileid => $fileid });
-            $db->commit();
-            if ($row) {
-              my $path = $db->_subdir_path('files', $fileid);
-              $result{$blobid} = -f $path
-                ? { type => $row->{type}, path => $path, is_temp => 0 }
-                : undef;
-            }
-            else {
-              $result{$blobid} = undef;
-            }
-          }
-          elsif ($blobid =~ /^m-(.+)$/) {
-            my $msgid = $1;
-            my ($type, $raw) = $db->get_raw_message($msgid);
-            if (defined $raw) {
-              my $fh = File::Temp->new(DIR => "$datadir/tmp", UNLINK => 0, SUFFIX => '.blob');
-              print $fh $raw;
-              close $fh;
-              $result{$blobid} = {
-                type    => $type || 'message/rfc822',
-                path    => $fh->filename,
-                is_temp => 1,
-              };
-            }
-            else {
-              $result{$blobid} = undef;
-            }
-          }
-          elsif ($blobid =~ /^d-/) {
-            # a FileNode's content, read from WebDAV pinned to the ETag the
-            # blobId names: undef when the file changed since (a 412) or went;
-            # { error } for one over JMAP_FILES_MAX_BYTES, which no copy reads
-            my ($type, $content) = eval { $db->get_blob($blobid) };
-            if (JMAP::FileNode::is_too_large($@)) {
-              $result{$blobid} = { error => $@ =~ s/\n\z//r };
-            }
-            elsif (defined $content) {
-              my $fh = File::Temp->new(DIR => "$datadir/tmp", UNLINK => 0, SUFFIX => '.blob');
-              binmode $fh; print $fh $content; close $fh;
-              $result{$blobid} = { type => $type || 'application/octet-stream', path => $fh->filename, is_temp => 1 };
-            }
-            else {
-              $result{$blobid} = undef;
-            }
-          }
-          else {
-            $result{$blobid} = undef;
-          }
-        }
-        return ['fetch_blobs', \%result];
-      }
-      if ($cmd eq 'store_blob') {
-        my $src     = $args->{path}    or die "store_blob: no path\n";
-        my $type    = $args->{type}    || 'application/octet-stream';
-        my $is_temp = $args->{is_temp} || 0;
-
-        # Passthrough destination: upload straight to the upstream and hand
-        # back its blobId; there is no local jfiles store to insert into.
-        if ($db->can('handle_jmap')) {
-          my $r = $db->proxy_upload($type, $src);
-          unlink $src if $is_temp;
-          return ['store_blob', { blobId => $r->{blobId} }];
-        }
-
-        my $size    = (stat($src))[7]  // 0;
-        my $expires = time() + 7 * 86400;
-
-        $db->begin();
-        $db->dbh->do(
-          'INSERT OR REPLACE INTO jfiles (type, size, expires, mtime) VALUES (?, ?, ?, ?)',
-          {}, $type, $size, $expires, time());
-        my $id = $db->dbh->last_insert_id(undef, undef, undef, undef);
-        $db->commit();
-
-        my $dest = $db->_subdir_path('files', $id);
-        unless (link($src, $dest)) {
-          require File::Copy;
-          File::Copy::copy($src, $dest) or do {
-            eval {
-              $db->begin();
-              $db->dbh->do('DELETE FROM jfiles WHERE jfileid = ?', {}, $id);
-              $db->commit();
-            };
-            die "blob copy failed: $!\n";
-          };
-        }
-        unlink $src if $is_temp;
-
-        return ['store_blob', { blobId => "f-$id" }];
-      }
-      if ($cmd eq 'jmap') {
-        my $result;
-        # Strip the routing hints unconditionally — they are internal to the
-        # parent<->worker protocol and must not reach a backend handler.
-        my $fwd = delete $args->{_fwd_map};
-        my $rev = delete $args->{_rev_map};
-        if ($db->can('handle_jmap')) {
-          $result = $db->handle_jmap($args, $fwd, $rev);
-        } else {
-          $result = $api->handle_request($args);
-          # A held (FUTURERELEASE) submission was created or canceled: tell
-          # the parent when this account next needs a send_due.
-          if (delete $db->{_sendat_changed}) {
-            my $next = $db->next_send_due;
-            eval { $write_json->(['sendat', $next]) };
-          }
-        }
-        # sessionState is the parent's: the state of the Session it served
-        return ['jmap', $result];
-      }
-      if ($cmd eq 'sync') {
-        # JMAP passthrough accounts have no local sync
-        return ['sync', $JSON::true] if $db->can('handle_jmap');
-        $db->sync_folders();
-        $db->sync_imap();
-        _dav_sync_safely($db, $accountid);
-        # A full WebDAV walk costs a request per collection, so the periodic
-        # tick only runs it every 300s (spec "Sync"); an explicit sync from
-        # the management API ({force => 1}) always does.
-        if ($db->can('sync_files')) {
-          if ($args->{force}) { $db->sync_files_safely() }
-          else                { $db->sync_files_if_due(300, { first => 0 }) }   # first walk: backfill worker
-        }
-        # sync_folders() may have turned up folders needing backfill after
-        # the account's one-shot needs_backfill flag was already cleared
-        # (new folders, or folders that previously got merged onto the
-        # wrong row and now have their own fresh uidfirst == uidnext) — tell
-        # the parent so it can (re)start the backfill loop for this account.
-        eval {
-          $write_json->(['needsbackfill', time()]) if $db->has_pending_backfill();
-        };
-        eval { $write_json->(['synced', time()]) };
-        return ['sync', $JSON::true];
-      }
-      # IMPORTANT: 'backfill' MUST only be sent to "$accountid:backfill" workers,
-      # never to the jmap/sync worker. See prod_backfill() in the parent.
-      if ($cmd eq 'backfill') {
-        # JMAP passthrough accounts have no backfill
-        return ['backfill', 0] if $db->can('handle_jmap');
-        # The account's first full WebDAV walk runs here, not in firstsync, so
-        # signup never waits for it (spec "Sync"); a no-op once any file sync
-        # has run.  Accounts with no backfill pending sync on demand instead.
-        $db->first_files_sync() if $db->can('first_files_sync');
-        my $more = $db->backfill() ? 1 : 0;
-        return ['backfill', $more];
-      }
-      if ($cmd eq 'send_due') {
-        # Send the held submissions whose time has come; answer the next due time.
-        return ['send_due', undef] unless $db->can('send_due');
-        return ['send_due', $db->send_due()];
-      }
-      if ($cmd eq 'davsync') {
-        _dav_sync_safely($db, $accountid);
-        return ['davsync', $JSON::true];
-      }
-      if ($cmd eq 'session_caps') {
-        # Passthrough only: fetch the upstream session and return the capability
-        # slice for this account, rewritten to the proxy accountId.
-        die "session_caps only valid for passthrough accounts\n"
-          unless $db->can('handle_jmap');
-        my $server     = $db->access_data();
-        my $proxy_id   = $accountid;
-        my $backend_id = $server->{backendAccountId} // '';
-        my ($session)  = $db->fetch_session({});
-        my $acct = ($session->{accounts} || {})->{$backend_id} || {};
-
-        # Rewrite backend accountId → proxy accountId in primaryAccounts values.
-        my %primary;
-        my $up_primary = $session->{primaryAccounts} || {};
-        for my $urn (keys %$up_primary) {
-          my $v = $up_primary->{$urn};
-          $primary{$urn} = (defined $v && $v eq $backend_id) ? $proxy_id : $v;
-        }
-
-        return ['session_caps', {
-          accountCapabilities => $acct->{accountCapabilities} || {},
-          capabilities        => $session->{capabilities}     || {},
-          name                => $acct->{name} // $proxy_id,
-          isReadOnly          => $acct->{isReadOnly} ? $JSON::true : $JSON::false,
-          isPersonal          => $acct->{isPersonal} ? $JSON::true : $JSON::false,
-          primaryAccounts     => \%primary,
-        }];
-      }
-      if ($cmd eq 'get_settings') {
-        my $data;
-        if ($db->can('handle_jmap')) {
-          $data = $db->access_data();  # includes type='jmap'
-        } else {
-          $db->begin();
-          $data = $db->dgetone('iserver') || {};
-          $db->commit();
-          $data->{type} = 'imap';
-        }
-        delete $data->{password};
-        return ['get_settings', $data];
-      }
-      if ($cmd eq 'update_settings') {
-        if ($db->can('handle_jmap')) {
-          # Verify new JMAP credentials then update stored settings
-          my ($session) = $db->fetch_session($args);
-          my $mail_cap  = 'urn:ietf:params:jmap:mail';
-          my $primary_aid = $session->{primaryAccounts}{$mail_cap}
-            or die "No primary mail account in upstream JMAP session\n";
-          # Keep an existing delegated binding unless the caller changes it.
-          my $backend_aid = $args->{backendAccountId}
-            // ($db->access_data()->{backendAccountId} || $primary_aid);
-          # As in signup_jmap: only validate a binding the caller asked for.
-          die "backendAccountId '$backend_aid' is not present in the upstream JMAP session\n"
-            if defined $args->{backendAccountId} && !$session->{accounts}{$backend_aid};
-          $db->setuser({
-            username         => $args->{username} // '',
-            password         => $args->{password} // '',
-            authType         => $args->{authType} || 'basic',
-            sessionUrl       => $args->{sessionUrl},
-            apiUrl           => $session->{apiUrl},
-            backendAccountId => $backend_aid,
-            capabilities     => $session->{accounts}{$backend_aid} || {},
-          });
-          my $fp = JMAP::JmapDB::cred_fingerprint({
-            apiUrl   => $session->{apiUrl},
-            username => $args->{username} // '',
-            authType => $args->{authType} || 'basic',
-            secret   => $args->{password} // '',
-          });
-          $dbh->do("UPDATE accounts SET cred_fingerprint = ? WHERE accountid = ?", {}, $fp, $accountid);
-          return ['update_settings', $JSON::true];
-        }
-        require Mail::IMAPTalk;
-        my $host = $args->{imapHost} or die "imapHost required\n";
-        my $port = $args->{imapPort} || 993;
-        my $ssl  = $args->{imapSSL} // 2;
-        my $imap = Mail::IMAPTalk->new(
-          Server      => $host,
-          Port        => $port,
-          UseSSL      => ($ssl > 1),
-          UseBlocking => ($ssl > 1),
-        );
-        die "Cannot connect to IMAP server $host:$port\n" unless $imap;
-        my $ok = $imap->login($args->{username}, $args->{password});
-        die "Login failed for $args->{username}\n" unless $ok;
-        $imap->logout();
-        $db->setuser($args);
-        return ['update_settings', $JSON::true];
-      }
-      if ($cmd eq 'delete') {
-        $db->delete() if $db;
-        return ['deleted', $JSON::true];
-      }
-      die "Unknown command: $cmd\n";
-    };
+    my $res = eval { $dispatch->($cmd, $args, $tag) };
     unless ($res) {
       my $err = "$@";
       eval { $db->rollback() } if $db && $db->in_transaction();
@@ -2894,49 +2913,7 @@ sub do_raw {
 }
 
 # ── PDPA (Personal Data Portability Archive) ─────────────────────────────────
-
-sub _pdpa_build_zip {
-  my (%files) = @_;
-  my @paths = sort keys %files;
-  return '' unless @paths;
-  my $zip_data = '';
-  my $first = shift @paths;
-  my $zip = IO::Compress::Zip->new(\$zip_data, Name => $first)
-    or die "Zip error: $ZipError\n";
-  $zip->print($files{$first});
-  for my $path (@paths) {
-    $zip->newStream(Name => $path) or die "Zip stream error: $ZipError\n";
-    $zip->print($files{$path});
-  }
-  $zip->close();
-  return $zip_data;
-}
-
-sub _pdpa_unzip {
-  my ($content) = @_;
-  my %files;
-  my $u = IO::Uncompress::Unzip->new(\$content)
-    or die "Cannot read zip: $UnzipError\n";
-  do {
-    my $hdr  = $u->getHeaderInfo;
-    my $name = $hdr->{Name} // '';
-    next if $name =~ m{/$};
-    local $/;
-    $files{$name} = <$u> // '';
-  } while $u->nextStream() > 0;
-  return %files;
-}
-
-sub _pdpa_mbox_path {
-  my ($mbox_id, $mbox_map) = @_;
-  my @parts;
-  my $cur = $mbox_map->{$mbox_id};
-  while ($cur) {
-    unshift @parts, $cur->{name};
-    $cur = $cur->{parentId} ? $mbox_map->{$cur->{parentId}} : undef;
-  }
-  return @parts ? join('/', @parts) : 'INBOX';
-}
+# The work is the worker's (JMAP::PDPA): the parent only passes it on.
 
 sub do_pdpa {
   my ($httpd, $req) = @_;
@@ -2949,7 +2926,7 @@ sub do_pdpa {
       _pdpa_export($accountid, $req);
     } elsif ($method eq 'post') {
       my $prefix = $req->url->query_param('prefix') // '';
-      _pdpa_import($accountid, $prefix, $req->content, $req);
+      _pdpa_import($accountid, $prefix, $req);
     } else {
       $req->respond([405, 'method not allowed', { Allow => 'GET, POST' }, 'Method Not Allowed']);
     }
@@ -2958,421 +2935,26 @@ sub do_pdpa {
 
 sub _pdpa_export {
   my ($accountid, $req) = @_;
-
-  my %zip;
-  my $ts = strftime('%Y-%m-%dT%H:%M:%SZ', gmtime());
-  $zip{'archive.json'} = encode_json({
-    archive => {
-      id        => Data::UUID::LibUUID::new_uuid_string(),
-      name      => "Export for $accountid",
-      generator => 'jmap-proxy',
-      timestamp => $ts,
-      version   => '1',
-    },
-    dataset => { languagetag => 'en' },
-  });
-
-  send_backend_request($accountid, 'jmap', {
-    using => [qw(urn:ietf:params:jmap:core urn:ietf:params:jmap:mail)],
-    methodCalls => [
-      ['Mailbox/get',  {}, 'mx'],
-      ['Email/query',  { limit => 10000 }, 'eq'],
-    ],
-  }, sub {
-    my $r = shift;
-    my %res = map { $_->[2] => $_->[1] } @{$r->{methodResponses}};
-
-    my %mbox_map   = map { $_->{id} => $_ } @{$res{mx}{list} // []};
-    my @email_ids  = @{$res{eq}{ids} // []};
-
-    _pdpa_export_contacts($accountid, \%zip, sub {
-      _pdpa_export_calendars($accountid, \%zip, sub {
-        _pdpa_export_mail($accountid, \@email_ids, \%mbox_map, \%zip, sub {
-          my $zip_bytes = eval { _pdpa_build_zip(%zip) };
-          if ($@) {
-            return $req->respond([500, 'error', {}, "zip build failed: $@"]);
-          }
-          $req->respond([200, 'ok', {
-            'Content-Type'        => 'application/zip',
-            'Content-Disposition' => "attachment; filename=\"pdpa-$accountid.zip\"",
-          }, $zip_bytes]);
-        });
-      });
-    });
-
+  send_backend_request($accountid, 'pdpa_export', {}, sub {
+    $req->respond([200, 'ok', {
+      'Content-Type'        => 'application/zip',
+      'Content-Disposition' => "attachment; filename=\"pdpa-$accountid.zip\"",
+    }, shift]);
   }, sub {
     $req->respond([500, 'error', {}, 'export failed: ' . ($_[0] // 'unknown')]);
   });
 }
 
-sub _pdpa_export_mail {
-  my ($accountid, $email_ids, $mbox_map, $zip, $cb) = @_;
-  return $cb->() unless @$email_ids;
-
-  send_backend_request($accountid, 'jmap', {
-    using => [qw(urn:ietf:params:jmap:core urn:ietf:params:jmap:mail)],
-    methodCalls => [['Email/get', {
-      ids        => $email_ids,
-      properties => [qw(id mailboxIds keywords receivedAt)],
-    }, 'eg']],
-  }, sub {
-    my $r = shift;
-    my @emails = @{$r->{methodResponses}[0][1]{list} // []};
-    return $cb->() unless @emails;
-
-    my @blob_ids = map { "m-$_->{id}" } @emails;
-    send_backend_request($accountid, 'fetch_blobs', { ids => \@blob_ids }, sub {
-      my $blobs = shift;
-
-      my %by_folder;
-      my %flag_to_kw = (
-        '$seen'     => '\Seen',   '$answered' => '\Answered',
-        '$flagged'  => '\Flagged', '$draft'   => '\Draft',
-      );
-
-      for my $email (@emails) {
-        my $blob = $blobs->{"m-$email->{id}"} or next;
-        my ($mbox_id) = keys %{$email->{mailboxIds} // {}};
-        my $folder = $mbox_id ? _pdpa_mbox_path($mbox_id, $mbox_map) : 'INBOX';
-
-        open(my $fh, '<', $blob->{path}) or next;
-        local $/; my $raw = <$fh>; close $fh;
-        unlink $blob->{path} if $blob->{is_temp};
-
-        my @flags = map { $flag_to_kw{lc $_} // "\$$_" } keys %{$email->{keywords} // {}};
-        push @{$by_folder{$folder}}, {
-          raw      => $raw,
-          flags    => \@flags,
-          received => $email->{receivedAt},
-        };
-      }
-
-      for my $folder (sort keys %by_folder) {
-        my @items;
-        my $seq = 1;
-        for my $m (@{$by_folder{$folder}}) {
-          my $filename = "$seq.eml";
-          $zip->{"mail/$folder/$filename"} = $m->{raw};
-          push @items, {
-            filename => $filename,
-            @{$m->{flags}} ? (flags => $m->{flags}) : (),
-            $m->{received} ? (receivedAt => $m->{received}) : (),
-          };
-          $seq++;
-        }
-        $zip->{"mail/$folder/folder.json"} = encode_json({
-          name  => (split('/', $folder))[-1],
-          items => \@items,
-        });
-      }
-      $cb->();
-    }, sub { $cb->() });
-  }, sub { $cb->() });
-}
-
-sub _pdpa_export_contacts {
-  my ($accountid, $zip, $cb) = @_;
-  send_backend_request($accountid, 'jmap', {
-    using => [qw(urn:ietf:params:jmap:core urn:ietf:params:jmap:contacts)],
-    methodCalls => [['AddressBook/get', {}, 'ax']],
-  }, sub {
-    my $r = shift;
-    my @abs = @{$r->{methodResponses}[0][1]{list} // []};
-    return $cb->() unless @abs;
-
-    my @remaining = @abs;
-    my $next_ab; $next_ab = sub {
-      return $cb->() unless @remaining;
-      my $ab  = shift @remaining;
-      my $dir = $ab->{name} // 'Personal';
-      send_backend_request($accountid, 'jmap', {
-        using => [qw(urn:ietf:params:jmap:core urn:ietf:params:jmap:contacts)],
-        methodCalls => [
-          ['ContactCard/query', { filter => { inAddressBook => $ab->{id} } }, 'cq'],
-          ['ContactCard/get', { '#ids' => { resultOf => 'cq', name => 'ContactCard/query', path => '/ids' } }, 'cg'],
-        ],
-      }, sub {
-        my $r2 = shift;
-        my %res = map { $_->[2] => $_->[1] } @{$r2->{methodResponses}};
-        my @cards = @{$res{cg}{list} // []};
-        my @items;
-        for my $card (@cards) {
-          my $uid = $card->{uid} // $card->{id};
-          $zip->{"contacts/$dir/$uid.json"} = encode_json($card);
-          push @items, { filename => "$uid.json", uid => $uid };
-        }
-        $zip->{"contacts/$dir/folder.json"} = encode_json({ name => $dir, items => \@items });
-        $next_ab->();
-      }, sub { $next_ab->() });
-    };
-    $next_ab->();
-  }, sub { $cb->() });
-}
-
-sub _pdpa_export_calendars {
-  my ($accountid, $zip, $cb) = @_;
-  send_backend_request($accountid, 'jmap', {
-    using => [qw(urn:ietf:params:jmap:core urn:ietf:params:jmap:calendars)],
-    methodCalls => [['Calendar/get', {}, 'cx']],
-  }, sub {
-    my $r = shift;
-    my @cals = @{$r->{methodResponses}[0][1]{list} // []};
-    return $cb->() unless @cals;
-
-    my @remaining = @cals;
-    my $next_cal; $next_cal = sub {
-      return $cb->() unless @remaining;
-      my $cal = shift @remaining;
-      my $dir = $cal->{name} // 'Calendar';
-      send_backend_request($accountid, 'jmap', {
-        using => [qw(urn:ietf:params:jmap:core urn:ietf:params:jmap:calendars)],
-        methodCalls => [
-          ['CalendarEvent/query', { filter => { inCalendar => $cal->{id} } }, 'evq'],
-          ['CalendarEvent/get', { '#ids' => { resultOf => 'evq', name => 'CalendarEvent/query', path => '/ids' } }, 'evg'],
-        ],
-      }, sub {
-        my $r2 = shift;
-        my %res = map { $_->[2] => $_->[1] } @{$r2->{methodResponses}};
-        my @events = @{$res{evg}{list} // []};
-        my @items;
-        for my $ev (@events) {
-          my $uid = $ev->{uid} // $ev->{id};
-          $zip->{"calendars/$dir/$uid.json"} = encode_json($ev);
-          push @items, { filename => "$uid.json", uid => $uid };
-        }
-        $zip->{"calendars/$dir/folder.json"} = encode_json({ name => $dir, items => \@items });
-        $next_cal->();
-      }, sub { $next_cal->() });
-    };
-    $next_cal->();
-  }, sub { $cb->() });
-}
-
 sub _pdpa_import {
-  my ($accountid, $prefix, $zip_bytes, $req) = @_;
-
-  my %files = eval { _pdpa_unzip($zip_bytes) };
-  if ($@) {
-    return $req->respond([400, 'bad request', {}, "Invalid zip: $@"]);
-  }
-
-  _pdpa_import_mail($accountid, $prefix, \%files, sub {
-    _pdpa_import_contacts($accountid, $prefix, \%files, sub {
-      _pdpa_import_calendars($accountid, $prefix, \%files, sub {
-        $req->respond([200, 'ok', { 'Content-Type' => 'application/json' },
-          $json->encode({ ok => \1 })]);
-      });
-    });
-  });
-}
-
-sub _pdpa_import_mail {
-  my ($accountid, $prefix, $files, $cb) = @_;
-
-  my %folders;
-  for my $path (keys %$files) {
-    next unless $path =~ m{^mail/(.+)/folder\.json$};
-    my $src  = $1;
-    my $meta = eval { decode_json($files->{$path}) } // {};
-    my $dest = $prefix ? "$prefix/$src" : $src;
-    $folders{$src} = { meta => $meta, dest => $dest };
-  }
-  return $cb->() unless %folders;
-
-  send_backend_request($accountid, 'jmap', {
-    using => [qw(urn:ietf:params:jmap:core urn:ietf:params:jmap:mail)],
-    methodCalls => [['Mailbox/get', {}, 'mx']],
+  my ($accountid, $prefix, $req) = @_;
+  my $file = _spool_body_to_temp($req);
+  send_backend_request($accountid, 'pdpa_import', { file => $file, prefix => $prefix }, sub {
+    $req->respond([200, 'ok', { 'Content-Type' => 'application/json' }, $json->encode({ ok => \1, imported => shift })]);
   }, sub {
-    my $r = shift;
-    my @existing = @{$r->{methodResponses}[0][1]{list} // []};
-
-    my %id_to_mbox = map { $_->{id} => $_ } @existing;
-    my %path_to_id;
-    for my $mbox (@existing) {
-      my @parts;
-      my $cur = $mbox;
-      while ($cur) {
-        unshift @parts, $cur->{name};
-        $cur = $cur->{parentId} ? $id_to_mbox{$cur->{parentId}} : undef;
-      }
-      $path_to_id{join('/', @parts)} = $mbox->{id};
-    }
-
-    # Collect unique dest paths, sorted parents-first
-    my %dest_paths;
-    for my $finfo (values %folders) {
-      my @parts = split '/', $finfo->{dest};
-      $dest_paths{join('/', @parts[0..$_])} = 1 for 0..$#parts;
-    }
-    my @to_create = sort { length($a) <=> length($b) || $a cmp $b }
-                    grep { !$path_to_id{$_} } keys %dest_paths;
-
-    my $do_import = sub {
-      _pdpa_import_mail_emails($accountid, $files, \%folders, \%path_to_id, $cb);
-    };
-
-    my $create_next; $create_next = sub {
-      return $do_import->() unless @to_create;
-      my $path    = shift @to_create;
-      my @parts   = split '/', $path;
-      my $name    = $parts[-1];
-      my $par_path = @parts > 1 ? join('/', @parts[0..$#parts-1]) : undef;
-      my $par_id   = $par_path ? $path_to_id{$par_path} : undef;
-      send_backend_request($accountid, 'jmap', {
-        using => [qw(urn:ietf:params:jmap:core urn:ietf:params:jmap:mail)],
-        methodCalls => [['Mailbox/set', {
-          create => { m => { name => $name, ($par_id ? (parentId => $par_id) : ()) } },
-        }, 'mc']],
-      }, sub {
-        my $r2 = shift;
-        my $created = $r2->{methodResponses}[0][1]{created}{m};
-        $path_to_id{$path} = $created->{id} if $created;
-        $create_next->();
-      }, sub { $create_next->() });
-    };
-    $create_next->();
-  }, sub { $cb->() });
-}
-
-sub _pdpa_import_mail_emails {
-  my ($accountid, $files, $folders, $path_to_id, $cb) = @_;
-
-  my %kw_map = (
-    '\Seen' => '$seen', '\Answered' => '$answered',
-    '\Flagged' => '$flagged', '\Draft' => '$draft',
-  );
-
-  my @queue;
-  for my $src (sort keys %$folders) {
-    my $finfo   = $folders->{$src};
-    my $mbox_id = $path_to_id->{$finfo->{dest}} or next;
-    for my $item (@{$finfo->{meta}{items} // []}) {
-      my $filename = $item->{filename} or next;
-      my $raw = $files->{"mail/$src/$filename"} or next;
-      my @flags = grep { !/^\\Recent$/i } @{$item->{flags} // []};
-      my %keywords = map { ($kw_map{$_} // lc(s/^\\//r)) => \1 } @flags;
-      push @queue, {
-        raw      => $raw,
-        mbox_id  => $mbox_id,
-        keywords => \%keywords,
-        received => $item->{receivedAt},
-      };
-    }
-  }
-  return $cb->() unless @queue;
-
-  my $import_next; $import_next = sub {
-    return $cb->() unless @queue;
-    my $item = shift @queue;
-
-    my $tmp = eval {
-      my $f = File::Temp->new(DIR => "$datadir/tmp", UNLINK => 0);
-      print $f $item->{raw};
-      close $f;
-      $f;
-    };
-    return $import_next->() unless $tmp;
-
-    send_backend_request($accountid, 'store_blob', {
-      path => $tmp->filename, type => 'message/rfc822', is_temp => 1,
-    }, sub {
-      my $blob_id = shift->{blobId} or return $import_next->();
-      send_backend_request($accountid, 'jmap', {
-        using => [qw(urn:ietf:params:jmap:core urn:ietf:params:jmap:mail)],
-        methodCalls => [['Email/import', { emails => { e => {
-          blobId     => $blob_id,
-          mailboxIds => { $item->{mbox_id} => \1 },
-          keywords   => $item->{keywords},
-          ($item->{received} ? (receivedAt => $item->{received}) : ()),
-        } } }, 'ei']],
-      }, sub { $import_next->() }, sub { $import_next->() });
-    }, sub { unlink $tmp->filename; $import_next->() });
-  };
-  $import_next->();
-}
-
-sub _pdpa_import_contacts {
-  my ($accountid, $prefix, $files, $cb) = @_;
-
-  my %ab_dirs;
-  for my $path (keys %$files) {
-    next unless $path =~ m{^contacts/(.+)/folder\.json$};
-    $ab_dirs{$1} = eval { decode_json($files->{$path}) } // {};
-  }
-  return $cb->() unless %ab_dirs;
-
-  my @remaining = sort keys %ab_dirs;
-  my $next_ab; $next_ab = sub {
-    return $cb->() unless @remaining;
-    my $dir  = shift @remaining;
-    my $meta = $ab_dirs{$dir};
-    my $name = $meta->{name} // $dir;
-    $name = "$prefix/$name" if $prefix;
-    send_backend_request($accountid, 'jmap', {
-      using => [qw(urn:ietf:params:jmap:core urn:ietf:params:jmap:contacts)],
-      methodCalls => [['AddressBook/set', { create => { ab => { name => $name } } }, 'as']],
-    }, sub {
-      my $r = shift;
-      my $ab_id = $r->{methodResponses}[0][1]{created}{ab}{id} or return $next_ab->();
-      my %create;
-      for my $item (@{$meta->{items} // []}) {
-        my $filename = $item->{filename} or next;
-        my $card = eval { decode_json($files->{"contacts/$dir/$filename"}) } or next;
-        delete @{$card}{qw(id addressBookIds)};
-        $card->{addressBookIds} = { $ab_id => \1 };
-        $create{$item->{uid} // $filename} = $card;
-      }
-      if (%create) {
-        send_backend_request($accountid, 'jmap', {
-          using => [qw(urn:ietf:params:jmap:core urn:ietf:params:jmap:contacts)],
-          methodCalls => [['ContactCard/set', { create => \%create }, 'cs']],
-        }, sub { $next_ab->() }, sub { $next_ab->() });
-      } else { $next_ab->() }
-    }, sub { $next_ab->() });
-  };
-  $next_ab->();
-}
-
-sub _pdpa_import_calendars {
-  my ($accountid, $prefix, $files, $cb) = @_;
-
-  my %cal_dirs;
-  for my $path (keys %$files) {
-    next unless $path =~ m{^calendars/(.+)/folder\.json$};
-    $cal_dirs{$1} = eval { decode_json($files->{$path}) } // {};
-  }
-  return $cb->() unless %cal_dirs;
-
-  my @remaining = sort keys %cal_dirs;
-  my $next_cal; $next_cal = sub {
-    return $cb->() unless @remaining;
-    my $dir  = shift @remaining;
-    my $meta = $cal_dirs{$dir};
-    my $name = $meta->{name} // $dir;
-    $name = "$prefix/$name" if $prefix;
-    send_backend_request($accountid, 'jmap', {
-      using => [qw(urn:ietf:params:jmap:core urn:ietf:params:jmap:calendars)],
-      methodCalls => [['Calendar/set', { create => { cal => { name => $name } } }, 'cs']],
-    }, sub {
-      my $r = shift;
-      my $cal_id = $r->{methodResponses}[0][1]{created}{cal}{id} or return $next_cal->();
-      my %create;
-      for my $item (@{$meta->{items} // []}) {
-        my $filename = $item->{filename} or next;
-        my $ev = eval { decode_json($files->{"calendars/$dir/$filename"}) } or next;
-        delete @{$ev}{qw(id calendarIds)};
-        $ev->{calendarIds} = { $cal_id => \1 };
-        $create{$item->{uid} // $filename} = $ev;
-      }
-      if (%create) {
-        send_backend_request($accountid, 'jmap', {
-          using => [qw(urn:ietf:params:jmap:core urn:ietf:params:jmap:calendars)],
-          methodCalls => [['CalendarEvent/set', { create => \%create }, 'evs']],
-        }, sub { $next_cal->() }, sub { $next_cal->() });
-      } else { $next_cal->() }
-    }, sub { $next_cal->() });
-  };
-  $next_cal->();
+    unlink $file;
+    my $err = $_[0] // 'unknown';
+    $req->respond([$err =~ /zip/i ? 400 : 500, 'error', {}, "import failed: $err"]);
+  });
 }
 
 sub do_landing {

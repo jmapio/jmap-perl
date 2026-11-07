@@ -361,7 +361,8 @@ Imports a PDPA zip archive into the authenticated account.
 - **Mail**: missing mailboxes are created (parent folders first), then each
   `.eml` is registered as a blob (`store_blob`) and imported via `Email/import`.
   `\Recent` is stripped (server-managed). IMAP flags are converted to JMAP
-  keywords (`\Seen` → `$seen` etc.).
+  keywords (`\Seen` → `$seen` etc.). A message the account already has
+  (`Email/import` answers `alreadyExists`) is added to the folder instead.
 - **Contacts**: a new address book is created for each source address book;
   cards are imported via `ContactCard/set`. `id` and `addressBookIds` from the
   archive are ignored; the server assigns new values.
@@ -371,10 +372,13 @@ Imports a PDPA zip archive into the authenticated account.
 
 Existing data is not replaced — imported data is added alongside it.
 
-**Response 200**
+**Response 200** — with how many of each were imported.
 ```json
-{ "ok": true }
+{ "ok": true, "imported": { "emails": 12, "contacts": 3, "events": 5 } }
 ```
+
+The archive is built and read in the account's worker, never in the proxy's
+event loop.
 
 **Response 400** — if the request body is not a valid zip.
 
