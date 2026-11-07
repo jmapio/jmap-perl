@@ -269,7 +269,7 @@ The test image is derived with `munge8bit: no` (Cyrus's default rewrites 8-bit h
 bytes to `X`, so EAI mail, RFC 8621 S4.8, could never be stored). The test stack
 registers `user1@example.com` (the image's users are in example.com) and sends through the image's Postfix on 8587 (AUTH PLAIN, no TLS); suite logins are the
 account's email. The run needs Text::JSCalendar 0.10, Text::JSContact 0.06 and
-Data::JSEmail 0.06 (each repo's `structure` branch, unreleased; 0.09/0.05/0.05 on master
+Data::JSEmail 0.06 (each repo's master, tagged and built 2026-11-07 but not yet on CPAN; 0.09/0.05/0.05
 predate the proxy's switch to their codecs; until they are on CPAN, put the checkouts' `lib` on
 `PERL5LIB` -- prepended, so local::lib stays -- both for the restart and for the run).
 
