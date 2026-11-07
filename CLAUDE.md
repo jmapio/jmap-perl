@@ -256,15 +256,15 @@ directory list, which silently skipped `t/core/`, `t/Blob/` and the top-level `t
 months and hid five real proxy bugs (ResultReference validation, dropped error responses,
 Blob/copy arguments, downloadUrl `{type}`, unknown-mailbox moves). Never narrow it again.
 
-On the suite's `spec-correctness` branch (296 files, 2026-11-06, image
-`cyrus-test-server:suite-fixes-20261002b`) IMAP mode fails **1 against the proxy and 59
-`--direct`, with no proxy-only failure**. Every failure was judged against the spec, which
-decides whether the proxy or the test is wrong ("Cyrus fails it too" decides nothing: in
-IMAP mode the proxy answers every method itself). The one left is not a quick fix:
-- `t/EmailSubmission/set/implicit-email-set.t`: the test mails itself, Postfix delivers a
-  copy back to INBOX, and the proxy's envelope-hash Email id (`calcmsgid`, used when the
-  server has no `XCONVERSATIONS`/`X-GM-EXT-1`) gives that differently-sized copy the same
-  id. Fixing it changes every such id, so it is a decision, not a quick fix.
+On the suite's `spec-correctness` branch (296 files, 2026-11-07, image
+`cyrus-test-server:suite-fixes-20261002b`) IMAP mode fails **0 against the proxy and 59
+`--direct`**. Every failure along the way was judged against the spec, which decides whether
+the proxy or the test is wrong ("Cyrus fails it too" decides nothing: in IMAP mode the
+proxy answers every method itself).
+Email ids (`ImapDB::_msgid_for`): the server's RFC 8474 EMAILID/THREADID where it has
+OBJECTID, Gmail's X-GM-MSGID, else a hash of the ENVELOPE and RFC822.SIZE (the envelope
+alone gave a self-delivered copy the sent copy's id). Schema v14 re-keys existing folders
+on their next sync (`rekey_folder`); clients see a changed id as destroyed plus created.
 The test image is derived with `munge8bit: no` (Cyrus's default rewrites 8-bit header
 bytes to `X`, so EAI mail, RFC 8621 S4.8, could never be stored). The test stack
 registers `user1@example.com` (the image's users are in example.com) and sends through the image's Postfix on 8587 (AUTH PLAIN, no TLS); suite logins are the
