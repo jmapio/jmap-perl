@@ -571,10 +571,13 @@ that drifted, leaky layer boundaries and no single error model. Confirmed bugs, 
 - [x] MDN/send writes client `subject`, `reportingUA`, `finalRecipient` into headers unencoded
 - [x] FileNode: unsharing a directory removed a subdirectory's own grant.  Now -20's model:
       shareWith is a directory's own entries (ownshare), its ACL their union with its parent's
-Reported, to verify: Calendar/Addressbook `/changes` compare maxChanges with all rows;
-`ifInState` ignored by Calendar/Contact `/set`; no timeout across the parent/worker boundary;
-`sessionState` unchanged when FileNode becomes advertised; PDPA export zips in the parent;
-`maxObjectsInGet`/`maxObjectsInSet` not enforced; EmailSubmission filter `operator` ignored.
+Reported, then verified and fixed: `/changes` comparing maxChanges with every row (and never
+paging) in Calendar/CalendarEvent/Contact/ContactGroup/AddressBook; `ifInState` ignored by seven
+`/set`s (now checked for every `/set` against its `/get`'s state, which showed AddressBook/set and
+VacationResponse/set reporting the wrong oldState); no timeout across the parent/worker boundary
+(`JMAP_WORKER_TIMEOUT`); `sessionState` blind to capability changes, and read with DBI in the
+parent; PDPA export/import blocking the parent (now JMAP::PDPA in the worker);
+`maxObjectsInGet`/`maxObjectsInSet` not enforced; EmailSubmission FilterOperators ignored.
 Next, as for the modules: a table-driven test of every method in the Dispatch table through
 `handle_request` against a temp DB and fake backend; then generic `/changes`, `/query`, the
 `/set` envelope and one `JMAP::Error`; a backend module with typed messages and deadlines.
