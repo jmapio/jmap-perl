@@ -239,8 +239,10 @@ older ones, so each needs re-checking against the new text:
       -05 -> -09 (Text::JSCalendar; first known gap: -29 maps a link by `rel` to ATTACH, IMAGE,
       URL (`describedby`, at most one) or LINK, where the module writes URL for every
       non-enclosure link)
-- [ ] jscontact-uid -07 -> RFC 9982 (JSContact 2.0: `uid` optional), jscontact-profiles -14 ->
-      RFC 10050, jscontact-cryptographic-key -00 -> -01 (Text::JSContact)
+- [x] jscontact-uid -07 -> RFC 9982 (JSContact 2.0: `uid` optional): Text::JSContact writes
+      version "2.0" and no uid for a vCard without UID; the proxy gives such a card a uid made
+      from its href (`JMAP::DB::card_uid_for_href`). RFC 10050 (jscontact-profiles) only creates
+      a registry; jscontact-cryptographic-key -01 has no vCard mapping and is not implemented
 - [ ] filenode -13 -> -20, blobext -01 -> -03, emailpush -02 -> -04, metadata -01 -> -05,
       mail-sharing -00 -> -02, refplus -01 -> -02
 - [ ] mailmaint-pacc -02 -> -04, mailmaint-oauth-public -05 -> -06

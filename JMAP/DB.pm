@@ -895,11 +895,26 @@ sub delete_event {
   return $Self->dmaybedirty('jevents', {active => 0}, {eventuid => $eventuid});
 }
 
+# A uid for a vCard that has no UID, made from where it lives ($href), so
+# every sync gives the same one.  JSContact 2.0 (RFC 9982) leaves such a
+# Card without uid, but CardDAV and JMAP Contacts need one: the protocol
+# assigns it, and a stable one can be referred to.  Shaped as a version 5
+# (name-based, SHA-1) UUID.
+sub card_uid_for_href {
+  my ($href) = @_;
+  my $h = substr(sha1_hex(Encode::is_utf8($href) ? Encode::encode_utf8($href) : $href), 0, 32);
+  substr($h, 12, 1) = '5';
+  substr($h, 16, 1) = sprintf('%x', 8 | (hex(substr($h, 16, 1)) & 3));
+  return 'urn:uuid:' . join('-', unpack('A8 A4 A4 A4 A12', $h));
+}
+
 sub parse_card {
   my $Self = shift;
   my $raw = shift;
+  my $href = shift;
   my $card = vcard_to_jscontact($raw);
   return undef unless $card;
+  $card->{uid} //= card_uid_for_href($href) if defined $href;
 
   # Return the JSContact Card directly — callers should migrate
   # to using JSContact properties instead of the old custom format

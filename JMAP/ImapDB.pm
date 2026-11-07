@@ -1200,7 +1200,7 @@ sub do_addressbooks {
       if (@toget) {
         my ($cards, $errors, $links) = $Self->backend_cmd('get_cards_multi', $href, \@toget, Full => 1);
         foreach my $href (keys %$cards) {
-          my $parsed = $Self->parse_card($cards->{$href});
+          my $parsed = $Self->parse_card($cards->{$href}, $href);
           $todo{$id}[1]{$href} = [$links->{$href}, $cards->{$href}, $parsed];
         }
       }
@@ -5147,6 +5147,8 @@ sub update_contact_groups {
       $notchanged{$carduid} = {type => 'parseError', description => "Could not parse existing card"};
       next;
     }
+    # a vCard without UID (RFC 9982) is filed under the uid the sync gave it
+    $card->{uid} //= "urn:uuid:$carduid";
     $card->{kind} = 'group';
     $card->{name}{full} = $contact->{name} if exists $contact->{name};
     if (exists $contact->{contactIds}) {
@@ -5365,6 +5367,8 @@ sub update_contacts {
       $notchanged{$carduid} = {type => 'parseError', description => "Could not parse existing card"};
       next;
     }
+    # a vCard without UID (RFC 9982) is filed under the uid the sync gave it
+    $card->{uid} //= "urn:uuid:$carduid";
     # Apply changes from the old custom format onto the JSContact card
     _apply_contact_changes($card, $contact);
 
@@ -5655,6 +5659,8 @@ sub update_contacts_jscontact {
         $notchanged{$carduid} = { type => 'serverFail', description => 'Could not parse existing card' };
         next;
       }
+      # a vCard without UID (RFC 9982) is filed under the uid the sync gave it
+      $card->{uid} //= "urn:uuid:$carduid";
 
       # Apply JSContact-format patch (shallow merge of top-level keys)
       for my $key (keys %$patch) {
