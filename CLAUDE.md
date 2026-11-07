@@ -81,7 +81,7 @@ Hard rules that are easy to violate:
   `FileNodeCopy`). `JMAP/BlobConvert.pm` is the pure
   engine behind the blob extensions (RFC 9404 and the blobext draft): UTF-8 checks, digests,
   archive/compress/delta/image recipes, with runtime detection of the optional modules.
-- `JMAP/Sync/` — backend sync drivers (`Standard`, `Gmail`, `Fastmail`, `AOL`, `Common`).
+- `JMAP/Sync/` — backend sync drivers (`Standard`, `Gmail`, `Fastmail`, `Common`).
 - `JMAP/OAuth/` — OAuth2 signup (`Google`, `Fastmail`, `OIDC`, `PACC`, `PKCE`).
 - `JMAP/CredentialStore.pm` — pluggable at-rest encryption for stored credentials.
 

@@ -9,7 +9,6 @@ use Test::More;
 use lib '.';
 use JMAP::Sync::Gmail;
 use JMAP::Sync::Fastmail;
-use JMAP::Sync::AOL;
 use JMAP::Sync::Standard;
 
 {
@@ -20,10 +19,9 @@ use JMAP::Sync::Standard;
 
 no warnings 'redefine', 'once';
 local *JMAP::Sync::Gmail::O             = sub { bless {}, 'FakeOAuth' };
-local *JMAP::Sync::AOL::O               = sub { bless {}, 'FakeOAuth' };
 local *JMAP::Sync::Fastmail::_get_oauth = sub { bless {}, 'FakeOAuth' };
 
-for my $class (qw(JMAP::Sync::Gmail JMAP::Sync::Fastmail JMAP::Sync::AOL)) {
+for my $class (qw(JMAP::Sync::Gmail JMAP::Sync::Fastmail)) {
   my $self = bless { auth => { password   => 'refresh-token',
                                caldavURL  => 'https://cal.test/',
                                carddavURL => 'https://card.test/' } }, $class;

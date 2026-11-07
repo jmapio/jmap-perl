@@ -217,7 +217,7 @@ Internal refactoring to improve maintainability; no user-visible changes.
 
 ### Done
 - [x] Sync providers: extract `connect_*` and `send_email` boilerplate into `JMAP::Sync::Common`
-      (Standard/Gmail/Fastmail/AOL override only what differs via hook methods)
+      (Standard/Gmail/Fastmail override only what differs via hook methods)
 - [x] API.pm split: decomposed 4,900-line god object into 9 domain files
       (Mailbox, Email, Thread, Calendar, Contact, Submission, Preferences, StorageNode, MDN;
       StorageNode has since become FileNode)
