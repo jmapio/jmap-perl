@@ -224,7 +224,9 @@ sub commit {
       $Self->dmaybedirty('jmailboxes', \%update, {jmailboxid => $jmailboxid});
     }
   }
-  if ($t->{modseq} and $Self->{change_cb}) {
+  # The state is saved whether or not anyone is listening: a worker without
+  # change_cb (after an OAuth signup, the backfill worker) changes rows too.
+  if ($t->{modseq}) {
     my %map;
     my %dbdata = (jhighestmodseq => $t->{modseq});
     my $state = "$t->{modseq}";
@@ -238,7 +240,8 @@ sub commit {
     $map{EmailDelivery} = $state if $t->{email_delivered};
 
     $Self->dupdate('account', \%dbdata);
-    $Self->{change_cb}->($Self, \%map, $state) unless $Self->{t}->{backfilling};
+    $Self->{change_cb}->($Self, \%map, $state)
+      if $Self->{change_cb} and not $Self->{t}->{backfilling};
   }
 
   $Self->{t}{dbh}->commit();
