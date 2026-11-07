@@ -17,6 +17,11 @@ our @EXPORT_OK = qw(imap_account_capabilities);
 # (JMAP::ImapDB::create_submissions, send_due).
 our $MAX_DELAYED_SEND = 30 * 86400;
 
+# RFC 8620 S2 core limits: advertised in the session (bin/jmap-proxy.pl) and
+# enforced by JMAP::API::handle_request, so the two cannot drift.
+our $MAX_OBJECTS_IN_GET = 4096;
+our $MAX_OBJECTS_IN_SET = 4096;
+
 # The accountCapabilities for an IMAP-backed account, as it appears both in the
 # session resource (RFC 8620 S1.6.2) and in a Principal's "accounts" map
 # (RFC 9670 S2). $conf needs only caldavURL, carddavURL and webdavURL (plus

@@ -4,6 +4,7 @@ package JMAP::API;
 
 use JMAP::Dispatch;
 use JMAP::Collation;
+use JMAP::Capabilities ();
 use Carp;
 use JMAP::DB;
 use strict;
@@ -571,6 +572,22 @@ sub handle_request {
           $logbit .= " (" . join(",", @list) . ")";
         }
 
+        # RFC 8620 S5.1, S5.3: more ids than maxObjectsInGet, or more objects
+        # to create, update and destroy than maxObjectsInSet, is requestTooLarge
+        if ($command =~ m{/get\z} && ref $myargs->{ids} eq 'ARRAY'
+            && @{ $myargs->{ids} } > $JMAP::Capabilities::MAX_OBJECTS_IN_GET) {
+          $Self->push_results($tag, ['error', { type => 'requestTooLarge' }]);
+          next;
+        }
+        if ($command =~ m{/set\z}) {
+          my $n = (ref $myargs->{create} eq 'HASH' ? keys %{ $myargs->{create} } : 0)
+                + (ref $myargs->{update} eq 'HASH' ? keys %{ $myargs->{update} } : 0)
+                + (ref $myargs->{destroy} eq 'ARRAY' ? @{ $myargs->{destroy} } : 0);
+          if ($n > $JMAP::Capabilities::MAX_OBJECTS_IN_SET) {
+            $Self->push_results($tag, ['error', { type => 'requestTooLarge' }]);
+            next;
+          }
+        }
         # RFC 8620 S5.3: a /set whose ifInState is not the current state is
         # stateMismatch, before anything is done.  The state is the one the
         # type's own /get reports, so the two can never disagree -- the
