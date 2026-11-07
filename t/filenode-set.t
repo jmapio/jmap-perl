@@ -1199,7 +1199,8 @@ sub files_under { my $p = shift; return [ sort grep { m{^\Q$p\E/} && !$tree{$_}{
   ok((grep { $_->{principal} =~ m{/user2/} } @{ $acl{"$R/PA/b/c"} }), 'and two levels down');
   my ($ch) = $api->api_FileNode_changes({ accountId => $db->accountid(), sinceState => $st->[1]{state} });
   is_deeply([ sort @{ $ch->[1]{updated} } ], [ sort @$x{qw(A B C)} ], 'FileNode/changes reports the descendants') or diag explain $ch;
-  is_deeply(get($x->{C})->{$x->{C}}{shareWith}, { user2 => { %none, mayRead => $t } }, 'whose mirror has the sharing');
+  # draft -20: shareWith is the node's own entries; what it inherits is not in it
+  is(get($x->{C})->{$x->{C}}{shareWith}, undef, 'whose shareWith shows nothing of its own (-20: inherited is not shareWith)');
   ok(get($x->{B})->{$x->{B}}{shareWith}{user3}, 'and keeps what was its own');
   $db->sync_files();
   ($ch) = $api->api_FileNode_changes({ accountId => $db->accountid(), sinceState => $ch->[1]{newState} });
@@ -1227,7 +1228,7 @@ sub files_under { my $p = shift; return [ sort grep { m{^\Q$p\E/} && !$tree{$_}{
   ok(exists $set->{updated}{$x->{A}}, 'the node is shared') or diag explain $set;
   ok((grep { m{PA/b/: ACL: HTTP 403} } @w), 'the refusal below is warned about') or diag explain \@w;
   ok(!get($x->{B})->{$x->{B}}{shareWith}{user2}, 'b\'s mirror: as the server has it (no user2)');
-  ok(get($x->{C})->{$x->{C}}{shareWith}{user2}, 'c still got it');
+  ok((grep { $_->{principal} =~ m{/user2/} } @{ $acl{"$R/PA/b/c"} }), 'c still got it');
   undef $acl_answer;
   $set = set(update => { $x->{A} => { shareWith => undef } })->[1];
 
@@ -1261,10 +1262,10 @@ sub files_under { my $p = shift; return [ sort grep { m{^\Q$p\E/} && !$tree{$_}{
   $set = set(update => { $x->{M} => { parentId => $x->{Sh} } })->[1];
   ok(exists $set->{updated}{$x->{M}}, 'moved in') or diag explain $set;
   is_deeply($users->("$R/Q-shared/m"), [ qw(user2 user3) ], 'the moved directory gets the new parent\'s sharee, and keeps its own');
-  is_deeply($users->("$R/Q-shared/m/n"), ['user2'], 'and so does the one below');
+  is_deeply($users->("$R/Q-shared/m/n"), [ qw(user2 user3) ], 'and the one below has both: it inherits m\'s too (-20)');
   my ($ch) = $api->api_FileNode_changes({ accountId => $db->accountid(), sinceState => $st->[1]{state} });
   ok((grep { $_ eq $x->{N} } @{ $ch->[1]{updated} }), 'FileNode/changes reports the directory below') or diag explain $ch;
-  ok(get($x->{N})->{$x->{N}}{shareWith}{user2}, 'whose mirror has it');
+  is(get($x->{N})->{$x->{N}}{shareWith}, undef, 'whose shareWith stays its own: nothing');
 
   # between two parents that share alike: nothing to do
   @acl_reqs = ();
@@ -1276,7 +1277,7 @@ sub files_under { my $p = shift; return [ sort grep { m{^\Q$p\E/} && !$tree{$_}{
   $set = set(update => { $x->{M} => { parentId => $x->{U} } })->[1];
   ok(exists $set->{updated}{$x->{M}}, 'moved out') or diag explain $set;
   is_deeply($users->("$R/Q-plain/m"), ['user3'], 'the old parent\'s sharee goes; its own stays');
-  is_deeply($users->("$R/Q-plain/m/n"), [], 'and below');
+  is_deeply($users->("$R/Q-plain/m/n"), ['user3'], 'and below, which keeps what m gives it');
   ok(!get($x->{N})->{$x->{N}}{shareWith}, 'the mirror follows');
 
   # a refusal never undoes the move
@@ -1286,7 +1287,7 @@ sub files_under { my $p = shift; return [ sort grep { m{^\Q$p\E/} && !$tree{$_}{
   ok(exists $set->{updated}{$x->{M}} && $tree{"$R/Q-shared/m"}, 'the move stands') or diag explain $set;
   ok((grep { m{Q-shared/m/: ACL: HTTP 403} } @w), 'the refusal is warned about') or diag explain \@w;
   ok(!get($x->{M})->{$x->{M}}{shareWith}{user2}, 'and its mirror shows the server');
-  ok(get($x->{N})->{$x->{N}}{shareWith}{user2}, 'the one below still got it');
+  ok((grep { $_->{principal} =~ m{/user2/} } @{ $acl{"$R/Q-shared/m/n"} }), 'the one below still got it');
   undef $acl_answer;
   set(update => { $x->{M} => { parentId => $x->{U} } });
 
@@ -1316,6 +1317,22 @@ sub files_under { my $p = shift; return [ sort grep { m{^\Q$p\E/} && !$tree{$_}{
   @acl_reqs = ();
   set(update => { $x->{Sh} => { shareWith => { user2 => { mayRead => $t } } } });
   is_deeply([ map { $_->[0] } @acl_reqs ], [ "$R/Q-shared" ], 'a descendant that already has it gets no request');
+
+  # -20: a directory's own grant survives its parent's going, even one
+  # equal to what the parent gave (inherited rights are a floor, not a
+  # replacement: unsharing the parent used to take the child's own grant)
+  my %none = map { ($_ => $f) } @JMAP::FileNode::RIGHTS;
+  my $z = mk(D => { parentId => $x->{Sh}, name => 'own2' }, E => { parentId => '#D', name => 'deeper' });
+  $set = set(update => { $z->{D} => { shareWith => { user2 => { mayRead => $t } } } })->[1];
+  ok(exists $set->{updated}{$z->{D}}, 'the subdirectory shared with user2 itself') or diag explain $set;
+  is_deeply(get($z->{D})->{$z->{D}}{shareWith}, { user2 => { %none, mayRead => $t } }, 'its shareWith is its own grant');
+  $set = set(update => { $x->{Sh} => { shareWith => undef } })->[1];
+  ok(exists $set->{updated}{$x->{Sh}}, 'the parent unshared');
+  is_deeply($users->("$R/Q-shared/own2"), ['user2'], 'the subdirectory keeps its own grant');
+  is_deeply($users->("$R/Q-shared/own2/deeper"), ['user2'], 'and the one below it still inherits it');
+  is_deeply(get($z->{D})->{$z->{D}}{shareWith}, { user2 => { %none, mayRead => $t } }, 'and its shareWith says so');
+  is(get($z->{E})->{$z->{E}}{shareWith}, undef, 'the one below has nothing of its own');
+  set(update => { $x->{Sh} => { shareWith => { user2 => { mayRead => $t } } } });
 
   # M2: the error is the request's own
   $acl_answer = sub { die "boom on the wire\n" };

@@ -1581,11 +1581,59 @@ sub _filenode_share_entries {
   }
 }
 
-# A node's shareWith from the mirror (undef: shared with nobody).
-sub filenode_sharewith {
+# A node's effective sharing: the users in its ACL (the sharewith column,
+# kept by every listing), which on a server whose ACLs do not inherit
+# includes what it has from above.  undef: nobody.
+sub filenode_share_effective {
   my ($Self, $row) = @_;
   return undef unless $row && defined $row->{sharewith} && length $row->{sharewith};
   return eval { decode_json($row->{sharewith}) };
+}
+
+# A node's shareWith (draft -20): its own entries only, not those it
+# inherits.  The proxy stores them when it sets them (ownshare); for a
+# directory it never set, they are what its ACL gives beyond its parent's.
+# In a transaction or not.
+sub filenode_sharewith {
+  my ($Self, $row, $parent_eff) = @_;
+  return undef unless $row;
+  my $stored = defined $row->{ownshare} ? eval { decode_json($row->{ownshare}) } : undef;
+  unless (@_ > 2) {
+    my $parent;
+    if (defined $row->{parentid}) {
+      my $tx = !$Self->in_transaction();
+      $Self->begin() if $tx;
+      $parent = $Self->filenode_row($row->{parentid});
+      $Self->commit() if $tx;
+    }
+    $parent_eff = $Self->filenode_share_effective($parent);
+  }
+  return JMAP::FileNode::own_share($Self->filenode_share_effective($row), $parent_eff, $stored);
+}
+
+# Store a directory's own shareWith ($own: a shareWith value, undef for
+# nobody).  In a transaction.
+sub _filenode_store_own {
+  my ($Self, $nodeid, $own) = @_;
+  $Self->dupdate('jfilenodes', { ownshare => JMAP::FileNode::sharewith_json($own) // '{}' }, { nodeid => $nodeid });
+}
+
+# Pin the own shareWith of each directory in $dirs that has none stored,
+# derived from the ACLs as they are now -- before a change above them
+# makes what they inherit indistinguishable from what is theirs.  $first_parent_eff
+# overrides the first one's parent (a directory that has just moved: its
+# old parent's).  Not in a transaction.
+sub _filenode_pin_own {
+  my ($Self, $dirs, $first_parent_eff) = @_;
+  $Self->begin();
+  my $i = 0;
+  for my $d (@$dirs) {
+    my $row = $Self->filenode_row($d->{nodeid}) or next;
+    next if defined $row->{ownshare};
+    my $own = ($i++ == 0 && @_ > 2) ? $Self->filenode_sharewith($row, $first_parent_eff) : $Self->filenode_sharewith($row);
+    $Self->_filenode_store_own($row->{nodeid}, $own);
+  }
+  $Self->commit();
 }
 
 # The principals whose ACEs may be dropped when the server refuses to take
@@ -1655,12 +1703,15 @@ sub _files_ace_sig {
 }
 
 # Set a directory's shareWith ($share: the whole new value, or undef for
-# nobody).  Reads the ACL fresh, keeps every ACE that is not a user's
-# sharing (self, the owner, deny ACEs, groups, ...) as it is, replaces the
-# users' grant ACEs, and reads the result back into the mirror, which gets
-# a new modseq when it changed.  The users whose sharing changed are then
-# changed the same way on every directory below (spec "Sharing": the draft
-# shares a node's descendants with it; Cyrus keeps ACLs per collection).
+# nobody).  Draft -20 "Access Control": shareWith is the directory's own
+# entries, and its rights are the union of those on it and on every
+# ancestor (inherited rights are a floor).  Cyrus keeps ACLs per
+# collection, so the ACL written is the union of $share and the parent's;
+# the own entries are kept in ownshare.  Reads the ACL fresh, keeps every
+# ACE that is not a user's sharing (self, the owner, deny ACEs, groups, ...)
+# as it is, replaces the users' grant ACEs, and reads the result back into
+# the mirror, which gets a new modseq when it changed.  Every directory
+# below is then brought to its own entries plus its parent's.
 # Returns (undef, $readback) on success, or a SetError.  Not in a transaction.
 #
 # There is no lock: a change another client makes to this ACL between the
@@ -1684,14 +1735,32 @@ sub set_filenode_sharewith {
   delete $cache->{"$base$_/"} for keys %{ $share || {} };
   my %o = $Self->_files_share_opts($info->{owner}, 1);
   my $owner_uid = JMAP::FileNode::share_user($info->{owner}, $base);
-  my @new;
+  # -20: inherited rights are a floor.  A server whose ACLs inherit shows
+  # them as inherited ACEs; on one that does not (Cyrus) the ACL holds the
+  # union of this directory's own entries and what its parent has.
   for my $uid (sort keys %{ $share || {} }) {
+    return { type => 'invalidProperties', properties => ['shareWith'], description => "not a user id this server can share with: $uid" }
+      unless $uid =~ $JMAP::FileNode::SHARE_USER;
+    return { type => 'invalidProperties', properties => ['shareWith'], description => "the owner cannot be in shareWith: $uid" }
+      if (defined $o{me} && $uid eq $o{me}) || (defined $owner_uid && $uid eq $owner_uid);
+  }
+  my $inherits = grep { $_->{inherited} } @{ $info->{aces} || [] };
+  $Self->begin();
+  my $parent = defined $row->{parentid} ? $Self->filenode_row($row->{parentid}) : undef;
+  my @below = grep { $_->{nodetype} eq 'directory' } @{ $Self->_filenode_subtree($row->{nodeid}) };
+  $Self->commit();
+  my $target = $inherits ? JMAP::FileNode::sharewith_normal($share)
+                         : JMAP::FileNode::share_union($share, $Self->filenode_share_effective($parent));
+  # the directories below keep what is their own through the change
+  $Self->_filenode_pin_own(\@below) unless $inherits;
+  my @new;
+  for my $uid (sort keys %{ $target || {} }) {
     # never trust the caller to have checked: this name goes into an href
     return { type => 'invalidProperties', properties => ['shareWith'], description => "not a user id this server can share with: $uid" }
       unless $uid =~ $JMAP::FileNode::SHARE_USER;
     return { type => 'invalidProperties', properties => ['shareWith'], description => "the owner cannot be in shareWith: $uid" }
       if (defined $o{me} && $uid eq $o{me}) || (defined $owner_uid && $uid eq $owner_uid);
-    my ($grant, $right) = JMAP::FileNode::grant_for_rights($share->{$uid}, $o{tree});
+    my ($grant, $right) = JMAP::FileNode::grant_for_rights($target->{$uid}, $o{tree});
     return { type => 'invalidProperties', properties => ['shareWith'], description => "the server cannot grant $right" }
       unless $grant;
     push @new, { principal => "$base$uid/", grant => $grant, deny => [] } if @$grant;
@@ -1727,30 +1796,57 @@ sub set_filenode_sharewith {
       if $want ne $got;
   }
   else {
-    $json = JMAP::FileNode::sharewith_json($share);   # what was asked for: the next sync corrects it
+    $json = JMAP::FileNode::sharewith_json($target);   # what was asked for: the next sync corrects it
   }
   $Self->begin();
   my $cur = $Self->dgetfield('jfilenodes', { nodeid => $row->{nodeid} }, 'sharewith');
-  $Self->ddirty('jfilenodes', { sharewith => $json, changed => time() }, { nodeid => $row->{nodeid} })
-    if ($cur // '') ne ($json // '');
-  my @below = grep { $_->{nodetype} eq 'directory' } @{ $Self->_filenode_subtree($row->{nodeid}) };
+  my $curown = $Self->dgetfield('jfilenodes', { nodeid => $row->{nodeid} }, 'ownshare');
+  my $own = JMAP::FileNode::sharewith_json($share) // '{}';
+  $Self->ddirty('jfilenodes', { sharewith => $json, ownshare => $own, changed => time() }, { nodeid => $row->{nodeid} })
+    if ($cur // '') ne ($json // '') or ($curown // '') ne $own;
   $Self->commit();
-  my $now = defined $json ? decode_json($json) : undef;
 
-  # the descendants: only the users whose sharing changed
-  my $delta = JMAP::FileNode::share_delta($old, $now);
-  if (%$delta) {
+  # the directories below: each one's ACL is its own entries and what its
+  # parent now has, so only the users whose rights that changes are touched
+  unless ($inherits) {
     # the principals were just asked about, freshly: the remembered answers will do
     my %od = (%o, hidden => sub { $Self->_files_not_principal($_[0]) });
-    $Self->_filenode_propagate_share($_, $delta, \%od) for @below;
+    my %targets = ($row->{nodeid} => $target);
+    $Self->_filenode_reshare($_, \%od, \%targets) for @below;
   }
-  return (undef, $now);
+  return (undef, JMAP::FileNode::sharewith_normal($share));
 }
 
-# Change the users in $delta (a share_delta) the same way on one directory
-# below a node whose shareWith changed.  Every other ACE of the descendant
-# stays; a descendant's own grant for one of those users is replaced (the
-# parent's change wins).  A user for whom the descendant already shows an
+# Bring one directory's ACL to its own shareWith plus what its parent has
+# (callers go top-down).  What the parent has is what it should have
+# ($targets, filled as this goes), not what its ACL now says: a parent
+# whose ACL request was refused does not take its rights from the subtree
+# below it.  Only the users whose rights change are touched.  Not in a
+# transaction.
+sub _filenode_reshare {
+  my ($Self, $desc, $o, $targets) = @_;
+  $Self->begin();
+  my $row = $Self->filenode_row($desc->{nodeid});
+  my $parent = $row && defined $row->{parentid} ? $Self->filenode_row($row->{parentid}) : undef;
+  $Self->commit();
+  return unless $row;
+  # its own as stored (pinned before the change above it): derived now,
+  # against the parent's new rights, what the parent just lost would look
+  # like the directory's own
+  my $own = defined $row->{ownshare} ? JMAP::FileNode::sharewith_normal(eval { decode_json($row->{ownshare}) })
+                                     : $Self->filenode_sharewith($row, $Self->filenode_share_effective($parent));
+  my $above = $parent && exists $targets->{ $parent->{nodeid} } ? $targets->{ $parent->{nodeid} }
+                                                                : $Self->filenode_share_effective($parent);
+  my $target = JMAP::FileNode::share_union($own, $above);
+  $targets->{ $row->{nodeid} } = $target;
+  my $delta = JMAP::FileNode::share_delta($Self->filenode_share_effective($row), $target);
+  return unless %$delta;
+  $Self->_filenode_propagate_share($row, $delta, $o);
+}
+
+# Change the users in $delta (a share_delta: their new rights, the
+# directory's own plus what it inherits) on one directory below a node whose
+# sharing changed.  Every other ACE of the descendant stays.  A user for whom the descendant already shows an
 # ACE inherited from above is left alone: that server inherits.  The mirror
 # follows the change (a new modseq, so /changes reports the descendant); if
 # the server refuses, the descendant's ACL is read back at once, so the
@@ -1781,7 +1877,7 @@ sub _filenode_apply_share_delta {
   my $json;
   if ($res && $res->{status} =~ /^2/) {
     $Self->begin();
-    my $cur = $Self->filenode_sharewith($Self->filenode_row($desc->{nodeid})) || {};
+    my $cur = $Self->filenode_share_effective($Self->filenode_row($desc->{nodeid})) || {};
     $Self->commit();
     for my $uid (keys %d) { if ($d{$uid}) { $cur->{$uid} = $d{$uid} } else { delete $cur->{$uid} } }
     $json = JMAP::FileNode::sharewith_json($cur);
@@ -1819,8 +1915,8 @@ sub _filenode_move_share {
   my $newp = $row && defined $row->{parentid} ? $Self->filenode_row($row->{parentid}) : undef;
   $Self->commit();
   return unless $row && $newp && $row->{parentid} ne $before->{parentid};
-  my $delta = JMAP::FileNode::share_delta($Self->filenode_sharewith($oldp), $Self->filenode_sharewith($newp));
-  return unless %$delta;
+  my ($was, $now) = map { $Self->filenode_share_effective($_) } $oldp, $newp;
+  return unless %{ JMAP::FileNode::share_delta($was, $now) };
   my $path = _filenode_path($row);
   my $info = eval { $Self->backend_cmd('files_acl_info', $path) };
   unless ($info) {
@@ -1828,12 +1924,15 @@ sub _filenode_move_share {
     return;
   }
   return if grep { $_->{inherited} } @{ $info->{aces} };   # the server inherits: nothing to carry
-  my %o = $Self->_files_share_opts($info->{owner});
-  $Self->_filenode_apply_share_delta($row, $info, $delta, \%o);
   $Self->begin();
   my @below = grep { $_->{nodetype} eq 'directory' } @{ $Self->_filenode_subtree($row->{nodeid}) };
   $Self->commit();
-  $Self->_filenode_propagate_share($_, $delta, \%o) for @below;
+  # what each had as its own, judged against where it was: the moved
+  # directory against its old parent
+  $Self->_filenode_pin_own([ $row, @below ], $was);
+  my %o = $Self->_files_share_opts($info->{owner});
+  my %targets;
+  $Self->_filenode_reshare($_, \%o, \%targets) for $row, @below;
 }
 
 # One full sync of the WebDAV tree into jfilenodes.  Returns 1 when a

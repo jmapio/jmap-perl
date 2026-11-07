@@ -569,9 +569,8 @@ that drifted, leaky layer boundaries and no single error model. Confirmed bugs, 
 - [x] `ContactCard/*` and `AddressBook/*` aliases rename an `error` response to the method name
 - [x] `Calendar/set` destroys a calendar's events before the calendar destroy has succeeded
 - [x] MDN/send writes client `subject`, `reportingUA`, `finalRecipient` into headers unencoded
-- [ ] FileNode: unsharing a directory removes a subdirectory's own grant (-20 makes inherited
-      rights a floor; store each directory's own shareWith and compute the ACL) -- part of
-      the filenode -13 -> -20 update
+- [x] FileNode: unsharing a directory removed a subdirectory's own grant.  Now -20's model:
+      shareWith is a directory's own entries (ownshare), its ACL their union with its parent's
 Reported, to verify: Calendar/Addressbook `/changes` compare maxChanges with all rows;
 `ifInState` ignored by Calendar/Contact `/set`; no timeout across the parent/worker boundary;
 `sessionState` unchanged when FileNode becomes advertised; PDPA export zips in the parent;

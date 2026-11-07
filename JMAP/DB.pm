@@ -1580,6 +1580,7 @@ CREATE TABLE IF NOT EXISTS jfilenodes (
   isSubscribed INTEGER,
   deadprops TEXT,
   sharewith TEXT,
+  ownshare TEXT,
   jcreated INTEGER,
   jmodseq INTEGER,
   mtime DATE,
@@ -1845,6 +1846,12 @@ EOF
         $dbh->do("ALTER TABLE jevents ADD COLUMN jcalendarids TEXT") unless $cols{jcalendarids};
         $dbh->do("UPDATE jevents SET jcalendarids = jcalendarid WHERE jcalendarids IS NULL");
       }
+      # FileNode sharing as draft -20 has it: a directory's own shareWith
+      # (ownshare, canonical JSON, '{}' for nobody; NULL until the proxy
+      # stores one), apart from its ACL (sharewith), which also holds what
+      # it inherits on a server whose ACLs do not inherit.
+      my %fcols = map { $_->[1] => 1 } @{ $dbh->selectall_arrayref("PRAGMA table_info(jfilenodes)") || [] };
+      $dbh->do("ALTER TABLE jfilenodes ADD COLUMN ownshare TEXT") if %fcols && !$fcols{ownshare};
       $dbh->do('PRAGMA user_version = 15');
       $dbh->commit;
     };

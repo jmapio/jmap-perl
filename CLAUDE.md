@@ -115,9 +115,11 @@ their **metadata only**: every method reads the mirror, every write goes to WebD
   (temporary names break swaps and cycles) so sibling names stay unique at every step. A
   node the client asked to move or rename is **never deleted by the same call** — not by a
   destroy, a `replace`, or `onDestroyRemoveChildren` — even when that move is refused.
-- **`shareWith` is the directory's WebDAV ACL**. Cyrus ACLs do not inherit, so the proxy
-  carries each change down to existing subdirectories itself, and a directory that moves
-  carries the sharing delta between its old and new parent. Files are never shared (an ACL
+- **`shareWith` is a directory's own entries (draft -20); its WebDAV ACL is their union with
+  everything above.** Inherited rights are a floor. Cyrus ACLs do not inherit, so the proxy keeps
+  each directory's own entries (`jfilenodes.ownshare`; derived from the ACL as what exceeds the
+  parent's where it never stored one) and writes each ACL as own + parent's, top-down, after a
+  change or a move. The `sharewith` column is the ACL's users (effective), not `shareWith`. Files are never shared (an ACL
   on a Cyrus file rewrites its collection's). Cyrus lists ACEs (e.g. `defaultacl`'s
   `admin`) that it then refuses back; the proxy fails the share rather than drop one,
   unless it is named in `JMAP_FILES_DROPPABLE_PRINCIPALS` (the test stack sets `admin`).

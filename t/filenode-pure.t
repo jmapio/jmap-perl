@@ -251,4 +251,26 @@ is(JMAP::FileNode::utc(JMAP::FileNode::epoch('2009-02-13T23:31:30Z')), '2009-02-
   ok(!JMAP::FileNode::is_too_large(undef), 'nor nothing');
 }
 
+# -20 Access Control: own shareWith vs the effective ACL
+{
+  my ($t, $f) = (JSON::true, JSON::false);
+  my $R  = sub { my %r = map { ($_ => $f) } @JMAP::FileNode::RIGHTS; $r{$_} = $t for @_; \%r };
+  is_deeply(JMAP::FileNode::share_union({ a => { mayRead => $t } }, { a => { mayAddChildren => $t }, b => { mayRead => $t } }, undef),
+            { a => $R->(qw(mayRead mayAddChildren)), b => $R->('mayRead') }, 'share_union ORs each user\'s rights');
+  is(JMAP::FileNode::share_union(undef, {}), undef, 'of nothing: nobody');
+
+  my $parent = { a => $R->('mayRead') };
+  # nothing stored: what exceeds the parent is the directory's own
+  is_deeply(JMAP::FileNode::own_share({ a => $R->('mayRead'), b => $R->('mayRead') }, $parent, undef),
+            { b => $R->('mayRead') }, 'derived: only what the parent does not give');
+  is_deeply(JMAP::FileNode::own_share({ a => $R->(qw(mayRead mayAddChildren)) }, $parent, undef),
+            { a => $R->(qw(mayRead mayAddChildren)) }, 'derived: more than the parent gives is own');
+  # stored: kept, even where the parent gives the same (the bug: unsharing the parent took it)
+  is_deeply(JMAP::FileNode::own_share({ a => $R->('mayRead') }, $parent, { a => $R->('mayRead') }),
+            { a => $R->('mayRead') }, 'stored: a grant equal to the parent\'s stays the directory\'s own');
+  is(JMAP::FileNode::own_share({}, $parent, { a => $R->('mayRead') }), undef, 'stored, but the ACL names nobody: nothing');
+  is_deeply(JMAP::FileNode::own_share({ a => $R->('mayRead'), c => $R->('mayRead') }, $parent, { a => $R->('mayRead') }),
+            { a => $R->('mayRead'), c => $R->('mayRead') }, 'stored, plus a user another client shared it with');
+}
+
 done_testing;

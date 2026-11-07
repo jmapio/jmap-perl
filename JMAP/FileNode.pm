@@ -249,6 +249,47 @@ sub share_delta {
   return \%d;
 }
 
+# draft -20 "Access Control": a node's rights are the union of the
+# shareWith entries on it and on all its ancestors; inherited rights are a
+# floor.  shareWith is the node's own entries only.  On a server whose ACLs
+# do not inherit (Cyrus), a directory's ACL must hold the union, so the
+# proxy keeps each directory's own entries and computes the ACL from them.
+
+# The union of shareWith values (each user's rights OR'ed), normalised.
+sub share_union {
+  my %u;
+  for my $s (map { sharewith_normal($_) || {} } @_) {
+    for my $uid (keys %$s) {
+      $u{$uid}{$_} ||= $s->{$uid}{$_} ? 1 : 0 for @RIGHTS;
+    }
+  }
+  return sharewith_normal({ map { my $r = $u{$_}; ($_ => { map { ($_ => ($r->{$_} ? JSON::true : JSON::false)) } @RIGHTS }) } keys %u });
+}
+
+# Whether rights $a are all within rights $b.
+sub _rights_within {
+  my ($a, $b) = @_;
+  return !grep { $a->{$_} && !($b && $b->{$_}) } @RIGHTS;
+}
+
+# A directory's own shareWith, from its effective sharing (the users in its
+# ACL, $eff), its parent's effective sharing ($parent_eff) and what the
+# proxy stored as its own ($stored; undef when it never stored any).  A
+# user the ACL no longer names has nothing; what was stored stays for a
+# user it does name; and a user granted more than the parent and the stored
+# value account for (another client shared it here) has that as their own.
+sub own_share {
+  my ($eff, $parent_eff, $stored) = map { sharewith_normal($_) || {} } @_;
+  my %own;
+  for my $uid (keys %$eff) {
+    my $floor = share_union({ x => $parent_eff->{$uid} }, { x => $stored->{$uid} });
+    my $mine = $stored->{$uid};
+    $mine = $eff->{$uid} unless _rights_within($eff->{$uid}, $floor && $floor->{x});
+    $own{$uid} = $mine if $mine;
+  }
+  return sharewith_normal(\%own);
+}
+
 # Apply a share_delta to one ACL (for a descendant of the node shared):
 # only the users in the delta are touched -- their grant ACEs go, and those
 # still shared with get one new ACE; every other ACE stays.  Returns the new
