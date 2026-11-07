@@ -250,19 +250,17 @@ months and hid five real proxy bugs (ResultReference validation, dropped error r
 Blob/copy arguments, downloadUrl `{type}`, unknown-mailbox moves). Never narrow it again.
 
 On the suite's `spec-correctness` branch (296 files, 2026-11-06, image
-`cyrus-test-server:suite-fixes-20261002b`) IMAP mode fails **2 against the proxy and 60
+`cyrus-test-server:suite-fixes-20261002b`) IMAP mode fails **1 against the proxy and 59
 `--direct`, with no proxy-only failure**. Every failure was judged against the spec, which
 decides whether the proxy or the test is wrong ("Cyrus fails it too" decides nothing: in
-IMAP mode the proxy answers every method itself). The two left are not the proxy's code:
-- `t/Email/import/eai-headers.t`: Cyrus's default `munge8bit` turns 8-bit header bytes
-  into `X` on APPEND, even after `ENABLE IMAP4rev2`, and it offers no `UTF8=ACCEPT`.
-  Needs `munge8bit: no` in the test image.
+IMAP mode the proxy answers every method itself). The one left is not a quick fix:
 - `t/EmailSubmission/set/implicit-email-set.t`: the test mails itself, Postfix delivers a
   copy back to INBOX, and the proxy's envelope-hash Email id (`calcmsgid`, used when the
   server has no `XCONVERSATIONS`/`X-GM-EXT-1`) gives that differently-sized copy the same
   id. Fixing it changes every such id, so it is a decision, not a quick fix.
-The test stack registers `user1@example.com` (the image's users are in example.com) and
-sends through the image's Postfix on 8587 (AUTH PLAIN, no TLS); suite logins are the
+The test image is derived with `munge8bit: no` (Cyrus's default rewrites 8-bit header
+bytes to `X`, so EAI mail, RFC 8621 S4.8, could never be stored). The test stack
+registers `user1@example.com` (the image's users are in example.com) and sends through the image's Postfix on 8587 (AUTH PLAIN, no TLS); suite logins are the
 account's email. The run needs the conversion modules' fix branches on `PERL5LIB`
 (`participant-jsid`, `media-uri-values`, `encoding-problem-and-bare-addresses`) until
 they are released.

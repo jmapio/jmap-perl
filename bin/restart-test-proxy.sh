@@ -64,15 +64,23 @@ if [ "$CLEAN" = "1" ]; then
         docker rm   "$CYRUS_CONTAINER" >/dev/null 2>&1 || true
     fi
     BASE_IMAGE="${CYRUS_IMAGE:-ghcr.io/cyrusimap/cyrus-docker-test-server:latest}"
+    # Cyrus regenerates /etc/imapd.conf from the image's template at every
+    # boot, and restarting the container breaks its auth, so the settings the
+    # proxy's tests need are baked into a derived image:
+    # - webdav in httpmodules, for FileNode;
+    # - munge8bit: no. Cyrus's default rewrites every 8-bit header byte to 'X'
+    #   on delivery and APPEND, so an EAI message (RFC 6532, which RFC 8621
+    #   S4.8 says the server MUST support) could never be stored intact.
+    # The tag carries a hash of this recipe, so changing it rebuilds the image.
+    DERIVED_RECIPE='RUN sed -i "s/^httpmodules: .*/httpmodules: caldav carddav jmap webdav/" /srv/testserver/imapd.conf && printf "munge8bit: no\\n" >> /srv/testserver/imapd.conf'
+    RECIPE_TAG=$(printf '%s' "$DERIVED_RECIPE" | shasum | cut -c1-8)
     case "${BASE_IMAGE##*/}" in
-        *:*) WEBDAV_IMAGE="${BASE_IMAGE%:*}:${BASE_IMAGE##*:}-webdav" ;;
-        *)   WEBDAV_IMAGE="${BASE_IMAGE}-webdav" ;;
+        *:*) WEBDAV_IMAGE="${BASE_IMAGE%:*}:${BASE_IMAGE##*:}-proxytest-$RECIPE_TAG" ;;
+        *)   WEBDAV_IMAGE="${BASE_IMAGE}-proxytest-$RECIPE_TAG" ;;
     esac
     if ! docker image inspect "$WEBDAV_IMAGE" >/dev/null 2>&1; then
-        # Cyrus regenerates /etc/imapd.conf from this template at every boot, and
-        # restarting the container breaks its auth, so WebDAV has to be baked in.
-        printf 'FROM %s\nRUN sed -i "s/^httpmodules: .*/httpmodules: caldav carddav jmap webdav/" /srv/testserver/imapd.conf\n' \
-            "$BASE_IMAGE" | docker build -q -t "$WEBDAV_IMAGE" - >/dev/null
+        printf 'FROM %s\n%s\n' "$BASE_IMAGE" "$DERIVED_RECIPE" \
+            | docker build -q -t "$WEBDAV_IMAGE" - >/dev/null
     fi
     docker run -d --name "$CYRUS_CONTAINER" \
         -p ${CYRUS_IMAP_PORT}:8143 \

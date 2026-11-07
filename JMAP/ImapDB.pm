@@ -3861,16 +3861,34 @@ sub _normalsubject {
 sub _envelopedata {
   my $data = shift;
   my $envelope = decode_json($data || "{}");
-  my $encsub = eval { Encode::decode('MIME-Header', $envelope->{Subject}) };
-  $encsub = $envelope->{Subject} unless defined $encsub;
+  # RFC 6532: a raw UTF-8 subject is decoded first, then any encoded-words
+  my $rawsub = $envelope->{Subject};
+  if (defined $rawsub && $rawsub =~ /[\x80-\xff]/ && $rawsub !~ /[^\x00-\xff]/) {
+    my $octets = $rawsub;
+    utf8::downgrade($octets, 1);
+    my $chars = eval { Encode::decode('UTF-8', $octets, Encode::FB_CROAK) };
+    $rawsub = $chars if defined $chars;
+  }
+  my $encsub = eval { Encode::decode('MIME-Header', $rawsub) };
+  $encsub = $rawsub unless defined $encsub;
   my $sortsub = _normalsubject($encsub);
+  # The address headers are the message's raw octets, one character per
+  # byte (the JSON round trip leaves them so). Keep them as octets: stored
+  # as characters, DBD::SQLite writes an upgraded string's internal UTF-8,
+  # so an RFC 6532 (UTF-8) address went in encoded a second time.
+  my %addr;
+  for my $h (qw(From To Cc Bcc)) {
+    my $v = $envelope->{$h};
+    utf8::downgrade($v, 1) if defined $v;
+    $addr{$h} = $v;
+  }
   return (
     msgsubject => $encsub,
     sortsubject => $sortsub,
-    msgfrom => $envelope->{From},
-    msgto => $envelope->{To},
-    msgcc => $envelope->{Cc},
-    msgbcc => $envelope->{Bcc},
+    msgfrom => $addr{From},
+    msgto => $addr{To},
+    msgcc => $addr{Cc},
+    msgbcc => $addr{Bcc},
     msgdate => str2time($envelope->{Date}),
     msginreplyto => _trimh($envelope->{'In-Reply-To'}),
     msgmessageid => _trimh($envelope->{'Message-ID'}),
