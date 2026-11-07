@@ -912,7 +912,7 @@ sub delete_card {
   # every card is a ContactCard (see set_card); a group is also a ContactGroup
   $Self->unlink_jcontact_payload($carduid);
   $Self->dmaybedirty('jcontacts', {active => 0}, {contactuid => $carduid, jaddressbookid => $jaddressbookid});
-  if ($kind ne 'contact') {
+  if (($kind // '') ne 'contact') {   # unknown: it may be a group
     $Self->dmaybedirty('jcontactgroups', {active => 0}, {groupuid => $carduid, jaddressbookid => $jaddressbookid});
   }
 }
