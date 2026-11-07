@@ -485,8 +485,8 @@ Follow-ups:
       to the backfill worker: today a FileNode request on a mirror older than 60 s walks the
       whole tree before answering (one PROPFIND per collection), a cliff on a big drive after
       idle; the walk belongs in the background, the request should answer from the mirror
-- [ ] Quota ids contain `:` (`files:octets`), outside the RFC 8620 S1.2 Id alphabet
-      (`A-Za-z0-9_-`); changing them makes clients refetch Quota
+- [x] Quota ids are valid RFC 8620 S1.2 Ids: `files-octets`, and `<root>-<RESOURCE>` for an
+      IMAP quota root when that fits the Id alphabet, else `_h` + sha256 (as for event UIDs)
 - [ ] Files inside a directory the proxy moves are not re-listed after the MOVE, so their
       `created`/`modified` are not pinned; this matters only on a server that resets the
       timestamps of a collection's members on MOVE (Cyrus keeps a member's ETag; whether it
@@ -501,9 +501,8 @@ Follow-ups:
       retry once with `If-None-Match: *`
 - [ ] A pinned `modified` hides an external edit made in the same second as the rename;
       also record the post-move ETag in the pin for files
-- [ ] Probe's `moveLeavesEmpty` step is not wrapped in `eval` (a dying user agent leaves its
-      scratch collections behind on each probe), and a failed Probe is not negative-cached
-      (one PROPFIND per Quota call or sync on an account whose `webdavURL` is not WebDAV)
+- [x] Probe's `moveLeavesEmpty` step removes its scratch collections even when a request dies,
+      and a failed Probe is not retried for 300 s (`$JMAP::ImapDB::PROBE_RETRY`, per worker)
 - [ ] ACL changes are read-modify-write with no precondition (Cyrus collection ETags don't
       move on an ACL change): two concurrent editors can lose a grant; it is logged when seen
 - [ ] On Cyrus every ACL rewrite loses the owner's IMAP `s`/`p` rights (and the allowlisted

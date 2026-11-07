@@ -2,7 +2,8 @@ package JMAP::API;
 use strict;
 use JMAP::Collation;
 use warnings;
-use Digest::SHA qw(sha1_hex);
+use Digest::SHA qw(sha1_hex sha256);
+use MIME::Base64 qw(encode_base64url);
 use JSON;
 
 # IMAP resource → JMAP mapping
@@ -20,6 +21,19 @@ sub _quota_state {
                               sort { $a->{id} cmp $b->{id} } @$quotas));
 }
 
+# A Quota id must be an RFC 8620 S1.2 Id (A-Za-z0-9_-).  An IMAP quota root
+# is any mailbox-ish name ("user/foo", "user.foo@example.com", ""), so it is
+# used as-is only when it already fits; otherwise it is hashed, the way
+# JMAP::EventId hashes a UID.  A plain id never starts with "_", so the two
+# forms cannot collide.
+sub _quota_id {
+  my ($root, $resource) = @_;
+  my $id = "$root-$resource";
+  return $id if $id =~ /\A[A-Za-z0-9-][A-Za-z0-9_-]{0,199}\z/;
+  utf8::encode($id) if utf8::is_utf8($id);
+  return '_h' . encode_base64url(sha256($id));
+}
+
 sub _quota_to_jmap {
   my ($raw, $name) = @_;
   my $resource = uc($raw->{resource});
@@ -27,7 +41,7 @@ sub _quota_to_jmap {
            || { type => lc($resource), scale => 1, types => ['Email'] };
   my $scale = $info->{scale};
   return {
-    id           => "$raw->{root}:$resource",
+    id           => _quota_id($raw->{root} // '', $resource),
     resourceType => $info->{type},
     used         => int($raw->{used}  * $scale),
     hardLimit    => int($raw->{limit} * $scale),
@@ -43,7 +57,7 @@ sub _files_quota_to_jmap {
   my ($dav, $name) = @_;
   return undef unless $dav;
   return {
-    id           => 'files:octets',
+    id           => 'files-octets',   # uc IMAP resources never give this
     resourceType => 'octets',
     used         => int($dav->{used}),
     hardLimit    => int($dav->{used} + $dav->{available}),

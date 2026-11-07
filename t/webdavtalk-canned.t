@@ -90,6 +90,13 @@ is($ok->{token}, 'tok1', 'sync 207 gives a token');
   ok((grep { m{^DELETE .*-d-moved/\z} } @{ $d->{log} }) && (grep { m{^DELETE .*-d/\z} } @{ $d->{log} }), 'and the probe tidies both');
   is(probe(mk(etag => 'zz', shell => 0))->{moveLeavesEmpty}, 0, 'gone after the MOVE: moveLeavesEmpty 0');
   ok(!exists probe(mk(etag => 'zz'))->{moveLeavesEmpty}, 'no MKCOL: unknown');
+  # the collection MOVE dies (a dying user agent): the scratch collections
+  # are still removed, then the error propagates
+  my $x = mk(etag => 'zz', shell => 1, die_on => 'MOVE');
+  ok(!eval { $x->Probe($root); 1 }, 'a dying collection MOVE: Probe dies');
+  like($@, qr/boom/, 'with that error');
+  ok((grep { m{^DELETE .*-d/b/\z} } @{ $x->{log} }) && (grep { m{^DELETE .*-d/\z} } @{ $x->{log} }),
+     'and the scratch collections are still DELETEd');
 }
 
 # (d) scratch file always deleted

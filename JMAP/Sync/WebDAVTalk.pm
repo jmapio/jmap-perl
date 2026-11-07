@@ -416,15 +416,19 @@ sub Probe {
 
   # a MOVE of a collection holding a collection: does an empty collection
   # stay behind at the old name (Cyrus)?  Unknown (undef) if this cannot run
+  # (any request may die: the scratch collections are removed regardless,
+  # each cleanup DELETE on its own, and the error then propagates)
   my $d = "$name-d";
-  if (($Self->Mkcol($d) // '') =~ /^2/) {
-    if (($Self->Mkcol("$d/b") // '') =~ /^2/ && ($Self->Move("$d/", "$d-moved/") // '') =~ /^2/) {
-      $f{moveLeavesEmpty} = $Self->Raw('PROPFIND', "$d/", undef, Depth => 0)->{status} == 207 ? 1 : 0;
-      $Self->Delete("$d-moved/b/");
-      $Self->Delete("$d-moved/");
-    }
-    $Self->Delete("$d/b/");
-    $Self->Delete("$d/");
+  if ((eval { $Self->Mkcol($d) } // '') =~ /^2/) {
+    my $ok = eval {
+      if (($Self->Mkcol("$d/b") // '') =~ /^2/ && ($Self->Move("$d/", "$d-moved/") // '') =~ /^2/) {
+        $f{moveLeavesEmpty} = $Self->Raw('PROPFIND', "$d/", undef, Depth => 0)->{status} == 207 ? 1 : 0;
+      }
+      1;
+    };
+    my $err = $@;
+    eval { $Self->Delete($_) } for ("$d-moved/b/", "$d-moved/", "$d/b/", "$d/");
+    die $err unless $ok;
   }
 
   $f{syncCollection} = $Self->SyncCollection($root, '') ? 1 : 0;

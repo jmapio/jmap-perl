@@ -1277,11 +1277,15 @@ sub files_root {
 }
 
 # What the server really supports (Probe), worked out once per account and
-# kept in iserver.webdavFeatures.  A probe that fails is not cached, so a
-# server that was briefly down is probed again next time.
+# kept in iserver.webdavFeatures.  A probe that fails is not stored, so a
+# server that was briefly down is probed again -- but not for
+# $PROBE_RETRY seconds (in this worker's memory only), so an account whose
+# webdavURL is not WebDAV does not pay a PROPFIND on every Quota call or sync.
+our $PROBE_RETRY = 300;
 sub filenode_features {
   my $Self = shift;
   return $Self->{_filefeatures} if $Self->{_filefeatures};
+  return {} if $Self->{_probe_failed} && time() - $Self->{_probe_failed} < $PROBE_RETRY;
   $Self->begin();
   my $json = $Self->dgetfield('iserver', {}, 'webdavFeatures');
   $Self->commit();
@@ -1291,6 +1295,7 @@ sub filenode_features {
     $f = eval { $Self->backend_cmd('files_probe', $root) };
     unless (ref $f eq 'HASH') {
       warn "filenode_features: probe failed: $@";
+      $Self->{_probe_failed} = time();
       return {};
     }
     $Self->begin();

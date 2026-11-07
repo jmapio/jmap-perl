@@ -37,8 +37,20 @@ is($iserver->()->{webdavFeatures}, undef, 'and nothing is kept');
 ok(!JMAP::Capabilities::filenode_ok($iserver->()), 'filenode_ok is false');
 ok(!exists imap_account_capabilities($iserver->())->{$urn}, 'no FileNode capability');
 
+# a failed Probe is remembered for a while: no PROPFIND on every call
+my $probes = 0;
+{
+  no warnings qw(redefine once);
+  my $inner = \&JMAP::ImapDB::backend_cmd;
+  *JMAP::ImapDB::backend_cmd = sub { $probes++; goto &$inner };
+}
+is_deeply($db->filenode_features(), {}, 'within the retry window: no features');
+is($probes, 0, 'and no new Probe');
 $probe_ok = 1;
-ok(scalar %{ $db->filenode_features() }, 'a Probe that works: features');
+is_deeply($db->filenode_features(), {}, 'even once the server would answer');
+$db->{_probe_failed} -= $JMAP::ImapDB::PROBE_RETRY;   # the window has passed
+ok(scalar %{ $db->filenode_features() }, 'after the window, a Probe that works: features');
+is($probes, 1, 'one Probe');
 ok(JMAP::Capabilities::filenode_ok($iserver->()), 'filenode_ok is true');
 ok(exists imap_account_capabilities($iserver->())->{$urn}, 'the FileNode capability');
 

@@ -12,11 +12,22 @@ require JMAP::ImapDB;
 
 my $q = JMAP::API::_files_quota_to_jmap({ used => 4096, available => 104853504 }, 'user1@example.com');
 is_deeply($q, {
-  id => 'files:octets', resourceType => 'octets', scope => 'account', name => 'user1@example.com',
+  id => 'files-octets', resourceType => 'octets', scope => 'account', name => 'user1@example.com',
   types => ['FileNode'], used => 4096, hardLimit => 104857600,
 }, 'used, and a hard limit of used plus available');
 like(JSON::XS->new->canonical->encode($q), qr/"hardLimit":104857600,.*"used":4096\b/, 'numbers encode as JSON numbers');
 is(JMAP::API::_files_quota_to_jmap(undef, 'x'), undef, 'no WebDAV quota, no Quota object');
+
+# every Quota id is an RFC 8620 S1.2 Id, whatever the IMAP quota root is
+for my $root ('', 'user/user1', 'user.user1@example.com', "caf\x{e9}", '_x', 'plain') {
+  my $q = JMAP::API::_quota_to_jmap({ root => $root, resource => 'storage', used => 1, limit => 2 }, 'n');
+  like($q->{id}, qr/\A[A-Za-z0-9_-]{1,255}\z/, "quota root '$root': a valid Id ($q->{id})");
+}
+is(JMAP::API::_quota_to_jmap({ root => 'plain', resource => 'STORAGE', used => 1, limit => 2 })->{id},
+   'plain-STORAGE', 'a root that fits is kept readable');
+isnt(JMAP::API::_quota_to_jmap({ root => 'a/b', resource => 'STORAGE', used => 1, limit => 2 })->{id},
+     JMAP::API::_quota_to_jmap({ root => 'a.b', resource => 'STORAGE', used => 1, limit => 2 })->{id},
+     'distinct roots, distinct ids');
 
 # files_quota keeps the last value read for when the PROPFIND fails, so the
 # files Quota does not flap destroyed/created
