@@ -1245,7 +1245,7 @@ sub get_submission_changes {
     {}, $since_modseq);
 }
 
-my $USER_SCHEMA_VERSION = 13;
+my $USER_SCHEMA_VERSION = 14;
 
 sub save_query {
   my ($Self, $type, $params, $state, $ids) = @_;
@@ -1822,6 +1822,25 @@ EOF
     };
     if ($@) { $dbh->rollback; die "user DB migration to v13 failed: $@" }
     $v = 13;
+  }
+
+  if ($v < 14) {
+    # Email ids changed scheme (ImapDB::_msgid_for): the server's RFC 8474
+    # EMAILID where it has one, else the envelope hash now with the size.
+    # Every folder is re-keyed on its next sync (ImapDB::rekey_folder); a
+    # changed id reaches clients as an Email destroyed and one created.
+    $dbh->begin_work;
+    eval {
+      my %cols = map { $_->[1] => 1 } @{ $dbh->selectall_arrayref("PRAGMA table_info(ifolders)") || [] };
+      if (%cols) {
+        $dbh->do("ALTER TABLE ifolders ADD COLUMN rekey INTEGER") unless $cols{rekey};
+        $dbh->do("UPDATE ifolders SET rekey = 1");
+      }
+      $dbh->do('PRAGMA user_version = 14');
+      $dbh->commit;
+    };
+    if ($@) { $dbh->rollback; die "user DB migration to v14 failed: $@" }
+    $v = 14;
   }
 }
 

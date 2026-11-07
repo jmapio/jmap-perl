@@ -3182,8 +3182,58 @@ sub labels {
   return { map { $_->{label} => [$_->{ifolderid}, $_->{jmailboxid}, $_->{imapname}] } @$data };
 }
 
+# Give a folder's stored messages the ids _msgid_for gives them now (schema
+# v14 flags every folder). On a server with RFC 8474 OBJECTID one cheap FETCH
+# of EMAILID/THREADID; otherwise from the envelope and size already stored.
+# Both the old and new id are queued for sync_jmap, so a changed id reaches
+# clients as an Email destroyed and one created; an EmailSubmission keeps
+# pointing at its Email. Gmail's ids (X-GM-MSGID) are unchanged.
+sub rekey_folder {
+  my ($Self, $folder) = @_;
+  my $objectids;
+  unless ($Self->{is_gmail}) {
+    # dies if the folder's UIDVALIDITY moved on: left for the next sync,
+    # after do_folder has dealt with that
+    $objectids = eval { $Self->backend_cmd('imap_objectids', $folder->{imapname}, $folder->{uidvalidity}) };
+    if ($@) { warn "rekey of $folder->{imapname} put off: $@"; return }
+  }
+  $Self->begin();
+  unless ($Self->{is_gmail}) {
+    my $rows = $Self->dget('imessages', { ifolderid => $folder->{ifolderid} }, 'uid,msgid,thrid,envelope,size');
+    my %moved;
+    for my $r (@$rows) {
+      my ($new, $thr);
+      if ($objectids) {
+        my $o = $objectids->{$r->{uid}} or next;
+        $new = _objectid_of($o->[0]) or next;
+        $thr = _objectid_of($o->[1]);
+      }
+      else {
+        $new = _msgid_for({ envelope => decode_json($r->{envelope} || '{}'), 'rfc822.size' => $r->{size} });
+      }
+      next if $new eq $r->{msgid};
+      $Self->dupdate('imessages', { msgid => $new, ($thr ? (thrid => $thr) : ()) },
+                     { ifolderid => $folder->{ifolderid}, uid => $r->{uid} });
+      $moved{$r->{msgid}} = $new;
+    }
+    for my $old (keys %moved) {
+      $Self->mark_sync($old);
+      $Self->mark_sync($moved{$old});
+      $Self->ddirty('jsubmission', { msgid => $moved{$old} }, { msgid => $old });   # emailId changed
+      $Self->ddelete('jrawmessage', { msgid => $old });
+    }
+  }
+  $Self->dupdate('ifolders', { rekey => 0 }, { ifolderid => $folder->{ifolderid} });
+  $Self->commit();
+}
+
 sub sync_imap {
   my $Self = shift;
+
+  $Self->begin();
+  my $rekey = $Self->dget('ifolders', { rekey => 1 });
+  $Self->commit();
+  $Self->rekey_folder($_) for @$rekey;
 
   $Self->begin();
   my $data = $Self->dget('ifolders');
@@ -3305,6 +3355,31 @@ sub calclabels {
   die "No way to calculate labels for " . Dumper($data);
 }
 
+# An Email's id: one message, one id, in whatever folders it sits, and two
+# messages never share one (RFC 8621 S4.1: an Email's content is immutable).
+# - The server's own, where it has one: RFC 8474 EMAILID (Cyrus, Dovecot,
+#   Stalwart); Gmail's X-GM-MSGID is handled by calcmsgid.
+# - Otherwise a hash of the ENVELOPE and RFC822.SIZE: the envelope alone is
+#   only the author's headers, so a copy delivered back to the sender (same
+#   headers plus trace fields) shared the sent one's id. The size tells such
+#   bytes apart, and an identical re-upload still finds its Email again.
+# _msgid_for() is also how a stored message is re-keyed (rekey_folder), so it
+# takes the envelope as stored or fetched, and the size as a plain number.
+sub _objectid_of {
+  my ($v) = @_;
+  ($v) = @$v if ref $v eq 'ARRAY';
+  return (defined $v && $v ne '' && uc $v ne 'NIL' && $v =~ /\A[A-Za-z0-9_-]{1,255}\z/) ? $v : undef;
+}
+
+sub _msgid_for {
+  my ($data) = @_;
+  if (my $emailid = _objectid_of($data->{emailid})) {
+    return $emailid;
+  }
+  my $coded = $json->encode([$data->{envelope}]) . "\0" . (0 + ($data->{'rfc822.size'} // 0));
+  return 'm' . substr(sha1_hex($coded), 0, 15);
+}
+
 sub calcmsgid {
   my $Self = shift;
   my $imapname = shift;
@@ -3314,13 +3389,12 @@ sub calcmsgid {
   return ($data->{"x-gm-msgid"}, $data->{"x-gm-thrid"})
     if ($data->{"x-gm-msgid"} and $data->{"x-gm-thrid"});
 
-  return ($data->{"digest.sha1"}, $data->{"cid"})
-    if ($data->{"digest.sha1"} and $data->{"cid"});
-
   my $envelope = $data->{envelope};
-  my $coded = $json->encode([$envelope]);
-  my $base = substr(sha1_hex($coded), 0, 9);
-  my $msgid = "m$base";
+  my $msgid = _msgid_for($data);
+  # RFC 8474 THREADID: the server's threading, where it has one
+  if (_objectid_of($data->{emailid}) and my $threadid = _objectid_of($data->{threadid})) {
+    return ($msgid, $threadid);
+  }
 
   my $replyto = _trimh($envelope->{'In-Reply-To'});
   my $messageid = _trimh($envelope->{'Message-ID'});
@@ -3333,7 +3407,7 @@ sub calcmsgid {
   my ($thrid) = $Self->dbh->selectrow_array(
     "SELECT DISTINCT thrid FROM ithread WHERE messageid IN (?, ?)",
     {}, $replyto, $messageid);
-  $thrid ||= "t$base";
+  $thrid ||= 't' . substr($msgid, 1);
   foreach my $id ($replyto, $messageid) {
     next if $id eq '';
     $Self->dbh->do("INSERT OR IGNORE INTO ithread (messageid, thrid, sortsubject) VALUES (?, ?, ?)", {}, $id, $thrid, $sortsub);
@@ -5941,7 +6015,8 @@ CREATE TABLE IF NOT EXISTS ifolders (
   highestmodseq INTEGER,
   uniqueid TEXT,
   myrights TEXT,
-  mtime DATE NOT NULL
+  mtime DATE NOT NULL,
+  rekey INTEGER
 );
 EOF
 

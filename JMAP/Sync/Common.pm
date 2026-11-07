@@ -979,7 +979,8 @@ sub imap_fetch {
     if ($getimmutable) {
       push @flags, qw(internaldate envelope rfc822.size);
       push @flags, qw(x-gm-msgid x-gm-thrid) if $imap->capability->{'x-gm-ext-1'};
-      push @flags, qw(cid digest.sha1) if $imap->capability->{'xconversations'};
+      # RFC 8474: the server's own ids, the same for every copy of a message
+      push @flags, qw(emailid threadid) if $imap->capability->{objectid};
     }
     next if ($highestmodseq and $item->[3] and $item->[3] == $highestmodseq);
     my @extra;
@@ -990,6 +991,28 @@ sub imap_fetch {
   $Self->_unselect($imap);
 
   return \%res;
+}
+
+# RFC 8474 EMAILID/THREADID of every message in a folder, for re-keying the
+# Emails stored before the proxy used them: { uid => [emailid, threadid] }, or
+# undef when the server has no OBJECTID or the folder's UIDVALIDITY moved on.
+sub imap_objectids {
+  my ($Self, $imapname, $uidvalidity) = @_;
+  my $imap = $Self->connect_imap();
+  return undef unless $imap->capability->{objectid};
+  $imap->examine($imapname) or die "EXAMINE FAILED $imapname";
+  my $uv = $imap->get_response_code('uidvalidity');
+  my %res;
+  if (defined $uv && $uv == $uidvalidity && ($imap->get_response_code('exists') || 0)) {
+    my $data = $imap->fetch('1:*', '(uid emailid threadid)') || {};
+    for my $row (values %$data) {
+      my ($e) = ref $row->{emailid}  ? @{$row->{emailid}}  : $row->{emailid};
+      my ($t) = ref $row->{threadid} ? @{$row->{threadid}} : $row->{threadid};
+      $res{$row->{uid}} = [$e, $t] if defined $e;
+    }
+  }
+  $Self->_unselect($imap);
+  return (defined $uv && $uv == $uidvalidity) ? \%res : undef;
 }
 
 sub imap_append {
