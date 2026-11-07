@@ -702,17 +702,12 @@ sub api_AddressBook_set {
   for my $id (@$destroy) {
     $Self->{db}->begin();
     my $has = $Self->{db}->dgetone('jcontacts', { jaddressbookid => $id, active => 1 }, 'contactuid');
-    my $contacts;
-    if ($has && $args->{onDestroyRemoveContents}) {
-      $contacts = $Self->{db}->dget('jcontacts', { jaddressbookid => $id, active => 1 }, 'contactuid');
-    }
     $Self->{db}->commit();
     if ($has && !$args->{onDestroyRemoveContents}) {
       $pre_notDestroyed{$id} = { type => 'addressBookHasContents' };
     } else {
-      if ($has && $contacts) {
-        $Self->{db}->destroy_contacts([ map { $_->{contactuid} } @$contacts ]);
-      }
+      # Not destroyed card by card first (see Calendar/set): the address
+      # book's DELETE takes its cards, and the sync after it records that.
       push @safe_destroy, $id;
     }
   }

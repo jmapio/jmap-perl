@@ -574,6 +574,8 @@ sub sync_calendars {
   foreach my $calendar (@$icalendars) {
     my $id = $calendar->{icalendarid};
     next if $seen{$id};
+    # its events went with it: a row left behind would still be found by UID
+    $Self->ddelete('ievents', {icalendarid => $id});
     $Self->ddelete('icalendars', {icalendarid => $id});
   }
 
@@ -625,6 +627,8 @@ sub sync_jcalendars {
   foreach my $calendar (@$jcalendars) {
     my $id = $calendar->{jcalendarid};
     next if $seen{$id};
+    $Self->unlink_jevent_payload($_)
+      for @{ $Self->dgetcol('jevents', {jcalendarid => $id, active => 1}, 'eventuid') };
     $Self->dnuke('jcalendars', {jcalendarid => $id});
     $Self->dnuke('jevents', {jcalendarid => $id});
   }
@@ -940,6 +944,7 @@ sub sync_addressbooks {
   foreach my $addressbook (@$iaddressbooks) {
     my $id = $addressbook->{iaddressbookid};
     next if $seen{$id};
+    $Self->ddelete('icards', {iaddressbookid => $id});
     $Self->ddelete('iaddressbooks', {iaddressbookid => $id});
   }
 
@@ -992,6 +997,8 @@ sub sync_jaddressbooks {
   foreach my $addressbook (@$jaddressbooks) {
     my $jid = $addressbook->{jaddressbookid};
     next if $seen{$jid};
+    $Self->unlink_jcontact_payload($_)
+      for @{ $Self->dgetcol('jcontacts', {jaddressbookid => $jid, active => 1}, 'contactuid') };
     $Self->dnuke('jaddressbooks', {jaddressbookid => $jid});
     $Self->dnuke('jcontactgroups', {jaddressbookid => $jid});
     $Self->dnuke('jcontacts', {jaddressbookid => $jid});

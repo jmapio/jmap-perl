@@ -359,14 +359,14 @@ sub api_Calendar_set {
   for my $jcalendarid (@$destroy) {
     $Self->begin();
     my $has_events = $Self->{db}->dcount('jevents', { jcalendarid => $jcalendarid, active => 1 });
-    my $event_uids = $has_events
-      ? $Self->{db}->dgetcol('jevents', { jcalendarid => $jcalendarid, active => 1 }, 'eventuid')
-      : [];
     $Self->commit();
     if ($has_events && !$onDestroyRemoveEvents) {
       $notDestroyed_pre{$jcalendarid} = { type => 'calendarHasEvent' };
     } else {
-      $Self->{db}->destroy_calendar_events($event_uids) if @$event_uids;
+      # Its events are not destroyed one by one first: had the calendar's
+      # DELETE then failed, they would be gone and the calendar left.  A
+      # collection's DELETE removes its members (RFC 4918 S9.6.1), and the
+      # sync after it destroys them here.
       push @safe_destroy, $jcalendarid;
     }
   }
