@@ -515,7 +515,18 @@ sub _validate_email_create {
     # header:Name (no suffix at all) cannot be an array
     if (ref($item->{$key}) eq 'ARRAY' && $rest eq '') {
       push @bad, "header:$1";
+      next;
     }
+    # a known form, allowed on this field (RFC 8621 S4.1.2), and a value
+    # that form can write
+    my ($name, $form, $all) = Data::JSEmail::parse_header_property($key);
+    unless (defined $form and Data::JSEmail::header_form_allowed($name, $form)) {
+      push @bad, $key;
+      next;
+    }
+    my $val = $item->{$key};
+    push @bad, $key
+      unless eval { Data::JSEmail::format_header($form, $_) for ($all ? @{ ref $val eq 'ARRAY' ? $val : [$val] } : ($val)); 1 };
   }
 
   # bodyValues restrictions: isTruncated and isEncodingProblem must not be true
@@ -660,68 +671,6 @@ sub _check_bodystructure_size {
   }
 }
 
-sub _convert_header_value {
-  my ($type, $val) = @_;
-  if ($type eq 'asText') {
-    return $val;
-  }
-  if ($type eq 'asAddresses') {
-    return join(', ', map {
-      my $name = $_->{name};
-      my $email = $_->{email};
-      defined $name && length($name) ? qq{"$name" <$email>} : $email;
-    } @$val);
-  }
-  if ($type eq 'asMessageIds') {
-    return join(' ', map { "<$_>" } @$val);
-  }
-  if ($type eq 'asDate') {
-    my $epoch = Date::Parse::str2time($val);
-    return Date::Format::time2str("%a, %d %b %Y %H:%M:%S %z", $epoch) if defined $epoch;
-    return $val;
-  }
-  if ($type eq 'asURLs') {
-    return join(",\r\n ", map { "<$_>" } @$val);
-  }
-  return $val;
-}
-
-sub _convert_header_forms {
-  my ($item) = @_;
-  for my $key (keys %$item) {
-    next unless $key =~ /^header:([^:]+):(.*)/;
-    my $hname = $1;
-    my $rest = $2;
-
-    my $val = delete $item->{$key};
-
-    # Parse :asType and :all modifiers
-    my $type;
-    my $is_all;
-    for my $part (split /:/, $rest) {
-      if ($part eq 'all') { $is_all = 1 }
-      elsif ($part =~ /^as/) { $type = $part }
-    }
-
-    if ($type && $is_all && ref($val) eq 'ARRAY') {
-      $item->{"header:$hname"} = [map { _convert_header_value($type, $_) } @$val];
-    } elsif ($type) {
-      $item->{"header:$hname"} = _convert_header_value($type, $val);
-    } elsif ($is_all) {
-      # :all without type - values are already the text to set
-      $item->{"header:$hname"} = $val;
-    }
-  }
-}
-
-sub _convert_header_forms_recursive {
-  my ($node) = @_;
-  _convert_header_forms($node);
-  if ($node->{subParts} && ref($node->{subParts}) eq 'ARRAY') {
-    _convert_header_forms_recursive($_) for @{$node->{subParts}};
-  }
-}
-
 sub create_messages {
   my $Self = shift;
   my $args = shift;
@@ -788,11 +737,8 @@ sub create_messages {
       next;
     }
 
-    # Convert typed header forms (header:Name:asType) to raw (header:Name)
-    _convert_header_forms($item);
-    if ($item->{bodyStructure}) {
-      _convert_header_forms_recursive($item->{bodyStructure});
-    }
+    # header:Name:asForm values go to Data::JSEmail::make as they are: it
+    # formats each form itself (quoting, RFC 2047, groups, dates)
 
     my %generated_defaults;
     my $defaults_cb = sub {

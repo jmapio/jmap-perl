@@ -9,7 +9,6 @@ use JSON::XS;
 use JSON;
 use DateTime;
 use DateTime::TimeZone;
-use DateTime::Event::ICal;
 use Text::JSCalendar;
 
 my $json = JSON::XS->new->utf8->canonical();
@@ -100,113 +99,45 @@ sub _window_overrides {
   }
 }
 
-# Format a DateTime as a JSCalendar recurrence-ID string (floating local time).
-sub _dt_to_rid {
-  my ($dt, $is_allday) = @_;
-  return $is_allday ? $dt->strftime('%Y-%m-%d') : $dt->strftime('%Y-%m-%dT%H:%M:%S');
-}
-
-# Convert a JSCalendar recurrenceRule object to DateTime::Event::ICal args.
-sub _jscal_rule_to_ical {
-  my ($rule, $tz, $is_allday) = @_;
-  my $freq = $rule->{frequency} or return ();
-  my %a = (freq => $freq);
-  $a{interval} = $rule->{interval} if defined $rule->{interval} && $rule->{interval} > 1;
-  $a{count}    = $rule->{count}    if defined $rule->{count};
-  if ($rule->{until}) {
-    my $dt = _parse_jscal_dt($rule->{until}, $tz);
-    $a{until} = $dt if $dt;
-  }
-  if ($rule->{byDay}) {
-    $a{byday} = [ map {
-      my $n = $_->{nthOfPeriod};
-      $n ? "$n$_->{day}" : $_->{day};
-    } @{$rule->{byDay}} ];
-  }
-  $a{bymonth}    = $rule->{byMonth}       if $rule->{byMonth};
-  $a{bymonthday} = $rule->{byMonthDay}    if $rule->{byMonthDay};
-  $a{bysetpos}   = $rule->{bySetPosition} if $rule->{bySetPosition};
-  $a{byhour}     = $rule->{byHour}        if $rule->{byHour};
-  $a{byminute}   = $rule->{byMinute}      if $rule->{byMinute};
-  return %a;
-}
-
-# Expand a recurring event's occurrences within [after, before).
-# Returns list of hashrefs: {id => instance id, rid => recurrence id,
-# start => "local-datetime"}.
+# The occurrences of a recurring event to report for a query window
+# [after, before): {id, rid, start} for each.  Text::JSCalendar expands the
+# rule (every part of it, RDATE-style additions, exclusions; bounded); an
+# occurrence counts by where it actually starts, so one moved out of the
+# window is left out and one moved into it from outside is added.
 sub _expand_event_occurrences {
   my ($Self, $row, $master, $after_str, $before_str) = @_;
+  return () unless defined $master->{start};
 
-  my $start_str = $master->{start} // return ();
-  my $rules = $master->{recurrenceRule} ? [$master->{recurrenceRule}] : [];
-  my $is_allday = ($start_str !~ /T/);
-  my $tz_name   = $master->{timeZone} // 'UTC';
-  my $tz        = eval { DateTime::TimeZone->new(name => $tz_name) }
-                  // DateTime::TimeZone->new(name => 'UTC');
-
-  my $dtstart  = _parse_jscal_dt($start_str, $tz) // return ();
-
-  # Convert after/before (may have trailing Z) to local-format strings for comparison.
-  # We ignore timezone offset — same approach as the existing string-compare filter.
+  # after/before may carry a trailing Z; compared as local times, as the
+  # string-compare filter does
   (my $after_cmp  = $after_str  // '') =~ s/Z$//;
   (my $before_cmp = $before_str // '') =~ s/Z$//;
 
-  my $dt_after  = $after_cmp  ? _parse_jscal_dt($after_cmp,  $tz) : undef;
-  my $dt_before = $before_cmp ? _parse_jscal_dt($before_cmp, $tz) : undef;
-
-  my %excluded;
   my $overrides = $master->{recurrenceOverrides} // {};
-  for my $rid (keys %$overrides) {
-    $excluded{$rid} = 1 if !defined $overrides->{$rid} || $overrides->{$rid}{excluded};
-  }
+  my $item = sub {
+    my $rid = shift;
+    my $patch = $overrides->{$rid};
+    my $actual_start = (ref $patch eq 'HASH' && defined $patch->{start}) ? $patch->{start} : $rid;
+    return () if length $after_cmp  && $actual_start lt $after_cmp;
+    return () if length $before_cmp && $actual_start ge $before_cmp;
+    return { id => JMAP::EventId::instance_id($row->{eventuid}, $rid),
+             rid => $rid, start => $actual_start };
+  };
 
-  my %seen;
-  my @items;
+  my @rids = eval { Text::JSCalendar->occurrences($master,
+    (length $after_cmp ? (after => $after_cmp) : ()),
+    (length $before_cmp ? (before => $before_cmp) : ())) };
+  warn "CalendarEvent/query: $row->{eventuid}: cannot expand: $@" if $@;
+  my %seen = map { $_ => 1 } @rids;
+  my @items = map { $item->($_) } @rids;
 
-  for my $rule (@$rules) {
-    my %ical = eval { _jscal_rule_to_ical($rule, $tz, $is_allday) };
-    next if $@ || !%ical;
-
-    my $set = eval { DateTime::Event::ICal->recur(dtstart => $dtstart, %ical) };
-    next if $@ || !$set;
-
-    # Start iterator just before $dt_after (or from dtstart - 1s if no after).
-    my $iter_from = $dt_after
-      ? $dt_after->clone->subtract(seconds => 1)
-      : $dtstart->clone->subtract(seconds => 1);
-    my $iter = $set->iterator(after => $iter_from);
-
-    my $safety = 5000;
-    while (my $dt = $iter->next) {
-      last unless --$safety;
-      last if $dt_before && DateTime->compare($dt, $dt_before) >= 0;
-      my $rid = _dt_to_rid($dt, $is_allday);
-      next if $excluded{$rid};
-      next if $seen{$rid}++;
-
-      my $override     = $overrides->{$rid} // {};
-      my $actual_start = $override->{start} // $rid;
-      next if $after_cmp  && $actual_start lt $after_cmp;
-      next if $before_cmp && $actual_start ge $before_cmp;
-
-      push @items, { id => JMAP::EventId::instance_id($row->{eventuid}, $rid),
-                     rid => $rid, start => $actual_start };
-    }
-  }
-
-  # Include moved overrides whose actual start lands in range but natural
-  # occurrence was outside (so not generated by the iterator above).
+  # moved overrides whose natural occurrence is outside the window
   for my $rid (sort keys %$overrides) {
-    next unless defined $overrides->{$rid};
-    next if $overrides->{$rid}{excluded};
     next if $seen{$rid};
-    my $actual_start = $overrides->{$rid}{start} // $rid;
-    next if $after_cmp  && $actual_start lt $after_cmp;
-    next if $before_cmp && $actual_start ge $before_cmp;
-    push @items, { id => JMAP::EventId::instance_id($row->{eventuid}, $rid),
-                   rid => $rid, start => $actual_start };
+    my $patch = $overrides->{$rid};
+    next unless ref $patch eq 'HASH' && !$patch->{excluded};
+    push @items, $item->($rid);
   }
-
   return @items;
 }
 
@@ -753,27 +684,13 @@ sub api_CalendarEvent_query {
   }];
 }
 
+# One occurrence of a recurring event as an event of its own (undef if
+# excluded): Text::JSCalendar applies the override patch, pointer paths like
+# participants/<id>/participationStatus included, sets recurrenceId and
+# start, and drops the master-only properties.
 sub _expand_occurrence {
   my ($master, $recurrence_id) = @_;
-
-  my $overrides = $master->{recurrenceOverrides} || {};
-
-  # Explicitly excluded occurrence
-  return undef if exists $overrides->{$recurrence_id}
-    && (!defined $overrides->{$recurrence_id} || $overrides->{$recurrence_id}{excluded});
-
-  my %item  = %$master;
-  my $patch = $overrides->{$recurrence_id} || {};
-  $item{$_} = $patch->{$_} for keys %$patch;
-
-  # start: override's value if it was moved, otherwise the scheduled recurrenceId
-  $item{start}       = exists $patch->{start} ? $patch->{start} : $recurrence_id;
-  $item{recurrenceId} = $recurrence_id;
-
-  # master-only properties are not valid on expanded occurrences (RFC 8984 §4.3)
-  delete $item{$_} for qw(recurrenceRule recurrenceOverrides);
-
-  return \%item;
+  return Text::JSCalendar->instance($master, $recurrence_id);
 }
 
 # draft-ietf-jmap-calendars S5.7: with reduceParticipants, "only participants

@@ -7,6 +7,7 @@ package JMAP::Sync::Common;
 
 use Data::UUID::LibUUID;
 use JMAP::Sync::CalDAVTalk;
+use Text::JSContact ();
 use JMAP::Sync::IMAPSocket;
 use JSON ();
 use Mail::IMAPTalk;
@@ -530,15 +531,29 @@ sub new_card {
   $talk->NewContact($collection, $card);
 }
 
+# Write $card over the vCard at $resource.  Given the vCard it was read
+# from ($original), only what the card changed is rewritten: properties the
+# JSContact model has no place for (vendor extensions, X- properties,
+# GENDER, ALTID localisations, ...) survive a JMAP edit instead of being
+# dropped by a fresh vCard.  Without it (or if it does not parse), a fresh
+# vCard is written, as Net::CardDAVTalk::UpdateContact does.
 sub update_card {
   my $Self = shift;
   my $resource = shift;
   my $card = shift;
+  my $original = shift;
 
   my $talk = $Self->connect_contacts();
   return unless $talk;
+  die "Invalid contact (expected hashref)\n" unless ref $card eq 'HASH';
 
-  $talk->UpdateContact($resource, $card);
+  my $vcf = Text::JSContact::jscontact_to_vcard($card,
+    (defined $original && length $original) ? (original => $original) : ());
+  $talk->Request('PUT', $resource, $vcf,
+    'Content-Type' => 'text/vcard',
+    'If-Match'     => '*',
+  );
+  return $resource;
 }
 
 sub delete_card {

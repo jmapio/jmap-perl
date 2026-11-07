@@ -801,50 +801,23 @@ sub getRawBlob {
 
 # or this
 # Filter a single body part to only include requested properties
-# RFC 8621 S4.1.2: the header fields each parsed form may be used on. Any
-# field not defined in RFC 5322 or RFC 2369 may use every form.
-my %HEADER_FORM_FIELDS = (
-  asText             => [qw(subject comments keywords list-id)],
-  asAddresses        => [qw(from sender reply-to to cc bcc resent-from resent-sender
-                            resent-reply-to resent-to resent-cc resent-bcc)],
-  asMessageIds       => [qw(message-id in-reply-to references resent-message-id)],
-  asDate             => [qw(date resent-date)],
-  asURLs             => [qw(list-help list-unsubscribe list-subscribe list-post
-                            list-owner list-archive)],
-);
-$HEADER_FORM_FIELDS{asGroupedAddresses} = $HEADER_FORM_FIELDS{asAddresses};
-my %HEADER_DEFINED = map { $_ => 1 } qw(
-  date from sender reply-to to cc bcc message-id in-reply-to references subject
-  comments keywords resent-date resent-from resent-sender resent-to resent-cc
-  resent-bcc resent-message-id return-path received
-  list-help list-unsubscribe list-subscribe list-post list-owner list-archive
-);
-
-# Returns undef if a header:{name}[:as{form}][:all] property is valid.
+# Returns undef if a header:{name}[:as{form}][:all] property is valid: a
+# known form, allowed on that field (RFC 8621 S4.1.2; Data::JSEmail has the
+# table).
 sub _header_prop_problem {
   my $prop = shift;
-  return "bad header property"
-    unless $prop =~ /^header:([^:]+)(?::(as[A-Za-z]+))?(?::all)?$/;
-  my ($name, $form) = (lc $1, $2);
-  return undef if !defined $form || $form eq 'asRaw';
-  my $fields = $HEADER_FORM_FIELDS{$form} or return "unknown form $form";
-  return undef unless $HEADER_DEFINED{$name};
-  return undef if grep { $_ eq $name } @$fields;
+  my ($name, $form) = Data::JSEmail::parse_header_property($prop)
+    or return "bad header property";
+  return undef if Data::JSEmail::header_form_allowed($name, $form);
   return "$form is not allowed for $name";
 }
 
 # The value of a header:... property over a list of {name, value} headers.
 sub _header_prop_value {
   my ($headers, $prop) = @_;
-  my (undef, $name, @mods) = split /:/, $prop;
-  my $all = @mods && $mods[-1] eq 'all';
-  pop @mods if $all;
-  my $form = $mods[0] // 'asRaw';
-  my @values = map { $_->{value} // $_->{Value} }
-               grep { lc($_->{name} // $_->{Name} // '') eq lc $name } @{$headers || []};
-  my $conv = $form eq 'asRaw' ? sub { $_[0] } : Data::JSEmail->can($form);
-  return [ map { $conv->($_) } @values ] if $all;
-  return @values ? $conv->($values[-1]) : undef;
+  my @headers = map { { name => $_->{name} // $_->{Name}, value => $_->{value} // $_->{Value} } }
+                @{ $headers || [] };
+  return Data::JSEmail::header_property(\@headers, $prop);
 }
 
 # RFC 8621 S4.1 and S4.1.4: the Email and EmailBodyPart properties, besides

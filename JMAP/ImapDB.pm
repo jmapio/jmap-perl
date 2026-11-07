@@ -5158,14 +5158,15 @@ sub update_contact_groups {
       $card->{members} = \%members;
     }
 
-    $todo{$old->{href}} = $card;
+    # with the vCard it came from, so the write patches only what changed
+    $todo{$old->{href}} = [$card, $raw_vcf];
     $changed{$carduid} = undef;
   }
 
   $Self->commit();
 
   foreach my $href (sort keys %todo) {
-    $Self->backend_cmd('update_card', $href, $todo{$href});
+    $Self->backend_cmd('update_card', $href, @{ $todo{$href} });
   }
 
   return (\%changed, \%notchanged);
@@ -5372,14 +5373,15 @@ sub update_contacts {
     # Apply changes from the old custom format onto the JSContact card
     _apply_contact_changes($card, $contact);
 
-    $todo{$old->{href}} = $card;
+    # with the vCard it came from, so the write patches only what changed
+    $todo{$old->{href}} = [$card, $raw_vcf];
     $changed{$carduid} = undef;
   }
 
   $Self->commit();
 
   foreach my $href (sort keys %todo) {
-    $Self->backend_cmd('update_card', $href, $todo{$href});
+    $Self->backend_cmd('update_card', $href, @{ $todo{$href} });
   }
 
   return (\%changed, \%notchanged);
@@ -5676,7 +5678,7 @@ sub update_contacts_jscontact {
         next;
       }
 
-      eval { $Self->backend_cmd('update_card', $icard->{href}, $card) };
+      eval { $Self->backend_cmd('update_card', $icard->{href}, $card, $raw_vcf) };
       if ($@) {
         $notchanged{$carduid} = { type => 'serverFail', description => "$@" };
         next;
