@@ -358,7 +358,8 @@ sub api_Calendar_set {
   my (@safe_destroy, %notDestroyed_pre);
   for my $jcalendarid (@$destroy) {
     $Self->begin();
-    my $has_events = $Self->{db}->dcount('jevents', { jcalendarid => $jcalendarid, active => 1 });
+    my $has_events = grep { $_ eq $jcalendarid } map { JMAP::DB::event_calendar_ids($_) }
+      @{ $Self->{db}->dget('jevents', { active => 1 }, 'jcalendarid,jcalendarids') };
     $Self->commit();
     if ($has_events && !$onDestroyRemoveEvents) {
       $notDestroyed_pre{$jcalendarid} = { type => 'calendarHasEvent' };
@@ -404,12 +405,13 @@ sub _event_match {
   my $Self = shift;
   my ($item, $condition, $storage) = @_;
 
+  # an event is in every calendar of its calendarIds
   if ($condition->{inCalendar}) {
-    return 0 unless $item->{jcalendarid} eq $condition->{inCalendar};
+    return 0 unless grep { $_ eq $condition->{inCalendar} } JMAP::DB::event_calendar_ids($item);
   }
   if ($condition->{inCalendars}) {
     my %cal_set = map { $_ => 1 } @{$condition->{inCalendars}};
-    return 0 unless $cal_set{$item->{jcalendarid}};
+    return 0 unless grep { $cal_set{$_} } JMAP::DB::event_calendar_ids($item);
   }
 
   if (defined $condition->{uid}) {
@@ -565,7 +567,7 @@ sub api_CalendarEvent_query {
 
   my $newQueryState = "$user->{jstateCalendarEvent}";
 
-  my $data = $Self->{db}->dget('jevents', { active => 1 }, 'eventuid,jcalendarid');
+  my $data = $Self->{db}->dget('jevents', { active => 1 }, 'eventuid,jcalendarid,jcalendarids');
 
 
   local $Self->{_query_tz} = $args->{timeZone} // 'Etc/UTC';
@@ -594,11 +596,11 @@ sub api_CalendarEvent_query {
 
     # inCalendar / inCalendars pre-filter (avoids loading payloads for wrong calendars)
     if ($filter->{inCalendar}) {
-      $data = [ grep { $_->{jcalendarid} eq $filter->{inCalendar} } @$data ];
+      $data = [ grep { my $r = $_; grep { $_ eq $filter->{inCalendar} } JMAP::DB::event_calendar_ids($r) } @$data ];
     }
     if ($filter->{inCalendars}) {
       my %cal_set = map { $_ => 1 } @{$filter->{inCalendars}};
-      $data = [ grep { $cal_set{$_->{jcalendarid}} } @$data ];
+      $data = [ grep { grep { $cal_set{$_} } JMAP::DB::event_calendar_ids($_) } @$data ];
     }
 
     my @expanded;
@@ -777,7 +779,7 @@ sub api_CalendarEvent_get {
     if (defined $recurrence_id) {
       my $master_uid = $eventuid;
 
-      my $data = $Self->{db}->dgetone('jevents', { eventuid => $master_uid, active => 1 }, 'jcalendarid');
+      my $data = $Self->{db}->dgetone('jevents', { eventuid => $master_uid, active => 1 }, 'jcalendarid,jcalendarids');
       unless ($data) {
         $missingids{$id} = 1;
         next;
@@ -805,7 +807,7 @@ sub api_CalendarEvent_get {
       $item->{$_} = undef for grep { _prop_wanted($args, $_) } qw(recurrenceRule recurrenceOverrides);
       %$item = (%$item, %computed);
       $item->{id}          = $id;
-      $item->{calendarIds} = { "$data->{jcalendarid}" => JSON::true } if _prop_wanted($args, 'calendarIds');
+      $item->{calendarIds} = { map { ("$_" => JSON::true) } JMAP::DB::event_calendar_ids($data) } if _prop_wanted($args, 'calendarIds');
       $item->{isOrigin}    = _is_origin($organizer, $user->{email})   if _prop_wanted($args, 'isOrigin');
       $item->{isDraft}     = $JSON::false if _prop_wanted($args, 'isDraft');
       # draft-ietf-jmap-calendars S10.9.2: set only on a synthetic instance id,
@@ -816,7 +818,7 @@ sub api_CalendarEvent_get {
     }
 
     # Master event
-    my $data = $Self->{db}->dgetone('jevents', { eventuid => $eventuid, active => 1 }, 'jcalendarid');
+    my $data = $Self->{db}->dgetone('jevents', { eventuid => $eventuid, active => 1 }, 'jcalendarid,jcalendarids');
     unless ($data) {
       $missingids{$id} = 1;
       next;
@@ -839,7 +841,7 @@ sub api_CalendarEvent_get {
     %$item = (%$item, %computed);
 
     $item->{id}          = $id;
-    $item->{calendarIds} = { "$data->{jcalendarid}" => JSON::true } if _prop_wanted($args, 'calendarIds');
+    $item->{calendarIds} = { map { ("$_" => JSON::true) } JMAP::DB::event_calendar_ids($data) } if _prop_wanted($args, 'calendarIds');
     $item->{isOrigin}    = _is_origin($organizer, $user->{email})   if _prop_wanted($args, 'isOrigin');
     $item->{isDraft}     = $JSON::false if _prop_wanted($args, 'isDraft');
     $item->{baseEventId} = undef        if _prop_wanted($args, 'baseEventId');
@@ -917,7 +919,7 @@ sub api_CalendarEvent_queryChanges {
     if ($user->{jdeletedmodseq} and $sinceQueryState <= $user->{jdeletedmodseq})
     or ($user->{jeventidcut} and $sinceQueryState <= $user->{jeventidcut});
 
-  my $data = $Self->{db}->dget('jevents', { active => 1 }, 'eventuid,jcalendarid,jmodseq');
+  my $data = $Self->{db}->dget('jevents', { active => 1 }, 'eventuid,jcalendarid,jcalendarids,jmodseq');
 
   $Self->commit();
 
@@ -1072,7 +1074,7 @@ sub api_Principal_getAvailability {
   (my $range_end   = $utc_end)   =~ s/Z$//;
 
   my $user_email = $user->{email};
-  my $jevents    = $Self->{db}->dget('jevents', {active => 1}, 'eventuid,jcalendarid');
+  my $jevents    = $Self->{db}->dget('jevents', {active => 1}, 'eventuid,jcalendarid,jcalendarids');
   $Self->commit();
 
   my @busy;

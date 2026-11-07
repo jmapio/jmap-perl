@@ -821,24 +821,50 @@ sub parse_event {
   return $event;
 }
 
+# A CalendarEvent is one per UID; the calendars holding a copy of it are its
+# calendarIds.  $calendars is the whole set (an array of jcalendarids, or
+# one id).
+sub _event_calendar_cols {
+  my ($calendars) = @_;
+  my @ids = sort { $a <=> $b } grep { defined } (ref $calendars ? @$calendars : ($calendars));
+  return (jcalendarid => $ids[0], jcalendarids => join(',', @ids));
+}
+
+# The calendars of a jevents row (one read with jcalendarids, jcalendarid).
+sub event_calendar_ids {
+  my ($row) = @_;
+  return () unless $row;
+  return split /,/, $row->{jcalendarids} if defined $row->{jcalendarids} && length $row->{jcalendarids};
+  return defined $row->{jcalendarid} ? ($row->{jcalendarid}) : ();
+}
+
 sub set_event {
   my $Self = shift;
-  my $jcalendarid = shift;
+  my $calendars = shift;
   my $event = shift;
   my $eventuid = delete $event->{uid};
   $Self->write_jevent_payload($eventuid, $event);
+  my %cal = _event_calendar_cols($calendars);
   if ($Self->dgetfield('jevents', { eventuid => $eventuid }, 'eventuid')) {
-    $Self->ddirty('jevents', { active => 1, jcalendarid => $jcalendarid,
+    $Self->ddirty('jevents', { active => 1, %cal,
                                jeventhash => JMAP::EventId::hash_id($eventuid) }, { eventuid => $eventuid });
   } else {
-    $Self->dmake('jevents', { eventuid => $eventuid, jcalendarid => $jcalendarid,
+    $Self->dmake('jevents', { eventuid => $eventuid, %cal,
                               jeventhash => JMAP::EventId::hash_id($eventuid) });
   }
 }
 
+# A copy of the event came or went, its content unchanged: its calendarIds
+# change (an update), or with no copy left it is destroyed.
+sub set_event_calendars {
+  my ($Self, $eventuid, $calendars) = @_;
+  return $Self->delete_event(undef, $eventuid) unless @$calendars;
+  return $Self->dmaybedirty('jevents', { _event_calendar_cols($calendars) }, { eventuid => $eventuid, active => 1 });
+}
+
 sub delete_event {
   my $Self = shift;
-  my $jcalendarid = shift; # doesn't matter
+  my $jcalendarid = shift; # doesn't matter: the event goes from every calendar
   my $eventuid = shift;
   $Self->unlink_jevent_payload($eventuid);
   return $Self->dmaybedirty('jevents', {active => 0}, {eventuid => $eventuid});
@@ -1209,7 +1235,7 @@ sub get_submission_changes {
     {}, $since_modseq);
 }
 
-my $USER_SCHEMA_VERSION = 14;
+my $USER_SCHEMA_VERSION = 15;
 
 sub save_query {
   my ($Self, $type, $params, $state, $ids) = @_;
@@ -1402,6 +1428,7 @@ CREATE TABLE IF NOT EXISTS jevents (
   eventuid TEXT PRIMARY KEY,
   jeventhash TEXT,
   jcalendarid INTEGER,
+  jcalendarids TEXT,
   firststart DATE,
   lastend DATE,
   jcreated INTEGER,
@@ -1805,6 +1832,24 @@ EOF
     };
     if ($@) { $dbh->rollback; die "user DB migration to v14 failed: $@" }
     $v = 14;
+  }
+
+  if ($v < 15) {
+    # One CalendarEvent per UID, in every calendar holding a copy of it
+    # (its calendarIds): jcalendarids lists them all, jcalendarid stays the
+    # first.  Until now an event was in one calendar, the last synced.
+    $dbh->begin_work;
+    eval {
+      my %cols = map { $_->[1] => 1 } @{ $dbh->selectall_arrayref("PRAGMA table_info(jevents)") || [] };
+      if (%cols) {
+        $dbh->do("ALTER TABLE jevents ADD COLUMN jcalendarids TEXT") unless $cols{jcalendarids};
+        $dbh->do("UPDATE jevents SET jcalendarids = jcalendarid WHERE jcalendarids IS NULL");
+      }
+      $dbh->do('PRAGMA user_version = 15');
+      $dbh->commit;
+    };
+    if ($@) { $dbh->rollback; die "user DB migration to v15 failed: $@" }
+    $v = 15;
   }
 }
 

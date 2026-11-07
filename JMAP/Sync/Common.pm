@@ -404,6 +404,21 @@ sub delete_event {
   $talk->DeleteEvent($resource);  # XXX - we pass more properties for no good reason to this API
 }
 
+# A copy of the event at $href in another calendar, with the same UID (one
+# event in two calendars): a WebDAV COPY, so the iCalendar is copied as it
+# is, not through a conversion.  Returns the new href.
+sub copy_event {
+  my ($Self, $href, $collection) = @_;
+  my $talk = $Self->connect_calendars();
+  return unless $talk;
+  $collection =~ s{/$}{};
+  (my $cal_id = $collection) =~ s{.*/}{};
+  (my $dest = $href) =~ s{.*/}{$cal_id/};
+  die "copy_event: $href is already in $collection\n" if $dest eq $href;
+  $talk->Request('COPY', $href, undef, 'Destination' => $talk->fullpath($dest), 'Overwrite' => 'F');
+  return $dest;
+}
+
 sub move_event {
   my $Self = shift;
   my ($old_href, $new_collection_href) = @_;

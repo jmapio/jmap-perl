@@ -562,8 +562,10 @@ that drifted, leaky layer boundaries and no single error model. Confirmed bugs, 
       an OAuth signup `/changes` is empty until the worker is recycled
 - [x] `JMAP::Sync::AOL` is never loaded (ImapDB.pm ~192), and reads a hard-coded config path
       (removed: AOL syncs through Standard with an app password)
-- [ ] Events (and contacts on upsert) are keyed by UID alone: `delete_event` ignores the calendar,
-      so removing one copy of a UID in two calendars removes both (schema v15: collection + UID)
+- [x] Events are keyed by UID alone: removing one copy of a UID in two calendars removed both.
+      Now one event per UID with every calendar holding a copy in calendarIds (schema v15)
+- [ ] Contacts have the same shape (contactuid is the key; a UID in two address books is one
+      row in the last synced): give ContactCard the same treatment with addressBookIds
 - [x] `ContactCard/*` and `AddressBook/*` aliases rename an `error` response to the method name
 - [x] `Calendar/set` destroys a calendar's events before the calendar destroy has succeeded
 - [x] MDN/send writes client `subject`, `reportingUA`, `finalRecipient` into headers unencoded

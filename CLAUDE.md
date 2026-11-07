@@ -180,7 +180,13 @@ but a different `backendAccountId` (validated against the upstream session's `ac
   S1.2). `JMAP::EventId` maps a UID to its id (unchanged when it already is a valid Id,
   else `_h` + sha256) and an instance to `_r<YYYYMMDD[THHMMSS]>_<event id>`; the API
   layer converts at its edges (`_event_id_resolver` going in), while ImapDB, the
-  `jqueries` snapshots and `/set` keys handed to ImapDB keep UIDs. Account ids must be
+  `jqueries` snapshots and `/set` keys handed to ImapDB keep UIDs.
+- **One CalendarEvent per UID, in every calendar holding a copy.** CalDAV lets a UID be in
+  several calendars; each copy is an `ievents` row, and the event's `calendarIds` is the set
+  of calendars with one (`jevents.jcalendarids`, schema v15). A copy that goes (its resource,
+  or its calendar) takes only its calendar out of `calendarIds`; the last copy takes the event.
+  An update goes to every copy, a calendar added to `calendarIds` gets a WebDAV COPY, one
+  removed loses its copy, and a destroy deletes them all. Account ids must be
   valid Ids too: `POST /api/accounts` refuses any other.
 
 ## Local development & testing

@@ -14,7 +14,7 @@ $db->begin();
 my $dbh = $db->dbh;
 
 my ($v) = $dbh->selectrow_array('PRAGMA user_version');
-is($v, 14, 'user schema is v14');
+is($v, 15, 'user schema is v15');
 
 my %cols = map { $_->[1] => 1 } @{ $dbh->selectall_arrayref('PRAGMA table_info(jfilenodes)') };
 ok($cols{$_}, "jfilenodes.$_") for qw(nodeid parentid name href nodetype etag ctag size

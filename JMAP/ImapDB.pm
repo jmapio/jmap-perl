@@ -627,10 +627,13 @@ sub sync_jcalendars {
   foreach my $calendar (@$jcalendars) {
     my $id = $calendar->{jcalendarid};
     next if $seen{$id};
-    $Self->unlink_jevent_payload($_)
-      for @{ $Self->dgetcol('jevents', {jcalendarid => $id, active => 1}, 'eventuid') };
     $Self->dnuke('jcalendars', {jcalendarid => $id});
-    $Self->dnuke('jevents', {jcalendarid => $id});
+    # its events lose it from calendarIds; one in no calendar now is gone
+    # (sync_calendars has already dropped the calendar's ievents rows)
+    for my $row (@{ $Self->dget('jevents', {active => 1}, 'eventuid,jcalendarid,jcalendarids') }) {
+      next unless grep { $_ eq $id } JMAP::DB::event_calendar_ids($row);
+      $Self->_event_copy_gone($row->{eventuid});
+    }
   }
 }
 
@@ -726,12 +729,14 @@ sub do_calendars {
           $Self->dinsert('ievents', $item);
         }
 
-        $Self->set_event($jcalendarid, $change->[2]);
+        $Self->set_event($Self->_event_calendars($uid), $change->[2]);
+        # a copy that changed its UID has left the event it was a copy of
+        $Self->_event_copy_gone($existing->{uid})
+          if $existing && defined $existing->{uid} && $existing->{uid} ne $uid;
       }
       elsif ($existing) {
-        $Self->unlink_event_ical($existing->{uid});
         $Self->ddelete('ievents', {ieventid => $existing->{ieventid}});
-        $Self->delete_event($jcalendarid, $existing->{uid});
+        $Self->_event_copy_gone($existing->{uid});
       }
     }
 
@@ -4694,6 +4699,34 @@ sub _set_schedule_agent_client {
 # calendarIds: "An event MUST belong to one or more Calendars at all times
 # ... The value for each key in the object MUST be true" (S5), and an id
 # that is not a calendar is an invalid foreign key (RFC 8620 S5.3).
+# The copies of an event on the server: one per calendar holding its UID,
+# as [{ href, icalendarid, jcalendarid }] in calendar order.  In a transaction.
+sub _event_copies {
+  my ($Self, $uid) = @_;
+  return $Self->dbh->selectall_arrayref(
+    "SELECT ievents.href, ievents.icalendarid, icalendars.jcalendarid FROM ievents"
+    . " JOIN icalendars USING (icalendarid) WHERE ievents.uid = ? ORDER BY icalendars.jcalendarid, ievents.href",
+    { Slice => {} }, $uid) || [];
+}
+
+# The event's calendarIds: every calendar with a copy.  In a transaction.
+sub _event_calendars {
+  my ($Self, $uid) = @_;
+  my %seen;
+  return [ grep { defined && !$seen{$_}++ } map { $_->{jcalendarid} } @{ $Self->_event_copies($uid) } ];
+}
+
+# A copy of $uid went (its resource, or its calendar): the event stays in
+# the calendars that still hold one, and is destroyed with the last.  Its
+# stored iCalendar goes with the last copy too.  In a transaction.
+sub _event_copy_gone {
+  my ($Self, $uid) = @_;
+  return unless defined $uid;
+  my $cals = $Self->_event_calendars($uid);
+  $Self->unlink_event_ical($uid) unless @$cals;
+  $Self->set_event_calendars($uid, $cals);
+}
+
 sub _event_calendarids_ok {
   my ($Self, $cids) = @_;
   return 0 unless ref $cids eq 'HASH' && %$cids;
@@ -4817,18 +4850,12 @@ sub create_calendar_events {
       $notcreated{$cid} = { type => 'invalidProperties', properties => \@bad };
       next;
     }
-    my @cal_ids = grep { ($calendar->{calendarIds} || {})->{$_} }
+    # a copy in each calendar (calendarIds), all with the one UID
+    my @cal_ids = sort { $a <=> $b } grep { ($calendar->{calendarIds} || {})->{$_} }
                        keys %{$calendar->{calendarIds} || {}};
-    if (@cal_ids > 1) {
-      $notcreated{$cid} = { type => 'invalidProperties',
-        properties => ['calendarIds'],
-        description => 'Only one calendar per event is supported' };
-      next;
-    }
     my ($jcalendarid) = @cal_ids;
-    $jcalendarid //= $calendar->{calendarId};  # fallback for old clients
-    my $href = $Self->dgetfield('icalendars', { jcalendarid => $jcalendarid }, 'href');
-    unless ($href) {
+    my @hrefs = map { $Self->dgetfield('icalendars', { jcalendarid => $_ }, 'href') } @cal_ids;
+    if (!@hrefs or grep { !$_ } @hrefs) {
       $notcreated{$cid} = {type => 'notFound', description => "No such calendar on server"};
       next;
     }
@@ -4864,7 +4891,7 @@ sub create_calendar_events {
       $ev{_no_schedule} = 1;
       _set_schedule_agent_client(\%ev);
     }
-    $todo{$cid} = [$href, \%ev];
+    $todo{$cid} = [\@hrefs, \%ev];
 
     # RFC 8620 S5.3: created reports what the server set or defaulted
     $createmap{$cid} = { id => $uid, %server_set };
@@ -4873,10 +4900,23 @@ sub create_calendar_events {
   $Self->commit();
 
   foreach my $cid (sort keys %todo) {
-    eval { $Self->backend_cmd('new_event', @{$todo{$cid}}) };
-    if ($@) {
+    my ($hrefs, $ev) = @{$todo{$cid}};
+    my @made;
+    my $ok = eval {
+      for my $i (0 .. $#$hrefs) {
+        # scheduling messages go once, with the first copy
+        my %copy = %$ev;
+        $copy{_no_schedule} = 1 if $i;
+        push @made, $Self->backend_cmd('new_event', $hrefs->[$i], \%copy);
+      }
+      1;
+    };
+    unless ($ok) {
+      my $err = "$@";
+      # all or nothing: the copies already made go again
+      eval { $Self->backend_cmd('delete_event', $_) } for grep { defined } @made;
       delete $createmap{$cid};
-      $notcreated{$cid} = { type => 'serverFail', description => "$@" };
+      $notcreated{$cid} = { type => 'serverFail', description => $err };
     }
   }
 
@@ -4892,9 +4932,10 @@ sub update_calendar_events {
 
   $Self->begin();
 
-  my %todo;         # href => [uid, event_data]
-  my %todo_occurrence;  # href => [[recurrenceId, uid_key, patch], ...]
-  my %todo_move;    # old_href => {new_cal_href, uid}
+  # Every change goes to every copy of the event (one per calendar).
+  my %todo;             # uid => [[href, ...], event_data]
+  my %todo_occurrence;  # uid => [[href, ...], [[recurrenceId, uid_key, patch], ...]]
+  my %todo_cals;        # uid => { move => [old_href, new_cal_href] } or { add => [cal_href, ...], remove => [href, ...] }
   my %changed;
   my %notchanged;
   foreach my $uid (keys %$update) {
@@ -4907,8 +4948,8 @@ sub update_calendar_events {
 
     if ($uid =~ m{^([^/]+)/(.+)$}) {
       my ($master_uid, $recurrence_id) = ($1, $2);
-      my $href = $Self->dgetfield('ievents', { uid => $master_uid }, 'href');
-      unless ($href) {
+      my @hrefs = map { $_->{href} } @{ $Self->_event_copies($master_uid) };
+      unless (@hrefs) {
         $notchanged{$uid} = {type => 'notFound', description => "No such calendar event"};
         next;
       }
@@ -4918,13 +4959,14 @@ sub update_calendar_events {
       my $no_sched_occ = defined $patch{sendSchedulingMessages} ? !$patch{sendSchedulingMessages} : 0;
       delete $patch{sendSchedulingMessages};
       $patch{_no_schedule} = 1 if $no_sched_occ;
-      push @{$todo_occurrence{$href}}, [$recurrence_id, $uid, \%patch];
+      $todo_occurrence{$master_uid}[0] = \@hrefs;
+      push @{$todo_occurrence{$master_uid}[1]}, [$recurrence_id, $uid, \%patch];
       $changed{$uid} = undef;
       next;
     }
 
-    my $href = $Self->dgetfield('ievents', { uid => $uid }, 'href');
-    unless ($href) {
+    my $copies = $Self->_event_copies($uid);
+    unless (@$copies) {
       $notchanged{$uid} = {type => 'notFound', description => "No such event on server"};
       next;
     }
@@ -4938,25 +4980,23 @@ sub update_calendar_events {
       $notchanged{$uid} = { type => 'invalidProperties', properties => \@bad };
       next;
     }
+    my @hrefs = map { $_->{href} } @$copies;
     if (my $cids = $calendar->{calendarIds}) {
-      my @active = grep { $cids->{$_} } keys %$cids;
-      if (@active > 1) {
-        $notchanged{$uid} = { type => 'invalidProperties',
-          properties => ['calendarIds'],
-          description => 'Only one calendar per event is supported' };
-        next;
+      # calendarIds is the set of calendars with a copy: a calendar added
+      # gets one, a calendar removed loses its own (the event stays in the
+      # others).  One calendar for another is a MOVE.
+      my %want = map { $_ => 1 } grep { $cids->{$_} } keys %$cids;
+      my %have = map { $_->{jcalendarid} => $_ } @$copies;
+      my @add    = grep { !$have{$_} } sort keys %want;
+      my @remove = grep { !$want{$_} } sort keys %have;
+      my %calhref = map { $_ => $Self->dgetfield('icalendars', { jcalendarid => $_ }, 'href') } @add;
+      if (@add == 1 && @remove == 1 && keys %have == 1) {
+        $todo_cals{$uid} = { move => [ $have{$remove[0]}{href}, $calhref{$add[0]} ] };
       }
-      if (@active == 1) {
-        my $new_jcal_id = $active[0];
-        my $new_ical = $Self->dgetone('icalendars', {jcalendarid => $new_jcal_id});
-        unless ($new_ical) {
-          $notchanged{$uid} = { type => 'invalidProperties', properties => ['calendarIds'] };
-          next;
-        }
-        my $cur_icalid = $Self->dgetfield('ievents', {href => $href}, 'icalendarid');
-        if (defined $cur_icalid && $new_ical->{icalendarid} != $cur_icalid) {
-          $todo_move{$href} = {new_cal_href => $new_ical->{href}, uid => $uid};
-        }
+      elsif (@add || @remove) {
+        $todo_cals{$uid} = { add => [ @calhref{@add} ], remove => [ map { $have{$_}{href} } @remove ] };
+        my %gone = map { $have{$_}{href} => 1 } @remove;
+        @hrefs = grep { !$gone{$_} } @hrefs;
       }
     }
     my %ev = %$calendar;
@@ -4964,8 +5004,7 @@ sub update_calendar_events {
     delete $ev{calendarId};
     if (exists $ev{utcStart} || exists $ev{utcEnd}) {
       my $current = $Self->read_jevent_payload($uid) // {};
-      my ($cur_cal) = keys %{ $current->{calendarIds} || {} };
-      my ($utc_bad) = $Self->_event_translate_utc(\%ev, $current, $cur_cal);
+      my ($utc_bad) = $Self->_event_translate_utc(\%ev, $current, $copies->[0]{jcalendarid});
       if (@$utc_bad) {
         $notchanged{$uid} = { type => 'invalidProperties', properties => $utc_bad };
         next;
@@ -4978,43 +5017,68 @@ sub update_calendar_events {
       $ev{_no_schedule} = 1;
       _set_schedule_agent_client(\%ev);
     }
-    $todo{$href} = [$uid, \%ev];
+    $todo{$uid} = [\@hrefs, \%ev];
 
     $changed{$uid} = undef;
   }
 
   $Self->commit();
 
-  foreach my $href (sort keys %todo_move) {
-    my $info = $todo_move{$href};
-    my $uid  = $info->{uid};
-    my $new_href = eval { $Self->backend_cmd('move_event', $href, $info->{new_cal_href}) };
-    if ($@) {
-      $notchanged{$uid} = {type => 'serverFail', description => "$@"};
-      delete $changed{$uid};
-      delete $todo{$href};
-      next;
-    }
-    if ($new_href && $new_href ne $href && exists $todo{$href}) {
-      $todo{$new_href} = delete $todo{$href};
+  my $fail = sub {
+    my ($uid, $err) = @_;
+    $notchanged{$uid} = { type => 'serverFail', description => "$err" };
+    delete $changed{$uid};
+    delete $todo{$uid};
+  };
+
+  # a move first, so the update goes to where the event now is
+  foreach my $uid (sort keys %todo_cals) {
+    my $move = $todo_cals{$uid}{move} or next;
+    my ($old, $to) = @$move;
+    my $new_href = eval { $Self->backend_cmd('move_event', $old, $to) };
+    if ($@) { $fail->($uid, $@); next }
+    if ($new_href && $new_href ne $old && $todo{$uid}) {
+      $todo{$uid}[0] = [ map { $_ eq $old ? $new_href : $_ } @{ $todo{$uid}[0] } ];
     }
   }
 
-  foreach my $href (sort keys %todo) {
-    my ($uid, $ev) = @{$todo{$href}};
-    eval { $Self->backend_cmd('update_event', $href, $ev) };
-    if ($@) {
-      $notchanged{$uid} = { type => 'serverFail', description => "$@" };
-      delete $changed{$uid};
+  foreach my $uid (sort keys %todo) {
+    my ($hrefs, $ev) = @{$todo{$uid}};
+    for my $i (0 .. $#$hrefs) {
+      # scheduling messages go once, with the first copy
+      my %copy = %$ev;
+      $copy{_no_schedule} = 1 if $i;
+      eval { $Self->backend_cmd('update_event', $hrefs->[$i], \%copy) };
+      if ($@) { $fail->($uid, $@); last }
     }
   }
-  foreach my $href (sort keys %todo_occurrence) {
-    for my $triple (@{$todo_occurrence{$href}}) {
+
+  # calendars added get a copy of the event as it now is; those removed lose theirs
+  foreach my $uid (sort keys %todo_cals) {
+    my $c = $todo_cals{$uid};
+    next if $c->{move} or !exists $changed{$uid};
+    my ($src) = @{ $todo{$uid} ? $todo{$uid}[0] : [] };
+    my $ok = eval {
+      $Self->backend_cmd('copy_event', $src, $_) for @{ $c->{add} };
+      $Self->backend_cmd('delete_event', $_) for @{ $c->{remove} };
+      1;
+    };
+    $fail->($uid, $@) unless $ok;
+  }
+
+  foreach my $master_uid (sort keys %todo_occurrence) {
+    my ($hrefs, $changes) = @{$todo_occurrence{$master_uid}};
+    for my $triple (@$changes) {
       my ($recurrence_id, $uid_key, $patch) = @$triple;
-      eval { $Self->backend_cmd('update_event_occurrence', $href, $recurrence_id, $patch) };
-      if ($@) {
-        $notchanged{$uid_key} = { type => 'serverFail', description => "$@" };
-        delete $changed{$uid_key};
+      for my $i (0 .. $#$hrefs) {
+        my %copy = %$patch;
+        $copy{_no_schedule} = 1 if $i;
+        eval { $Self->backend_cmd('update_event_occurrence', $hrefs->[$i], $recurrence_id, \%copy) };
+        if ($@) {
+          $notchanged{$uid_key} = { type => 'serverFail', description => "$@" };
+          delete $changed{$uid_key};
+          last;
+        }
       }
     }
   }
@@ -5030,30 +5094,31 @@ sub destroy_calendar_events {
 
   $Self->begin();
 
-  my %todo;
+  # Destroying the event removes it from every calendar: each copy goes.
+  my %todo;             # href => uid
   my %todo_occurrence;  # href => [recurrenceId, ...]
   my @destroyed;
   my %notdestroyed;
   foreach my $uid (@$destroy) {
     if ($uid =~ m{^([^/]+)/(.+)$}) {
       my ($master_uid, $recurrence_id) = ($1, $2);
-      my $href = $Self->dgetfield('ievents', { uid => $master_uid }, 'href');
-      unless ($href) {
+      my @hrefs = map { $_->{href} } @{ $Self->_event_copies($master_uid) };
+      unless (@hrefs) {
         $notdestroyed{$uid} = {type => 'notFound', description => "No such calendar event"};
         next;
       }
-      push @{$todo_occurrence{$href}}, $recurrence_id;
+      push @{$todo_occurrence{$_}}, $recurrence_id for @hrefs;
       push @destroyed, $uid;
       next;
     }
 
-    my $href = $Self->dgetfield('ievents', { uid => $uid }, 'href');
-    unless ($href) {
+    my @hrefs = map { $_->{href} } @{ $Self->_event_copies($uid) };
+    unless (@hrefs) {
       $notdestroyed{$uid} = {type => 'notFound', description => "No such event on server"};
       next;
     }
 
-    $todo{$href} = $uid;
+    $todo{$_} = $uid for @hrefs;
     push @destroyed, $uid;
   }
 
@@ -5065,9 +5130,8 @@ sub destroy_calendar_events {
 
   if (%todo) {
     $Self->begin();
-    for my $href (sort keys %todo) {
-      $Self->delete_event(undef, $todo{$href});
-    }
+    my %uids = map { $_ => 1 } values %todo;
+    $Self->delete_event(undef, $_) for sort keys %uids;
     $Self->commit();
   }
 
