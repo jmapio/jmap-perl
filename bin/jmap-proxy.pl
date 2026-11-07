@@ -200,6 +200,9 @@ sub _form_encode    { my %h=@_; my $u=URI->new('http:'); $u->query_form(%h); $u-
 
 # Token touch cache: token => [ip, time] — flushed to __accounts__ every 5 min
 my %token_touch;
+
+# accountid => the state of the Session it was last served in (see /jmap/session)
+my %session_state;
 my $TOKEN_TOUCH_INTERVAL = 300;
 
 my $shutting_down = 0;
@@ -997,12 +1000,7 @@ sub run_backend_worker {
             eval { $write_json->(['sendat', $next]) };
           }
         }
-        # Add sessionState: checksum of sorted accountIds in pool (RFC 8620)
-        my $poolid = $dbh->selectrow_array(
-          "SELECT poolid FROM accounts WHERE accountid = ?", {}, $accountid) || $accountid;
-        my $aids = $dbh->selectcol_arrayref(
-          "SELECT accountid FROM accounts WHERE poolid = ? ORDER BY accountid", {}, $poolid);
-        $result->{sessionState} = Digest::SHA::sha1_hex(join(',', @$aids));
+        # sessionState is the parent's: the state of the Session it served
         return ['jmap', $result];
       }
       if ($cmd eq 'sync') {
@@ -1897,8 +1895,13 @@ sub do_session {
           downloadUrl => "$BASEURL/raw/{accountId}/{blobId}/{name}?type={type}",
           uploadUrl => "$BASEURL/upload/{accountId}",
           eventSourceUrl => "$BASEURL/eventsource?types={types}&closeafter={closeafter}&ping={ping}",
-          state => sha1_hex(join(',', sort map { $_->{accountid} } @pool)),
         };
+        # RFC 8620 S2: the state changes when anything else in the Session
+        # does (a capability FileNode gains once probed, an account added),
+        # so it is a hash of all of it.  Every response's sessionState reads
+        # it from here.
+        $session->{state} = sha1_hex(JSON::XS->new->canonical->encode($session));
+        $session_state{ $_->{accountid} } = $session->{state} for @pool;
 
         warn "SESSION " . JSON::XS::encode_json($session) . "\n" if $ENV{JMAP_DEBUG};
         $req->respond([200, 'ok', {
@@ -2074,7 +2077,10 @@ sub _do_jmap_request {
         # RFC 8620 S3.4: createdIds is "only returned if given in the request",
         # and then holds every id the client passed plus the ones created here.
         (ref $data->{createdIds} eq 'HASH' ? (createdIds => \%created_ids) : ()),
-        sessionState    => _compute_session_state($accountid),
+        # the state of the Session this account was last served in; before
+        # one has been served (a restart) a value no Session has, so the
+        # client fetches it and from then on the two agree
+        sessionState    => $session_state{$accountid} // 'none',
       };
       my $body = $json->encode($result);
       warn "JMAP RESPONSE: " . length($body) . " bytes\n";
@@ -2366,18 +2372,6 @@ sub _push_refresh {
   }, sub { warn "PUSH: can't refresh subscribed accounts: $_[0]\n" });
 }
 
-sub _compute_session_state {
-  my ($accountid) = @_;
-  my $dbh = DBI->connect("dbi:SQLite:dbname=$datadir/accounts.sqlite3",
-    undef, undef, { AutoCommit => 1, RaiseError => 0, PrintError => 0 });
-  return '' unless $dbh;
-  my ($poolid) = $dbh->selectrow_array(
-    "SELECT poolid FROM accounts WHERE accountid = ?", {}, $accountid);
-  $poolid //= $accountid;
-  my $aids = $dbh->selectcol_arrayref(
-    "SELECT accountid FROM accounts WHERE poolid = ? ORDER BY accountid", {}, $poolid);
-  return sha1_hex(join(',', @{$aids || []}));
-}
 
 # Get the current state string for a JMAP type from an account (async, via worker)
 sub _get_jmap_state {
