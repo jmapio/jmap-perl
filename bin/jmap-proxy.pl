@@ -56,6 +56,7 @@ use JMAP::OAuth::PACC;
 use JMAP::OAuth::OIDC;
 use JMAP::Push;
 use JMAP::Dispatch;
+use JMAP::Workers;
 use JMAP::FileNodeCopy;
 use JMAP::FileNode;   # max_bytes, is_too_large: the in-memory cap on one file's content
 use JMAP::Collation;
@@ -235,7 +236,14 @@ sub mk_json {
       _maybe_finish_shutdown() if $shutting_down;
     }
     elsif (my $entry = _take_pending($accountid, $res->[2])) {
-      if ($res->[0] eq 'error') {
+      if ($res->[0] eq 'error' and JMAP::Workers::survives_error($accountid)) {
+        # The accounts worker answers the error and carries on: only this
+        # request failed, and what is queued behind it will still be answered.
+        $stat{backend_errors}++;
+        warn "Backend error on $accountid: $res->[1]\n";
+        $entry->[1]->($res->[1]);
+      }
+      elsif ($res->[0] eq 'error') {
         $stat{backend_errors}++;
         warn "Backend error on $accountid: $res->[1]\n";
         delete $backend{$accountid};
@@ -248,7 +256,7 @@ sub mk_json {
         $entry->[1]->($res->[1]);
       }
       else {
-        $backend{$accountid}[3] = time() if $backend{$accountid};
+        $backend{$accountid}[3] = time() if $backend{$accountid} && !$entry->[2];
         $entry->[0]->($res->[1]);
       }
       _maybe_finish_shutdown() if $shutting_down;
@@ -1719,8 +1727,11 @@ sub send_backend_request {
   my $errcb = shift;
   my $backend = get_backend($accountid);
   my $cmd = "#" . $backend->[1]++;
-  $backend->[3] = time();
-  $waiting{$accountid}{$cmd} = [$cb || sub { 1 }, $errcb || sub { 1 }];
+  # Background requests (the periodic sync) are not use: counting them would
+  # keep every worker from ever being reaped as idle.
+  my $background = JMAP::Workers::is_background($request);
+  $backend->[3] = time() unless $background;
+  $waiting{$accountid}{$cmd} = [$cb || sub { 1 }, $errcb || sub { 1 }, $background];
   $backend->[0]->push_write(json => [$request, $args, $cmd]);
 }
 
@@ -5239,16 +5250,19 @@ if ($idle_timeout) {
     interval => 60,
     cb       => sub {
       my $now = time();
-      for my $name (keys %backend) {
-        next if $name eq '__accounts__';  # keep accounts worker alive
-        next if %{$waiting{$name} || {}};  # has in-flight requests
-        my $idle = $now - ($backend{$name}[3] || 0);
-        if ($idle > $idle_timeout) {
-          warn "Idle timeout: closing $name (idle ${idle}s)\n";
-          delete $backend{$name};
-          delete $waiting{$name};
-          # Child will see EOF on socketpair and exit
-        }
+      # Kept up: an account with an EventSource client or a push
+      # subscription (its changes must still be noticed), or a backfill.
+      my %keep = (%backfilling, %push_accounts,
+                  map { $_ => 1 } grep { %{ $PushMap{$_} || {} } } keys %PushMap);
+      for my $name (JMAP::Workers::reapable(
+          now         => $now,
+          timeout     => $idle_timeout,
+          last_active => { map { $_ => $backend{$_}[3] } keys %backend },
+          busy        => { map { $_ => 1 } grep { %{ $waiting{$_} || {} } } keys %waiting },
+          keep        => \%keep)) {
+        warn "Idle timeout: closing $name (idle @{[ $now - ($backend{$name}[3] || 0) ]}s)\n";
+        delete $backend{$name};
+        # Child will see EOF on socketpair and exit
       }
     },
   );
