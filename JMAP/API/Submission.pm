@@ -66,7 +66,8 @@ sub _submission_match {
 
 sub _submission_filter {
   my ($Self, $data, $filter) = @_;
-  return [ grep { $Self->_submission_match($_, $filter) } @$data ];
+  # a FilterOperator was taken for a condition with no properties: it matched everything
+  return [ grep { my $row = $_; JMAP::API::_filter_matches($filter, sub { $Self->_submission_match($row, $_[0]) }) } @$data ];
 }
 
 sub api_EmailSubmission_query {

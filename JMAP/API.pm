@@ -765,6 +765,20 @@ sub _check_filter {
   return ();
 }
 
+# RFC 8620 S5.5: a Filter is a FilterCondition or a FilterOperator
+# ({operator: AND|OR|NOT, conditions: [Filter...]}, NOT meaning none of
+# them).  $leaf->($condition) says whether a FilterCondition matches.
+sub _filter_matches {
+  my ($filter, $leaf) = @_;
+  return $leaf->($filter) unless ref $filter eq 'HASH' && exists $filter->{operator};
+  my @c = @{ $filter->{conditions} || [] };
+  my $op = $filter->{operator} // '';
+  return !grep { !_filter_matches($_, $leaf) } @c if $op eq 'AND';
+  return !!grep { _filter_matches($_, $leaf) } @c if $op eq 'OR';
+  return !grep { _filter_matches($_, $leaf) } @c if $op eq 'NOT';
+  return 0;
+}
+
 sub _limit_changes {
   my ($Self, $data, $args, $newState_ref) = @_;
   return ($data, 0) unless $args->{maxChanges} and @$data > $args->{maxChanges};
