@@ -4540,7 +4540,6 @@ sub _event_translate_utc {
   return (\@bad, \%server_set) if @bad;
 
   require DateTime;
-  require DateTime::Format::ISO8601;
   my $parse_utc = sub {
     my ($v) = @_;
     return undef unless defined $v && !ref $v
@@ -4566,9 +4565,12 @@ sub _event_translate_utc {
     my $end = $parse_utc->(delete $ev->{utcEnd}) or return (['utcEnd'], {});
     unless ($start_utc) {
       my $start = $ev->{start} // $current->{start};
-      $start_utc = defined $start && eval {
-        DateTime::Format::ISO8601->parse_datetime($start)->set_time_zone($tz)->set_time_zone('UTC')
-      } or return (['utcEnd'], {});
+      # a JSCalendar LocalDateTime, YYYY-MM-DDTHH:MM:SS
+      $start_utc = defined $start
+        && $start =~ /\A(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)/
+        && eval { DateTime->new(year => $1, month => $2, day => $3, hour => $4,
+                                minute => $5, second => $6, time_zone => $tz)->set_time_zone('UTC') }
+        or return (['utcEnd'], {});
     }
     my $secs = $end->epoch - $start_utc->epoch;
     return (['utcEnd'], {}) if $secs < 0;
