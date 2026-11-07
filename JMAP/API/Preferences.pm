@@ -476,6 +476,11 @@ sub api_VacationResponse_set {
   my $accountid = $Self->{db}->accountid();
   $Self->commit();
 
+  # oldState: what VacationResponse/get would have said before (RFC 8620 S5.3)
+  $Self->begin();
+  my $oldState = _vacation_state($Self->{db}->dgetone('juserprefs', { jprefid => 'vacationresponse', active => 1 }));
+  $Self->commit();
+
   my $create  = $args->{create}  // {};
   my $update  = $args->{update}  // {};
   my $destroy = $args->{destroy} // [];
@@ -508,7 +513,7 @@ sub api_VacationResponse_set {
 
   return ['VacationResponse/set', {
     accountId    => $accountid,
-    oldState     => undef,
+    oldState     => $oldState,
     newState     => _vacation_state($row),
     created      => undef,
     notCreated   => _nullempty(\%notCreated),

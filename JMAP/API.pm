@@ -571,6 +571,23 @@ sub handle_request {
           $logbit .= " (" . join(",", @list) . ")";
         }
 
+        # RFC 8620 S5.3: a /set whose ifInState is not the current state is
+        # stateMismatch, before anything is done.  The state is the one the
+        # type's own /get reports, so the two can never disagree -- the
+        # methods that checked this themselves did it one way each, and seven
+        # did not check at all.
+        if ($command =~ m{\A(\w+)/set\z} && defined $myargs->{ifInState}) {
+          my $type = $1;
+          if (my $get = $Self->can("api_${type}_get")) {
+            my ($g) = eval { $Self->$get({ accountId => $myargs->{accountId}, ids => [] }) };
+            $Self->{db}->reset() if $Self->{db}->in_transaction();
+            my $state = ref $g eq 'ARRAY' && $g->[0] ne 'error' && ref $g->[1] eq 'HASH' ? $g->[1]{state} : undef;
+            if (defined $state && "$myargs->{ifInState}" ne "$state") {
+              $Self->push_results($tag, ['error', { type => 'stateMismatch' }]);
+              next;
+            }
+          }
+        }
         @items = eval { $Self->$FuncRef($myargs, $tag) };
         if ($@) {
           warn "JMAP METHOD ERROR $command ($tag): $@\n";

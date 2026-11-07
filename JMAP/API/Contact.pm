@@ -655,7 +655,7 @@ sub api_AddressBook_set {
     if ($args->{accountId} and $args->{accountId} ne $accountid);
 
   my $user = $Self->{db}->get_user();
-  my $oldState = "$user->{jstateContact}";
+  my $oldState = "$user->{jhighestmodseq}";
   return $Self->_transError(['error', {type => 'stateMismatch', oldState => $oldState, newState => $oldState}])
     if defined $args->{ifInState} and $args->{ifInState} ne $oldState;
   $Self->commit();
@@ -743,7 +743,7 @@ sub api_AddressBook_set {
 
   $Self->begin();
   $user = $Self->{db}->get_user();
-  my $newState = "$user->{jstateContact}";
+  my $newState = "$user->{jhighestmodseq}";
   $Self->commit();
 
   return ['AddressBook/set', {
