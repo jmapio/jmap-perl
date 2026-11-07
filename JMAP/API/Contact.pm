@@ -627,17 +627,25 @@ sub api_Addressbook_changes {
 }
 
 # JSContact (RFC 9553) aliases — data is already stored in Card format
+
+# An alias answers under its own name, but an error response stays "error":
+# renaming it made the client read the error object as a method result.
+sub _rename_response {
+  my ($r, $name) = @_;
+  $r->[0] = $name if $r && ref($r) eq 'ARRAY' && !ref($r->[0]) && $r->[0] ne 'error';
+  return $r;
+}
 sub api_AddressBook_get {
   my $Self = shift;
   my ($r) = $Self->api_Addressbook_get(@_);
-  $r->[0] = 'AddressBook/get' if $r && !ref($r->[0]);
+  _rename_response($r, 'AddressBook/get');
   return $r;
 }
 
 sub api_AddressBook_changes {
   my $Self = shift;
   my @r = $Self->api_Addressbook_changes(@_);
-  $r[0][0] = 'AddressBook/changes' if @r && !ref($r[0][0]);
+  _rename_response($r[0], 'AddressBook/changes');
   return @r;
 }
 
@@ -763,21 +771,21 @@ sub api_AddressBook_set {
 sub api_ContactCard_query {
   my $Self = shift;
   my @r = $Self->api_Contact_query(@_);
-  $r[0][0] = 'ContactCard/query' if @r && !ref($r[0][0]);
+  _rename_response($r[0], 'ContactCard/query');
   return @r;
 }
 
 sub api_ContactCard_get {
   my $Self = shift;
   my ($r) = $Self->api_Contact_get(@_);
-  $r->[0] = 'ContactCard/get' if $r && !ref($r->[0]);
+  _rename_response($r, 'ContactCard/get');
   return $r;
 }
 
 sub api_ContactCard_changes {
   my $Self = shift;
   my @r = $Self->api_Contact_changes(@_);
-  $r[0][0] = 'ContactCard/changes' if @r && !ref($r[0][0]);
+  _rename_response($r[0], 'ContactCard/changes');
   return @r;
 }
 
