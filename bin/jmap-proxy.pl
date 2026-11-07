@@ -350,6 +350,11 @@ sub _dav_sync_safely {
   }
 }
 
+# A signup may only take over an existing account when the caller has proved it
+# owns it; anyone can name an email and a backend that accepts their password.
+# The parent sets _bind_existing only for the management API (an admin) and for
+# an OAuth login whose provider vouched for the address. A returning user with
+# the account's own credentials logs in through verify_credentials instead.
 sub run_backend_worker {
   my ($sock, $name) = @_;
 
@@ -532,6 +537,9 @@ sub run_backend_worker {
         # Create account in accounts DB
         my $existing_aid = $dbh->selectrow_array(
           "SELECT accountid FROM accounts WHERE email = ?", {}, $detail->{username});
+        die "An account for $detail->{username} already exists: log in with its password\n"
+          if $existing_aid && !$detail->{_bind_existing};
+        delete $detail->{_bind_existing};
         my $final_aid;
         if ($existing_aid) {
           $final_aid = $existing_aid;
@@ -567,6 +575,8 @@ sub run_backend_worker {
 
         my $existing_aid = $dbh->selectrow_array(
           "SELECT accountid FROM accounts WHERE email = ?", {}, $email);
+        die "An account for $email already exists, and this sign-in does not prove you own it\n"
+          if $existing_aid && !$args->{_bind_existing};
         my ($final_aid, $target_aid);
         if ($existing_aid) {
           $final_aid  = $existing_aid;
@@ -666,6 +676,12 @@ sub run_backend_worker {
         # Create the account entry in accounts.sqlite3
         my $existing_aid = $dbh->selectrow_array(
           "SELECT accountid FROM accounts WHERE email = ?", {}, $display_email);
+        # A fixed, trusted upstream (Fastmail's) proves who the login is by the
+        # username in its own session
+        my $session_proves = $args->{_bind_if_session_user}
+          && lc($session->{username} // '') eq lc $display_email;
+        die "An account for $display_email already exists: log in with its password\n"
+          if $existing_aid && !$args->{_bind_existing} && !$session_proves;
         my $final_aid;
         if ($existing_aid) {
           $final_aid = $existing_aid;
@@ -1336,10 +1352,11 @@ sub run_accounts_worker {
           return ['verify_credentials', { accountid => $aid }];
         }
 
-        my $stored = $udb->selectrow_hashref(
-          "SELECT password FROM iserver WHERE username = ?", {}, $email);
+        # As in 'auth': the account DB's one iserver row; the IMAP username
+        # need not be the email (API.md)
+        my $stored = $udb->selectrow_hashref("SELECT password FROM iserver LIMIT 1");
         return ['verify_credentials', undef] unless $stored;
-        my $actual = JMAP::CredentialStore->decrypt($stored->{password});
+        my $actual = JMAP::CredentialStore->decrypt($stored->{password} // '');
         return ['verify_credentials', undef] unless $actual eq $password;
         return ['verify_credentials', { accountid => $aid }];
       }
@@ -3450,14 +3467,23 @@ sub do_cb_oauth {
       # Get user email from userinfo endpoint (if available)
       my $userinfo_url = $state->{userinfo_url};
       my $get_email_cb = sub {
-        my ($email) = @_;
-        $email ||= $state->{email};
+        my ($asserted) = @_;
+        my $email = $asserted || $state->{email};
         unless ($email) {
           return $err_html->("Could not determine account email from OAuth response.");
         }
 
         my $auth_aid     = $state->{auth_aid};
         my $account_type = $state->{account_type};
+        # Whether the provider vouched for $email, which binding to an existing
+        # account needs: Google's own userinfo; or a PACC server's, but only for
+        # the very address whose domain led us to it (a server found through
+        # attacker.example may claim anyone's address). Fastmail has no
+        # userinfo: over JMAP the worker checks its session's username, over
+        # IMAP nothing proves it.
+        my $proven = ($account_type eq 'gmail' && $asserted)
+                  || ($account_type eq 'imap' && $asserted && $state->{email}
+                      && lc $asserted eq lc $state->{email});
         my $imap         = $state->{imap} // {};
         my $accountid    = new_uuid_string();
 
@@ -3468,6 +3494,7 @@ sub do_cb_oauth {
             password   => $refresh_token,   # stored as encrypted refresh token
             authType   => 'fastmail_oauth',
             sessionUrl => 'https://api.fastmail.com/jmap/session',
+            _bind_if_session_user => 1,
             ($auth_aid ? (poolid => $auth_aid) : ()),
           }, sub {
             my $result = shift;
@@ -3495,6 +3522,7 @@ sub do_cb_oauth {
         }
 
         send_backend_request($accountid, 'signup_oauth', {
+          _bind_existing => ($proven ? 1 : 0),
           email         => $email,
           refresh_token => $refresh_token,
           account_type  => $account_type,
@@ -4355,7 +4383,7 @@ sub mgmt_api_accounts {
       # JMAP passthrough account — signup_jmap creates the accounts.sqlite3 entry itself.
       # The worker is keyed by $aid so signup_jmap uses it as the new accountid.
       delete $backend{$aid} if $backend{$aid};
-      send_backend_request($aid, 'signup_jmap', $data, sub {
+      send_backend_request($aid, 'signup_jmap', { %$data, _bind_existing => 1 }, sub {
         my ($final_aid, $email) = @{shift()};
         delete $backend{$aid} if $aid ne $final_aid;
         $req->respond([201, 'created',
