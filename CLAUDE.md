@@ -268,10 +268,9 @@ on their next sync (`rekey_folder`); clients see a changed id as destroyed plus 
 The test image is derived with `munge8bit: no` (Cyrus's default rewrites 8-bit header
 bytes to `X`, so EAI mail, RFC 8621 S4.8, could never be stored). The test stack
 registers `user1@example.com` (the image's users are in example.com) and sends through the image's Postfix on 8587 (AUTH PLAIN, no TLS); suite logins are the
-account's email. The run needs the conversion modules' fix branches on `PERL5LIB`
-(Text-JSCalendar `jscalendar-29` (on top of `participant-jsid`), Text-JSContact `rfc9982`
-(on top of `media-uri-values`), Data-JSEmail `encoding-problem-and-bare-addresses`) until
-they are released.
+account's email. The run needs Text::JSCalendar 0.09, Text::JSContact 0.05 and
+Data::JSEmail 0.05 (each repo's master; until they are on CPAN, put the checkouts' `lib` on
+`PERL5LIB` -- prepended, so local::lib stays -- both for the restart and for the run).
 
 **Every `api_*` method lives in exactly one module.** `JMAP::API::*` all declare
 `package JMAP::API`, so two files defining the same sub is legal Perl — the last
