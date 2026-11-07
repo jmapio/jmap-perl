@@ -278,16 +278,14 @@ sub api_Calendar_changes {
   return @e if @e;
   my $sinceState = $args->{sinceState};
 
-  my $data = $Self->{db}->dget('jcalendars', {}, 'jcalendarid,jmodseq,active,jcreated');
-
-  if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
-    return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
-  }
+  my $data = $Self->{db}->dget('jcalendars', { jmodseq => ['>', $sinceState] }, 'jcalendarid,jmodseq,active,jcreated');
+  my $partial;
+  ($data, $partial) = $Self->_limit_changes($data, $args, \$newState);
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]) unless defined $data;
 
   $Self->commit();
 
-  my @changed = grep { $_->{jmodseq} > $sinceState } @$data;
-  my ($created, $updated, $destroyed) = $Self->_classify_changes(\@changed, $sinceState, 'jcalendarid');
+  my ($created, $updated, $destroyed) = $Self->_classify_changes($data, $sinceState, 'jcalendarid');
 
   my @res = (['Calendar/changes', {
     accountId => $accountid,
@@ -296,7 +294,7 @@ sub api_Calendar_changes {
     created => [map { "$_" } @$created],
     updated => [map { "$_" } @$updated],
     destroyed => [map { "$_" } @$destroyed],
-    hasMoreChanges => JSON::false,
+    hasMoreChanges => $partial ? JSON::true : JSON::false,
   }]);
 
   return @res;
@@ -874,11 +872,10 @@ sub api_CalendarEvent_changes {
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
     if $user->{jeventidcut} && $args->{sinceState} =~ /\A\d+\z/ && $args->{sinceState} <= $user->{jeventidcut};
 
-  my $data = $Self->{db}->dget('jevents', { jmodseq => ['>', $args->{sinceState}] }, 'eventuid,active,jcreated');
-
-  if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
-    return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
-  }
+  my $data = $Self->{db}->dget('jevents', { jmodseq => ['>', $args->{sinceState}] }, 'eventuid,active,jcreated,jmodseq');
+  my $partial;
+  ($data, $partial) = $Self->_limit_changes($data, $args, \$newState);
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]) unless defined $data;
 
   $Self->commit();
 
@@ -893,7 +890,7 @@ sub api_CalendarEvent_changes {
     created => $ids->($created),
     updated => $ids->($updated),
     destroyed => $ids->($destroyed),
-    hasMoreChanges => JSON::false,
+    hasMoreChanges => $partial ? JSON::true : JSON::false,
   }];
 
   return @res;

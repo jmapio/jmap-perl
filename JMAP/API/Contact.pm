@@ -301,11 +301,10 @@ sub api_Contact_changes {
   my @e = $Self->_check_since_state($args, $user, $newState);
   return @e if @e;
 
-  my $data = $Self->{db}->dget('jcontacts', { jmodseq => ['>', $args->{sinceState}] }, 'contactuid,active,jcreated');
-
-  if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
-    return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
-  }
+  my $data = $Self->{db}->dget('jcontacts', { jmodseq => ['>', $args->{sinceState}] }, 'contactuid,active,jcreated,jmodseq');
+  my $partial;
+  ($data, $partial) = $Self->_limit_changes($data, $args, \$newState);
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]) unless defined $data;
   $Self->commit();
 
   my ($created, $updated, $destroyed) = $Self->_classify_changes($data, $args->{sinceState}, 'contactuid');
@@ -318,7 +317,7 @@ sub api_Contact_changes {
     created => [map { "$_" } @$created],
     updated => [map { "$_" } @$updated],
     destroyed => [map { "$_" } @$destroyed],
-    hasMoreChanges => JSON::false,
+    hasMoreChanges => $partial ? JSON::true : JSON::false,
   }];
 
   return @res;
@@ -446,11 +445,10 @@ sub api_ContactGroup_changes {
   my @e = $Self->_check_since_state($args, $user, $newState);
   return @e if @e;
 
-  my $data = $Self->{db}->dget('jcontactgroups', { jmodseq => ['>', $args->{sinceState}] }, 'groupuid,active,jcreated');
-
-  if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
-    return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
-  }
+  my $data = $Self->{db}->dget('jcontactgroups', { jmodseq => ['>', $args->{sinceState}] }, 'groupuid,active,jcreated,jmodseq');
+  my $partial;
+  ($data, $partial) = $Self->_limit_changes($data, $args, \$newState);
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]) unless defined $data;
 
   my ($created, $updated, $destroyed) = $Self->_classify_changes($data, $args->{sinceState}, 'groupuid');
   $Self->commit();
@@ -463,7 +461,7 @@ sub api_ContactGroup_changes {
     created => [map { "$_" } @$created],
     updated => [map { "$_" } @$updated],
     destroyed => [map { "$_" } @$destroyed],
-    hasMoreChanges => JSON::false,
+    hasMoreChanges => $partial ? JSON::true : JSON::false,
   }];
 
   return @res;
@@ -602,16 +600,14 @@ sub api_Addressbook_changes {
   return @e if @e;
   my $sinceState = $args->{sinceState};
 
-  my $data = $Self->{db}->dget('jaddressbooks', {}, 'jaddressbookid,jmodseq,active,jcreated');
-
-  if ($args->{maxChanges} and @$data > $args->{maxChanges}) {
-    return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]);
-  }
+  my $data = $Self->{db}->dget('jaddressbooks', { jmodseq => ['>', $sinceState] }, 'jaddressbookid,jmodseq,active,jcreated');
+  my $partial;
+  ($data, $partial) = $Self->_limit_changes($data, $args, \$newState);
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]) unless defined $data;
 
   $Self->commit();
 
-  my @changed = grep { $_->{jmodseq} > $sinceState } @$data;
-  my ($created, $updated, $destroyed) = $Self->_classify_changes(\@changed, $sinceState, 'jaddressbookid');
+  my ($created, $updated, $destroyed) = $Self->_classify_changes($data, $sinceState, 'jaddressbookid');
 
   my @res = (['Addressbook/changes', {
     accountId => $accountid,
@@ -620,7 +616,7 @@ sub api_Addressbook_changes {
     created => [map { "$_" } @$created],
     updated => [map { "$_" } @$updated],
     destroyed => [map { "$_" } @$destroyed],
-    hasMoreChanges => JSON::false,
+    hasMoreChanges => $partial ? JSON::true : JSON::false,
   }]);
 
   return @res;
