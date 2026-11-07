@@ -896,19 +896,38 @@ sub parse_card {
   return $card;
 }
 
+# A ContactCard is one per UID; the address books holding a copy of it are
+# its addressBookIds.  $books is the whole set (an array of
+# jaddressbookids, or one id).
+sub _card_book_cols {
+  my ($books) = @_;
+  my @ids = sort { $a <=> $b } grep { defined } (ref $books ? @$books : ($books));
+  return (jaddressbookid => $ids[0], jaddressbookids => join(',', @ids));
+}
+
+# The address books of a jcontacts row (read with jaddressbookids, jaddressbookid).
+sub card_book_ids {
+  my ($row) = @_;
+  return () unless $row;
+  return split /,/, $row->{jaddressbookids} if defined $row->{jaddressbookids} && length $row->{jaddressbookids};
+  return defined $row->{jaddressbookid} ? ($row->{jaddressbookid}) : ();
+}
+
 sub set_card {
   my $Self = shift;
-  my $jaddressbookid = shift;
+  my $books = shift;
   my $card = shift;
   my $carduid = $card->{uid} // '';
   $carduid =~ s/^urn:uuid://;
   my $kind = $card->{kind} // 'individual';
+  my %book = _card_book_cols($books);
+  my $jaddressbookid = $book{jaddressbookid};
   # RFC 9610: every card, a group (kind "group") included, is a ContactCard.
   $Self->write_jcontact_payload($carduid, $card);
   if ($Self->dgetfield('jcontacts', { contactuid => $carduid }, 'contactuid')) {
-    $Self->ddirty('jcontacts', { active => 1, jaddressbookid => $jaddressbookid }, { contactuid => $carduid });
+    $Self->ddirty('jcontacts', { active => 1, %book }, { contactuid => $carduid });
   } else {
-    $Self->dmake('jcontacts', { contactuid => $carduid, jaddressbookid => $jaddressbookid });
+    $Self->dmake('jcontacts', { contactuid => $carduid, %book });
   }
   # Groups are also kept for the pre-RFC ContactGroup API.
   if ($kind eq 'group') {
@@ -930,16 +949,27 @@ sub set_card {
   }
 }
 
+# A copy of the card came or went, its content unchanged: its
+# addressBookIds change (an update), or with no copy left it is destroyed.
+sub set_card_books {
+  my ($Self, $carduid, $books, $kind) = @_;
+  return $Self->delete_card(undef, $carduid, $kind) unless @$books;
+  my %book = _card_book_cols($books);
+  $Self->dmaybedirty('jcontactgroups', { jaddressbookid => $book{jaddressbookid} }, { groupuid => $carduid, active => 1 })
+    if ($kind // '') ne 'contact';
+  return $Self->dmaybedirty('jcontacts', \%book, { contactuid => $carduid, active => 1 });
+}
+
 sub delete_card {
   my $Self = shift;
-  my $jaddressbookid = shift; # doesn't matter
+  my $jaddressbookid = shift; # doesn't matter: the card goes from every address book
   my $carduid = shift;
   my $kind = shift;
   # every card is a ContactCard (see set_card); a group is also a ContactGroup
   $Self->unlink_jcontact_payload($carduid);
-  $Self->dmaybedirty('jcontacts', {active => 0}, {contactuid => $carduid, jaddressbookid => $jaddressbookid});
+  $Self->dmaybedirty('jcontacts', {active => 0}, {contactuid => $carduid});
   if (($kind // '') ne 'contact') {   # unknown: it may be a group
-    $Self->dmaybedirty('jcontactgroups', {active => 0}, {groupuid => $carduid, jaddressbookid => $jaddressbookid});
+    $Self->dmaybedirty('jcontactgroups', {active => 0}, {groupuid => $carduid});
   }
 }
 
@@ -1235,7 +1265,7 @@ sub get_submission_changes {
     {}, $since_modseq);
 }
 
-my $USER_SCHEMA_VERSION = 15;
+my $USER_SCHEMA_VERSION = 16;
 
 sub save_query {
   my ($Self, $type, $params, $state, $ids) = @_;
@@ -1490,6 +1520,7 @@ EOF
 CREATE TABLE IF NOT EXISTS jcontacts (
   contactuid TEXT PRIMARY KEY,
   jaddressbookid INTEGER,
+  jaddressbookids TEXT,
   isFlagged BOOLEAN,
   jcreated INTEGER,
   jmodseq INTEGER,
@@ -1857,6 +1888,24 @@ EOF
     };
     if ($@) { $dbh->rollback; die "user DB migration to v15 failed: $@" }
     $v = 15;
+  }
+
+  if ($v < 16) {
+    # One ContactCard per UID, in every address book holding a copy of it
+    # (its addressBookIds), as v15 did for CalendarEvents: jaddressbookids
+    # lists them all, jaddressbookid stays the first.
+    $dbh->begin_work;
+    eval {
+      my %cols = map { $_->[1] => 1 } @{ $dbh->selectall_arrayref("PRAGMA table_info(jcontacts)") || [] };
+      if (%cols) {
+        $dbh->do("ALTER TABLE jcontacts ADD COLUMN jaddressbookids TEXT") unless $cols{jaddressbookids};
+        $dbh->do("UPDATE jcontacts SET jaddressbookids = jaddressbookid WHERE jaddressbookids IS NULL");
+      }
+      $dbh->do('PRAGMA user_version = 16');
+      $dbh->commit;
+    };
+    if ($@) { $dbh->rollback; die "user DB migration to v16 failed: $@" }
+    $v = 16;
   }
 }
 

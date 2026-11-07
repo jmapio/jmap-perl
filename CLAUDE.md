@@ -188,7 +188,8 @@ but a different `backendAccountId` (validated against the upstream session's `ac
   of calendars with one (`jevents.jcalendarids`, schema v15). A copy that goes (its resource,
   or its calendar) takes only its calendar out of `calendarIds`; the last copy takes the event.
   An update goes to every copy, a calendar added to `calendarIds` gets a WebDAV COPY, one
-  removed loses its copy, and a destroy deletes them all. Account ids must be
+  removed loses its copy, and a destroy deletes them all. ContactCards work the same way with
+  `icards` copies and `addressBookIds` (`jcontacts.jaddressbookids`, schema v16). Account ids must be
   valid Ids too: `POST /api/accounts` refuses any other.
 
 ## Local development & testing

@@ -581,6 +581,21 @@ sub delete_card {
   $talk->DeleteContact($resource);
 }
 
+# A copy of the card at $href in another address book, with the same UID
+# (one card in two address books): a WebDAV COPY, so the vCard is copied as
+# it is.  Returns the new href.
+sub copy_card {
+  my ($Self, $href, $collection) = @_;
+  my $talk = $Self->connect_contacts();
+  return unless $talk;
+  $collection =~ s{/$}{};
+  (my $filename = $href) =~ s{.*/}{};
+  my $dest = "$collection/$filename";
+  die "copy_card: $href is already in $collection\n" if $dest eq $href;
+  $talk->Request('COPY', $href, undef, 'Destination' => $talk->fullpath($dest), 'Overwrite' => 'F');
+  return $dest;
+}
+
 sub move_card {
   my $Self = shift;
   my ($old_href, $new_collection) = @_;

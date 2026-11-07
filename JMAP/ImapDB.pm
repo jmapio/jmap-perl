@@ -1002,11 +1002,13 @@ sub sync_jaddressbooks {
   foreach my $addressbook (@$jaddressbooks) {
     my $jid = $addressbook->{jaddressbookid};
     next if $seen{$jid};
-    $Self->unlink_jcontact_payload($_)
-      for @{ $Self->dgetcol('jcontacts', {jaddressbookid => $jid, active => 1}, 'contactuid') };
     $Self->dnuke('jaddressbooks', {jaddressbookid => $jid});
-    $Self->dnuke('jcontactgroups', {jaddressbookid => $jid});
-    $Self->dnuke('jcontacts', {jaddressbookid => $jid});
+    # its cards lose it from addressBookIds; one in no address book now is
+    # gone (sync_addressbooks has already dropped the book's icards rows)
+    for my $row (@{ $Self->dget('jcontacts', {active => 1}, 'contactuid,jaddressbookid,jaddressbookids') }) {
+      next unless grep { $_ eq $jid } JMAP::DB::card_book_ids($row);
+      $Self->_card_copy_gone($row->{contactuid});
+    }
   }
 }
 
@@ -1252,12 +1254,14 @@ sub do_addressbooks {
           $Self->dinsert('icards', $item);
         }
 
-        $Self->set_card($jaddressbookid, $change->[2]);
+        $Self->set_card($Self->_card_books($uid), $change->[2]);
+        # a copy that changed its UID has left the card it was a copy of
+        $Self->_card_copy_gone($existing->{uid}, $existing->{kind})
+          if $existing && defined $existing->{uid} && _bare_uid($existing->{uid}) ne _bare_uid($uid);
       }
       elsif ($existing) {
-        $Self->unlink_card_vcf($existing->{uid});
         $Self->ddelete('icards', {icardid => $existing->{icardid}});
-        $Self->delete_card($jaddressbookid, $existing->{uid}, $existing->{kind});
+        $Self->_card_copy_gone($existing->{uid}, $existing->{kind});
       }
     }
 
@@ -5558,6 +5562,43 @@ sub update_contacts {
 
 # A ContactCard id is its uid without any urn:uuid: prefix (see set_card);
 # icards keeps the uid as the vCard has it.
+sub _bare_uid { my $u = shift // ''; $u =~ s/^urn:uuid://; return $u }
+
+# The copies of a card on the server: one per address book holding its UID
+# (with or without urn:uuid:), as [{ href, iaddressbookid, jaddressbookid,
+# uid, kind }] in address book order.  In a transaction.
+sub _card_copies {
+  my ($Self, $uid) = @_;
+  my $bare = _bare_uid($uid);
+  return $Self->dbh->selectall_arrayref(
+    "SELECT icards.href, icards.iaddressbookid, icards.uid, icards.kind, iaddressbooks.jaddressbookid FROM icards"
+    . " JOIN iaddressbooks USING (iaddressbookid) WHERE icards.uid IN (?, ?)"
+    . " ORDER BY iaddressbooks.jaddressbookid, icards.href",
+    { Slice => {} }, $bare, "urn:uuid:$bare") || [];
+}
+
+# The card's addressBookIds: every address book with a copy.  In a transaction.
+sub _card_books {
+  my ($Self, $uid) = @_;
+  my %seen;
+  return [ grep { defined && !$seen{$_}++ } map { $_->{jaddressbookid} } @{ $Self->_card_copies($uid) } ];
+}
+
+# A copy of the card went (its resource, or its address book): the card
+# stays in the books that still hold one, and is destroyed with the last,
+# its stored vCard with it.  In a transaction.
+sub _card_copy_gone {
+  my ($Self, $uid, $kind) = @_;
+  return unless defined $uid;
+  my $bare = _bare_uid($uid);
+  my $books = $Self->_card_books($bare);
+  unless (@$books) {
+    $Self->unlink_card_vcf($uid);
+    $Self->unlink_card_vcf($bare) if $bare ne $uid;
+  }
+  $Self->set_card_books($bare, $books, $kind);
+}
+
 sub _icard_for {
   my ($Self, $id, $fields) = @_;
   return $Self->dgetone('icards', { uid => $id }, $fields)
@@ -5573,19 +5614,18 @@ sub destroy_contacts {
   my %todo;
   my @destroyed;
   my %notdestroyed;
+  # destroying the card removes it from every address book: each copy goes
   foreach my $carduid (@$destroy) {
     $Self->begin();
-    my $old = $Self->_icard_for($carduid, 'href,iaddressbookid');
-    unless ($old) {
+    my $copies = $Self->_card_copies($carduid);
+    unless (@$copies) {
       $Self->commit();
       $notdestroyed{$carduid} = {type => 'notFound', description => "No such card on server"};
       next;
     }
-    my $jaddressbookid = $Self->dgetfield('iaddressbooks', { iaddressbookid => $old->{iaddressbookid} }, 'jaddressbookid');
-    $Self->unlink_jcontact_payload($carduid);
-    $Self->dmaybedirty('jcontacts', { active => 0 }, { contactuid => $carduid, jaddressbookid => $jaddressbookid });
+    $Self->delete_card(undef, $carduid, $copies->[0]{kind});
     $Self->commit();
-    $todo{$old->{href}} = 1;
+    $todo{ $_->{href} } = 1 for @$copies;
     push @destroyed, $carduid;
   }
 
@@ -5673,8 +5713,8 @@ sub create_contacts_jscontact {
   for my $cid (sort keys %$new) {
     my $card = { %{ $new->{$cid} } };  # shallow copy so we don't modify caller's data
 
-    # Resolve addressBookIds to a CardDAV href
-    my $abookhref = $default_href;
+    # Resolve addressBookIds to CardDAV hrefs: a copy in each
+    my @abookhrefs = ($default_href);
     if (exists $card->{addressBookIds}) {
       my $abids = delete $card->{addressBookIds};
       # RFC 9610 S3: each value "MUST be true", a card "MUST belong to at
@@ -5684,18 +5724,10 @@ sub create_contacts_jscontact {
         $notcreated{$cid} = { type => 'invalidProperties', properties => ['addressBookIds'] };
         next;
       }
-      my @active = grep { $abids->{$_} } keys %$abids;
-      if (@active > 1) {
-        $notcreated{$cid} = { type => 'invalidProperties',
-          properties => ['addressBookIds'],
-          description => 'Only one address book per card is supported' };
-        next;
-      }
-      my ($jab_id) = @active;
-      $abookhref = $href_by_jab{$jab_id} // $default_href if $jab_id;
+      @abookhrefs = map { $href_by_jab{$_} } sort { $a <=> $b } grep { $abids->{$_} } keys %$abids;
     }
 
-    unless ($abookhref) {
+    unless (@abookhrefs && !grep { !$_ } @abookhrefs) {
       $notcreated{$cid} = { type => 'notFound', description => 'No addressbook on server' };
       next;
     }
@@ -5732,9 +5764,13 @@ sub create_contacts_jscontact {
     }
     my $uid = $card->{uid} // new_uuid_string();
     $card->{uid} = $uid;
-    eval { $Self->backend_cmd('new_card', $abookhref, $card) };
-    if ($@) {
-      $notcreated{$cid} = { type => 'serverFail', description => "$@" };
+    my @made;
+    my $ok = eval { push @made, $Self->backend_cmd('new_card', $_, { %$card }) for @abookhrefs; 1 };
+    unless ($ok) {
+      my $err = "$@";
+      # all or nothing: the copies already made go again
+      eval { $Self->backend_cmd('delete_card', $_) } for grep { defined && !ref } @made;
+      $notcreated{$cid} = { type => 'serverFail', description => $err };
       next;
     }
     # The id is the uid without its urn:uuid: prefix, as set_card stores it
@@ -5766,16 +5802,19 @@ sub update_contacts_jscontact {
     my $patch = { %{ $changes->{$carduid} } };  # shallow copy
 
     $Self->begin();
-    my $icard = $Self->_icard_for($carduid, 'href,iaddressbookid');
-    my $jcontact = $Self->dgetone('jcontacts', { contactuid => $carduid }, 'jaddressbookid');
+    my $copies = $Self->_card_copies($carduid);
     $Self->commit();
 
-    unless ($icard) {
+    unless (@$copies) {
       $notchanged{$carduid} = { type => 'notFound', description => 'No such card on server' };
       next;
     }
+    my @hrefs = map { $_->{href} } @$copies;
 
-    # Handle addressBookIds change: MOVE card to new collection
+    # addressBookIds is the set of address books with a copy: a book added
+    # gets one, a book removed loses its own (the card stays in the
+    # others).  One book for another is a MOVE.
+    my (@add, @remove);
     if (exists $patch->{addressBookIds}) {
       my $abids = delete $patch->{addressBookIds};
       unless (ref $abids eq 'HASH' && %$abids
@@ -5783,40 +5822,30 @@ sub update_contacts_jscontact {
         $notchanged{$carduid} = { type => 'invalidProperties', properties => ['addressBookIds'] };
         next;
       }
-      my @active = $abids ? grep { $abids->{$_} } keys %$abids : ();
-      if (@active > 1) {
-        $notchanged{$carduid} = { type => 'invalidProperties',
-          properties => ['addressBookIds'],
-          description => 'Only one address book per card is supported' };
-        next;
-      }
-      my ($new_jab_id) = @active;
-      my $new_href = $new_jab_id ? $href_by_jab{$new_jab_id} : undef;
-      unless ($new_href) {
-        $notchanged{$carduid} = { type => 'notFound', description => 'No such address book' };
-        next;
-      }
-      $new_href =~ s{/$}{};
-      my $old_collection = $icard->{href};
-      $old_collection =~ s{/[^/]+$}{};
-      if ($old_collection ne $new_href) {
-        eval { $Self->backend_cmd('move_card', $icard->{href}, $new_href) };
+      my %want = map { $_ => 1 } grep { $abids->{$_} } keys %$abids;
+      my %have = map { $_->{jaddressbookid} => $_ } @$copies;
+      @add    = grep { !$have{$_} } sort keys %want;
+      @remove = grep { !$want{$_} } sort keys %have;
+      if (@add == 1 && @remove == 1 && keys %have == 1) {
+        my $old = $have{ $remove[0] }{href};
+        (my $to = $href_by_jab{ $add[0] }) =~ s{/$}{};
+        eval { $Self->backend_cmd('move_card', $old, $to) };
         if ($@) {
           $notchanged{$carduid} = { type => 'serverFail', description => "$@" };
           next;
         }
-        # Derive new href: same filename, new collection
-        (my $filename = $icard->{href}) =~ s{.*/}{};
-        my $new_card_href = "$new_href/$filename";
+        (my $filename = $old) =~ s{.*/}{};
+        my $new_href = "$to/$filename";
         $Self->begin();
-        $Self->dmaybeupdate('icards',
-          { href => $new_card_href, iaddressbookid => $iab_by_jab{$new_jab_id} },
-          { href => $icard->{href} });
-        $Self->dmaybeupdate('jcontacts',
-          { jaddressbookid => $new_jab_id },
-          { contactuid => $carduid });
+        $Self->dmaybeupdate('icards', { href => $new_href, iaddressbookid => $iab_by_jab{ $add[0] } }, { href => $old });
+        $Self->set_card_books($carduid, $Self->_card_books($carduid), $copies->[0]{kind});
         $Self->commit();
-        $icard->{href} = $new_card_href;
+        @hrefs = ($new_href);
+        @add = @remove = ();
+      }
+      else {
+        my %gone = map { $have{$_}{href} => 1 } @remove;
+        @hrefs = grep { !$gone{$_} } @hrefs;
       }
     }
 
@@ -5847,8 +5876,26 @@ sub update_contacts_jscontact {
         next;
       }
 
-      eval { $Self->backend_cmd('update_card', $icard->{href}, $card, $raw_vcf) };
-      if ($@) {
+      # every copy gets the change
+      my $failed;
+      for my $href (@hrefs) {
+        eval { $Self->backend_cmd('update_card', $href, $card, $raw_vcf) };
+        if ($@) { $failed = "$@"; last }
+      }
+      if ($failed) {
+        $notchanged{$carduid} = { type => 'serverFail', description => $failed };
+        next;
+      }
+    }
+
+    # books added get a copy of the card as it now is; those removed lose theirs
+    if (@add || @remove) {
+      my $ok = eval {
+        $Self->backend_cmd('copy_card', $hrefs[0], $href_by_jab{$_}) for @add;
+        $Self->backend_cmd('delete_card', $_->{href}) for grep { my $c = $_; grep { $_ eq $c->{jaddressbookid} } @remove } @$copies;
+        1;
+      };
+      unless ($ok) {
         $notchanged{$carduid} = { type => 'serverFail', description => "$@" };
         next;
       }

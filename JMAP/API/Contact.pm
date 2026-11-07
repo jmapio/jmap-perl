@@ -59,7 +59,8 @@ sub _contact_match {
 
   # RFC 9610 S3.3.1
   if (defined $condition->{inAddressBook}) {
-    return 0 unless "$item->{jaddressbookid}" eq "$condition->{inAddressBook}";
+    # a card is in every address book of its addressBookIds
+    return 0 unless grep { "$_" eq "$condition->{inAddressBook}" } JMAP::DB::card_book_ids($item);
   }
 
   return 1 unless grep { $_ ne 'inAddressBook' } keys %$condition;
@@ -166,7 +167,7 @@ sub api_Contact_query {
 
   my $newQueryState = "$user->{jstateContact}";
 
-  my $data = $Self->{db}->dget('jcontacts', { active => 1 }, 'contactuid,jaddressbookid,jcreated,jmodseq');
+  my $data = $Self->{db}->dget('jcontacts', { active => 1 }, 'contactuid,jaddressbookid,jaddressbookids,jcreated,jmodseq');
 
   my %storage;
   $data = $Self->_contact_filter($data, $args->{filter}, \%storage) if $args->{filter};
@@ -249,7 +250,7 @@ sub api_Contact_get {
 
   #properties: String[] A list of properties to fetch for each message.
 
-  my $data = $Self->{db}->dgetby('jcontacts', 'contactuid', { active => 1 }, 'contactuid,jaddressbookid');
+  my $data = $Self->{db}->dgetby('jcontacts', 'contactuid', { active => 1 }, 'contactuid,jaddressbookid,jaddressbookids');
 
   my %want;
   if ($args->{ids}) {
@@ -272,7 +273,7 @@ sub api_Contact_get {
     }
 
     $item->{id} = $id;
-    $item->{addressBookIds} = { "$data->{$id}{jaddressbookid}" => $JSON::true }
+    $item->{addressBookIds} = { map { ("$_" => $JSON::true) } JMAP::DB::card_book_ids($data->{$id}) }
       if _prop_wanted($args, 'addressBookIds');
 
     push @list, $item;
@@ -697,7 +698,8 @@ sub api_AddressBook_set {
   my (@safe_destroy, %pre_notDestroyed);
   for my $id (@$destroy) {
     $Self->{db}->begin();
-    my $has = $Self->{db}->dgetone('jcontacts', { jaddressbookid => $id, active => 1 }, 'contactuid');
+    my $has = grep { "$_" eq "$id" } map { JMAP::DB::card_book_ids($_) }
+      @{ $Self->{db}->dget('jcontacts', { active => 1 }, 'jaddressbookid,jaddressbookids') };
     $Self->{db}->commit();
     if ($has && !$args->{onDestroyRemoveContents}) {
       $pre_notDestroyed{$id} = { type => 'addressBookHasContents' };
@@ -848,7 +850,7 @@ sub api_ContactCard_queryChanges {
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newQueryState => $newQueryState}])
     if ($user->{jdeletedmodseq} and $sinceQueryState <= $user->{jdeletedmodseq});
 
-  my $data = $Self->{db}->dget('jcontacts', { active => 1 }, 'contactuid,jaddressbookid,jcreated,jmodseq');
+  my $data = $Self->{db}->dget('jcontacts', { active => 1 }, 'contactuid,jaddressbookid,jaddressbookids,jcreated,jmodseq');
 
   $Self->commit();
 
