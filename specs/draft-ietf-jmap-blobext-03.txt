@@ -4,14 +4,14 @@
 
 Network Working Group                                        B. Gondwana
 Internet-Draft                                                  Fastmail
-Obsoletes: 9404 (if approved)                              21 April 2026
+Obsoletes: 9404 (if approved)                            2 November 2026
 Updates: 8620 (if approved)                                             
 Intended status: Standards Track                                        
-Expires: 23 October 2026
+Expires: 6 May 2027
 
 
                           JMAP Blob Management
-                       draft-ietf-jmap-blobext-01
+                       draft-ietf-jmap-blobext-03
 
 Abstract
 
@@ -44,7 +44,7 @@ Status of This Memo
    time.  It is inappropriate to use Internet-Drafts as reference
    material or to cite them other than as "work in progress."
 
-   This Internet-Draft will expire on 23 October 2026.
+   This Internet-Draft will expire on 6 May 2027.
 
 Copyright Notice
 
@@ -53,9 +53,9 @@ Copyright Notice
 
 
 
-Gondwana                 Expires 23 October 2026                [Page 1]
+Gondwana                   Expires 6 May 2027                   [Page 1]
 
-Internet-Draft                  JMAP Blob                     April 2026
+Internet-Draft                  JMAP Blob                  November 2026
 
 
    This document is subject to BCP 78 and the IETF Trust's Legal
@@ -75,63 +75,67 @@ Table of Contents
      2.1.  urn:ietf:params:jmap:blob2  . . . . . . . . . . . . . . .   4
        2.1.1.  Capability Example  . . . . . . . . . . . . . . . . .   7
    3.  DataSourceObject  . . . . . . . . . . . . . . . . . . . . . .   8
-   4.  Blob/set  . . . . . . . . . . . . . . . . . . . . . . . . . .   9
-   5.  Blob/get  . . . . . . . . . . . . . . . . . . . . . . . . . .  11
-   6.  Blob/lookup . . . . . . . . . . . . . . . . . . . . . . . . .  14
-   7.  The "expires" Response Property . . . . . . . . . . . . . . .  15
-   8.  Blob/convert  . . . . . . . . . . . . . . . . . . . . . . . .  16
-     8.1.  ImageConvertRecipe  . . . . . . . . . . . . . . . . . . .  17
-     8.2.  ArchiveRecipe . . . . . . . . . . . . . . . . . . . . . .  19
-     8.3.  ArchiveEntry  . . . . . . . . . . . . . . . . . . . . . .  19
-       8.3.1.  Considerations for application/zip  . . . . . . . . .  20
-       8.3.2.  Considerations for application/x-tar  . . . . . . . .  21
-       8.3.3.  Considerations for application/x-cpio . . . . . . . .  22
-     8.4.  ExtractRecipe . . . . . . . . . . . . . . . . . . . . . .  22
-     8.5.  CompressRecipe  . . . . . . . . . . . . . . . . . . . . .  23
+   4.  Blob/set  . . . . . . . . . . . . . . . . . . . . . . . . . .  10
+   5.  Blob/get  . . . . . . . . . . . . . . . . . . . . . . . . . .  12
+   6.  Blob/lookup . . . . . . . . . . . . . . . . . . . . . . . . .  16
+   7.  The "expires" Response Property . . . . . . . . . . . . . . .  17
+   8.  Blob/convert  . . . . . . . . . . . . . . . . . . . . . . . .  17
+     8.1.  ImageConvertRecipe  . . . . . . . . . . . . . . . . . . .  19
+     8.2.  ArchiveRecipe . . . . . . . . . . . . . . . . . . . . . .  21
+     8.3.  ArchiveEntry  . . . . . . . . . . . . . . . . . . . . . .  21
+       8.3.1.  Considerations for application/zip  . . . . . . . . .  22
+       8.3.2.  Considerations for application/x-tar  . . . . . . . .  23
+       8.3.3.  Considerations for application/x-cpio . . . . . . . .  23
+     8.4.  ExtractRecipe . . . . . . . . . . . . . . . . . . . . . .  23
+     8.5.  CompressRecipe  . . . . . . . . . . . . . . . . . . . . .  24
        8.5.1.  Considerations for application/gzip . . . . . . . . .  24
        8.5.2.  Considerations for application/x-bzip2  . . . . . . .  24
-       8.5.3.  Considerations for application/x-xz . . . . . . . . .  24
-       8.5.4.  Considerations for application/zstd . . . . . . . . .  24
-     8.6.  DecompressRecipe  . . . . . . . . . . . . . . . . . . . .  24
+       8.5.3.  Considerations for application/x-xz . . . . . . . . .  25
+       8.5.4.  Considerations for application/zstd . . . . . . . . .  25
+     8.6.  DecompressRecipe  . . . . . . . . . . . . . . . . . . . .  25
      8.7.  DeltaRecipe . . . . . . . . . . . . . . . . . . . . . . .  25
-       8.7.1.  Considerations for application/x-rdiff-delta  . . . .  25
-       8.7.2.  Considerations for application/x-bsdiff . . . . . . .  25
+       8.7.1.  Considerations for application/x-rdiff-delta  . . . .  26
+       8.7.2.  Considerations for application/x-bsdiff . . . . . . .  26
        8.7.3.  Considerations for text/x-diff  . . . . . . . . . . .  26
      8.8.  PatchRecipe . . . . . . . . . . . . . . . . . . . . . . .  26
-   9.  Examples  . . . . . . . . . . . . . . . . . . . . . . . . . .  26
-     9.1.  Uploading a Blob Inline . . . . . . . . . . . . . . . . .  26
+   9.  Examples  . . . . . . . . . . . . . . . . . . . . . . . . . .  27
+     9.1.  Uploading a Blob Inline . . . . . . . . . . . . . . . . .  27
      9.2.  Querying Blob Chunks  . . . . . . . . . . . . . . . . . .  27
-     9.3.  Creating a Zip Archive  . . . . . . . . . . . . . . . . .  28
-     9.4.  Creating a Compressed Tar Archive . . . . . . . . . . . .  29
-     9.5.  Extracting a Compressed Tar Archive . . . . . . . . . . .  31
-     9.6.  Computing and Applying a Delta  . . . . . . . . . . . . .  32
-   10. Security Considerations . . . . . . . . . . . . . . . . . . .  34
+     9.3.  Looking Up Blob References  . . . . . . . . . . . . . . .  28
+     9.4.  Creating a Zip Archive  . . . . . . . . . . . . . . . . .  29
+     9.5.  Creating a Compressed Tar Archive . . . . . . . . . . . .  30
+     9.6.  Extracting a Compressed Tar Archive . . . . . . . . . . .  32
+     9.7.  Computing and Applying a Delta  . . . . . . . . . . . . .  33
 
 
 
-Gondwana                 Expires 23 October 2026                [Page 2]
+Gondwana                   Expires 6 May 2027                   [Page 2]
 
-Internet-Draft                  JMAP Blob                     April 2026
+Internet-Draft                  JMAP Blob                  November 2026
 
 
-     10.1.  Access Control . . . . . . . . . . . . . . . . . . . . .  34
-     10.2.  Untrusted Data . . . . . . . . . . . . . . . . . . . . .  34
-     10.3.  Resource Consumption . . . . . . . . . . . . . . . . . .  34
-     10.4.  Archive Path Traversal . . . . . . . . . . . . . . . . .  35
-     10.5.  Content Smuggling  . . . . . . . . . . . . . . . . . . .  35
-   11. IANA Considerations . . . . . . . . . . . . . . . . . . . . .  35
+   10. Security Considerations . . . . . . . . . . . . . . . . . . .  35
+     10.1.  Access Control . . . . . . . . . . . . . . . . . . . . .  35
+     10.2.  Untrusted Data . . . . . . . . . . . . . . . . . . . . .  35
+     10.3.  Resource Consumption . . . . . . . . . . . . . . . . . .  35
+     10.4.  Archive Path Traversal . . . . . . . . . . . . . . . . .  36
+     10.5.  Content Smuggling  . . . . . . . . . . . . . . . . . . .  36
+   11. IANA Considerations . . . . . . . . . . . . . . . . . . . . .  37
      11.1.  JMAP Capability Registration for
-            urn:ietf:params:jmap:blob2 . . . . . . . . . . . . . . .  35
-     11.2.  JMAP Error Code Registrations  . . . . . . . . . . . . .  35
-       11.2.1.  unknownDataType  . . . . . . . . . . . . . . . . . .  36
-       11.2.2.  unknownFormat  . . . . . . . . . . . . . . . . . . .  36
-       11.2.3.  blobHasReference . . . . . . . . . . . . . . . . . .  36
-       11.2.4.  conversionFailed . . . . . . . . . . . . . . . . . .  36
-     11.3.  JMAP Data Types Registry . . . . . . . . . . . . . . . .  37
-   12. Changes . . . . . . . . . . . . . . . . . . . . . . . . . . .  37
-   13. Acknowledgements  . . . . . . . . . . . . . . . . . . . . . .  40
-   14. Normative References  . . . . . . . . . . . . . . . . . . . .  40
-   Author's Address  . . . . . . . . . . . . . . . . . . . . . . . .  41
+            urn:ietf:params:jmap:blob2 . . . . . . . . . . . . . . .  37
+     11.2.  JMAP Capability Update for urn:ietf:params:jmap:blob . .  37
+     11.3.  JMAP Error Code Update for unknownDataType . . . . . . .  37
+     11.4.  JMAP Error Code Registrations  . . . . . . . . . . . . .  38
+       11.4.1.  unknownFormat  . . . . . . . . . . . . . . . . . . .  38
+       11.4.2.  blobHasReference . . . . . . . . . . . . . . . . . .  38
+       11.4.3.  conversionFailed . . . . . . . . . . . . . . . . . .  38
+     11.5.  JMAP Data Types Registry . . . . . . . . . . . . . . . .  39
+   12. Changes . . . . . . . . . . . . . . . . . . . . . . . . . . .  39
+   13. Acknowledgements  . . . . . . . . . . . . . . . . . . . . . .  44
+   14. References  . . . . . . . . . . . . . . . . . . . . . . . . .  44
+     14.1.  Normative References . . . . . . . . . . . . . . . . . .  44
+     14.2.  Informative References . . . . . . . . . . . . . . . . .  45
+   Author's Address  . . . . . . . . . . . . . . . . . . . . . . . .  45
 
 1.  Introduction
 
@@ -161,13 +165,9 @@ Internet-Draft                  JMAP Blob                     April 2026
 
 
 
-
-
-
-
-Gondwana                 Expires 23 October 2026                [Page 3]
+Gondwana                   Expires 6 May 2027                   [Page 3]
 
-Internet-Draft                  JMAP Blob                     April 2026
+Internet-Draft                  JMAP Blob                  November 2026
 
 
 1.1.  Conventions Used in This Document
@@ -195,10 +195,10 @@ Internet-Draft                  JMAP Blob                     April 2026
    the "capabilities" property.
 
    A server MAY also advertise urn:ietf:params:jmap:blob (as defined in
-   RFC9404) to support older clients, but a client MUST NOT include both
-   urn:ietf:params:jmap:blob and urn:ietf:params:jmap:blob2 in the using
-   array of the same request.  The blob2 capability supersedes the blob
-   capability and does not depend on it.
+   [JMAP-BLOB]) to support older clients, but a client MUST NOT include
+   both urn:ietf:params:jmap:blob and urn:ietf:params:jmap:blob2 in the
+   using array of the same request.  The blob2 capability supersedes the
+   blob capability and does not depend on it.
 
    The value of this property in the JMAP session "capabilities"
    property MUST be an empty object.
@@ -211,24 +211,25 @@ Internet-Draft                  JMAP Blob                     April 2026
 
       The maximum size of a blob (in octets) that the server will allow
       to be created (including blobs created by concatenating multiple
-      data sources together).  If null, the server does not advertise a
-      specific limit but MAY still reject blobs that are too large.
+      data sources together).  A creation that would exceed it is
+      rejected with a "tooLarge" SetError.  If null, the server does not
+      advertise a specific limit but MAY still reject blobs that are too
+      large.
 
    *  maxDataSources: "UnsignedInt"
 
 
 
 
-
-
-Gondwana                 Expires 23 October 2026                [Page 4]
+Gondwana                   Expires 6 May 2027                   [Page 4]
 
-Internet-Draft                  JMAP Blob                     April 2026
+Internet-Draft                  JMAP Blob                  November 2026
 
 
       The maximum number of DataSourceObjects allowed in the data array
       of a single creation in Blob/set.  Servers MUST support at least
-      64 DataSourceObjects per creation.
+      64 DataSourceObjects per creation.  A creation with more is
+      rejected with a "tooLarge" SetError.
 
    *  supportedTypeNames: "String[]"
 
@@ -245,10 +246,21 @@ Internet-Draft                  JMAP Blob                     April 2026
 
    *  supportedDigestAlgorithms: "String[]"
 
-      An array of digest algorithms supported for Blob/get, from the
-      IANA "Hash Function Textual Names" registry, expressed in
-      lowercase (e.g., "sha", "sha-256").  Clients SHOULD prefer
-      algorithms listed earlier in the array.
+      An array of digest algorithms supported for Blob/get and for
+      checking digests in Blob/set, from the IANA "Hash Algorithms for
+      HTTP Digest Fields" registry [DIGEST-FIELDS], expressed in
+      lowercase (e.g., "sha-256", "sha").
+
+      The server lists the algorithms in its order of preference, and
+      SHOULD only list ones it can compute efficiently: a server that
+      stores a digest of each blob, for example, can return that one
+      without reading the blob.  Clients SHOULD use the first algorithm
+      in the list that they support.  An algorithm the registry marks as
+      deprecated, such as "sha" (SHA-1), which [JMAP-BLOB] servers and
+      clients commonly use, MAY still be listed.  SHA-1 is vulnerable to
+      collision attacks: it detects accidental corruption, but a client
+      relying on a digest to detect deliberate tampering SHOULD NOT use
+      it.
 
    *  uploadUrl: "String|null"
 
@@ -263,6 +275,13 @@ Internet-Draft                  JMAP Blob                     April 2026
       Response Property" below.  If null, clients SHOULD use the
       session-level uploadUrl.
 
+
+
+Gondwana                   Expires 6 May 2027                   [Page 5]
+
+Internet-Draft                  JMAP Blob                  November 2026
+
+
    *  chunkSize: "UnsignedInt|null"
 
       A hint indicating the preferred chunk size in octets.  If a client
@@ -274,13 +293,6 @@ Internet-Draft                  JMAP Blob                     April 2026
       blobs still, or to combine them.
 
    *  supportedImageReadTypes: "String[]|null"
-
-
-
-Gondwana                 Expires 23 October 2026                [Page 5]
-
-Internet-Draft                  JMAP Blob                     April 2026
-
 
       The media types ([MEDIA-TYPES]) that the server can read as input
       to ImageConvertRecipe.  If null, the server does not support image
@@ -300,7 +312,7 @@ Internet-Draft                  JMAP Blob                     April 2026
 
    *  supportedExtractTypes: "String[]|null"
 
-      The archive MIME types supported for extracting archives via
+      The archive media types supported for extracting archives via
       ExtractRecipe.  This MAY include types not in
       supportedArchiveTypes (e.g., "application/vnd.ms-tnef").  If null,
       the server does not support archive extraction.
@@ -313,10 +325,18 @@ Internet-Draft                  JMAP Blob                     April 2026
 
    *  supportedDecompressTypes: "String[]|null"
 
-      The compression MIME types supported for decompressing via
+      The compression media types supported for decompressing via
       DecompressRecipe.  This MAY include types not in
       supportedCompressTypes.  If null, the server does not support
       decompression.
+
+
+
+
+Gondwana                   Expires 6 May 2027                   [Page 6]
+
+Internet-Draft                  JMAP Blob                  November 2026
+
 
    *  supportedDeltaTypes: "String[]|null"
 
@@ -329,14 +349,6 @@ Internet-Draft                  JMAP Blob                     April 2026
       The delta media types supported for applying patches via
       PatchRecipe.  This MAY include types not in supportedDeltaTypes.
       If null, the server does not support patch application.
-
-
-
-
-Gondwana                 Expires 23 October 2026                [Page 6]
-
-Internet-Draft                  JMAP Blob                     April 2026
-
 
    *  maxConvertSize: "UnsignedInt|null"
 
@@ -370,10 +382,18 @@ Internet-Draft                  JMAP Blob                     April 2026
        "maxDataSources": 64,
        "supportedTypeNames": ["Email", "Thread", "Mailbox"],
        "supportedDigestAlgorithms": ["sha-256", "sha"],
-       "uploadUrl": "https://upload.example.com/jmap/upload/{accountId}/",
+       "uploadUrl": "https://up.example.com/jmap/upload/{accountId}/",
        "chunkSize": 5242880,
        "supportedImageReadTypes": [
          "image/png",
+
+
+
+Gondwana                   Expires 6 May 2027                   [Page 7]
+
+Internet-Draft                  JMAP Blob                  November 2026
+
+
          "image/jpeg",
          "image/gif",
          "image/tiff"
@@ -386,14 +406,6 @@ Internet-Draft                  JMAP Blob                     April 2026
          "application/zip",
          "application/x-tar"
        ],
-
-
-
-Gondwana                 Expires 23 October 2026                [Page 7]
-
-Internet-Draft                  JMAP Blob                     April 2026
-
-
        "supportedExtractTypes": [
          "application/zip",
          "application/x-tar",
@@ -430,25 +442,21 @@ Internet-Draft                  JMAP Blob                     April 2026
    The data:asText and data:asBase64 properties MUST NOT both be present
    in the same DataSourceObject.
 
+
+
+
+Gondwana                   Expires 6 May 2027                   [Page 8]
+
+Internet-Draft                  JMAP Blob                  November 2026
+
+
    *  data:asText: "String|null"
 
-      The data represented as a UTF-8 string.  The server MUST reject
-      the creation with a "notCreated" response if the value is not
-      valid UTF-8.
+      The data represented as a UTF-8 string.
 
    *  data:asBase64: "String|null"
 
-      The data encoded as base64 ([BASE64]).  The server MUST reject the
-      creation with a "notCreated" response if the value is not valid
-      base64.
-
-
-
-
-Gondwana                 Expires 23 October 2026                [Page 8]
-
-Internet-Draft                  JMAP Blob                     April 2026
-
+      The data encoded as base64 ([BASE64]).
 
    *  blobId: "BlobId"
 
@@ -459,16 +467,11 @@ Internet-Draft                  JMAP Blob                     April 2026
 
       The offset (in octets) within the data source from which to start
       copying.  If null, defaults to 0 (the start of the data source).
-      If the range cannot be fully satisfied (i.e., it begins or extends
-      past the end of the data), the DataSourceObject is invalid and the
-      creation MUST be rejected with a "notCreated" response.
 
    *  length: "UnsignedInt|null"
 
       The number of octets to copy from the data source.  If null, copy
-      from offset to the end of the data source.  If the range cannot be
-      fully satisfied, the DataSourceObject is invalid and the creation
-      MUST be rejected with a "notCreated" response.
+      from offset to the end of the data source.
 
    *  size: "UnsignedInt|null"
 
@@ -480,7 +483,12 @@ Internet-Draft                  JMAP Blob                     April 2026
 
       The byte offset of the start of this data source within the outer
       (containing) blob.  Only meaningful in the chunks array of a Blob/
-      get response.
+      get response.  This value is redundant with the sum of the length
+      values of the preceding chunks, but it allows a client to locate
+      the chunk covering a particular byte range without fetching or
+      summing every earlier chunk, and when a DataSourceObject is reused
+      in Blob/set it acts as a consistency check that the chunk is being
+      placed where the client expects.
 
    A DataSourceObject in the chunks array of a Blob/get response MAY
    also include digest:* properties (e.g. digest:sha-256) when those
@@ -489,26 +497,39 @@ Internet-Draft                  JMAP Blob                     April 2026
    contributes to the blob (i.e. after applying offset and length).
 
    When a server provides size, position, or digest:* values in a Blob/
-   get response, it MUST calculate them correctly.  When a
-   DataSourceObject containing size, position, or digest:* values is
-   used in Blob/set, the server MUST reject the object if any provided
-   value does not match the actual data.
+   get response, it MUST calculate them correctly.
+
+
+
+Gondwana                   Expires 6 May 2027                   [Page 9]
+
+Internet-Draft                  JMAP Blob                  November 2026
+
+
+   A DataSourceObject used in Blob/set is invalid if data:asText is not
+   valid UTF-8, if data:asBase64 is not valid base64, if the range given
+   by offset and length begins or extends past the end of the data, or
+   if any size, position, or digest:* value it contains does not match
+   the actual data.  The server MUST NOT guess the user's intent: it
+   MUST reject the creation with an "invalidProperties" SetError whose
+   properties is ["data"].  If a blobId does not exist, or the user
+   cannot access it, the server MUST reject the creation with a
+   "notFound" SetError.
 
 4.  Blob/set
 
    Blob/set is defined under the urn:ietf:params:jmap:blob2 capability
    and requires that capability in the request's using array.
 
-
-
-Gondwana                 Expires 23 October 2026                [Page 9]
-
-Internet-Draft                  JMAP Blob                     April 2026
-
-
    This method creates, touches, and destroys blobs.  It is a standard
    Foo/set method ([JMAP-CORE], Section 5.3) with the following blob-
    specific behaviours:
+
+   *  Blobs have no state, as in [JMAP-BLOB]: Blob/get returns no state
+      string, and there is no Blob/changes method.  Blob/set does not
+      take an ifInState argument, and a non-null value is rejected with
+      an "invalidArguments" error.  Unlike other Foo/set methods, the
+      response has oldState and newState both null.
 
    *  create: "Id[BlobCreateObject]|null"
 
@@ -528,9 +549,18 @@ Internet-Draft                  JMAP Blob                     April 2026
    *  destroy: The server MUST reject any blob that is still referenced
       by another object with a "blobHasReference" SetError.
 
-   An BlobCreateObject has the following properties:
+   A BlobCreateObject has the following properties:
 
    *  data: "DataSourceObject[]"
+
+
+
+
+
+Gondwana                   Expires 6 May 2027                  [Page 10]
+
+Internet-Draft                  JMAP Blob                  November 2026
+
 
       An array of zero or more DataSourceObjects.  The new blob is
       formed by concatenating the data described by each
@@ -543,6 +573,29 @@ Internet-Draft                  JMAP Blob                     April 2026
       the blob, but is not required to.  The server MAY infer the type
       itself and override the client's hint.
 
+   *  size: "UnsignedInt|null" (default: null)
+
+      The size in octets of the blob being created: the total of the
+      octets contributed by all the DataSourceObjects.  If given, the
+      server MUST reject the creation with an "invalidProperties"
+      SetError if the resulting blob is a different size.
+
+   *  digest:<algorithm>: "String|null" (default: null)
+
+      The base64-encoded digest of the whole blob being created,
+      computed with the named algorithm, as returned by Blob/get.  A
+      client MAY give any number of these.  The server MUST verify each
+      one against the resulting blob, and if any does not match, MUST
+      reject the creation with an "invalidProperties" SetError and MUST
+      NOT create the blob.  A server MUST reject a digest whose
+      algorithm is not in its supportedDigestAlgorithms capability with
+      an "invalidProperties" SetError, so that a client never believes
+      an unchecked blob was verified.
+
+      This lets a client that uploaded content in several pieces, or
+      sent it inline, confirm in the same call that the server holds
+      exactly the bytes it meant to send, without a further Blob/get.
+
    *  noPersist: "Boolean" (default: false)
 
       If true, the resulting blob is ephemeral: it may be referenced via
@@ -554,24 +607,27 @@ Internet-Draft                  JMAP Blob                     April 2026
       servers to optimise pipelines where intermediate blobs are never
       needed after the request completes.
 
+   Inline data (data:asText and data:asBase64) is part of the JMAP
+   request, so it counts towards the server's maxSizeRequest limit
+   ([JMAP-CORE], Section 2), and base64 makes it about a third larger
 
 
 
-Gondwana                 Expires 23 October 2026               [Page 10]
+Gondwana                   Expires 6 May 2027                  [Page 11]
 
-Internet-Draft                  JMAP Blob                     April 2026
+Internet-Draft                  JMAP Blob                  November 2026
 
 
-   The server MUST NOT guess the user's intent when a DataSourceObject
-   is invalid (e.g., contains non-UTF-8 data in data:asText or invalid
-   base64 in data:asBase64).  It MUST reject the creation and return a
-   "notCreated" response for that creation id.
+   than the octets it carries.  Clients SHOULD consider using the upload
+   endpoint ([JMAP-CORE], Section 6.1) for blobs larger than a megabyte,
+   and referencing the uploaded blob by blobId.
 
-   The response is a standard Foo/set response.  The objects in the
-   created and updated maps are BlobObjects.  If an update set a new
-   expires, the server returns a BlobObject with the actual expires that
-   was applied; if the server accepted the requested value it need not
-   return an expires in the BlobObject.
+   Apart from oldState and newState, the response is a standard Foo/set
+   response.  The objects in the created and updated maps are
+   BlobObjects.  If an update set a new expires, the server returns a
+   BlobObject with the actual expires that was applied; if the server
+   accepted the requested value it need not return an expires in the
+   BlobObject.
 
    A BlobObject has the following properties:
 
@@ -583,9 +639,10 @@ Internet-Draft                  JMAP Blob                     April 2026
 
       The media type of the blob, or null if unknown.
 
-   *  size: "UnsignedInt"
+   *  size: "UnsignedInt|null"
 
-      The size of the blob in octets.
+      The size of the blob in octets, or null if the server has not yet
+      generated a Blob/convert result (see "Blob/convert").
 
    *  expires: "UTCDate|null"
 
@@ -612,22 +669,23 @@ Internet-Draft                  JMAP Blob                     April 2026
 
 
 
-
-Gondwana                 Expires 23 October 2026               [Page 11]
+Gondwana                   Expires 6 May 2027                  [Page 12]
 
-Internet-Draft                  JMAP Blob                     April 2026
+Internet-Draft                  JMAP Blob                  November 2026
 
 
       The number of bytes to return.  If null, returns all bytes from
       offset to the end of the blob.
 
-   *  dataSourceProperties: "String[]" (default: ["blobId", "size"])
+   *  dataSourceProperties: "String[]" (default: ["blobId", "offset",
+      "length"])
 
       If supplied, only the properties listed in the array are returned
-      for each DataSourceObject in the chunks array.  Available
+      for each DataSourceObject in the chunks array.  This argument has
+      no effect unless chunks is included in properties.  Available
       properties include blobId, size, offset, length, position, and
-      digest:* values where * is a hash algorithm name from the IANA
-      "Hash Function Textual Names" registry (e.g.  digest:sha-256).
+      digest:* values where * is an algorithm name from the
+      supportedDigestAlgorithms capability (e.g.  digest:sha-256).
 
    The requestable properties in the properties array are:
 
@@ -649,29 +707,27 @@ Internet-Draft                  JMAP Blob                     April 2026
 
    *  digest:<algorithm>
 
-      The base64-encoded digest of the selected range, computed using
-      the named algorithm.  The algorithm name MUST appear in the
-      server's supportedDigestAlgorithms capability.
+      The base64-encoded digest of the octets in the selected range,
+      computed using the named algorithm: exactly the octets that a data
+      property would return.  If the range extends past the end of the
+      blob, that is the octets from offset to the end, or no octets if
+      offset is past the end.
 
    *  size
 
       The total size of the blob in octets, regardless of the range
-      selected.
+      selected.  Servers SHOULD store the size of a blob in a form that
+      is cheap to read, and clients SHOULD request only size when that
+      is all they need, since fetching blob content can be much more
+      expensive for the server.
 
    *  imageData
 
 
 
-
-
-
-
-
-
-
-Gondwana                 Expires 23 October 2026               [Page 12]
+Gondwana                   Expires 6 May 2027                  [Page 13]
 
-Internet-Draft                  JMAP Blob                     April 2026
+Internet-Draft                  JMAP Blob                  November 2026
 
 
       If the blob is an image or video type and the server can extract
@@ -691,8 +747,8 @@ Internet-Draft                  JMAP Blob                     April 2026
          known.
 
       -  orientation: "UnsignedInt|null" EXIF orientation value (1-8) as
-         defined in the EXIF specification (CIPA DC-008).  If present,
-         indicates how the image should be rotated/flipped for display.
+         defined in [EXIF].  If present, indicates how the image should
+         be rotated/flipped for display.
 
       -  date: "UTCDate|null" Date the image or video was captured (from
          EXIF DateTimeOriginal or equivalent), if present.
@@ -712,6 +768,28 @@ Internet-Draft                  JMAP Blob                     April 2026
          present.  This is read-only — it reflects the metadata stored
          in the blob content and is not a user-editable property.
 
+   *  chunks
+
+      An array of DataSourceObjects describing the internal chunk
+      structure of the blob (see below).  Only returned if explicitly
+      requested in properties.  The properties returned for each
+      DataSourceObject are controlled by the dataSourceProperties
+      argument.
+
+
+
+
+
+
+Gondwana                   Expires 6 May 2027                  [Page 14]
+
+Internet-Draft                  JMAP Blob                  November 2026
+
+
+   A digest:* name in properties or dataSourceProperties whose algorithm
+   is not in the server's supportedDigestAlgorithms capability is
+   rejected with an "invalidArguments" error.
+
    If neither offset nor length are specified (i.e., both null), the
    default properties are data and size.  Otherwise, the client MUST
    specify the properties to return.
@@ -723,13 +801,6 @@ Internet-Draft                  JMAP Blob                     April 2026
 
       The blobId of the blob.
 
-
-
-Gondwana                 Expires 23 October 2026               [Page 13]
-
-Internet-Draft                  JMAP Blob                     April 2026
-
-
    *  isEncodingProblem: "Boolean" (default: false)
 
       Set to true if data or data:asText was requested but the selected
@@ -740,23 +811,36 @@ Internet-Draft                  JMAP Blob                     April 2026
       Set to true if the selected range extends past the end of the
       blob.  In this case, only the bytes from offset to the end of the
       blob (or an empty string if offset is past the end) are returned.
+      A null length selects everything from offset to the end, so it
+      sets isTruncated only if offset is past the end of the blob.
 
    *  chunks: "DataSourceObject[]"
 
-      An array of one or more data source objects describing the
-      internal chunk structure of the blob.  The blob is reconstructed
-      by concatenating the data from each data source object in the
-      listed order.  The client MUST use the offset and length of each
-      DataSourceObject to determine which octets to read from each
-      chunk's underlying blob.
+      Present only if chunks was requested in properties.  An array of
+      one or more data source objects describing the internal chunk
+      structure of the blob.  The blob is reconstructed by concatenating
+      the data from each data source object in the listed order.  The
+      client MUST use the offset and length of each DataSourceObject to
+      determine which octets to read from each chunk's underlying blob.
 
-      This property MUST be explicitly requested in properties.
+      A server that does not store the blob in chunks returns a single
+      DataSourceObject covering the entire blob, with blobId set to the
+      blob's own id, offset 0, length and size equal to the size of the
+      blob, and position 0.  This allows clients to process the chunks
+      array the same way regardless of how the server stores blobs.
 
    The response also contains:
 
    *  accountId: "Id"
 
       The id of the account used for the operation.
+
+
+
+Gondwana                   Expires 6 May 2027                  [Page 15]
+
+Internet-Draft                  JMAP Blob                  November 2026
+
 
    *  notFound: "Id[]"
 
@@ -770,6 +854,17 @@ Internet-Draft                  JMAP Blob                     April 2026
    This method provides a reverse lookup: given a set of blobIds, it
    returns which objects of specified data types reference those blobs.
 
+   Since different data types have different semantics of "contains",
+   the definition of "reference" is somewhat loose, but roughly means
+   "you could discover this blobId by looking at this object or at other
+   objects recursively contained within this object".  For example, with
+   a server that supports [JMAP-MAIL], if any Email in a Mailbox
+   references a blob, then that Mailbox references the blob, and any
+   Thread containing such an Email references it too.  This does not
+   work the other way: an Email that references a Mailbox in its
+   mailboxIds does not thereby reference the blobs of other Emails in
+   that Mailbox.
+
    The method takes the following arguments:
 
    *  accountId: "Id"
@@ -778,16 +873,10 @@ Internet-Draft                  JMAP Blob                     April 2026
 
    *  typeNames: "String[]"
 
-
-
-
-Gondwana                 Expires 23 October 2026               [Page 14]
-
-Internet-Draft                  JMAP Blob                     April 2026
-
-
       A list of data type names to search.  Only type names listed in
-      the server's supportedTypeNames capability are valid.  If a type
+      the server's supportedTypeNames capability, and whose "JMAP Data
+      Types" registry entry has "Can Reference Blobs" set to "Yes" (or
+      private types defined to reference blobs), are valid.  If a type
       name is not known by the server or the associated capability has
       not been requested in using, the server MUST return an
       "unknownDataType" error.
@@ -801,6 +890,13 @@ Internet-Draft                  JMAP Blob                     April 2026
    *  accountId: "Id"
 
       The id of the account used for the operation.
+
+
+
+Gondwana                   Expires 6 May 2027                  [Page 16]
+
+Internet-Draft                  JMAP Blob                  November 2026
+
 
    *  list: "BlobInfo[]"
 
@@ -818,6 +914,10 @@ Internet-Draft                  JMAP Blob                     April 2026
    does not exist on the server at all, the server MUST still return an
    empty array for each type name.  This ensures that the response does
    not reveal whether the blob exists but is inaccessible to the user.
+   Likewise, the server MUST NOT return the id of an object that the
+   user could not discover by querying.  For example, if an Email that
+   references the blob is in a Mailbox the user cannot see, that Email's
+   id MUST NOT appear in matchedIds.
 
 7.  The "expires" Response Property
 
@@ -834,14 +934,6 @@ Internet-Draft                  JMAP Blob                     April 2026
       null, the server does not have a specific expiry time for the
       blob.
 
-
-
-
-Gondwana                 Expires 23 October 2026               [Page 15]
-
-Internet-Draft                  JMAP Blob                     April 2026
-
-
    Clients that need the blob to persist beyond the expires time should
    reference it from a persistent object (e.g., a FileNode or an Email)
    before it expires.
@@ -854,6 +946,13 @@ Internet-Draft                  JMAP Blob                     April 2026
    Blob/convert performs server-side transformations on blobs.  Like
    Blob/set, it takes an accountId and a create argument that maps
    creation ids to conversion request objects.
+
+
+
+Gondwana                   Expires 6 May 2027                  [Page 17]
+
+Internet-Draft                  JMAP Blob                  November 2026
+
 
    Each conversion request object MAY also include the following
    property:
@@ -890,14 +989,6 @@ Internet-Draft                  JMAP Blob                     April 2026
    also includes an expires property on each BlobObject (see "The
    expires Response Property" above).
 
-
-
-
-Gondwana                 Expires 23 October 2026               [Page 16]
-
-Internet-Draft                  JMAP Blob                     April 2026
-
-
    If the conversion completed but encountered problems (e.g., a corrupt
    archive where some entries extracted successfully but others did not,
    or a truncated compressed stream that partially decompressed), the
@@ -909,6 +1000,15 @@ Internet-Draft                  JMAP Blob                     April 2026
 
    *  description: "String|null" A human-readable description of the
       problem, if any.
+
+
+
+
+
+Gondwana                   Expires 6 May 2027                  [Page 18]
+
+Internet-Draft                  JMAP Blob                  November 2026
+
 
    If the conversion failed entirely and no usable output could be
    produced, the server MUST return a conversionFailed SetError in the
@@ -926,13 +1026,15 @@ Internet-Draft                  JMAP Blob                     April 2026
    server to respond quickly to Blob/convert requests while deferring
    expensive work such as image resizing or archive creation.  The
    returned blobId MUST be usable in all contexts where a regular blobId
-   is accepted.  If the deferred generation later fails (e.g., the
-   source blob has expired), the server SHOULD return an appropriate
-   HTTP error when the blob is downloaded.  If the exact size of the
-   output is not yet known, the server MUST omit the size property from
-   the response for that creation.  If a client later requests the size
-   property via Blob/get for a deferred blob, the server MUST generate
-   the blob at that point and return the actual size.
+   is accepted.  If the exact size of the output is not yet known, the
+   server returns a null size for that creation.  If the deferred
+   generation later fails (e.g., the source blob has expired), the
+   server treats the blob as not existing: a download returns 404 (Not
+   Found), Blob/get reports it in notFound, and a creation in Blob/set
+   or Blob/convert that references it fails with a "notFound" SetError.
+   If a client later requests the size property via Blob/get for a
+   deferred blob, the server MUST generate the blob at that point and
+   return the actual size.
 
    The server MUST resolve the order of dependencies between entries in
    the create map and process them in an order such that all
@@ -947,13 +1049,6 @@ Internet-Draft                  JMAP Blob                     April 2026
 
    *  blobId: "BlobId" The blobId of the source image.
 
-
-
-Gondwana                 Expires 23 October 2026               [Page 17]
-
-Internet-Draft                  JMAP Blob                     April 2026
-
-
    *  type: "String" Media type ([MEDIA-TYPES]) of the image to create
       (e.g. "image/png").  MUST be one of the values in the server's
       supportedImageWriteTypes capability.  The source image MUST be in
@@ -962,6 +1057,14 @@ Internet-Draft                  JMAP Blob                     April 2026
    *  width: "UnsignedInt|null" Maximum width in pixels of the image to
       create.  If null, the server preserves the source width (or scales
       proportionally if only height is given).
+
+
+
+
+Gondwana                   Expires 6 May 2027                  [Page 19]
+
+Internet-Draft                  JMAP Blob                  November 2026
+
 
    *  height: "UnsignedInt|null" Maximum height in pixels of the image
       to create.  If null, the server preserves the source height (or
@@ -1000,16 +1103,6 @@ Internet-Draft                  JMAP Blob                     April 2026
 
    *  "notFound" — the referenced blobId does not exist.
 
-
-
-
-
-
-Gondwana                 Expires 23 October 2026               [Page 18]
-
-Internet-Draft                  JMAP Blob                     April 2026
-
-
    *  "invalidProperties" — the type is not in supportedImageWriteTypes,
       or the source blob is not in a format listed in
       supportedImageReadTypes.
@@ -1018,6 +1111,16 @@ Internet-Draft                  JMAP Blob                     April 2026
       requested dimensions exceed maxImageDimension.
 
    *  "conversionFailed" — the image conversion failed entirely.
+
+
+
+
+
+
+Gondwana                   Expires 6 May 2027                  [Page 20]
+
+Internet-Draft                  JMAP Blob                  November 2026
+
 
 8.2.  ArchiveRecipe
 
@@ -1058,14 +1161,6 @@ Internet-Draft                  JMAP Blob                     April 2026
       directory, symlink, hardlink, fifo, and device entries.  Violating
       these constraints is an "invalidProperties" error.
 
-
-
-
-Gondwana                 Expires 23 October 2026               [Page 19]
-
-Internet-Draft                  JMAP Blob                     April 2026
-
-
    *  entryType: "String|null" The type of the entry.  If null, defaults
       to "file".  Defined values are "file" (a regular file, the
       default), "directory", "symlink" (a symbolic link), "hardlink" (a
@@ -1074,8 +1169,21 @@ Internet-Draft                  JMAP Blob                     April 2026
       MUST reject entries with unsupported types for the chosen archive
       format with an "invalidProperties" error.
 
-   *  modified: "UTCDate|null" The modification time of the entry as an
-      RFC 3339 timestamp.  If null, defaults to the current server time.
+
+
+
+
+Gondwana                   Expires 6 May 2027                  [Page 21]
+
+Internet-Draft                  JMAP Blob                  November 2026
+
+
+   *  modified: "UTCDate|null" The modification time of the entry.  If
+      null, defaults to the current server time.
+
+   *  created: "UTCDate|null" The creation time of the entry, or null if
+      it has none.  Formats that cannot record a creation time ignore
+      it.
 
    *  linkTarget: "String|null" The target path for symlink and hardlink
       entries.  MUST be non-null when entryType is "symlink" or
@@ -1110,139 +1218,57 @@ Internet-Draft                  JMAP Blob                     April 2026
 
    The zip format only supports "file" and "directory" entry types.  The
    comment and compressionMethod properties are only meaningful for zip
-   archives.  The mode, uid, gid, ownerName, groupName, devMajor, and
-   devMinor properties are ignored.
+   archives.  The created time is stored in an extra field.  The mode,
+   uid, gid, ownerName, groupName, devMajor, and devMinor properties are
+   ignored.
 
 
 
 
 
-Gondwana                 Expires 23 October 2026               [Page 20]
+
+
+
+Gondwana                   Expires 6 May 2027                  [Page 22]
 
-Internet-Draft                  JMAP Blob                     April 2026
+Internet-Draft                  JMAP Blob                  November 2026
 
 
 8.3.2.  Considerations for application/x-tar
 
    The tar format supports all entry types.  The mode, uid, gid,
    ownerName, groupName, devMajor, and devMinor properties are
-   meaningful for tar archives.  The comment and compressionMethod
-   properties are ignored.
+   meaningful for tar archives.  The created, comment, and
+   compressionMethod properties are ignored.
 
    Tar archives are not inherently compressed.  To create a compressed
    tar archive (e.g. a .tar.gz file), first create the tar archive using
-   ArchiveRecipe, then compress the result using CompressRecipe.  The
-   following example creates a .tar.gz containing three files in a
-   single Blob/convert call, using a backreference from the archive
-   creation to the compression step:
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-Gondwana                 Expires 23 October 2026               [Page 21]
-
-Internet-Draft                  JMAP Blob                     April 2026
-
-
-   [["Blob/convert", {
-     "accountId": "abc",
-     "create": {
-       "t1": {
-         "archive": {
-           "type": "application/x-tar",
-           "entries": [
-             {
-               "name": "site/index.html",
-               "blobId": "Baaaa",
-               "modified": "2026-03-01T12:00:00Z",
-               "mode": "0644"
-             },
-             {
-               "name": "site/logo.png",
-               "blobId": "Bbbbb",
-               "modified": "2026-02-15T09:30:00Z",
-               "mode": "0644"
-             },
-             {
-               "name": "site/style.css",
-               "blobId": "Bcccc",
-               "modified": "2026-03-01T12:00:00Z",
-               "mode": "0644"
-             }
-           ]
-         }
-       },
-       "t2": {
-         "compress": {
-           "blobId": "#t1",
-           "type": "application/gzip"
-         }
-       }
-     }
-   }, "0"]]
+   ArchiveRecipe, then compress the result using CompressRecipe (see
+   "Creating a Compressed Tar Archive" in "Examples").
 
 8.3.3.  Considerations for application/x-cpio
 
    The cpio format supports all entry types except that ownerName and
-   groupName are not supported.  The comment and compressionMethod
-   properties are ignored.
+   groupName are not supported.  The created, comment, and
+   compressionMethod properties are ignored.
 
 8.4.  ExtractRecipe
 
    An ExtractRecipe extracts the entry listing from an existing archive
    blob.  It is an object with the following properties:
 
-
-
-
-Gondwana                 Expires 23 October 2026               [Page 22]
-
-Internet-Draft                  JMAP Blob                     April 2026
-
-
    *  blobId: "BlobId" The blobId of the archive to extract.
 
-   *  type: "String|null" The MIME type of the archive format.  If null,
-      the server SHOULD attempt to auto-detect the format from the blob
-      content (e.g. by inspecting magic bytes).  If auto-detection
+   *  type: "String|null" The media type of the archive format.  If
+      null, the server SHOULD attempt to auto-detect the format from the
+      blob content (e.g. by inspecting magic bytes).  If auto-detection
       fails, the server MUST return an "unknownFormat" error.
 
-   In addition to the standard creation response properties, a
-   successful ExtractRecipe result includes:
+   An ExtractRecipe creates no blob.  The id, type, and size in its
+   result are those of the archive blob that was extracted, and a
+   backreference to its creation id resolves to that blob.  noPersist
+   has no effect on an ExtractRecipe.  A successful ExtractRecipe result
+   also includes:
 
    *  entries: "ArchiveEntry[]" An array of ArchiveEntry objects
       describing the contents of the archive.  Each file entry will have
@@ -1256,6 +1282,13 @@ Internet-Draft                  JMAP Blob                     April 2026
       support the archive format.
 
    *  "invalidProperties" — the type is not in supportedExtractTypes.
+
+
+
+Gondwana                   Expires 6 May 2027                  [Page 23]
+
+Internet-Draft                  JMAP Blob                  November 2026
+
 
    *  "tooLarge" — the source blob exceeds maxConvertSize.
 
@@ -1282,14 +1315,6 @@ Internet-Draft                  JMAP Blob                     April 2026
       the compressed output.  If null, the server uses the format's
       default behaviour.
 
-
-
-
-Gondwana                 Expires 23 October 2026               [Page 23]
-
-Internet-Draft                  JMAP Blob                     April 2026
-
-
    Errors:
 
    *  "notFound" — the referenced blobId does not exist.
@@ -1312,6 +1337,15 @@ Internet-Draft                  JMAP Blob                     April 2026
    compression, 900k block size).  The default is typically 9.  Bzip2
    always includes a CRC-32 checksum; the checksum property is ignored.
 
+
+
+
+
+Gondwana                   Expires 6 May 2027                  [Page 24]
+
+Internet-Draft                  JMAP Blob                  November 2026
+
+
 8.5.3.  Considerations for application/x-xz
 
    Compression level ranges from 0 (fastest) to 9 (best compression).
@@ -1332,19 +1366,12 @@ Internet-Draft                  JMAP Blob                     April 2026
 
    *  blobId: "BlobId" The blobId of the compressed data to decompress.
 
-   *  type: "String|null" The MIME type of the compression format.  If
+   *  type: "String|null" The media type of the compression format.  If
       null, the server SHOULD attempt to auto-detect the format from
       magic bytes.  If auto-detection fails, the server MUST return an
       "unknownFormat" error.
 
    Errors:
-
-
-
-Gondwana                 Expires 23 October 2026               [Page 24]
-
-Internet-Draft                  JMAP Blob                     April 2026
-
 
    *  "notFound" — the referenced blobId does not exist.
 
@@ -1365,6 +1392,15 @@ Internet-Draft                  JMAP Blob                     April 2026
    *  blobId: "BlobId" The blobId of the original (base) blob.
 
    *  newBlobId: "BlobId" The blobId of the new blob to compare against.
+
+
+
+
+
+Gondwana                   Expires 6 May 2027                  [Page 25]
+
+Internet-Draft                  JMAP Blob                  November 2026
+
 
    *  type: "String" The media type of the delta format to produce.
       MUST be one of the values in the server's supportedDeltaTypes
@@ -1394,14 +1430,6 @@ Internet-Draft                  JMAP Blob                     April 2026
    The server produces a bsdiff-format patch.  Both blobs must fit in
    memory; servers MAY reject very large blobs with a "tooLarge" error.
 
-
-
-
-Gondwana                 Expires 23 October 2026               [Page 25]
-
-Internet-Draft                  JMAP Blob                     April 2026
-
-
 8.7.3.  Considerations for text/x-diff
 
    The server produces a unified diff.  Both blobs are interpreted as
@@ -1421,6 +1449,14 @@ Internet-Draft                  JMAP Blob                     April 2026
       one of the values in the server's supportedPatchTypes capability.
 
    The result blob is the patched output.
+
+
+
+
+Gondwana                   Expires 6 May 2027                  [Page 26]
+
+Internet-Draft                  JMAP Blob                  November 2026
+
 
    Errors:
 
@@ -1451,13 +1487,6 @@ Internet-Draft                  JMAP Blob                     April 2026
      }
    }, "0"]]
 
-
-
-Gondwana                 Expires 23 October 2026               [Page 26]
-
-Internet-Draft                  JMAP Blob                     April 2026
-
-
    The response:
 
    [["Blob/set", {
@@ -1477,9 +1506,18 @@ Internet-Draft                  JMAP Blob                     April 2026
    This example fetches a blob's chunk structure with offsets, sizes,
    and SHA-256 digests:
 
+
+
+
+Gondwana                   Expires 6 May 2027                  [Page 27]
+
+Internet-Draft                  JMAP Blob                  November 2026
+
+
    [["Blob/get", {
      "accountId": "abc",
      "ids": ["B1a2b3c"],
+     "properties": ["size", "chunks"],
      "dataSourceProperties": [
        "blobId", "size", "offset", "length", "position",
        "digest:sha-256"
@@ -1487,32 +1525,6 @@ Internet-Draft                  JMAP Blob                     April 2026
    }, "0"]]
 
    The response shows the blob is stored as two chunks:
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-Gondwana                 Expires 23 October 2026               [Page 27]
-
-Internet-Draft                  JMAP Blob                     April 2026
-
 
    [["Blob/get", {
      "accountId": "abc",
@@ -1544,7 +1556,51 @@ Internet-Draft                  JMAP Blob                     April 2026
    The position values show where each chunk fits in the assembled blob,
    and the digest:sha-256 values can be used to verify chunk integrity.
 
-9.3.  Creating a Zip Archive
+9.3.  Looking Up Blob References
+
+   This example finds which Mailbox and Email objects reference two
+   blobs:
+
+
+
+
+
+Gondwana                   Expires 6 May 2027                  [Page 28]
+
+Internet-Draft                  JMAP Blob                  November 2026
+
+
+   [["Blob/lookup", {
+     "accountId": "abc",
+     "typeNames": ["Mailbox", "Email"],
+     "ids": ["Bfirst", "Bsecond"]
+   }, "0"]]
+
+   The response shows that the first blob is referenced by two emails in
+   the same mailbox, and the second blob is not referenced by any
+   objects of the requested types (or is not visible to the user):
+
+   [["Blob/lookup", {
+     "accountId": "abc",
+     "list": [
+       {
+         "id": "Bfirst",
+         "matchedIds": {
+           "Mailbox": ["M1"],
+           "Email": ["E1", "E2"]
+         }
+       },
+       {
+         "id": "Bsecond",
+         "matchedIds": {
+           "Mailbox": [],
+           "Email": []
+         }
+       }
+     ]
+   }, "0"]]
+
+9.4.  Creating a Zip Archive
 
    This example creates a zip file containing an HTML document, a CSS
    file, and a JPEG image:
@@ -1565,9 +1621,9 @@ Internet-Draft                  JMAP Blob                     April 2026
 
 
 
-Gondwana                 Expires 23 October 2026               [Page 28]
+Gondwana                   Expires 6 May 2027                  [Page 29]
 
-Internet-Draft                  JMAP Blob                     April 2026
+Internet-Draft                  JMAP Blob                  November 2026
 
 
    [["Blob/convert", {
@@ -1610,7 +1666,7 @@ Internet-Draft                  JMAP Blob                     April 2026
      "notCreated": {}
    }, "0"]]
 
-9.4.  Creating a Compressed Tar Archive
+9.5.  Creating a Compressed Tar Archive
 
    This example creates a .tar.gz file from the same three files.  The
    intermediate tar blob uses noPersist since only the final compressed
@@ -1621,9 +1677,9 @@ Internet-Draft                  JMAP Blob                     April 2026
 
 
 
-Gondwana                 Expires 23 October 2026               [Page 29]
+Gondwana                   Expires 6 May 2027                  [Page 30]
 
-Internet-Draft                  JMAP Blob                     April 2026
+Internet-Draft                  JMAP Blob                  November 2026
 
 
    [["Blob/convert", {
@@ -1677,9 +1733,9 @@ Internet-Draft                  JMAP Blob                     April 2026
 
 
 
-Gondwana                 Expires 23 October 2026               [Page 30]
+Gondwana                   Expires 6 May 2027                  [Page 31]
 
-Internet-Draft                  JMAP Blob                     April 2026
+Internet-Draft                  JMAP Blob                  November 2026
 
 
    [["Blob/convert", {
@@ -1694,7 +1750,7 @@ Internet-Draft                  JMAP Blob                     April 2026
      "notCreated": {}
    }, "0"]]
 
-9.5.  Extracting a Compressed Tar Archive
+9.6.  Extracting a Compressed Tar Archive
 
    This example decompresses and extracts a .tar.gz file to discover its
    contents.  The intermediate decompressed tar blob uses noPersist:
@@ -1718,9 +1774,10 @@ Internet-Draft                  JMAP Blob                     April 2026
      }
    }, "0"]]
 
-   The response for the ExtractRecipe includes the standard creation
-   response properties plus an entries array listing the archive
-   contents, with a blobId for each file entry:
+   The response for the ExtractRecipe gives the id, type, and size of
+   the archive it extracted, which here is the decompressed tar created
+   by "u1", and an entries array listing the archive contents, with a
+   blobId for each file entry:
 
 
 
@@ -1732,10 +1789,9 @@ Internet-Draft                  JMAP Blob                     April 2026
 
 
 
-
-Gondwana                 Expires 23 October 2026               [Page 31]
+Gondwana                   Expires 6 May 2027                  [Page 32]
 
-Internet-Draft                  JMAP Blob                     April 2026
+Internet-Draft                  JMAP Blob                  November 2026
 
 
    [["Blob/convert", {
@@ -1777,7 +1833,7 @@ Internet-Draft                  JMAP Blob                     April 2026
    download individual files or as inputs to further Blob/convert
    operations.
 
-9.6.  Computing and Applying a Delta
+9.7.  Computing and Applying a Delta
 
    This example computes a unified diff between two versions of a text
    file:
@@ -1789,9 +1845,9 @@ Internet-Draft                  JMAP Blob                     April 2026
 
 
 
-Gondwana                 Expires 23 October 2026               [Page 32]
+Gondwana                   Expires 6 May 2027                  [Page 33]
 
-Internet-Draft                  JMAP Blob                     April 2026
+Internet-Draft                  JMAP Blob                  November 2026
 
 
    [["Blob/convert", {
@@ -1845,9 +1901,9 @@ Internet-Draft                  JMAP Blob                     April 2026
 
 
 
-Gondwana                 Expires 23 October 2026               [Page 33]
+Gondwana                   Expires 6 May 2027                  [Page 34]
 
-Internet-Draft                  JMAP Blob                     April 2026
+Internet-Draft                  JMAP Blob                  November 2026
 
 
    [["Blob/convert", {
@@ -1880,10 +1936,31 @@ Internet-Draft                  JMAP Blob                     April 2026
    possible values.  Servers MUST reject malformed inputs as specified
    in the DataSourceObject definition.
 
+   JSON parsers are not all consistent in handling non-UTF-8 data, and
+   JMAP requires all JSON to be UTF-8, so a server MUST return null for
+   data:asText (setting isEncodingProblem) rather than return octets
+   that are not valid UTF-8.
+
+   The server MUST NOT trust that the data given to Blob/set is a well-
+   formed instance of its stated media type.  If the server parses a
+   blob — to convert it, extract an archive, or read image metadata — it
+   SHOULD only use hardened parsers designed to deal with arbitrary
+   untrusted data.  The server SHOULD NOT reject data on the grounds
+   that it is not a valid specimen of the stated type.
+
 10.3.  Resource Consumption
 
    Several operations defined in this document can consume significant
    server resources.
+
+
+
+
+
+Gondwana                   Expires 6 May 2027                  [Page 35]
+
+Internet-Draft                  JMAP Blob                  November 2026
+
 
    Archive and compression operations may require substantial CPU and
    memory.  Servers SHOULD impose reasonable limits on archive size,
@@ -1895,16 +1972,15 @@ Internet-Draft                  JMAP Blob                     April 2026
    Image conversion can also consume significant resources, especially
    for very large images or high output dimensions.
 
+   Digest algorithms can be expensive to calculate over large blobs.
+   Servers that share resources between users SHOULD track resource use
+   by clients and rate-limit expensive operations, such as computing
+   digests in Blob/get or verifying them in Blob/set, to avoid resource
+   starvation.
+
    Delta and patch operations can also be resource-intensive,
    particularly for large blobs.  Servers SHOULD impose limits on the
    size of blobs that can be used as inputs to these operations.
-
-
-
-Gondwana                 Expires 23 October 2026               [Page 34]
-
-Internet-Draft                  JMAP Blob                     April 2026
-
 
    Servers SHOULD advertise their limits via the maxConvertSize,
    maxArchiveEntries, and maxImageDimension capability properties so
@@ -1928,9 +2004,21 @@ Internet-Draft                  JMAP Blob                     April 2026
 
    The ability to split content into multiple blobs, recombine them via
    Blob/set, and apply delta patches may be used to bypass security
-   scanners that inspect blob content.  Servers that perform content
-   scanning SHOULD scan the output of Blob/convert operations as well as
-   the inputs.
+   scanners that inspect blob content: carefully chosen data sources can
+   recreate dangerous content on the far side of a scanner watching the
+   upload endpoint.  Servers that perform content scanning SHOULD
+   provide a hook to scan the blob that results from concatenating the
+   data sources in Blob/set, in the same way as blobs arriving through
+   the upload endpoint, and SHOULD scan the output of Blob/convert
+
+
+
+Gondwana                   Expires 6 May 2027                  [Page 36]
+
+Internet-Draft                  JMAP Blob                  November 2026
+
+
+   operations as well as the inputs.
 
 11.  IANA Considerations
 
@@ -1950,19 +2038,25 @@ Internet-Draft                  JMAP Blob                     April 2026
    Security and privacy considerations: this document, Security
    Considerations
 
-11.2.  JMAP Error Code Registrations
+11.2.  JMAP Capability Update for urn:ietf:params:jmap:blob
 
-   IANA is requested to register the following entries in the "JMAP
-   Error Codes" registry:
+   IANA is requested to update the "urn:ietf:params:jmap:blob"
+   capability, registered by [JMAP-BLOB], as follows:
 
+   Capability Name: urn:ietf:params:jmap:blob
 
+   Specification document: [JMAP-BLOB], superseded by this document
 
-Gondwana                 Expires 23 October 2026               [Page 35]
-
-Internet-Draft                  JMAP Blob                     April 2026
+   Intended use: obsolete
 
+   Change Controller: IETF
 
-11.2.1.  unknownDataType
+   Security and privacy considerations: [JMAP-BLOB], Section 5
+
+11.3.  JMAP Error Code Update for unknownDataType
+
+   IANA is requested to update the "unknownDataType" entry in the "JMAP
+   Error Codes" registry, registered by [JMAP-BLOB], as follows:
 
    JMAP Error Code: unknownDataType
 
@@ -1970,14 +2064,29 @@ Internet-Draft                  JMAP Blob                     April 2026
 
    Change Controller: IETF
 
+
+
+
+
+
+Gondwana                   Expires 6 May 2027                  [Page 37]
+
+Internet-Draft                  JMAP Blob                  November 2026
+
+
    Description: The server does not recognise the data type specified in
    the typeNames array of a Blob/lookup request, or the capability
    required to use that data type has not been included in the using
    array of the request.
 
-   Reference: this document
+   Reference: this document (replacing [JMAP-BLOB])
 
-11.2.2.  unknownFormat
+11.4.  JMAP Error Code Registrations
+
+   IANA is requested to register the following entries in the "JMAP
+   Error Codes" registry:
+
+11.4.1.  unknownFormat
 
    JMAP Error Code: unknownFormat
 
@@ -1992,7 +2101,7 @@ Internet-Draft                  JMAP Blob                     April 2026
 
    Reference: this document
 
-11.2.3.  blobHasReference
+11.4.2.  blobHasReference
 
    JMAP Error Code: blobHasReference
 
@@ -2006,31 +2115,60 @@ Internet-Draft                  JMAP Blob                     April 2026
 
    Reference: this document
 
-11.2.4.  conversionFailed
+11.4.3.  conversionFailed
 
    JMAP Error Code: conversionFailed
-
-
-
-
-Gondwana                 Expires 23 October 2026               [Page 36]
-
-Internet-Draft                  JMAP Blob                     April 2026
-
 
    Intended use: common
 
    Change Controller: IETF
+
+
+
+Gondwana                   Expires 6 May 2027                  [Page 38]
+
+Internet-Draft                  JMAP Blob                  November 2026
+
 
    Description: The server was unable to perform the requested blob
    conversion.
 
    Reference: this document
 
-11.3.  JMAP Data Types Registry
+11.5.  JMAP Data Types Registry
 
    IANA is requested to update the reference for the "JMAP Data Types"
-   registry to this document (replacing the reference to RFC9404).
+   registry to this document (replacing the reference to [JMAP-BLOB]).
+   The registry's fields, registration policy, and instructions to the
+   designated experts below are carried forward unchanged from
+   [JMAP-BLOB], so that they remain defined in a current document.  The
+   existing entries are unchanged.
+
+   Each entry has the following fields:
+
+   Type Name: the name of the data type, as used in typeNames in Blob/
+   lookup and as a key in a StateChange object ([JMAP-CORE],
+   Section 7.1).
+
+   Can Reference Blobs: "Yes" if objects of this type can reference
+   blobs (see "Blob/lookup"), otherwise "No".
+
+   Can Use for State Change: "Yes" if the type name can appear in a
+   StateChange object, otherwise "No".
+
+   Capability: the capability URI that a client includes in using to use
+   this data type.
+
+   Reference: the document that defines the data type.
+
+   The registration policy for this registry is "Specification Required"
+   [IANA-GUIDELINES].  Either an RFC or a similarly stable reference
+   document defines a JMAP Data Type and associated capability.
+
+   IANA will appoint designated experts to review requests for additions
+   to this registry, with guidance to allow any registration that
+   provides a stable document describing the capability and control over
+   the URI namespace to which the capability URI points.
 
 12.  Changes
 
@@ -2038,6 +2176,98 @@ Internet-Draft                  JMAP Blob                     April 2026
 
    The source of this document exists on github at:
    https://github.com/brong/draft-gondwana-jmap-blobext/
+
+   *draft-ietf-jmap-blobext-03*
+
+
+
+Gondwana                   Expires 6 May 2027                  [Page 39]
+
+Internet-Draft                  JMAP Blob                  November 2026
+
+
+   *  Added created to ArchiveEntry.
+
+   *  Carried over from RFC9404 what this document had lost: Blob/lookup
+      does not return ids of objects the user cannot discover, the
+      meaning of "reference" and the "Can Reference Blobs" restriction,
+      the server's handling of untrusted blob data, scanning of
+      concatenated blobs, the cost of digests, the request size limit
+      for inline data, and the hints about fetching size.
+
+   *  Digest algorithm names come from the "Hash Algorithms for HTTP
+      Digest Fields" registry of RFC9530 (which replaces the RFC3230
+      registry RFC9404 used), not the "Hash Function Textual Names"
+      registry, where SHA-1 is "sha-1".  Servers list algorithms in
+      their order of preference, only ones they can compute efficiently,
+      and clients use the first they support; "sha" (deprecated there)
+      remains allowed.
+
+   *  A Blob/get digest is over exactly the octets returned for the
+      range, including when the range runs past the end of the blob.
+
+   *  Added optional size and digest:<algorithm> properties to the
+      BlobCreateObject, checked against the whole blob being created, so
+      a client can verify an assembled or inline upload in the same
+      call.  (RFC9404 defined neither; per-source values were already
+      checked on each DataSourceObject.)
+
+   *  Restated the registration policy and designated expert guidance
+      for the "JMAP Data Types" registry, so they are not left only in
+      the obsoleted RFC9404.
+
+   *  Blobs have no state, as in RFC9404: Blob/set takes no ifInState
+      and returns null oldState and newState.  (Thanks to Mark Atwood.)
+
+   *  The dataSourceProperties default is ["blobId", "offset",
+      "length"], so chunks fed back into Blob/set keep their ranges.
+      (Thanks to Mark Atwood.)
+
+   *  Named the SetErrors for Blob/set: "invalidProperties" for an
+      invalid DataSourceObject, "tooLarge" for exceeding maxDataSources
+      or maxSizeBlobSet, and "notFound" for an unknown blobId.  An
+      unsupported digest:* name in Blob/get is "invalidArguments".
+      (Thanks to Mark Atwood.)
+
+   *  BlobObject size is null until a deferred Blob/convert result is
+      generated, and a deferred result whose generation fails is treated
+      as not existing everywhere.  (Thanks to Mark Atwood.)
+
+
+
+
+
+Gondwana                   Expires 6 May 2027                  [Page 40]
+
+Internet-Draft                  JMAP Blob                  November 2026
+
+
+   *  The id, type, and size of an ExtractRecipe result are those of the
+      archive it extracted.  (Thanks to Mark Atwood.)
+
+   *  IANA: the "urn:ietf:params:jmap:blob" capability is marked
+      obsolete, "unknownDataType" is updated rather than registered
+      again, and the "JMAP Data Types" registry's fields are defined
+      here.  RFC9404 is now an informative reference.  (Thanks to Mark
+      Atwood.)
+
+   *  Editorial: removed a duplicate .tar.gz example, used "media type"
+      throughout, added a reference for EXIF, and removed a stray back
+      matter marker from the text.  (Thanks to Mark Atwood.)
+
+   *draft-ietf-jmap-blobext-02*
+
+   *  Listed chunks as a requestable Blob/get property and fixed the
+      chunks example to request it.
+
+   *  Explained the purpose of the DataSourceObject position property.
+
+   *  Servers that do not store blobs in chunks return a single chunk
+      covering the whole blob.
+
+   *  Added a Blob/lookup example.
+
+   *  Extended acknowledgements.
 
    *draft-ietf-jmap-blobext-01*
 
@@ -2059,6 +2289,15 @@ Internet-Draft                  JMAP Blob                     April 2026
    *  Obsoletes RFC9404: incorporated all content from RFC9404 into this
       document, making it self-contained.
 
+
+
+
+
+Gondwana                   Expires 6 May 2027                  [Page 41]
+
+Internet-Draft                  JMAP Blob                  November 2026
+
+
    *  Renamed Blob/upload to Blob/set, making it a standard Foo/set
       operation with create, update, and destroy at the top level.
 
@@ -2066,13 +2305,6 @@ Internet-Draft                  JMAP Blob                     April 2026
       defined only in RFC9404).
 
    *  Added Blob/lookup method (previously defined only in RFC9404).
-
-
-
-Gondwana                 Expires 23 October 2026               [Page 37]
-
-Internet-Draft                  JMAP Blob                     April 2026
-
 
    *  Added full DataSourceObject definition (merging RFC9404 base
       definition with blobext extensions).
@@ -2114,21 +2346,20 @@ Internet-Draft                  JMAP Blob                     April 2026
    *  Added EXIF orientation reference and digest algorithm registry
       reference.
 
+
+
+
+Gondwana                   Expires 6 May 2027                  [Page 42]
+
+Internet-Draft                  JMAP Blob                  November 2026
+
+
    *  Fixed grammar and consistent error ordering across recipes.
 
    *  Structural reorder: DataSourceObject before Blob/get, ArchiveEntry
       promoted to peer section.
 
    *draft-gondwana-jmap-blobext-05*
-
-
-
-
-
-Gondwana                 Expires 23 October 2026               [Page 38]
-
-Internet-Draft                  JMAP Blob                     April 2026
-
 
    *  Added imageData property to Blob/get for image/video metadata
       extraction (dimensions, orientation, date, GPS, duration).
@@ -2171,20 +2402,20 @@ Internet-Draft                  JMAP Blob                     April 2026
    *  Added noPersist option to Blob/upload and Blob/convert for
       ephemeral intermediate blobs in pipelines.
 
+
+
+
+Gondwana                   Expires 6 May 2027                  [Page 43]
+
+Internet-Draft                  JMAP Blob                  November 2026
+
+
    *  Removed rdiffSignature and rdiffPatch from Blob/get and
       DataSourceObject.
 
    *  Fleshed out capability object with supported type lists.
 
    *  Added capability and method examples.
-
-
-
-
-Gondwana                 Expires 23 October 2026               [Page 39]
-
-Internet-Draft                  JMAP Blob                     April 2026
-
 
    *  Expanded Security Considerations.
 
@@ -2206,41 +2437,40 @@ Internet-Draft                  JMAP Blob                     April 2026
 13.  Acknowledgements
 
    The authors would like to thank Mauro De Gennaro, Ben Bucksch,
-   Ricardo Signes, and the members of the JMAP Working Group at the IETF
-   for their contributions and feedback.
+   Ricardo Signes, Neil Jenkins, Ken Murchison, Arnt Gulbrandsen, Seph
+   Gentle, Matthew Horsfall, Mark Atwood, and the members of the JMAP
+   Working Group at the IETF for their contributions and feedback.
 
-   {backmatter}
+14.  References
 
-14.  Normative References
+14.1.  Normative References
 
    [BASE64]   Josefsson, S., "The Base16, Base32, and Base64 Data
               Encodings", RFC 4648, DOI 10.17487/RFC4648, October 2006,
               <https://www.rfc-editor.org/rfc/rfc4648>.
 
-   [DIGEST-ALGORITHMS]
-              Mogul, J. and A. Van Hoff, "Instance Digests in HTTP",
-              RFC 3230, DOI 10.17487/RFC3230, January 2002,
-              <https://www.rfc-editor.org/rfc/rfc3230>.
+   [DIGEST-FIELDS]
+              Polli, R. and L. Pardue, "Digest Fields", RFC 9530,
+              DOI 10.17487/RFC9530, February 2024,
+              <https://www.rfc-editor.org/rfc/rfc9530>.
 
    [JMAP-CORE]
               Jenkins, N. and C. Newman, "The JSON Meta Application
               Protocol (JMAP)", RFC 8620, DOI 10.17487/RFC8620, July
               2019, <https://www.rfc-editor.org/rfc/rfc8620>.
 
+
+
+Gondwana                   Expires 6 May 2027                  [Page 44]
+
+Internet-Draft                  JMAP Blob                  November 2026
+
+
    [MEDIA-TYPES]
               Freed, N., Klensin, J., and T. Hansen, "Media Type
               Specifications and Registration Procedures", BCP 13,
               RFC 6838, DOI 10.17487/RFC6838, January 2013,
               <https://www.rfc-editor.org/rfc/rfc6838>.
-
-
-
-
-
-Gondwana                 Expires 23 October 2026               [Page 40]
-
-Internet-Draft                  JMAP Blob                     April 2026
-
 
    [RFC2119]  Bradner, S., "Key words for use in RFCs to Indicate
               Requirement Levels", BCP 14, RFC 2119,
@@ -2250,6 +2480,29 @@ Internet-Draft                  JMAP Blob                     April 2026
    [RFC8174]  Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC
               2119 Key Words", BCP 14, RFC 8174, DOI 10.17487/RFC8174,
               May 2017, <https://www.rfc-editor.org/rfc/rfc8174>.
+
+14.2.  Informative References
+
+   [EXIF]     Camera & Imaging Products Association, "Exchangeable image
+              file format for digital still cameras: Exif Version 3.0",
+              CIPA DC-008-2023, May 2023.
+
+   [IANA-GUIDELINES]
+              Cotton, M., Leiba, B., and T. Narten, "Guidelines for
+              Writing an IANA Considerations Section in RFCs", BCP 26,
+              RFC 8126, DOI 10.17487/RFC8126, June 2017,
+              <https://www.rfc-editor.org/rfc/rfc8126>.
+
+   [JMAP-BLOB]
+              Gondwana, B., Ed., "JSON Meta Application Protocol (JMAP)
+              Blob Management Extension", RFC 9404,
+              DOI 10.17487/RFC9404, August 2023,
+              <https://www.rfc-editor.org/rfc/rfc9404>.
+
+   [JMAP-MAIL]
+              Jenkins, N. and C. Newman, "The JSON Meta Application
+              Protocol (JMAP) for Mail", RFC 8621, DOI 10.17487/RFC8621,
+              August 2019, <https://www.rfc-editor.org/rfc/rfc8621>.
 
 Author's Address
 
@@ -2264,33 +2517,4 @@ Author's Address
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-Gondwana                 Expires 23 October 2026               [Page 41]
+Gondwana                   Expires 6 May 2027                  [Page 45]

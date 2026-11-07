@@ -1,0 +1,2856 @@
+
+
+
+
+mailmaint                                                      D. Eggert
+Internet-Draft                                                 Apple Inc
+Intended status: Standards Track                              B. Bucksch
+Expires: 8 April 2027                                             Beonex
+                                                            M. Diephouse
+                                                               Apple Inc
+                                                          5 October 2026
+
+
+Automatic Configuration of Email, Calendar, and Contact Server Settings
+                      draft-ietf-mailmaint-pacc-04
+
+Abstract
+
+   This document specifies an automatic configuration mechanism for
+   email, calendar, and contact user agent applications.  Domain owners
+   publish standardized configuration information that user agent
+   applications retrieve and use to simplify server setup procedures.
+
+Status of This Memo
+
+   This Internet-Draft is submitted in full conformance with the
+   provisions of BCP 78 and BCP 79.
+
+   Internet-Drafts are working documents of the Internet Engineering
+   Task Force (IETF).  Note that other groups may also distribute
+   working documents as Internet-Drafts.  The list of current Internet-
+   Drafts is at https://datatracker.ietf.org/drafts/current/.
+
+   Internet-Drafts are draft documents valid for a maximum of six months
+   and may be updated, replaced, or obsoleted by other documents at any
+   time.  It is inappropriate to use Internet-Drafts as reference
+   material or to cite them other than as "work in progress."
+
+   This Internet-Draft will expire on 8 April 2027.
+
+Copyright Notice
+
+   Copyright (c) 2026 IETF Trust and the persons identified as the
+   document authors.  All rights reserved.
+
+
+
+
+
+
+
+
+
+
+
+Eggert, et al.            Expires 8 April 2027                  [Page 1]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+   This document is subject to BCP 78 and the IETF Trust's Legal
+   Provisions Relating to IETF Documents (https://trustee.ietf.org/
+   license-info) in effect on the date of publication of this document.
+   Please review these documents carefully, as they describe your rights
+   and restrictions with respect to this document.  Code Components
+   extracted from this document must include Revised BSD License text as
+   described in Section 4.e of the Trust Legal Provisions and are
+   provided without warranty as described in the Revised BSD License.
+
+Table of Contents
+
+   1.  Introduction  . . . . . . . . . . . . . . . . . . . . . . . .   3
+   2.  Document Conventions  . . . . . . . . . . . . . . . . . . . .   3
+   3.  Overview  . . . . . . . . . . . . . . . . . . . . . . . . . .   4
+     3.1.  Server Requirements Summary . . . . . . . . . . . . . . .   5
+     3.2.  User Agent Requirements Summary . . . . . . . . . . . . .   6
+   4.  JSON Configuration  . . . . . . . . . . . . . . . . . . . . .   6
+     4.1.  Example . . . . . . . . . . . . . . . . . . . . . . . . .   7
+     4.2.  Protocols . . . . . . . . . . . . . . . . . . . . . . . .   8
+     4.3.  Authentication  . . . . . . . . . . . . . . . . . . . . .  10
+     4.4.  Informational . . . . . . . . . . . . . . . . . . . . . .  11
+       4.4.1.  Provider Information  . . . . . . . . . . . . . . . .  12
+       4.4.2.  Help  . . . . . . . . . . . . . . . . . . . . . . . .  13
+   5.  Flow  . . . . . . . . . . . . . . . . . . . . . . . . . . . .  13
+     5.1.  Email Address . . . . . . . . . . . . . . . . . . . . . .  13
+     5.2.  Configuration Source  . . . . . . . . . . . . . . . . . .  13
+       5.2.1.  Well-Known Uniform Resource Identifier  . . . . . . .  14
+       5.2.2.  DNS-Based Digest Validation . . . . . . . . . . . . .  15
+     5.3.  Configuration JSON Validation . . . . . . . . . . . . . .  23
+     5.4.  Selecting Protocols and Authentication  . . . . . . . . .  24
+       5.4.1.  OAuth . . . . . . . . . . . . . . . . . . . . . . . .  25
+       5.4.2.  HTTP Authentication Mechanisms  . . . . . . . . . . .  26
+       5.4.3.  Authentication Mechanisms of Text-Based Protocols . .  28
+     5.5.  Confirming Server Names . . . . . . . . . . . . . . . . .  31
+     5.6.  Username  . . . . . . . . . . . . . . . . . . . . . . . .  32
+     5.7.  Configuring OAuth . . . . . . . . . . . . . . . . . . . .  32
+     5.8.  Configuring Password-Based Authentication . . . . . . . .  33
+   6.  OAuth Requirements  . . . . . . . . . . . . . . . . . . . . .  33
+   7.  Security Considerations . . . . . . . . . . . . . . . . . . .  34
+     7.1.  Mistyped Domain Names . . . . . . . . . . . . . . . . . .  34
+     7.2.  Attacker Controlled JSON Configuration  . . . . . . . . .  35
+     7.3.  DNS . . . . . . . . . . . . . . . . . . . . . . . . . . .  35
+     7.4.  Transport Security Validation . . . . . . . . . . . . . .  36
+       7.4.1.  Minimum TLS Version . . . . . . . . . . . . . . . . .  37
+     7.5.  Following HTTP Redirects  . . . . . . . . . . . . . . . .  38
+     7.6.  Updating the Configuration  . . . . . . . . . . . . . . .  39
+     7.7.  Logo Images . . . . . . . . . . . . . . . . . . . . . . .  39
+   8.  IANA Considerations . . . . . . . . . . . . . . . . . . . . .  40
+
+
+
+Eggert, et al.            Expires 8 April 2027                  [Page 2]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+     8.1.  The User-Agent Auto-Configuration Protocol Registry . . .  40
+       8.1.1.  Registration Template . . . . . . . . . . . . . . . .  40
+       8.1.2.  Initial Registrations . . . . . . . . . . . . . . . .  41
+     8.2.  Registration  . . . . . . . . . . . . . . . . . . . . . .  42
+       8.2.1.  Registration of Well-Known URI
+               user-agent-configuration.json . . . . . . . . . . . .  42
+       8.2.2.  Registration of DNS Underscore Label
+               _ua-auto-config . . . . . . . . . . . . . . . . . . .  42
+   9.  References  . . . . . . . . . . . . . . . . . . . . . . . . .  42
+     9.1.  Normative References  . . . . . . . . . . . . . . . . . .  42
+     9.2.  Informative References  . . . . . . . . . . . . . . . . .  47
+   Appendix A.  Configuration JSON Schema  . . . . . . . . . . . . .  48
+   Acknowledgements  . . . . . . . . . . . . . . . . . . . . . . . .  51
+   Authors' Addresses  . . . . . . . . . . . . . . . . . . . . . . .  51
+
+1.  Introduction
+
+   Manual configuration of email, calendar, and contact user agent
+   applications requires users to correctly specify numerous technical
+   parameters including server hostnames, port numbers, and
+   authentication protocols.  This manual process frequently results in
+   configuration errors and setup failures, even among technically
+   skilled users.
+
+   This document defines a mechanism that significantly simplifies this
+   configuration process.  Domain owners can publish standardized
+   configuration data that user agents can automatically retrieve and
+   use.  In most cases, users need only provide their email address and
+   account password to complete the setup.
+
+   For providers that support the OAuth Profile for Open Public Clients
+   [OAuthPublic], this mechanism also enables automatic OAuth
+   configuration.  The user agent automatically determines all necessary
+   details to set up OAuth authentication for the associated account.
+
+2.  Document Conventions
+
+   In the examples of text-based protocols (IMAP, POP3, Submission, and
+   ManageSieve), this document uses a prefix of "C: " to denote lines
+   sent by the user agent to the server, and "S: " for lines sent by the
+   server to the user agent.  These prefixes are not part of the
+   protocol.  Lines without either prefix are continuations of the
+   previous line, and no line break is present in the protocol unless
+   specifically mentioned.  Examples of HTTP-based protocols do not use
+   these prefixes; each example shows either a request or a response, as
+   stated in the surrounding text.
+
+
+
+
+
+Eggert, et al.            Expires 8 April 2027                  [Page 3]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+   The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT",
+   "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and
+   "OPTIONAL" in this document are to be interpreted as described in BCP
+   14 [RFC2119] [RFC8174] when, and only when, they appear in all
+   capitals, as shown here.
+
+   This document uses the term _public suffix_ as defined in Section 9
+   of [RFC9499]: a domain under which third parties can register names,
+   such as com or co.uk.  Note that a public suffix can consist of more
+   than one label.  Such a domain is also referred to as an "effective
+   top-level domain" (eTLD).
+
+   This document uses the term _registrable domain_ as defined in
+   Section 2.3 of [COOKIES]: a hostname's public suffix plus the label
+   to its left.  It is the portion of a hostname that a single
+   organization registers, and it is also commonly called "eTLD+1".  For
+   example, the registrable domain of mail.example.com is example.com,
+   and the registrable domain of mail.example.co.uk is example.co.uk.
+
+   Note that nothing in a domain name itself indicates whether it is a
+   public suffix; determining the registrable domain of a hostname
+   requires an external list of public suffixes, such as the Public
+   Suffix List [PSL].  This document does not mandate a particular
+   source for that list.
+
+   This document uses the following terms for the parties involved.
+   Often they are the same party.
+
+   Domain owner:  The party that controls the DNS zone of the domain
+      part of the user's email address (the {domain} used in
+      Section 5.2.1).  The domain owner publishes the configuration
+      document for that domain and the DNS TXT RR containing its digest,
+      or delegates their publication to the provider (Section 5.2.2.4).
+
+   Provider:  The party that operates the servers that the configuration
+      describes.
+
+   Named party:  Whichever of the domain owner and the provider the info
+      object of the configuration describes.  The domain owner chooses
+      which (Section 4.4).
+
+3.  Overview
+
+   The automatic configuration process begins when a user wants to set
+   up their user agent application.  The user agent requests the user's
+   email address and then uses the domain portion of that address to
+   retrieve configuration data for the account.
+
+
+
+
+Eggert, et al.            Expires 8 April 2027                  [Page 4]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+   Configuration retrieval uses the Well-Known URIs mechanism defined in
+   [RFC8615].  The specific suffix for this configuration is user-agent-
+   configuration.json.  Section 5.2 provides detailed information about
+   the retrieval process.
+
+   The configuration is provided as a JSON document (detailed in
+   Section 4) that informs the user agent about:
+
+   *  Human-readable information, such as the name and logo of the
+      domain owner or the provider
+
+   *  Supported protocols for this domain
+
+   *  Server endpoints for each protocol
+
+   *  OAuth Profile for Open Public Clients support availability
+
+   The user agent uses this configuration to determine whether the
+   provider supports protocols that the user agent can also use, helping
+   decide whether to continue with the setup process.  For example, an
+   email user agent might check for support of JMAP, IMAP, POP3, and
+   Submission protocols.
+
+   Next, the user agent typically connects to the relevant services to
+   verify which authentication methods they support and whether the user
+   agent can use those methods.  For instance, if the user agent needs
+   both IMAP and Submission, it will connect to both servers to check
+   their capabilities and confirm compatibility with the user agent's
+   supported authentication mechanisms.
+
+   Based on the available options, the user agent then proceeds with one
+   of two approaches:
+
+   1.  Continue configuration using OAuth Profile for Open Public
+       Clients, or
+
+   2.  Request the user's password for traditional authentication
+
+   Finally, the user agent uses the obtained credentials (OAuth tokens
+   or password) to connect to the servers specified in the configuration
+   document and validates that the credentials work correctly with the
+   desired protocols.
+
+3.1.  Server Requirements Summary
+
+   The following is a non-normative, high-level summary of what a domain
+   owner and its provider need to implement.
+
+
+
+
+Eggert, et al.            Expires 8 April 2027                  [Page 5]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+   *  Publish a JSON configuration document at a well-known HTTPS URI,
+      listing the domain's supported protocols and their server
+      endpoints.
+
+   *  Publish DNS TXT records containing a digest of that configuration
+      document, so user agents can verify its integrity.  A domain owner
+      can delegate both to its provider (Section 5.2.2.4).
+
+   *  Accept the user's full email address as the username on all
+      servers listed in the configuration.
+
+   *  Optionally, support the OAuth Profile for Open Public Clients to
+      enable OAuth-based authentication.
+
+3.2.  User Agent Requirements Summary
+
+   The following is a non-normative, high-level summary of what a user
+   agent needs to implement.
+
+   *  Ability to construct the well-known URI from a user's email
+      address and retrieve the JSON configuration document over HTTPS.
+
+   *  Ability to validate the configuration document's integrity by
+      comparing its digest against a DNS TXT record.
+
+   *  Ability to connect to each server listed in the configuration and
+      retrieve its supported authentication mechanisms.
+
+   *  User interface to present the server hostnames for the user to
+      confirm before any credentials are entered.
+
+   *  Support for OAuth Profile for Open Public Clients and/or password-
+      based authentication, to complete account setup.
+
+4.  JSON Configuration
+
+   The configuration document describes which services are available and
+   their corresponding endpoints for a specific domain.
+
+   The configuration file MUST conform to the JSON schema specification
+   provided in Appendix A.
+
+   The configuration uses the media type application/json.  The HTTP
+   server MUST set the corresponding Content-Type header as specified in
+   [RFC9110].
+
+
+
+
+
+
+Eggert, et al.            Expires 8 April 2027                  [Page 6]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+4.1.  Example
+
+   The following example demonstrates a typical JSON configuration:
+
+   ========== NOTE: '\' line wrapping per RFC 8792 ===========
+
+   {
+       "protocols": {
+           "jmap": {
+               "url": "https://jmap.example.com/session"
+           },
+           "imap": {
+               "host": "imap.example.com"
+           },
+           "pop3": {
+               "host": "pop3.example.com"
+           },
+           "submit": {
+               "host": "smtp.example.com"
+           },
+           "caldav": {
+               "url": "https://sync.example.com/.well-known/caldav"
+           },
+           "carddav": {
+               "url": "https://sync.example.com/.well-known/carddav"
+           }
+       },
+       "authentication": {
+           "oauth-public": {
+               "issuer": "https://auth.example.com"
+           },
+           "password": true
+       },
+       "info": {
+           "provider": {
+               "name": "Example Provider Name",
+               "shortName": "Example",
+               "logo": [
+                   {
+                       "url": "https://www.example.com/logo.svg",
+                       "content-type": "image/svg+xml"
+                   }
+               ]
+           },
+           "help": {
+               "documentation": "https://help.example.com/howto/\
+                   set-up-your-mail-app.html",
+               "developer": "https://developer.example.com/\
+
+
+
+Eggert, et al.            Expires 8 April 2027                  [Page 7]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+                   client-apps/",
+               "contact": ["mailto:it@example.com"]
+           }
+       }
+   }
+
+4.2.  Protocols
+
+   The protocols object specifies all protocols that the provider offers
+   for the domain and identifies the server endpoint for each protocol.
+
+   For the following HTTP-based protocols:
+
+   *  JMAP defined in [RFC8620],
+
+   *  CalDAV defined in [RFC4791],
+
+   *  CardDAV defined in [RFC6352], and
+
+   *  WebDAV defined in [RFC4918]
+
+   each protocol entry MUST include a url value containing a URL with
+   the https scheme.  A server MAY answer a request for this URL with a
+   redirect (see Section 7.5); the URL reached after all redirects have
+   been followed MUST specify an endpoint that serves the corresponding
+   protocol.  The server MUST use the default port 443 for HTTPS, and
+   the URL MUST NOT include an explicit port number.
+
+   The webdav protocol entry describes a WebDAV service used for file
+   sharing, as distinct from the calendar and contact services described
+   by the caldav and carddav entries.
+
+   For the WebDAV-based protocols CalDAV, CardDAV, and WebDAV, the url
+   value serves two purposes: the user agent uses it to probe for
+   supported authentication schemes (see Section 5.4.2), and, once
+   authenticated, it uses it as the base URL for the protocol itself.
+   It is therefore not sufficient for the url to be any resource that
+   merely triggers authentication; it MUST be a URL that the user agent
+   can use as the initial "context path" for the bootstrapping procedure
+   in Section 6 of [RFC6764].  Specifically, the url MUST be either:
+
+   1.  the protocol-specific .well-known URI defined in Section 5 of
+       [RFC6764] (that is, https://example.com/.well-known/caldav for
+       CalDAV and https://example.com/.well-known/carddav for CardDAV),
+       which redirects to such a context path; or
+
+   2.  the context path itself, that is, a WebDAV resource that responds
+       to a PROPFIND request (Section 9.1 of [RFC4918]).
+
+
+
+Eggert, et al.            Expires 8 April 2027                  [Page 8]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+   For CalDAV and CardDAV, the url SHOULD be the protocol-specific
+   .well-known URI (form 1).  Section 5 of [RFC6764] already requires
+   servers to support these URIs and to redirect requests for them to
+   the actual context path, and requires user agents to follow those
+   redirects, so form 1 is the most broadly interoperable choice.  It
+   also lets a provider change the context path, including on a per-user
+   basis, without a change to the configuration document or its DNS
+   digest (Section 5.2.2).
+
+   [RFC6764] does not define a .well-known URI for WebDAV as defined in
+   [RFC4918], and no such URI is registered in the "Well-Known URIs"
+   registry.  The url of a webdav protocol entry MUST therefore be the
+   context path (form 2).
+
+   The url MUST NOT be a bare origin, nor any other URL that neither
+   serves the protocol itself nor redirects to a resource that does, and
+   that would require the user agent to derive the context path on its
+   own.  Note that a server MUST NOT locate the actual service endpoint
+   at the .well-known URI (Section 5 of [RFC6764]); form 1 therefore
+   always involves at least one redirect.
+
+   The user agent sends its PROPFIND probe to this url and follows any
+   redirect subject to the constraints in Section 7.5.  The URL reached
+   after all redirects have been followed is the context path that the
+   user agent uses for subsequent protocol operations; the user agent is
+   not required to derive .well-known URIs itself.  A server MAY require
+   authentication before it issues the redirect, as described in
+   Section 5 of [RFC6764]; such a response also carries the WWW-
+   Authenticate header fields that the user agent is probing for (see
+   Section 5.4.2).  Where the OAuth profile in [OAuthPublic] calls for a
+   protected-resource identifier, that identifier is the context path
+   reached after all redirects have been followed, not the url as
+   published in the configuration.
+
+   Hostnames in URLs MUST support Internationalized Domain Names (IDNs)
+   as defined in [RFC5890] and [RFC5891].  A configuration MAY use
+   either Unicode labels (u-labels) or ASCII Compatible Encoding labels
+   (a-labels).  User agents MUST support both forms and handle the
+   conversion between them as specified in [RFC5891].
+
+   Example:
+
+   "jmap": {
+       "url": "https://jmap.example.com/session"
+   }
+
+   For the following text-based protocols:
+
+
+
+
+Eggert, et al.            Expires 8 April 2027                  [Page 9]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+   *  IMAP defined in [RFC9051],
+
+   *  POP3 defined in [RFC1939],
+
+   *  Submission defined in [RFC6409], and
+
+   *  ManageSieve defined in [RFC5804]
+
+   each protocol entry MUST include a host value specifying the hostname
+   of the server that provides the corresponding protocol.  The service
+   MUST be available on the default port for that protocol, with the
+   connection secured using TLS from the start of the connection, also
+   known as "direct TLS" or "implicit TLS".  Section 5.4.3 goes into
+   details about TLS and which ports to use.
+
+   Hostnames MUST support Internationalized Domain Names (IDNs) as
+   defined in [RFC5890] and [RFC5891].  A configuration MAY use either
+   Unicode labels (u-labels) or ASCII Compatible Encoding labels
+   (a-labels).  User agents MUST support both forms and handle the
+   conversion between them as specified in [RFC5891].
+
+   Example:
+
+   "imap": {
+       "host": "imap.mail.example.com"
+   }
+
+4.3.  Authentication
+
+   The authentication object specifies which authentication mechanisms
+   the provider supports.
+
+   The authentication object itself is optional, but providers SHOULD
+   include it.  If it is absent, the configuration makes no statement
+   about the authentication mechanisms that the provider supports, and
+   the user agent has to determine them solely by probing each server of
+   interest as described in Section 5.4.
+
+   If the authentication object is present, it MUST include the password
+   value.  This value indicates whether the provider supports username
+   and password authentication.  The configuration for a provider that
+   supports OAuth but not password-based authentication therefore
+   contains "password": false.
+
+   The nested oauth-public object contains a single issuer value that
+   specifies the authorization server's issuer identifier as defined in
+   [RFC8414].  This value is a URL that uses the https scheme and has no
+   query or fragment components.  User agents can use this identifier
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 10]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+   for authentication via [OAuthPublic].  The presence of the oauth-
+   public object indicates that the provider supports OAuth; its absence
+   indicates that it does not.
+
+   The contents of the authentication object describe the provider as a
+   whole.  Individual servers can differ, so a user agent still needs to
+   probe each server that it intends to use, as described in
+   Section 5.4.
+
+4.4.  Informational
+
+   The info object contains information that user agents can present to
+   users.  It describes either the domain owner or the provider, and the
+   domain owner decides which.  For example, a domain owner that offers
+   a white-label provider's service under its own brand describes
+   itself, and a domain owner that uses a provider's service under the
+   provider's brand describes the provider.  Despite its name, the info/
+   provider object (Section 4.4.1) describes this party, the _named
+   party_.
+
+   The only required field is info/provider/name, which SHOULD clearly
+   identify the named party to the user.  The optional info/provider/
+   shortName provides a shorter version of name.
+
+   The info/provider/logo array can contain one or more entries pointing
+   to the named party's logo images.  User agents can use these to
+   display that logo to users.
+
+   The info/help/documentation field provides a URL that can be
+   presented to users for additional information about the named party's
+   service.  The info/help/developer field contains a URL with
+   information specifically for user agent developers.  The info/help/
+   contact array lists URLs, such as mailto URLs, that user agent
+   developers can use to contact the named party.  As described in
+   Section 4.4.2, these URLs are not intended for users, and user agents
+   MUST NOT display them.
+
+   A minimal info example:
+
+   "info": {
+       "provider": {
+           "name": "Example Provider Name"
+       }
+   }
+
+
+
+
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 11]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+4.4.1.  Provider Information
+
+   The provider object can have name, shortName, and logo properties.
+
+   The name and shortName values are intended for display to the user.
+
+   The name property specifies the named party's display name, such as
+   the name used in its marketing materials.  It SHOULD be no longer
+   than 30 characters, but MUST be no longer than 60 characters.
+
+   The shortName property is optional.  It specifies a brief version of
+   the named party's name, as commonly recognized by users.  It SHOULD
+   be no longer than 12 characters, and it MUST NOT be longer than 20
+   characters.
+
+   Both name and shortName MUST NOT include any control characters and
+   SHOULD NOT include any excessive white space.
+
+   The logo property contains an array of variants of the named party's
+   logo.  User agents select the variant that best matches their UI
+   requirements and technical constraints.
+
+   Each object in the array contains the following properties:
+
+   *  url - Location where the logo can be retrieved.  User agents MAY
+      download the logo file during configuration and store it locally.
+
+   *  content-type - Media type of the logo image.  This follows
+      [RFC2045] media type format, specifying the main type and subtype
+      without parameters.  The main media type MUST be image.
+
+   *  width - Image width in pixels.  Optional.  Omitted for SVG files.
+
+   *  height - Image height in pixels.  Optional.  Omitted for SVG
+      files.
+
+   The logos SHOULD include at least one of each of the following:
+
+   *  image/svg+xml
+
+   *  image/png with size 128 by 128
+
+   *  image/png with size 512 by 512
+
+   Logo images in the SVG format MUST use the SVG Tiny PS Profile
+   specified in [I-D.svg-tiny-ps-abrotman].
+
+
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 12]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+4.4.2.  Help
+
+   These fields are intended to allow the named party to give additional
+   information about configuring user agents.
+
+   The documentation property should link to a document intended for
+   users.  It can provide additional information to users about how to
+   configure their user agent.  A user agent MAY choose to display a
+   link to this URL.  User agents SHOULD NOT display links with a URL
+   scheme other than https.
+
+   The developer property should link to a document intended for user
+   agent developers.  The document this URL links to can provide
+   additional information to the developer.
+
+   The contact property should provide a way for user agent developers
+   to contact the named party.  It is _not_ intended as a way for users
+   to contact the named party.  User agents MUST NOT display this link
+   in their user interface.  This URL would typically be a mailto URL or
+   a URL linking to a contact form for developers to use.
+
+5.  Flow
+
+   Section 3 provides a high-level overview of the automatic
+   configuration process.  This section details the individual steps
+   involved in this process.
+
+5.1.  Email Address
+
+   During the initial configuration process, the user agent requests the
+   user's email address.  User agents SHOULD accept any valid mailbox
+   format as specified in Section 3.4 of [RFC5322].
+
+5.2.  Configuration Source
+
+   After the user provides their email address, the user agent extracts
+   the domain part of the user's email address according to
+   Section 3.4.1 of [RFC5322].  For example:
+
+
+
+
+
+
+
+
+
+
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 13]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+           +================================+=================+
+           | Text Entered by User           | domain          |
+           +================================+=================+
+           | jdoe@foo.example.com           | foo.example.com |
+           +--------------------------------+-----------------+
+           | "J Doe" <jdoe@foo.example.com> | foo.example.com |
+           +--------------------------------+-----------------+
+           | <jdoe@foo.example.com>         | foo.example.com |
+           +--------------------------------+-----------------+
+
+                    Table 1: Domain from email address
+
+   This domain is then used to retrieve the JSON configuration resource
+   using well-known URIs with DNS-based digest validation.
+
+5.2.1.  Well-Known Uniform Resource Identifier
+
+   The user agent retrieves configuration data over HTTP using the
+   format described in Section 4.
+
+   Configuration retrieval uses [RFC8615] Well-Known URIs.  The user
+   agent constructs the URI using the _domain_ from the user's email
+   address and the _URI suffix_ user-agent-configuration.json.  The
+   detailed URI construction process is specified in [RFC8615].
+
+   The domain name MUST support Internationalized Domain Names (IDNs) as
+   defined in [RFC5890] and [RFC5891].  User agents MUST handle both
+   Unicode labels (u-labels) and ASCII Compatible Encoding labels
+   (a-labels) when processing domain names from email addresses, and
+   convert them appropriately for URI construction as specified in
+   [RFC5891].
+
+   The URI follows this template:
+
+   ========== NOTE: '\' line wrapping per RFC 8792 ===========
+
+   https://ua-auto-config.{domain}/\
+     .well-known/user-agent-configuration.json
+
+   If the user's email address' domain is foo.example.com, the user
+   agent constructs the following URI:
+
+   ========== NOTE: '\' line wrapping per RFC 8792 ===========
+
+   https://ua-auto-config.foo.example.com/\
+     .well-known/user-agent-configuration.json
+
+
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 14]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+   This URI always uses the https scheme.  User agents MUST retrieve the
+   configuration file only via https (HTTP over TLS).
+
+   The user agent MUST validate that the connection is secured by TLS,
+   and this connection MUST use TLS 1.3 ([RFC9846]) or higher.  If the
+   user agent follows any HTTP redirect while retrieving the
+   configuration, every hop MUST likewise use the https scheme over TLS
+   1.3 or higher.  See Section 7.4 and Section 7.4.1 for details about
+   transport security with respect to retrieving the configuration.
+
+   As described in Section 4, the configuration uses the media type
+   application/json.  The user agent MUST validate that the Content-Type
+   of the returned resource is application/json.
+
+   The HTTP server that serves the JSON configuration MUST NOT require
+   any form of HTTP authentication to return the configuration.
+
+   For example, the user agent sends the following request:
+
+   GET /.well-known/user-agent-configuration.json HTTP/1.1
+   host: ua-auto-config.foo.example.com
+   user-agent: curl/8.4.0
+   accept: application/json
+
+   and the server responds:
+
+   HTTP/1.1 200 OK
+   server: nginx/1.25.3
+   date: Thu, 23 Oct 2025 10:30:00 GMT
+   content-type: application/json
+   content-length: 1184
+
+   {
+       "protocols": {
+           "jmap": {
+   ...
+
+5.2.2.  DNS-Based Digest Validation
+
+   After retrieving the auto-configuration resource from the well-known
+   URI as described in Section 5.2.1, the user agent SHOULD validate its
+   integrity before use.  This validation is performed by comparing a
+   locally computed digest of the resource against a digest published in
+   a DNS TXT resource record (RR).
+
+   This validation depends on the integrity of the DNS answer, and it
+   therefore only adds to the protection that TLS already provides
+   (Section 7.4) if the user agent can obtain that answer over a trusted
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 15]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+   channel.  A user agent that cannot do so, or that has no way to
+   perform DNS queries at all, MAY omit this validation.  Section 7.3
+   discusses this trade-off.
+
+   A user agent that performs this validation MUST perform it as
+   described in Section 5.2.2.1.  If the validation fails, the user
+   agent MUST ignore the auto-configuration resource.
+
+   Domain owners MUST publish the DNS TXT RR described in
+   Section 5.2.2.2, using the SHA-256 digest algorithm (or delegate this
+   to its provider; see Section 5.2.2.4), regardless of whether a
+   particular user agent validates it.  Section 5.2.2.3 describes how to
+   publish this record when the configuration changes.
+
+5.2.2.1.  Validation Procedure
+
+   A user agent that validates the auto-configuration resource MUST
+   perform the following steps:
+
+   1.  Let the "decoded message content" be the payload body of the
+       final HTTP response, reached after any redirects have been
+       followed, after all Transfer-Encoding (e.g., "chunked") and
+       Content-Encoding (e.g., "gzip", "br") transformations have been
+       reversed.  This is the final, decompressed representation of the
+       resource.  See Section 6.1 of [RFC9112] and Section 8.4 of
+       [RFC9110] for details on these encodings.
+
+   2.  Construct a DNS query QNAME using the template _ua-auto-
+       config.{domain}, where {domain} is the domain part of the user's
+       email address (e.g., "foo.example.com" for
+       "jdoe@foo.example.com").
+
+   3.  Perform a DNS query for the TXT RR type at the constructed QNAME,
+       following any CNAME RRs as described in Section 3.6.2 of
+       [RFC1034].  The response may contain multiple TXT RRs.
+
+   4.  For each TXT RR returned in the DNS response:
+
+       a.  Parse the record according to the syntax in Section 5.2.2.2.
+           If the record is malformed or is missing any of the mandatory
+           tags (v, a, d), discard this RR and proceed to the next one.
+
+       b.  Let the "remote algorithm" be the value of the a tag.  If the
+           user agent does not support this algorithm, discard this RR
+           and proceed to the next one.
+
+
+
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 16]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+       c.  Let the "remote digest" be the Base64-decoded value of the d
+           tag.  If decoding fails, discard this RR and proceed to the
+           next one.
+
+       d.  Using the "remote algorithm", compute a "local digest" of the
+           "decoded message content" obtained in step 1.
+
+       e.  Perform a byte-for-byte comparison of the "local digest" and
+           the "remote digest".  If they are identical, the validation
+           is successful.  The user agent MUST immediately stop
+           processing further TXT RRs and MAY use the auto-configuration
+           resource.
+
+   5.  If, after checking all valid and supported TXT RRs, no match is
+       found, the validation has failed.  The user agent MUST discard
+       the "decoded message content" and behave as if no auto-
+       configuration resource was found.
+
+   Note: A compliant HTTP client library will typically handle the
+   decoding of Transfer-Encoding and Content-Encoding transparently.
+   The requirement in this document is to ensure that the digest is
+   computed on the final data, not on an intermediate, encoded
+   representation.
+
+5.2.2.2.  DNS Resource Record for Auto-Configuration
+
+   Configuration information for a given domain is published as a DNS
+   TXT resource record (RR) at a special name, _ua-auto-config,
+   prepended to the domain name.  For example, for the domain
+   example.com, the lookup would be for a TXT record at _ua-auto-
+   config.example.com.  This name can be an alias for a name in another
+   zone; see Section 5.2.2.4.
+
+5.2.2.2.1.  Record Syntax
+
+   The content of the TXT RR is a string of tag=value pairs separated by
+   semicolons (;).  Tags are short ASCII strings that identify a
+   particular parameter.  Values are ASCII strings whose format depends
+   on the tag.
+
+   As described in Section 3.3.14 of [RFC1035], the RDATA of a TXT RR
+   consists of one or more character-strings, each of which can hold at
+   most 255 octets.  If the RDATA of a single TXT RR contains more than
+   one character-string, a user agent MUST concatenate those character-
+   strings, in the order in which they appear in the RDATA and without
+   adding any separator, and treat the result as the content of the
+   record.  A user agent MUST NOT concatenate the contents of separate
+   TXT RRs; each RR is parsed and evaluated on its own, as described in
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 17]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+   Section 5.2.2.1.  The records defined by this document fit within a
+   single character-string, and domain owners SHOULD publish them as
+   one.
+
+   The formal syntax of the record is described using ABNF [RFC5234] as
+   follows.  The core rules ALPHA, DIGIT, HTAB, and WSP are defined in
+   Appendix B.1 of [RFC5234], and the Base64 alphabet is the one defined
+   in Section 4 of [RFC4648].
+
+   config-record    = tag-spec *( *WSP ";" *WSP tag-spec ) *WSP [";"]
+
+   tag-spec         = version-tag / alg-tag / digest-tag / future-tag
+
+   version-tag      = "v" *WSP "=" *WSP "UAAC1"
+   alg-tag          = "a" *WSP "=" *WSP digest-algorithm
+   digest-algorithm = "sha256"
+   digest-tag       = "d" *WSP "=" *WSP 1*base64-char
+
+   future-tag       = 1*tag-name-char *WSP "=" *WSP 1*tag-value-char
+
+   tag-name-char    = ALPHA / DIGIT
+   tag-value-char   = %x21-3A / %x3C-7E ; Any visible ASCII char
+                                        ; except semicolon
+
+   base64-char      = ALPHA / DIGIT / "+" / "/" / "="
+
+   ABNF string literals are case-insensitive (Section 2.3 of [RFC5234]),
+   but the tag names and tag values defined by this document are not;
+   see Section 5.2.2.2.2.
+
+5.2.2.2.2.  Tags
+
+   The following tags are defined.  Tag names and tag values are case-
+   sensitive.  The tag names v, a, and d and the tag value sha256 MUST
+   be lowercase, and the tag value UAAC1 MUST be uppercase, as shown in
+   this document.  A record that uses different case for any of these
+   MUST be treated as invalid and ignored, as described in
+   Section 5.2.2.2.4.
+
+
+
+
+
+
+
+
+
+
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 18]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+   +=====+================================================+===========+
+   | Tag | Description                                    | Status    |
+   +=====+================================================+===========+
+   | v   | Version.  The value MUST be "UAAC1" for        | Mandatory |
+   |     | records compliant with this specification.     |           |
+   +-----+------------------------------------------------+-----------+
+   | a   | Digest Algorithm.  The value MUST be "sha256". | Mandatory |
+   |     | This identifies the algorithm used to create   |           |
+   |     | the digest in the 'd' tag.                     |           |
+   +-----+------------------------------------------------+-----------+
+   | d   | Digest.  The Base64-encoded digest of the JSON | Mandatory |
+   |     | resource described in Section 5.2.1.  The      |           |
+   |     | encoding MUST follow Section 4 of [RFC4648].   |           |
+   +-----+------------------------------------------------+-----------+
+
+                          Table 2: Defined Tags
+
+5.2.2.2.3.  Digest Algorithm
+
+   SHA-256 ("sha256") as defined in [RFC6234] is the supported digest
+   algorithm.
+
+   The digest is computed over the raw bytes of the JSON resource
+   retrieved from the well-known URI, after any HTTP transfer or content
+   encoding has been decoded.
+
+5.2.2.2.4.  Parsing Rules
+
+   A user agent parsing the record MUST adhere to the following rules:
+
+   *  The record MUST contain the v, a, and d tags.  If any of these
+      tags are missing, the record is invalid and MUST be ignored.
+
+   *  The order of the tags is not significant.
+
+   *  Whitespace (WSP) is permitted on either side of the = and ;
+      separators and MUST be ignored.
+
+   *  If a tag is encountered that is not defined in this document
+      (e.g., a tag from a future version), the parser MUST ignore that
+      entire tag=value pair.  This allows for future extensions.
+
+   *  If any of the mandatory tags (v, a) have values other than those
+      specified in this document, including a value that differs only in
+      case, the record is invalid and MUST be ignored.
+
+
+
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 19]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+5.2.2.3.  Changing the Configuration
+
+   The digest in the TXT RR has to match the configuration document that
+   the user agent retrieves.  Because DNS answers are cached for the
+   duration of the record's TTL, and because HTTP caches and content
+   delivery networks can serve a previous version of the configuration
+   document for some time, a domain owner that changes its configuration
+   document has a window during which a user agent can retrieve one
+   version of the document and the digest of another.  During that
+   window, validation as described in Section 5.2.2.1 fails, and user
+   agents behave as if no configuration were published.
+
+   To avoid this, a domain owner that changes its configuration document
+   SHOULD publish, for the duration of the change, one TXT RR for the
+   previous version of the document and one TXT RR for the new version.
+   The validation procedure in Section 5.2.2.1 accepts a configuration
+   document that matches any of the records returned for the QNAME, so a
+   user agent succeeds regardless of which version of the document it
+   retrieves.  Once the domain owner is confident that no cached copy of
+   the previous version is being served anymore, it removes the record
+   for the previous version.
+
+   Domain owners SHOULD keep the TTL of the TXT RR short enough that
+   this window stays short, and SHOULD take the caching directives that
+   they set on the configuration document ([RFC9111]) into account when
+   deciding how long to publish both records.
+
+5.2.2.4.  Delegating to the Provider
+
+   A domain owner can delegate the publication of its configuration to
+   its provider, so that the provider maintains a single configuration
+   document and TXT RR for all domains it serves.  When a domain owner
+   delegates both names as described below, the provider fulfills the
+   domain owner's requirements in this document for publishing the
+   configuration document and the TXT RR, including those in
+   Section 5.2.2.3.
+
+   The configuration involves two names: the host ua-auto-
+   config.{domain} that serves the configuration document
+   (Section 5.2.1), and the owner name _ua-auto-config.{domain} of the
+   TXT RR that holds its digest.  Validation succeeds only if the digest
+   in the TXT RR matches the document served by the host, so both have
+   to be under the control of the same party.
+
+
+
+
+
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 20]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+   The domain owner delegates the TXT RR by publishing a CNAME RR at
+   _ua-auto-config.{domain} that points to a name in the provider's
+   zone.  A domain owner that does so MUST also have the configuration
+   document served by the provider, using one of the following methods,
+   and MUST NOT serve its own copy of that document:
+
+   1.  A CNAME RR at ua-auto-config.{domain} that points to a host
+       operated by the provider.  The provider then serves the
+       configuration document for ua-auto-config.{domain}, and needs a
+       certificate for that name that satisfies Section 7.4.
+
+   2.  An HTTP server at ua-auto-config.{domain}, operated by the domain
+       owner, that redirects requests for the well-known URI to the
+       provider's configuration document, subject to Section 7.5.  The
+       domain owner, not the provider, needs a certificate for ua-auto-
+       config.{domain}. The user agent still queries the TXT RR at _ua-
+       auto-config.{domain} for the domain of the user's email address,
+       not for the host that the redirect points to.
+
+   Conversely, a domain owner that has the configuration document served
+   by the provider (by either method) MUST also delegate the TXT RR.
+   Delegating only one of the two names leaves the document and its
+   digest under the control of different parties, and validation fails
+   as soon as either party changes its side, for example when the
+   provider changes its configuration (Section 5.2.2.3).
+
+   These are requirements on the domain owner.  A user agent cannot
+   detect a violation, other than through a failed validation.
+
+   For example, the domain owner of example.org, whose provider operates
+   example.net, delegates both names using the first method:
+
+   _ua-auto-config.example.org.  CNAME  _ua-auto-config.example.net.
+   ua-auto-config.example.org.   CNAME  ua-auto-config.example.net.
+
+   A CNAME RR cannot coexist with other RRs at the same owner name
+   (Section 10.1 of [RFC2181]).  A domain owner that delegates _ua-auto-
+   config.{domain} therefore cannot publish TXT RRs of its own there.
+   The TTL of the CNAME RR adds to the time during which a user agent
+   can see a previous answer.
+
+   A configuration document that a provider serves for several domains
+   is identical for all of them, so its info object (Section 4.4)
+   describes the provider.  A domain owner whose configuration describes
+   itself, for example under a white-label arrangement, needs a document
+   specific to its domain.  Under delegation, the provider can serve
+   such a document, selecting it by the requested host (first method),
+   or by a redirect target specific to the domain, which the domain
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 21]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+   owner then redirects to (second method).  The provider publishes the
+   TXT RR for that document at a name specific to that domain, which is
+   the target of that domain's CNAME RR.  Publishing the digests of all
+   domain-specific documents at one shared name would also pass
+   validation, but it would let the document of one domain validate for
+   every other domain that delegates to that name, and it grows with
+   each domain:
+
+   _ua-auto-config.example.org.  CNAME  example-org.example.net.
+
+5.2.2.5.  Example
+
+   This example demonstrates the configuration retrieval process for a
+   user with email address user@example.com.
+
+   The user agent performs the following steps:
+
+   1.  Constructs the well-known URI from the email domain:
+
+      ========== NOTE: '\' line wrapping per RFC 8792 ===========
+
+      https://ua-auto-config.example.com/\
+        .well-known/user-agent-configuration.json
+
+   2.  Retrieves the JSON configuration over HTTPS and receives:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 22]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+      {
+          "protocols": {
+              "jmap": {
+                  "url": "https://jmap.example.com/session"
+              },
+              "imap": {
+                  "host": "imap.example.com"
+              },
+              "submit": {
+                  "host": "smtp.example.com"
+              }
+          },
+          "authentication": {
+              "oauth-public": {
+                  "issuer": "https://auth.example.com"
+              },
+              "password": true
+          },
+          "info": {
+              "provider": {
+                  "name": "Example Provider"
+              }
+          }
+      }
+
+   3.  Queries DNS for TXT record at _ua-auto-config.example.com and
+       receives:
+
+      ========== NOTE: '\' line wrapping per RFC 8792 ===========
+
+      _ua-auto-config.example.com.    TXT    "v=UAAC1; a=sha256; \
+        d=K7gNU3sdo+OL0wNhqoVWhr3g6s1xYv72ol/pe/Unols="
+
+   4.  Computes the SHA-256 digest of the retrieved JSON configuration
+       and verifies it matches the digest in the DNS TXT record.
+
+   5.  Since validation succeeds, the user agent may proceed to use this
+       configuration for account setup.
+
+5.3.  Configuration JSON Validation
+
+   After successfully retrieving a configuration resource, user agents
+   MUST validate that the configuration contains valid JSON syntax
+   according to [RFC8259].  Additionally, user agents MUST validate the
+   retrieved configuration against the JSON schema provided in
+   Appendix A.  If the JSON syntax is invalid, or if the configuration
+   does not validate against that schema, user agents MUST ignore the
+   configuration entirely and not use any portion of it.
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 23]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+   User agents MUST process only the properties that they support and
+   MUST ignore properties not specified in the schema.  This requirement
+   enables future extensions of the format without breaking existing
+   user agent implementations.
+
+5.4.  Selecting Protocols and Authentication
+
+   After successfully retrieving and validating the configuration JSON,
+   the user agent needs to determine:
+
+   *  Which protocols to use
+
+   *  Which authentication mechanism to employ
+
+   Both user agents and servers support multiple protocols.  The user
+   agent needs to decide which protocols to use and determine whether
+   the protocols specified in the configuration are sufficient to
+   proceed.  This document does not provide recommendations regarding
+   protocol preferences or minimum protocol requirements, as these
+   decisions depend on the specific needs and implementation details of
+   individual user agents.
+
+   The automatic configuration flow supports two distinct authentication
+   types:
+
+   *  Username and password-based authentication
+
+   *  OAuth-based authentication
+
+   User agents can support one or both authentication methods.
+   Similarly, servers for each protocol can support one or both methods.
+   Additionally, the specific implementation details of authentication
+   can vary between protocols.
+
+   User agents SHOULD probe each protocol and server of interest to
+   determine compatible authentication methods.  This probing process
+   can influence the user agent's protocol selection and allows the user
+   agent to verify server availability.
+
+   This document does not provide recommendations regarding protocol
+   preferences.  The user agent MUST make these decisions based on its
+   needs.
+
+   If the user agent determines that it can use either password-based
+   authentication or OAuth authentication, the user agent SHOULD prefer
+   OAuth-based authentication.
+
+
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 24]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+5.4.1.  OAuth
+
+   The JSON configuration includes an oauth-public entry when the
+   provider supports OAuth.  The issuer value specifies the
+   authorization server's issuer identifier.  According to Section 2.2
+   of [OAuthPublic], the OAuth Authorization Server Metadata is served
+   at a URL constructed using this issuer value with the template
+
+   {issuer}/.well-known/oauth-authorization-server
+
+   For example, if the JSON configuration contains this entry:
+
+   "oauth-public" : {
+       "issuer" : "https://auth.example.com"
+   },
+
+   the OAuth Authorization Server Metadata would be at the URL
+   https://auth.example.com/.well-known/oauth-authorization-server.
+
+   Note that as defined in [RFC8414], the authorization server's issuer
+   identifier MUST be a URL that uses the https scheme without any query
+   or fragment components.  User agents MUST verify that the issuer
+   value is valid according to [RFC8414].  The issuer value SHOULD NOT
+   have a trailing slash, and user agents MUST construct the metadata
+   URL as described in Section 3.1 of [RFC8414], which inserts the well-
+   known URI path between the host and any path component of the issuer
+   identifier.
+
+   Before the user agent chooses to use OAuth for any protocols, it
+   SHOULD make sure that it can retrieve the OAuth Authorization Server
+   Metadata from the corresponding URI.  This retrieval, and any HTTP
+   redirect the user agent follows while performing it, MUST use the
+   https scheme over TLS 1.3 ([RFC9846]) or higher, as required by
+   Section 7.4.1.
+
+   The presence of the oauth-public object describes the provider, not
+   any individual server.  The user agent SHOULD therefore still probe
+   each server that it is interested in, as described in Section 5.4.2
+   and Section 5.4.3, to check that the server itself supports OAuth.
+   The user agent MUST NOT perform any authentication while probing, but
+   it SHOULD record which mechanism(s) each server supports.
+
+
+
+
+
+
+
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 25]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+5.4.2.  HTTP Authentication Mechanisms
+
+   To check which HTTP authentication schemes a particular HTTP server
+   supports, the user agent SHOULD send a request to the server's
+   endpoint without any Authorization header.  The user agent SHOULD
+   choose an HTTP method that requires access privileges on the target
+   resource, so that a server that supports authentication responds with
+   a 401 Unauthorized status code and a www-authenticate response
+   header.  The appropriate method depends on the protocol.
+
+   For the WebDAV-based protocols CalDAV ([RFC4791]), CardDAV
+   ([RFC6352]), and WebDAV ([RFC4918]), the user agent SHOULD use a
+   PROPFIND request as defined in Section 9.1 of [RFC4918].  PROPFIND is
+   the canonical request used to bootstrap a WebDAV connection: it
+   requires access privileges on the collection and therefore reliably
+   triggers authentication.  A plain GET request against a WebDAV
+   collection is not a reliable probe, because how servers handle it
+   varies widely.  The bootstrapping procedure in Section 6 of [RFC6764]
+   uses the same request, a PROPFIND for the DAV:current-user-principal
+   property ([RFC5397]).  A minimal probe might look like this:
+
+   PROPFIND /dav/ HTTP/1.1
+   host: dav.example.com
+   depth: 0
+   content-type: application/xml; charset=utf-8
+
+   <?xml version="1.0" encoding="utf-8"?>
+   <propfind xmlns="DAV:">
+     <prop>
+       <current-user-principal/>
+     </prop>
+   </propfind>
+
+   For all other HTTP-based protocols, notably JMAP ([RFC8620]), the
+   user agent SHOULD use a GET request.  For example:
+
+   GET /jmap/session HTTP/1.1
+   host: api.example.com
+   accept: application/json
+
+   As detailed in [RFC9110] the server SHOULD respond to either request
+   with a 401 Unauthorized status code and a www-authenticate response
+   header indicating which authentication scheme(s) are supported.
+
+   The user agent SHOULD include an accept header with the content type
+   it would expect for the given protocol.  For JMAP, for example, the
+   user agent SHOULD include accept: application/json as a header in
+   this request.
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 26]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+   If the server supports OAuth, the www-authenticate response header
+   would include the Bearer scheme, which [RFC6750] defines; [RFC6749]
+   describes the OAuth framework itself in more detail.  [RFC7617] and
+   [RFC7616] describe username + password authentication using the so-
+   called 'Basic' HTTP authentication scheme and the HTTP digest access
+   authentication respectively.  Other password based authentication
+   mechanisms exist for HTTP, but their discussion is outside the scope
+   of this document.
+
+   For example, a response header
+
+   HTTP/1.1 401 Unauthorized
+   www-authenticate: Bearer realm="api.example.com"
+
+   would indicate that the server supports OAuth.
+
+   Alternatively, a response such as
+
+   ========== NOTE: '\' line wrapping per RFC 8792 ===========
+
+   HTTP/1.1 401 Unauthorized
+   www-authenticate: Digest realm="api.example.com", qop="auth", \
+   algorithm=SHA-256, nonce="dcd98b7102dd2f0e8b11d0f600bfb0c093", \
+   opaque="5ccc069c403ebaf9f0171e9517f40e41"
+
+   would indicate that the server supports digest access authentication.
+
+   Details of HTTP authentication are described in [RFC9110] but it is
+   worth noting that a server supporting multiple authentication methods
+   can return either multiple www-authenticate header fields in its
+   response or a single www-authenticate header field with multiple
+   authentication methods.
+
+   These probing requests are sent to the HTTP-based protocol endpoints
+   from the configuration, which use the https scheme, and they are
+   subject to the transport security requirements in Section 7.4.1.  A
+   server MAY respond to a probe with a redirect, which lets a provider
+   use the configured URL as a stable "front door" that redirects to the
+   server that actually handles the protocol.  The user agent MUST
+   follow such redirects subject to the constraints in Section 7.5.  For
+   the WebDAV-based protocols, the URL reached after these redirects is
+   the context path the user agent uses for the protocol itself, as
+   described in Section 4.2.
+
+
+
+
+
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 27]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+5.4.3.  Authentication Mechanisms of Text-Based Protocols
+
+   For the text-based protocols (IMAP, POP3, Submission, and
+   ManageSieve) the user agent SHOULD connect to the server to check
+   that:
+
+   *  the user agent can reach the server,
+
+   *  the server implements the expected protocol, and
+
+   *  which authentication mechanisms the server supports.
+
+   The user agent MUST attempt to connect to the server on the default
+   ports:
+
+   *  port 993 for IMAP
+
+   *  port 995 for POP3
+
+   *  port 465 for Submission
+
+   using TLS from the start of the connection ("direct TLS", also known
+   as "implicit TLS"), as specified in [RFC8314].  These connections
+   MUST use TLS 1.3 ([RFC9846]) or higher, as required by Section 7.4.1.
+
+
+   // TODO: ManageSieve needs a port in the list above.  This document
+   // requires direct TLS for all text-based protocols, but [RFC5804]
+   // defines only port 4190 with STARTTLS, and no port for ManageSieve
+   // over direct TLS is registered.  Resolve this before publication,
+   // for example by requesting a port assignment for ManageSieve over
+   // direct TLS, or by scoping ManageSieve out of this document.
+   //
+   // -- editor
+
+   The user agent SHOULD NOT attempt to connect to a text-based protocol
+   server on its cleartext port.
+
+   The user agent MUST NOT allow for configuration with a cleartext
+   protocol that is not protected by TLS.
+
+   The user agent MUST validate that the connection is secured by TLS,
+   and that the server certificate is valid and matches the expected
+   domain name.  See Section 7.4 for details on transport security
+   validation.
+
+
+
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 28]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+   If the server announces the OAUTHBEARER SASL authentication method
+   ([RFC7628]), the user agent can assume that this server supports
+   using [OAuthPublic].  For IMAP for example, if the server's
+   CAPABILITY contains AUTH=OAUTHBEARER this would indicate this
+   support.
+
+   Servers SHOULD NOT announce support for the OAUTHBEARER SASL
+   mechanism if they do not support [OAuthPublic].  Servers MUST
+   announce support for the OAUTHBEARER SASL mechanism if they support
+   OAuth Profile for Open Public Clients.  Servers SHOULD NOT use the
+   XOAUTH2 SASL mechanism.
+
+   There are various SASL authentication mechanisms for password-based
+   authentication, and additionally IMAP and POP3 also support password-
+   based authentication through LOGIN and APOP respectively.  The user
+   agent needs to probe each server to determine which authentication
+   methods are supported by both the user agent and the server.
+
+5.4.3.1.  IMAP
+
+   The IMAP protocol provides various other authentication mechanisms.
+   There are various SASL mechanisms for username + password
+   authentication.  [RFC4959] describes how to use SASL with IMAP.
+
+   Unless the server sends the LOGINDISABLED capability, user agents
+   know that they can use the LOGIN command for username + password
+   authentication.
+
+   For IMAP, a sample session might look like this:
+
+   ========== NOTE: '\' line wrapping per RFC 8792 ===========
+
+   S: * OK [CAPABILITY IMAP4rev2 IMAP4rev1 SASL-IR AUTH=PLAIN \
+   AUTH=OAUTHBEARER] IMAP Server
+   C: A1 LOGOUT
+   S: * BYE IMAP Server logging out
+   S: A1 OK LOGOUT completed
+
+   In this case the server returned its IMAP capabilities as part of the
+   so-called greeting messages.  The support for the OAUTHBEARER SASL
+   authentication mechanism indicates to the user agent that the server
+   supports OAuth.  Similarly the PLAIN SASL authentication mechanism
+   indicates that the server supports username + password
+   authentication.  The absence of the LOGINDISABLED also indicates
+   support for username and password authentication.
+
+
+
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 29]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+   If the server doesn't include its capabilities in the server
+   greeting, the user agent SHOULD send a CAPABILITY command as outlined
+   in Section 6.1.1 of [RFC9051].  The user agent SHOULD send a LOGOUT
+   command as outlined in Section 6.1.3 of [RFC9051] and check that the
+   server sends an untagged BYE response.
+
+5.4.3.2.  Submission
+
+   Message submission uses the SMTP protocol [RFC5321] and similarly
+   announces which authentication mechanisms it supports.  [RFC4954]
+   describes how to use SASL with SMTP.
+
+   The user agent would use the EHLO command to retrieve the submission
+   server's supported authentication mechanisms.  For example:
+
+   S: 220 smtp.example.com ESMTP service ready
+   C: EHLO client.example.com
+   S: 250-smtp.example.com
+   S: 250-PIPELINING
+   S: 250-SIZE 10240000
+   S: 250-AUTH PLAIN LOGIN OAUTHBEARER
+   S: 250-ENHANCEDSTATUSCODES
+   S: 250 8BITMIME
+   C: QUIT
+   S: 221 Bye
+
+   Section 3.2 of [RFC5321] describes this client initiation of the SMTP
+   protocol.  [RFC4954] describes SMTP authentication in detail.  In the
+   above example PLAIN and LOGIN indicate that the server supports
+   username + password based authentication, and OAUTHBEARER indicates
+   that the server supports OAuth.
+
+   The user agent SHOULD send a QUIT command and check for the server's
+   221 Bye response.
+
+5.4.3.3.  POP3
+
+   For POP3 [RFC5034] describes how to use SASL.  POP3 additionally
+   supports password based authentication using its USER and PASS
+   commands, or through the optional APOP command.  The user agent can
+   check which SASL authentication methods the server supports using the
+   CAPA command.
+
+   For example:
+
+
+
+
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 30]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+   S: +OK pop.example.com POP3 server ready
+   C: CAPA
+   S: +OK List of capabilities follows
+   S: SASL PLAIN OAUTHBEARER
+   S: IMPLEMENTATION BlurdyBlurp POP3 server
+   S: .
+   C: QUIT
+   S: +OK POP3 server signing off (maildrop empty)
+
+   The user agent SHOULD send a QUIT command and check for the server's
+   +OK response.
+
+5.5.  Confirming Server Names
+
+   Before any credentials are entered, the user agent SHOULD display to
+   the user the hostnames of all servers that it intends to authenticate
+   with, and request explicit confirmation.  This list of server
+   hostnames gives the user a chance to validate if they want to move
+   ahead.
+
+   The user agent MAY choose to limit the hostnames to their registrable
+   domains when displaying this list.  Instead of displaying
+   mail.example.com the user agent would display example.com, and
+   instead of mail.example.co.uk it would display example.co.uk.
+   Limiting the hostnames to their registrable domains helps users
+   identify if this is the domain they intend to connect to or not.
+
+   At least the registrable domains of all involved hostnames MUST be
+   displayed clearly and prominently.  The user agent MUST NOT cut off
+   parts of long registrable domains, to avoid spoofing.  At least 63
+   characters of the registrable domain MUST be displayed.
+
+   If the user mistyped their email address in Section 5.1, letting the
+   user confirm the server hostnames gives the user a chance to notice
+   this.
+
+   When the user agent has followed an HTTP redirect while probing a
+   server (see Section 5.4.2 and Section 7.5), the hostname it displays
+   for that server MUST be the hostname reached after all redirects have
+   been followed, not the hostname taken from the configuration.
+   Otherwise the user could confirm a hostname that differs from the one
+   the user agent ultimately authenticates with.
+
+
+
+
+
+
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 31]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+   User agents can enhance the user experience by using the info section
+   of the configuration (described in Section 4.4) to display the named
+   party's name and logo during this configuration step.  The named
+   party can be the domain owner rather than the provider (Section 4.4),
+   so this name can differ from the registrable domains of the servers.
+   The name and logo supplement, but do not replace, the hostnames that
+   the user confirms.
+
+   Section 7.1 lists security considerations related to the user
+   confirming these hostnames.
+
+5.6.  Username
+
+   For password-based authentication, the full addr-spec part of the
+   email address MUST be used as the username.  For example:
+
+             +============================+==================+
+             | Text Entered by User       | username         |
+             +============================+==================+
+             | jdoe@example.com           | jdoe@example.com |
+             +----------------------------+------------------+
+             | "J Doe" <jdoe@example.com> | jdoe@example.com |
+             +----------------------------+------------------+
+             | <jdoe@example.com>         | jdoe@example.com |
+             +----------------------------+------------------+
+
+                    Table 3: Username from email address
+
+   For OAuth Profile for Open Public Clients, the user agent MUST send
+   this username as the login_hint in the authorization request URL.
+
+   The provider MUST ensure that any valid email address that the user
+   might enter during setup is a valid username for all servers given in
+   this configuration.  This will require a mapping on the server level
+   from email address to internal username.  This mapping happens
+   internally in the server and the user agent is not involved in this
+   mapping.
+
+5.7.  Configuring OAuth
+
+   If the user agent and the provider both support OAuth Profile for
+   Open Public Clients, and if the servers that the user agent wants to
+   use support OAuth, the user agent can configure OAuth.
+
+
+
+
+
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 32]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+   The authentication section in the JSON configuration described in
+   Section 4.3 will let the user agent create a URL to retrieve the
+   OAuth Authorization Server Metadata as described in Section 5.4.1.
+   With this metadata, the user agent can then use [OAuthPublic] to
+   configure OAuth.
+
+   Part of this will require opening the authorization request URL in an
+   external browser, which is typically the user's default browser.  The
+   user agent SHOULD make it very apparent to the user which hostname is
+   being used for the authorization request URL.  The user agent SHOULD
+   make the user confirm at least the registrable domain of the hostname
+   of this URL.  This is to minimize the risk of the user exposing their
+   credentials to a third party.
+
+   As described in Section 5.5, the user agent SHOULD also confirm the
+   server hostnames with the user.  For OAuth authentication, the user
+   agent SHOULD include the hostname of the authorization request URL in
+   this list of hostnames.
+
+5.8.  Configuring Password-Based Authentication
+
+   If the user agent and provider both support password-based
+   authentication, and if the servers that the user agent wants to use
+   support password-based authentication, the user agent can configure
+   itself to use these servers.
+
+   The user agent SHOULD at this point ask the user for the password for
+   their account.
+
+   Once the user has entered their password, the user agent SHOULD
+   validate that it is able to authenticate using the entered password
+   with all servers that it is interested in.  Only then would it save
+   the new configuration.
+
+6.  OAuth Requirements
+
+   If OAuth is used, the OAuth authorization server MUST adhere to
+   [OAuthPublic].
+
+   Notably, Dynamic Client Registration MUST be implemented and MUST
+   return a working Client ID in response to the HTTP calls defined by
+   that specification.
+
+   The OAuth scopes defined in [OAuthPublic] MUST be included and MUST
+   give access to the servers returned in the JSON configuration
+   described in Section 4.
+
+
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 33]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+   A single token MUST work for all servers in the JSON configuration,
+   such that a single user login is sufficient for all services.  For
+   that purpose, the user agent will include all relevant scopes in the
+   authorization requests.
+
+7.  Security Considerations
+
+   While the mechanism described in this document makes it easier for
+   users to correctly configure their user agent, there's an associated
+   risk with making it easier for users to expose their credentials to a
+   third party.
+
+   User agents using the mechanism described in this document need to
+   design their user interface and user experience such that this risk
+   is minimized.  Actual affordances depend on implementation details of
+   the user interface and are outside the scope of this document.
+
+7.1.  Mistyped Domain Names
+
+   As part of the first step of the mechanism described in this
+   document, the user enters their email address.  If the user mistyped
+   the domain part of their email address, and if the mistyped domain
+   exists and supports the mechanism described in this document, the
+   user could expose their credentials to servers chosen by the domain
+   owner of that domain.  An attacker could use this in an attempt to
+   gain knowledge of the user's credentials.
+
+   As a result, user agents need to carefully design their user
+   interface and user experience as to let the user know which domain is
+   being used.  It would make sense to display this very clearly to the
+   user, before they enter any credentials.
+
+   The user agent would want to display a list of the registrable
+   domains of all the servers that it intends to use.  The user can then
+   confirm these.
+
+   When the mechanism described in this document uses OAuth, it would
+   make sense to ask the user to confirm the domains of the servers that
+   will be used and additionally confirm the domains of
+
+   *  the URL to retrieve the OAuth Authorization Server Metadata and/or
+
+   *  the authorization request URL.
+
+   When asking the user to confirm these domains, it would make sense to
+   only display the registrable domain of those domains.  This would
+   make it more difficult for an attacker to do URL obfuscation and use
+   subdomain phishing.
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 34]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+   When using a browser for OAuth, the user agent would want to display
+   the registrable domain that the browser is currently displaying, and
+   update this when redirects happen or new pages are loaded.
+
+7.2.  Attacker Controlled JSON Configuration
+
+   If an attacker can direct the user agent to use an attacker-
+   controlled JSON configuration, the attacker would be able to direct
+   the user to servers of the attacker's choosing.
+
+   The transport security requirements in Section 7.4 and the digest
+   validation in Section 5.2.2 limit an attacker's ability to substitute
+   a configuration in the first place.  Presenting the server names for
+   the user to confirm (Section 5.5), following the display guidance in
+   Section 7.1, gives the user a chance to notice servers they do not
+   expect.
+
+   The name and logo in the info object (Section 4.4) are asserted by
+   the configuration and are not verified, so an attacker-controlled
+   configuration can claim any brand.  Because the named party can
+   legitimately differ from the registrable domains of the servers,
+   users cannot treat such a difference as a warning sign.  User agents
+   MUST NOT present the name or logo as verified, and SHOULD NOT display
+   them more prominently than the registrable domains of the servers
+   (Section 5.5).
+
+   An attacker-controlled configuration could also point a protocol's
+   URL at a host that redirects the user agent elsewhere.  Section 7.5
+   describes the constraints that user agents apply when following such
+   redirects, including that the user confirms the host reached after
+   all redirects rather than the host named in the configuration.
+
+   None of this is sufficient on its own.  The user agent also needs to
+   combine these mechanisms with a conservative trust policy for its TLS
+   when retrieving the JSON configuration.
+
+7.3.  DNS
+
+   The value of the digest validation described in Section 5.2.2 is that
+   it ties the configuration to the domain owner, or to the provider to
+   which the domain owner has delegated the TXT RR (Section 5.2.2.4),
+   rather than to whoever operates the host that serves the well-known
+   URI.  An attacker who can serve content for ua-auto-config.{domain}
+   (for example by compromising a web hosting service or a content
+   delivery network configuration), but who cannot publish records in
+   the zone that holds the TXT RR, cannot make a substituted
+   configuration validate.  When a domain owner delegates both names to
+   its provider, the provider controls both the configuration document
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 35]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+   and its digest; validation then protects against a compromise of the
+   provider's HTTP hosting, but not against the provider itself, which
+   the domain owner already trusts with its email.
+
+   That property only holds if the DNS answer itself is trustworthy, so
+   a user agent that performs this validation needs to take care that an
+   attacker has not altered the DNS response.  Using DNSSEC is one
+   method of improving the security aspects of this approach (if the TXT
+   RR is reached through a CNAME RR, every zone involved needs to be
+   signed), as is querying a trusted resolver over a channel that
+   provides integrity protection, such as DNS over TLS or DNS over
+   HTTPS.  An attacker who can alter DNS responses but cannot defeat the
+   requirements in Section 7.4 can cause the validation to fail for a
+   legitimate configuration, and thereby prevent automatic
+   configuration.
+
+   For this reason, Section 5.2.2 states this validation as a SHOULD
+   rather than a MUST: a user agent that has no way to obtain DNS
+   answers that it can rely on MAY omit it.  Such a user agent relies
+   solely on the transport security requirements in Section 7.4 and
+   Section 7.4.1, under which the configuration is retrieved over TLS
+   from ua-auto-config.{domain}, or from a host it redirects to, with
+   the server certificate validated for every hop, together with the
+   user confirming the resulting server names (Section 5.5).
+
+7.4.  Transport Security Validation
+
+   Whenever secure transport is used (including TLS for HTTPS
+   connections and QUIC's TLS-based security layer for HTTP/3), user
+   agents MUST check the certificates presented by the server.  This
+   certificate MUST be within its validity period (prior to its
+   expiration date) and MUST chain to a root CA that is trusted by the
+   user agent.  The certificate MUST have a subject alternative name
+   (SAN) ([RFC5280]) with a DNS-ID ([RFC9525]) matching the hostname,
+   per the rules given in [RFC9525].  The certificate MAY also be
+   checked for revocation via OCSP ([RFC6960]), CRLs ([RFC5280], updated
+   by [RFC6818]), or some other mechanism.  The general recommendations
+   for the secure use of TLS in [RFC9325] SHOULD be followed.
+
+   If these checks fail or the server certificate is otherwise invalid,
+   the user agent MUST disconnect and MUST NOT use any configuration
+   retrieved from that URI.
+
+   Certificate validation failures represent significant security risks,
+   as they may indicate attempts to redirect users' credentials to an
+   attacker.  User agents SHOULD NOT allow users to override certificate
+   validation checks.
+
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 36]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+   Beyond the minimum TLS version required in Section 7.4.1, user agents
+   MAY implement even more restrictive transport security policies for
+   the connections described in this document than those typically
+   required for web browsing, in order to provide stronger security
+   guarantees.  For TLS connections, user agents MAY want to further
+   restrict the allowed cipher suites.  For QUIC connections, user
+   agents MAY apply similar restrictions to the underlying TLS handshake
+   parameters.
+
+7.4.1.  Minimum TLS Version
+
+   Every connection that a user agent establishes as part of the
+   mechanism described in this document MUST be secured using TLS 1.3
+   ([RFC9846]) or higher.  This requirement is not limited to retrieval
+   of the JSON configuration; it applies to _all_ services, whether
+   HTTP-based or text-based.  This includes, but is not limited to:
+
+   *  retrieval of the JSON configuration from the Well-Known URI
+      (Section 5.2.1);
+
+   *  connections to HTTP-based protocol servers, such as JMAP, CalDAV,
+      CardDAV, and WebDAV;
+
+   *  connections that the user agent itself makes to OAuth endpoints,
+      such as retrieval of the OAuth Authorization Server Metadata
+      (Section 5.4.1), dynamic client registration, and token requests;
+      and
+
+   *  connections to text-based protocol servers, such as IMAP, POP3,
+      Submission, and ManageSieve.
+
+   This requirement applies equally to the TLS layer used by HTTP/1.1
+   and HTTP/2, and to the TLS-based security layer of QUIC used by
+   HTTP/3.
+
+   Servers that provide any of these services MUST support TLS 1.3 or
+   higher.  If a server does not offer TLS 1.3 or higher, or if a
+   connection using TLS 1.3 or higher cannot be established for any
+   other reason, the user agent MUST NOT proceed with that connection
+   and MUST NOT use the corresponding service.  The user agent MUST NOT
+   fall back to an earlier version of TLS, and SHOULD NOT allow users to
+   override this requirement.
+
+   If the user agent follows an HTTP redirect (for example, any of the
+   3xx status codes described in Section 15.4 of [RFC9110]) while
+   retrieving the JSON configuration or while connecting to any HTTP-
+   based protocol server or OAuth endpoint, then _every_ hop in the
+   resulting redirect chain MUST also use the https scheme and MUST be
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 37]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+   secured using TLS 1.3 or higher.  The certificate validation
+   requirements described earlier in this section, and the minimum TLS
+   version requirement above, MUST be enforced independently for each
+   hop.  If any target in the redirect chain uses a scheme other than
+   https, or a connection to it cannot be established using TLS 1.3 or
+   higher, the user agent MUST NOT follow the redirect and MUST abort
+   the operation, discarding any data obtained from that redirect chain.
+   Additional constraints on following redirects are described in
+   Section 7.5.
+
+7.5.  Following HTTP Redirects
+
+   Several steps of the mechanism described in this document involve
+   HTTP requests that a server can answer with a redirect (any of the
+   3xx status codes described in Section 15.4 of [RFC9110]).  This
+   includes retrieval of the JSON configuration (Section 5.2.1), the
+   HTTP authentication probes (Section 5.4.2), and connections that the
+   user agent makes to OAuth endpoints (Section 5.4.1).  Allowing
+   redirects lets a provider publish a stable URL in the configuration
+   that acts as a "front door" and redirects the user agent to the
+   server that actually handles a protocol.
+
+   Redirects are, however, a security-sensitive feature.  The
+   configuration is treated as potentially attacker-influenced
+   (Section 7.2), and a redirect can send a probe, and subsequently the
+   user's credentials, to a host that never appeared in the
+   configuration and that the user was never shown.  User agents
+   therefore MUST apply the following constraints whenever they follow a
+   redirect for any request described in this document.
+
+   1.  Every hop in the redirect chain MUST use the https scheme and
+       MUST be secured using TLS 1.3 ([RFC9846]) or higher, with
+       certificate validation enforced independently for each hop, as
+       required by Section 7.4.1.
+
+   2.  The user agent MUST limit the number of redirects it follows for
+       a single request.  This limit MUST NOT exceed 5.  If a request
+       would exceed this limit, the user agent MUST NOT follow the
+       additional redirect and MUST abort the operation, discarding any
+       data obtained from that redirect chain.
+
+
+
+
+
+
+
+
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 38]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+   3.  The hostnames that the user agent presents to the user for
+       confirmation (Section 5.5), and that it will authenticate with,
+       MUST be the hostnames of the servers reached after all redirects
+       have been followed, not the hostnames taken from the
+       configuration.  If following a redirect changes the host that the
+       user agent will authenticate with, the user agent MUST present
+       that final host for confirmation before any credentials are sent
+       to it.
+
+   Because the user agent probes each server of interest (Section 5.4.2)
+   before it asks the user to confirm the server hostnames
+   (Section 5.5), the final host reached after any redirect is known at
+   the time of confirmation.
+
+7.6.  Updating the Configuration
+
+   The mechanism described in this document can be used to upgrade a
+   user's configuration.  The user agent could check for configurations
+   even when it has a working configuration for an account.  If the user
+   agent finds a configuration that is better (in some way) than the
+   already existing configuration, it could then upgrade the existing
+   configuration.
+
+   But in doing so, the user agent would increase the attack window that
+   a potential attacker has.  Instead of only giving an attacker the
+   opportunity when the user configures their user agent for the first
+   time, the attacker would now have an opportunity each time the user
+   agent checks for a better configuration.  That could be undesirable.
+
+7.7.  Logo Images
+
+   Image parsers are a common attack vector, and user agents MUST NOT
+   display the logo images described in Section 4.4.1 unless they can do
+   so in a way that doesn't expose the user agent to such attacks.
+
+   Retrieving a logo also discloses information to whoever operates the
+   host that the url of that logo names.  That host learns the user
+   agent's IP address, and the fact that this user agent is being set up
+   for this named party (Section 4.4), at the time of setup.  The host
+   can be operated by a third party, such as a content delivery network,
+   and the configuration is treated as potentially attacker-influenced
+   (Section 7.2), so the url can name a host that the user has no
+   relationship with and has not been shown.  User agents therefore
+   SHOULD NOT retrieve logo images before the user has confirmed the
+   configuration as described in Section 5.5, and MAY choose not to
+   retrieve them at all.  Logo images SHOULD be served from a host under
+   a registrable domain of the domain owner or of the provider.
+
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 39]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+8.  IANA Considerations
+
+8.1.  The User-Agent Auto-Configuration Protocol Registry
+
+   This document establishes the user-agent auto-configuration protocol
+   registry.
+
+   User-agent auto-configuration protocols are registered on the advice
+   of one or more Designated Experts (appointed by the IESG or their
+   delegate), with Specification Required (using terminology from
+   [RFC8126]).  However, to allow for the allocation of values prior to
+   publication, the Designated Expert(s) may approve registration once
+   they are satisfied that such a specification will be published.
+
+   Registration requests are sent to the art@ietf.org mailing list for
+   review and comment, with an appropriate subject (e.g., "Request for
+   user-agent auto-configuration protocol: example").
+
+
+   // TODO: confirm the review mailing list for this registry.  This
+   // document currently names art@ietf.org; the working group may
+   // instead want to request a dedicated review list.
+   //
+   // -- editor
+
+   Before a period of 14 days has passed, the Designated Expert(s) will
+   either approve or deny the registration request, communicating this
+   decision both to the review list and to IANA.  Denials should include
+   an explanation and, if applicable, suggestions as to how to make the
+   request successful.  Registration requests that are undetermined for
+   a period longer than 21 days can be brought to the IESG's attention
+   (using the iesg@ietf.org mailing list) for resolution.
+
+   Registry Name:
+      User-Agent Auto-Configuration Protocols
+
+   Registration Procedure:
+      Specification Required (per [RFC8126])
+
+8.1.1.  Registration Template
+
+   Name:
+      The commonly used name of the protocol
+
+   Protocol Key:
+      The JSON key used in the protocols object in the JSON
+      configuration described in Section 4
+
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 40]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+   URL Scheme:
+      (Optional) The URL scheme to be used for this protocol.  HTTP
+      based protocols specify https.  If left empty, the protocols entry
+      in the JSON configuration will only specify a hostname using host.
+      If a URL scheme is specified, the JSON configuration entry will
+      instead use url with a URL using this URL scheme.
+
+   Specification:
+      Which RFC(s) or document(s) specify the protocol
+
+   Additional Properties:
+      Which additional property values are present in the protocol's
+      JSON object.
+
+8.1.2.  Initial Registrations
+
+    +=============+=============+========+===============+============+
+    | Name        | Protocol    | URL    | Specification | Additional |
+    |             | Key         | scheme |               | Properties |
+    +=============+=============+========+===============+============+
+    | JMAP        | jmap        | https  | [RFC8620],    |            |
+    |             |             |        | [RFC8621],    |            |
+    |             |             |        | [RFC8887],    |            |
+    |             |             |        | [RFC9610]     |            |
+    +-------------+-------------+--------+---------------+------------+
+    | IMAP        | imap        |        | [RFC9051]     |            |
+    +-------------+-------------+--------+---------------+------------+
+    | POP3        | pop3        |        | [RFC1939],    |            |
+    |             |             |        | [RFC5034]     |            |
+    +-------------+-------------+--------+---------------+------------+
+    | Submission  | submit      |        | [RFC6409],    |            |
+    |             |             |        | [RFC5321]     |            |
+    +-------------+-------------+--------+---------------+------------+
+    | CalDAV      | caldav      | https  | [RFC4791]     |            |
+    +-------------+-------------+--------+---------------+------------+
+    | CardDAV     | carddav     | https  | [RFC6352]     |            |
+    +-------------+-------------+--------+---------------+------------+
+    | WebDAV      | webdav      | https  | [RFC4918]     |            |
+    +-------------+-------------+--------+---------------+------------+
+    | ManageSieve | managesieve |        | [RFC5804],    |            |
+    |             |             |        | [RFC5228]     |            |
+    +-------------+-------------+--------+---------------+------------+
+
+           Table 4: Initial registrations to the User-Agent Auto-
+                      Configuration Protocol Registry
+
+   The _Additional Properties_ field is empty in all of the initial
+   values.
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 41]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+8.2.  Registration
+
+8.2.1.  Registration of Well-Known URI user-agent-configuration.json
+
+   This registers the user-agent-configuration.json URI suffix from
+   Section 5.2.1 in the "Well-Known URIs" registry as specified in
+   [RFC8615].
+
+    +==================+==========+=============+=========+===========+
+    |URI suffix        |Change    |Specification|Status   |Related    |
+    |                  |controller|document(s)  |         |information|
+    +==================+==========+=============+=========+===========+
+    |user-agent-       |IETF      |This document|permanent|None       |
+    |configuration.json|          |             |         |           |
+    +------------------+----------+-------------+---------+-----------+
+
+             Table 5: Registration in Well-Known URIs Registry
+
+8.2.2.  Registration of DNS Underscore Label _ua-auto-config
+
+   This registers the DNS underscore label _ua-auto-config used in
+   Section 5.2.2 in the "Underscored and Globally Scoped DNS Node Names"
+   registry as specified in [RFC8552].
+
+               +=========+=================+===============+
+               | RR Type | _NODE NAME      | Reference     |
+               +=========+=================+===============+
+               | TXT     | _ua-auto-config | This document |
+               +---------+-----------------+---------------+
+
+                  Table 6: Registration in Underscored and
+                  Globally Scoped DNS Node Names Registry
+
+9.  References
+
+9.1.  Normative References
+
+   [RFC1034]  Mockapetris, P., "Domain names - concepts and facilities",
+              STD 13, RFC 1034, DOI 10.17487/RFC1034, November 1987,
+              <https://www.rfc-editor.org/info/rfc1034>.
+
+   [RFC1035]  Mockapetris, P., "Domain names - implementation and
+              specification", STD 13, RFC 1035, DOI 10.17487/RFC1035,
+              November 1987, <https://www.rfc-editor.org/info/rfc1035>.
+
+   [RFC1939]  Myers, J. and M. Rose, "Post Office Protocol - Version 3",
+              STD 53, RFC 1939, DOI 10.17487/RFC1939, May 1996,
+              <https://www.rfc-editor.org/info/rfc1939>.
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 42]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+   [RFC2045]  Freed, N. and N. Borenstein, "Multipurpose Internet Mail
+              Extensions (MIME) Part One: Format of Internet Message
+              Bodies", RFC 2045, DOI 10.17487/RFC2045, November 1996,
+              <https://www.rfc-editor.org/info/rfc2045>.
+
+   [RFC2119]  Bradner, S., "Key words for use in RFCs to Indicate
+              Requirement Levels", BCP 14, RFC 2119,
+              DOI 10.17487/RFC2119, March 1997,
+              <https://www.rfc-editor.org/info/rfc2119>.
+
+   [RFC2181]  Elz, R. and R. Bush, "Clarifications to the DNS
+              Specification", RFC 2181, DOI 10.17487/RFC2181, July 1997,
+              <https://www.rfc-editor.org/info/rfc2181>.
+
+   [RFC4648]  Josefsson, S., "The Base16, Base32, and Base64 Data
+              Encodings", RFC 4648, DOI 10.17487/RFC4648, October 2006,
+              <https://www.rfc-editor.org/info/rfc4648>.
+
+   [RFC4791]  Daboo, C., Desruisseaux, B., and L. Dusseault,
+              "Calendaring Extensions to WebDAV (CalDAV)", RFC 4791,
+              DOI 10.17487/RFC4791, March 2007,
+              <https://www.rfc-editor.org/info/rfc4791>.
+
+   [RFC4918]  Dusseault, L., Ed., "HTTP Extensions for Web Distributed
+              Authoring and Versioning (WebDAV)", RFC 4918,
+              DOI 10.17487/RFC4918, June 2007,
+              <https://www.rfc-editor.org/info/rfc4918>.
+
+   [RFC4954]  Siemborski, R., Ed. and A. Melnikov, Ed., "SMTP Service
+              Extension for Authentication", RFC 4954,
+              DOI 10.17487/RFC4954, July 2007,
+              <https://www.rfc-editor.org/info/rfc4954>.
+
+   [RFC4959]  Siemborski, R. and A. Gulbrandsen, "IMAP Extension for
+              Simple Authentication and Security Layer (SASL) Initial
+              Client Response", RFC 4959, DOI 10.17487/RFC4959,
+              September 2007, <https://www.rfc-editor.org/info/rfc4959>.
+
+   [RFC5034]  Siemborski, R. and A. Menon-Sen, "The Post Office Protocol
+              (POP3) Simple Authentication and Security Layer (SASL)
+              Authentication Mechanism", RFC 5034, DOI 10.17487/RFC5034,
+              July 2007, <https://www.rfc-editor.org/info/rfc5034>.
+
+   [RFC5228]  Guenther, P., Ed. and T. Showalter, Ed., "Sieve: An Email
+              Filtering Language", RFC 5228, DOI 10.17487/RFC5228,
+              January 2008, <https://www.rfc-editor.org/info/rfc5228>.
+
+
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 43]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+   [RFC5234]  Crocker, D., Ed. and P. Overell, "Augmented BNF for Syntax
+              Specifications: ABNF", STD 68, RFC 5234,
+              DOI 10.17487/RFC5234, January 2008,
+              <https://www.rfc-editor.org/info/rfc5234>.
+
+   [RFC5280]  Cooper, D., Santesson, S., Farrell, S., Boeyen, S.,
+              Housley, R., and W. Polk, "Internet X.509 Public Key
+              Infrastructure Certificate and Certificate Revocation List
+              (CRL) Profile", RFC 5280, DOI 10.17487/RFC5280, May 2008,
+              <https://www.rfc-editor.org/info/rfc5280>.
+
+   [RFC5321]  Klensin, J., "Simple Mail Transfer Protocol", RFC 5321,
+              DOI 10.17487/RFC5321, October 2008,
+              <https://www.rfc-editor.org/info/rfc5321>.
+
+   [RFC5322]  Resnick, P., Ed., "Internet Message Format", RFC 5322,
+              DOI 10.17487/RFC5322, October 2008,
+              <https://www.rfc-editor.org/info/rfc5322>.
+
+   [RFC5397]  Sanchez, W. and C. Daboo, "WebDAV Current Principal
+              Extension", RFC 5397, DOI 10.17487/RFC5397, December 2008,
+              <https://www.rfc-editor.org/info/rfc5397>.
+
+   [RFC5804]  Melnikov, A., Ed. and T. Martin, "A Protocol for Remotely
+              Managing Sieve Scripts", RFC 5804, DOI 10.17487/RFC5804,
+              July 2010, <https://www.rfc-editor.org/info/rfc5804>.
+
+   [RFC5890]  Klensin, J., "Internationalized Domain Names for
+              Applications (IDNA): Definitions and Document Framework",
+              RFC 5890, DOI 10.17487/RFC5890, August 2010,
+              <https://www.rfc-editor.org/info/rfc5890>.
+
+   [RFC5891]  Klensin, J., "Internationalized Domain Names in
+              Applications (IDNA): Protocol", RFC 5891,
+              DOI 10.17487/RFC5891, August 2010,
+              <https://www.rfc-editor.org/info/rfc5891>.
+
+   [RFC6234]  Eastlake 3rd, D. and T. Hansen, "US Secure Hash Algorithms
+              (SHA and SHA-based HMAC and HKDF)", RFC 6234,
+              DOI 10.17487/RFC6234, May 2011,
+              <https://www.rfc-editor.org/info/rfc6234>.
+
+   [RFC6352]  Daboo, C., "CardDAV: vCard Extensions to Web Distributed
+              Authoring and Versioning (WebDAV)", RFC 6352,
+              DOI 10.17487/RFC6352, August 2011,
+              <https://www.rfc-editor.org/info/rfc6352>.
+
+
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 44]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+   [RFC6409]  Gellens, R. and J. Klensin, "Message Submission for Mail",
+              STD 72, RFC 6409, DOI 10.17487/RFC6409, November 2011,
+              <https://www.rfc-editor.org/info/rfc6409>.
+
+   [RFC6749]  Hardt, D., Ed., "The OAuth 2.0 Authorization Framework",
+              RFC 6749, DOI 10.17487/RFC6749, October 2012,
+              <https://www.rfc-editor.org/info/rfc6749>.
+
+   [RFC6750]  Jones, M. and D. Hardt, "The OAuth 2.0 Authorization
+              Framework: Bearer Token Usage", RFC 6750,
+              DOI 10.17487/RFC6750, October 2012,
+              <https://www.rfc-editor.org/info/rfc6750>.
+
+   [RFC6764]  Daboo, C., "Locating Services for Calendaring Extensions
+              to WebDAV (CalDAV) and vCard Extensions to WebDAV
+              (CardDAV)", RFC 6764, DOI 10.17487/RFC6764, February 2013,
+              <https://www.rfc-editor.org/info/rfc6764>.
+
+   [RFC6818]  Yee, P., "Updates to the Internet X.509 Public Key
+              Infrastructure Certificate and Certificate Revocation List
+              (CRL) Profile", RFC 6818, DOI 10.17487/RFC6818, January
+              2013, <https://www.rfc-editor.org/info/rfc6818>.
+
+   [RFC6960]  Santesson, S., Myers, M., Ankney, R., Malpani, A.,
+              Galperin, S., and C. Adams, "X.509 Internet Public Key
+              Infrastructure Online Certificate Status Protocol - OCSP",
+              RFC 6960, DOI 10.17487/RFC6960, June 2013,
+              <https://www.rfc-editor.org/info/rfc6960>.
+
+   [RFC7616]  Shekh-Yusef, R., Ed., Ahrens, D., and S. Bremer, "HTTP
+              Digest Access Authentication", RFC 7616,
+              DOI 10.17487/RFC7616, September 2015,
+              <https://www.rfc-editor.org/info/rfc7616>.
+
+   [RFC7617]  Reschke, J., "The 'Basic' HTTP Authentication Scheme",
+              RFC 7617, DOI 10.17487/RFC7617, September 2015,
+              <https://www.rfc-editor.org/info/rfc7617>.
+
+   [RFC7628]  Mills, W., Showalter, T., and H. Tschofenig, "A Set of
+              Simple Authentication and Security Layer (SASL) Mechanisms
+              for OAuth", RFC 7628, DOI 10.17487/RFC7628, August 2015,
+              <https://www.rfc-editor.org/info/rfc7628>.
+
+   [RFC8126]  Cotton, M., Leiba, B., and T. Narten, "Guidelines for
+              Writing an IANA Considerations Section in RFCs", BCP 26,
+              RFC 8126, DOI 10.17487/RFC8126, June 2017,
+              <https://www.rfc-editor.org/info/rfc8126>.
+
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 45]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+   [RFC8174]  Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC
+              2119 Key Words", BCP 14, RFC 8174, DOI 10.17487/RFC8174,
+              May 2017, <https://www.rfc-editor.org/info/rfc8174>.
+
+   [RFC8259]  Bray, T., Ed., "The JavaScript Object Notation (JSON) Data
+              Interchange Format", STD 90, RFC 8259,
+              DOI 10.17487/RFC8259, December 2017,
+              <https://www.rfc-editor.org/info/rfc8259>.
+
+   [RFC8314]  Moore, K. and C. Newman, "Cleartext Considered Obsolete:
+              Use of Transport Layer Security (TLS) for Email Submission
+              and Access", RFC 8314, DOI 10.17487/RFC8314, January 2018,
+              <https://www.rfc-editor.org/info/rfc8314>.
+
+   [RFC8414]  Jones, M., Sakimura, N., and J. Bradley, "OAuth 2.0
+              Authorization Server Metadata", RFC 8414,
+              DOI 10.17487/RFC8414, June 2018,
+              <https://www.rfc-editor.org/info/rfc8414>.
+
+   [RFC9846]  Rescorla, E., "The Transport Layer Security (TLS) Protocol
+              Version 1.3", RFC 9846, DOI 10.17487/RFC9846, July 2026,
+              <https://www.rfc-editor.org/info/rfc9846>.
+
+   [RFC8552]  Crocker, D., "Scoped Interpretation of DNS Resource
+              Records through "Underscored" Naming of Attribute Leaves",
+              BCP 222, RFC 8552, DOI 10.17487/RFC8552, March 2019,
+              <https://www.rfc-editor.org/info/rfc8552>.
+
+   [RFC8615]  Nottingham, M., "Well-Known Uniform Resource Identifiers
+              (URIs)", RFC 8615, DOI 10.17487/RFC8615, May 2019,
+              <https://www.rfc-editor.org/info/rfc8615>.
+
+   [RFC8620]  Jenkins, N. and C. Newman, "The JSON Meta Application
+              Protocol (JMAP)", RFC 8620, DOI 10.17487/RFC8620, July
+              2019, <https://www.rfc-editor.org/info/rfc8620>.
+
+   [RFC8621]  Jenkins, N. and C. Newman, "The JSON Meta Application
+              Protocol (JMAP) for Mail", RFC 8621, DOI 10.17487/RFC8621,
+              August 2019, <https://www.rfc-editor.org/info/rfc8621>.
+
+   [RFC8887]  Murchison, K., "A JSON Meta Application Protocol (JMAP)
+              Subprotocol for WebSocket", RFC 8887,
+              DOI 10.17487/RFC8887, August 2020,
+              <https://www.rfc-editor.org/info/rfc8887>.
+
+
+
+
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 46]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+   [RFC9051]  Melnikov, A., Ed. and B. Leiba, Ed., "Internet Message
+              Access Protocol (IMAP) - Version 4rev2", RFC 9051,
+              DOI 10.17487/RFC9051, August 2021,
+              <https://www.rfc-editor.org/info/rfc9051>.
+
+   [RFC9110]  Fielding, R., Ed., Nottingham, M., Ed., and J. Reschke,
+              Ed., "HTTP Semantics", STD 97, RFC 9110,
+              DOI 10.17487/RFC9110, June 2022,
+              <https://www.rfc-editor.org/info/rfc9110>.
+
+   [RFC9111]  Fielding, R., Ed., Nottingham, M., Ed., and J. Reschke,
+              Ed., "HTTP Caching", STD 98, RFC 9111,
+              DOI 10.17487/RFC9111, June 2022,
+              <https://www.rfc-editor.org/info/rfc9111>.
+
+   [RFC9112]  Fielding, R., Ed., Nottingham, M., Ed., and J. Reschke,
+              Ed., "HTTP/1.1", STD 99, RFC 9112, DOI 10.17487/RFC9112,
+              June 2022, <https://www.rfc-editor.org/info/rfc9112>.
+
+   [RFC9325]  Sheffer, Y., Saint-Andre, P., and T. Fossati,
+              "Recommendations for Secure Use of Transport Layer
+              Security (TLS) and Datagram Transport Layer Security
+              (DTLS)", BCP 195, RFC 9325, DOI 10.17487/RFC9325, November
+              2022, <https://www.rfc-editor.org/info/rfc9325>.
+
+   [RFC9525]  Saint-Andre, P. and R. Salz, "Service Identity in TLS",
+              RFC 9525, DOI 10.17487/RFC9525, November 2023,
+              <https://www.rfc-editor.org/info/rfc9525>.
+
+   [RFC9610]  Jenkins, N., Ed., "JSON Meta Application Protocol (JMAP)
+              for Contacts", RFC 9610, DOI 10.17487/RFC9610, December
+              2024, <https://www.rfc-editor.org/info/rfc9610>.
+
+   [I-D.svg-tiny-ps-abrotman]
+              Brotman, A. and J. T. Adams, "SVG Tiny Portable/Secure",
+              Work in Progress, Internet-Draft, draft-svg-tiny-ps-
+              abrotman-12, 1 May 2026,
+              <https://datatracker.ietf.org/doc/html/draft-svg-tiny-ps-
+              abrotman-12>.
+
+   [OAuthPublic]
+              Jenkins, N. and B. Bucksch, "OAuth Profile for Open Public
+              Clients", Work in Progress, Internet-Draft, draft-ietf-
+              mailmaint-oauth-public,
+              <https://datatracker.ietf.org/doc/html/draft-ietf-
+              mailmaint-oauth-public>.
+
+9.2.  Informative References
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 47]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+   [RFC9499]  Hoffman, P. and K. Fujiwara, "DNS Terminology", BCP 219,
+              RFC 9499, DOI 10.17487/RFC9499, March 2024,
+              <https://www.rfc-editor.org/info/rfc9499>.
+
+   [COOKIES]  Bingler, S., West, M., and J. Wilander, "Cookies: HTTP
+              State Management Mechanism", Work in Progress, Internet-
+              Draft, draft-ietf-httpbis-rfc6265bis-22, 1 December 2025,
+              <https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-
+              rfc6265bis-22>.
+
+   [I-D.bhutton-json-schema]
+              Wright, A., Andrews, H., Hutton, B., and G. Dennis, "JSON
+              Schema: A Media Type for Describing JSON Documents", Work
+              in Progress, Internet-Draft, draft-bhutton-json-schema-01,
+              10 June 2022, <https://datatracker.ietf.org/doc/html/
+              draft-bhutton-json-schema-01>.
+
+   [I-D.bhutton-json-schema-validation]
+              Wright, A., Andrews, H., and B. Hutton, "JSON Schema
+              Validation: A Vocabulary for Structural Validation of
+              JSON", Work in Progress, Internet-Draft, draft-bhutton-
+              json-schema-validation-01, 10 June 2022,
+              <https://datatracker.ietf.org/doc/html/draft-bhutton-json-
+              schema-validation-01>.
+
+   [PSL]      Mozilla Foundation, "Public Suffix List",
+              <https://publicsuffix.org/list/>.
+
+Appendix A.  Configuration JSON Schema
+
+   The following schema defines the format of the JSON configuration in
+   Section 4.  It is expressed in the 2020-12 dialect of JSON Schema,
+   described in [I-D.bhutton-json-schema] and
+   [I-D.bhutton-json-schema-validation].
+
+
+   // TODO: confirm the $id of the schema below.  JSON Schema requires
+   // $id to be an absolute URI, and that URI needs to be stable, so it
+   // cannot be a draft-specific URL.  This document currently uses a
+   // URL derived from the RFC number, to be substituted by the RFC
+   // Editor.
+   //
+   // -- editor
+
+   [RFC Editor: please replace "rfcXXXX" in the $id value below with the
+   RFC number assigned to this document.]
+
+
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 48]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+   ========== NOTE: '\' line wrapping per RFC 8792 ===========
+
+   {
+       "$schema": "https://json-schema.org/draft/2020-12/schema",
+       "$id": "https://www.rfc-editor.org/rfc/rfcXXXX/\
+           ua-auto-config.json",
+       "title": "User-Agent Automatic Configuration",
+       "description": "Automatic Configuration of Email, Calendar, \
+           and Contact Server Settings",
+       "type": "object",
+       "properties": {
+           "protocols": {
+               "type": "object",
+               "properties": {
+                   "caldav": { "$ref": "#/$defs/http-server" },
+                   "carddav": { "$ref": "#/$defs/http-server" },
+                   "imap": { "$ref": "#/$defs/text-server" },
+                   "jmap": { "$ref": "#/$defs/http-server" },
+                   "managesieve": { "$ref": "#/$defs/text-server" },
+                   "pop3": { "$ref": "#/$defs/text-server" },
+                   "submit": { "$ref": "#/$defs/text-server" },
+                   "webdav": { "$ref": "#/$defs/http-server" }
+               }
+           },
+           "authentication": {
+               "properties": {
+                   "oauth-public": {
+                       "properties": {
+                           "issuer": {
+                               "format": "uri",
+                               "type": "string"
+                           }
+                       },
+                       "required": [
+                           "issuer"
+                       ],
+                       "type": "object"
+                   },
+                   "password": {
+                       "type": "boolean"
+                   }
+               },
+               "required": [ "password" ]
+           },
+           "info": {
+               "type": "object",
+               "properties": {
+                   "provider": {
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 49]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+                       "type": "object",
+                       "properties": {
+                           "name": { "type": "string", "minLength": 1 },
+                           "shortName": { "type": "string", \
+                               "minLength": 1 },
+                           "logo": {
+                               "type": "array",
+                               "items": {
+                                   "type": "object",
+                                   "properties": {
+                                       "url": { "type": "string", \
+                                           "format": "uri" },
+                                       "content-type": { \
+                                           "type": "string", \
+                                           "minLength": 1 },
+                                       "width": { "type": "integer", \
+                                           "minimum": 1 },
+                                       "height": { "type": "integer", \
+                                           "minimum": 1 }
+                                   },
+                                   "required": [ "url", "content-type" ]
+                               }
+                           }
+                       },
+                       "required": [ "name" ]
+                   },
+                   "help": {
+                       "type": "object",
+                       "properties": {
+                           "documentation": { "type": "string", \
+                               "format": "uri" },
+                           "developer": { "type": "string", \
+                               "format": "uri" },
+                           "contact": {
+                               "type": "array",
+                               "items": { "type": "string", \
+                                   "minLength": 1 }
+                           }
+                       }
+                   }
+               },
+               "required": [ "provider" ]
+           }
+       },
+       "required": [ "protocols", "info" ],
+       "$defs": {
+           "http-server": {
+               "type": "object",
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 50]
+
+Internet-Draft    Auto-Config of Email Server Settings      October 2026
+
+
+               "properties": {
+                   "url": { "type": "string", "format": "uri" }
+               },
+               "required": ["url"]
+           },
+           "text-server": {
+               "type": "object",
+               "properties": {
+                   "host": { "type": "string", "format": "hostname" }
+               },
+               "required": ["host"]
+           }
+       }
+   }
+
+Acknowledgements
+
+   This document is based on the work of Ben Bucksch.
+
+Authors' Addresses
+
+   Daniel Eggert
+   Apple Inc
+   One Apple Park Way
+   Cupertino,  CA 95014
+   United States of America
+   Email: deggert@apple.com
+   URI:   https://www.apple.com
+
+
+   Ben Bucksch
+   Beonex
+   Email: ben.bucksch@beonex.com
+
+
+   Matt Diephouse
+   Apple Inc
+   One Apple Park Way
+   Cupertino,  CA 95014
+   United States of America
+   Email: diephouse@apple.com
+   URI:   https://www.apple.com
+
+
+
+
+
+
+
+
+
+Eggert, et al.            Expires 8 April 2027                 [Page 51]

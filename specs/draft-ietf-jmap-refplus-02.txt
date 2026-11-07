@@ -4,12 +4,12 @@
 
 JMAP                                                       M. De Gennaro
 Internet-Draft                                             Stalwart Labs
-Intended status: Standards Track                        19 December 2025
-Expires: 22 June 2026
+Intended status: Standards Track                            21 June 2026
+Expires: 23 December 2026
 
 
                     JMAP Enhanced Result References
-                       draft-ietf-jmap-refplus-01
+                       draft-ietf-jmap-refplus-02
 
 Abstract
 
@@ -42,20 +42,20 @@ Status of This Memo
    time.  It is inappropriate to use Internet-Drafts as reference
    material or to cite them other than as "work in progress."
 
-   This Internet-Draft will expire on 22 June 2026.
+   This Internet-Draft will expire on 23 December 2026.
 
 Copyright Notice
 
-   Copyright (c) 2025 IETF Trust and the persons identified as the
+   Copyright (c) 2026 IETF Trust and the persons identified as the
    document authors.  All rights reserved.
 
 
 
 
 
-De Gennaro                Expires 22 June 2026                  [Page 1]
+De Gennaro              Expires 23 December 2026                [Page 1]
 
-Internet-Draft       JMAP Enhanced Result References       December 2025
+Internet-Draft       JMAP Enhanced Result References           June 2026
 
 
    This document is subject to BCP 78 and the IETF Trust's Legal
@@ -109,9 +109,9 @@ Table of Contents
 
 
 
-De Gennaro                Expires 22 June 2026                  [Page 2]
+De Gennaro              Expires 23 December 2026                [Page 2]
 
-Internet-Draft       JMAP Enhanced Result References       December 2025
+Internet-Draft       JMAP Enhanced Result References           June 2026
 
 
        5.4.1.  Parser Security . . . . . . . . . . . . . . . . . . .  23
@@ -165,9 +165,9 @@ Internet-Draft       JMAP Enhanced Result References       December 2025
 
 
 
-De Gennaro                Expires 22 June 2026                  [Page 3]
+De Gennaro              Expires 23 December 2026                [Page 3]
 
-Internet-Draft       JMAP Enhanced Result References       December 2025
+Internet-Draft       JMAP Enhanced Result References           June 2026
 
 
    The current result reference mechanism, however, is limited to method
@@ -221,9 +221,9 @@ Internet-Draft       JMAP Enhanced Result References       December 2025
 
 
 
-De Gennaro                Expires 22 June 2026                  [Page 4]
+De Gennaro              Expires 23 December 2026                [Page 4]
 
-Internet-Draft       JMAP Enhanced Result References       December 2025
+Internet-Draft       JMAP Enhanced Result References           June 2026
 
 
    The value of this property in an account's "capabilities" property is
@@ -277,9 +277,9 @@ Internet-Draft       JMAP Enhanced Result References       December 2025
 
 
 
-De Gennaro                Expires 22 June 2026                  [Page 5]
+De Gennaro              Expires 23 December 2026                [Page 5]
 
-Internet-Draft       JMAP Enhanced Result References       December 2025
+Internet-Draft       JMAP Enhanced Result References           June 2026
 
 
 2.1.  JSON Path Support
@@ -333,9 +333,9 @@ Internet-Draft       JMAP Enhanced Result References       December 2025
 
 
 
-De Gennaro                Expires 22 June 2026                  [Page 6]
+De Gennaro              Expires 23 December 2026                [Page 6]
 
-Internet-Draft       JMAP Enhanced Result References       December 2025
+Internet-Draft       JMAP Enhanced Result References           June 2026
 
 
 2.1.3.  Validation Requirements
@@ -389,9 +389,9 @@ Internet-Draft       JMAP Enhanced Result References       December 2025
 
 
 
-De Gennaro                Expires 22 June 2026                  [Page 7]
+De Gennaro              Expires 23 December 2026                [Page 7]
 
-Internet-Draft       JMAP Enhanced Result References       December 2025
+Internet-Draft       JMAP Enhanced Result References           June 2026
 
 
        *  Otherwise, treat it as a JSON Pointer expression.
@@ -445,9 +445,9 @@ Internet-Draft       JMAP Enhanced Result References       December 2025
 
 
 
-De Gennaro                Expires 22 June 2026                  [Page 8]
+De Gennaro              Expires 23 December 2026                [Page 8]
 
-Internet-Draft       JMAP Enhanced Result References       December 2025
+Internet-Draft       JMAP Enhanced Result References           June 2026
 
 
    *  If the nodelist contains one or more nodes, use an array
@@ -501,9 +501,9 @@ Internet-Draft       JMAP Enhanced Result References       December 2025
 
 
 
-De Gennaro                Expires 22 June 2026                  [Page 9]
+De Gennaro              Expires 23 December 2026                [Page 9]
 
-Internet-Draft       JMAP Enhanced Result References       December 2025
+Internet-Draft       JMAP Enhanced Result References           June 2026
 
 
    *  If the pointer identifies exactly one value, use that value as the
@@ -557,9 +557,9 @@ Internet-Draft       JMAP Enhanced Result References       December 2025
 
 
 
-De Gennaro                Expires 22 June 2026                 [Page 10]
+De Gennaro              Expires 23 December 2026               [Page 10]
 
-Internet-Draft       JMAP Enhanced Result References       December 2025
+Internet-Draft       JMAP Enhanced Result References           June 2026
 
 
 2.2.3.  Type Validation
@@ -613,9 +613,9 @@ Internet-Draft       JMAP Enhanced Result References       December 2025
 
 
 
-De Gennaro                Expires 22 June 2026                 [Page 11]
+De Gennaro              Expires 23 December 2026               [Page 11]
 
-Internet-Draft       JMAP Enhanced Result References       December 2025
+Internet-Draft       JMAP Enhanced Result References           June 2026
 
 
    If a result reference fails to resolve, the server MUST reject the
@@ -669,9 +669,9 @@ Internet-Draft       JMAP Enhanced Result References       December 2025
 
 
 
-De Gennaro                Expires 22 June 2026                 [Page 12]
+De Gennaro              Expires 23 December 2026               [Page 12]
 
-Internet-Draft       JMAP Enhanced Result References       December 2025
+Internet-Draft       JMAP Enhanced Result References           June 2026
 
 
    4.  Apply the resolved value to the location specified by the JSON
@@ -725,9 +725,9 @@ Internet-Draft       JMAP Enhanced Result References       December 2025
 
 
 
-De Gennaro                Expires 22 June 2026                 [Page 13]
+De Gennaro              Expires 23 December 2026               [Page 13]
 
-Internet-Draft       JMAP Enhanced Result References       December 2025
+Internet-Draft       JMAP Enhanced Result References           June 2026
 
 
    If a FilterCondition contains both a property name with "#" prefix
@@ -781,9 +781,9 @@ Internet-Draft       JMAP Enhanced Result References       December 2025
 
 
 
-De Gennaro                Expires 22 June 2026                 [Page 14]
+De Gennaro              Expires 23 December 2026               [Page 14]
 
-Internet-Draft       JMAP Enhanced Result References       December 2025
+Internet-Draft       JMAP Enhanced Result References           June 2026
 
 
    *  *Syntactic Resolution Phase*: A generic reference resolution layer
@@ -837,9 +837,9 @@ Internet-Draft       JMAP Enhanced Result References       December 2025
 
 
 
-De Gennaro                Expires 22 June 2026                 [Page 15]
+De Gennaro              Expires 23 December 2026               [Page 15]
 
-Internet-Draft       JMAP Enhanced Result References       December 2025
+Internet-Draft       JMAP Enhanced Result References           June 2026
 
 
    [
@@ -893,9 +893,9 @@ Internet-Draft       JMAP Enhanced Result References       December 2025
 
 
 
-De Gennaro                Expires 22 June 2026                 [Page 16]
+De Gennaro              Expires 23 December 2026               [Page 16]
 
-Internet-Draft       JMAP Enhanced Result References       December 2025
+Internet-Draft       JMAP Enhanced Result References           June 2026
 
 
 4.2.  Usage in /set patch objects
@@ -949,9 +949,9 @@ Internet-Draft       JMAP Enhanced Result References       December 2025
 
 
 
-De Gennaro                Expires 22 June 2026                 [Page 17]
+De Gennaro              Expires 23 December 2026               [Page 17]
 
-Internet-Draft       JMAP Enhanced Result References       December 2025
+Internet-Draft       JMAP Enhanced Result References           June 2026
 
 
 4.3.  Usage in /query FilterCondition
@@ -1005,9 +1005,9 @@ Internet-Draft       JMAP Enhanced Result References       December 2025
 
 
 
-De Gennaro                Expires 22 June 2026                 [Page 18]
+De Gennaro              Expires 23 December 2026               [Page 18]
 
-Internet-Draft       JMAP Enhanced Result References       December 2025
+Internet-Draft       JMAP Enhanced Result References           June 2026
 
 
    [
@@ -1061,9 +1061,9 @@ Internet-Draft       JMAP Enhanced Result References       December 2025
 
 
 
-De Gennaro                Expires 22 June 2026                 [Page 19]
+De Gennaro              Expires 23 December 2026               [Page 19]
 
-Internet-Draft       JMAP Enhanced Result References       December 2025
+Internet-Draft       JMAP Enhanced Result References           June 2026
 
 
 5.1.  Denial of Service Considerations
@@ -1117,9 +1117,9 @@ Internet-Draft       JMAP Enhanced Result References       December 2025
 
 
 
-De Gennaro                Expires 22 June 2026                 [Page 20]
+De Gennaro              Expires 23 December 2026               [Page 20]
 
-Internet-Draft       JMAP Enhanced Result References       December 2025
+Internet-Draft       JMAP Enhanced Result References           June 2026
 
 
    *  Result references in FilterCondition objects might require
@@ -1173,9 +1173,9 @@ Internet-Draft       JMAP Enhanced Result References       December 2025
 
 
 
-De Gennaro                Expires 22 June 2026                 [Page 21]
+De Gennaro              Expires 23 December 2026               [Page 21]
 
-Internet-Draft       JMAP Enhanced Result References       December 2025
+Internet-Draft       JMAP Enhanced Result References           June 2026
 
 
 5.2.1.  Type Confusion
@@ -1229,9 +1229,9 @@ Internet-Draft       JMAP Enhanced Result References       December 2025
 
 
 
-De Gennaro                Expires 22 June 2026                 [Page 22]
+De Gennaro              Expires 23 December 2026               [Page 22]
 
-Internet-Draft       JMAP Enhanced Result References       December 2025
+Internet-Draft       JMAP Enhanced Result References           June 2026
 
 
 5.3.  Privacy Considerations
@@ -1285,9 +1285,9 @@ Internet-Draft       JMAP Enhanced Result References       December 2025
 
 
 
-De Gennaro                Expires 22 June 2026                 [Page 23]
+De Gennaro              Expires 23 December 2026               [Page 23]
 
-Internet-Draft       JMAP Enhanced Result References       December 2025
+Internet-Draft       JMAP Enhanced Result References           June 2026
 
 
 5.4.2.  Cache Security
@@ -1341,9 +1341,9 @@ Internet-Draft       JMAP Enhanced Result References       December 2025
 
 
 
-De Gennaro                Expires 22 June 2026                 [Page 24]
+De Gennaro              Expires 23 December 2026               [Page 24]
 
-Internet-Draft       JMAP Enhanced Result References       December 2025
+Internet-Draft       JMAP Enhanced Result References           June 2026
 
 
    [RFC2119]  Bradner, S., "Key words for use in RFCs to Indicate
@@ -1397,9 +1397,9 @@ Internet-Draft       JMAP Enhanced Result References       December 2025
 
 
 
-De Gennaro                Expires 22 June 2026                 [Page 25]
+De Gennaro              Expires 23 December 2026               [Page 25]
 
-Internet-Draft       JMAP Enhanced Result References       December 2025
+Internet-Draft       JMAP Enhanced Result References           June 2026
 
 
 Appendix A.  Changes
@@ -1453,4 +1453,4 @@ Author's Address
 
 
 
-De Gennaro                Expires 22 June 2026                 [Page 26]
+De Gennaro              Expires 23 December 2026               [Page 26]

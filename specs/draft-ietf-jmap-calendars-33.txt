@@ -5,12 +5,12 @@
 JMAP                                                   N.M. Jenkins, Ed.
 Internet-Draft                                                  Fastmail
 Intended status: Standards Track                        M. Douglass, Ed.
-Expires: 9 May 2026                                  Spherical Cow Group
-                                                         5 November 2025
+Expires: 17 April 2027                               Spherical Cow Group
+                                                         14 October 2026
 
 
           JSON Meta Application Protocol (JMAP) for Calendars
-                      draft-ietf-jmap-calendars-26
+                      draft-ietf-jmap-calendars-33
 
 Abstract
 
@@ -35,11 +35,11 @@ Status of This Memo
    time.  It is inappropriate to use Internet-Drafts as reference
    material or to cite them other than as "work in progress."
 
-   This Internet-Draft will expire on 9 May 2026.
+   This Internet-Draft will expire on 17 April 2027.
 
 Copyright Notice
 
-   Copyright (c) 2025 IETF Trust and the persons identified as the
+   Copyright (c) 2026 IETF Trust and the persons identified as the
    document authors.  All rights reserved.
 
    This document is subject to BCP 78 and the IETF Trust's Legal
@@ -53,139 +53,124 @@ Copyright Notice
 
 
 
-Jenkins & Douglass         Expires 9 May 2026                   [Page 1]
+Jenkins & Douglass        Expires 17 April 2027                 [Page 1]
 
-Internet-Draft               JMAP Calendars                November 2025
+Internet-Draft               JMAP Calendars                 October 2026
 
 
 Table of Contents
 
    1.  Introduction  . . . . . . . . . . . . . . . . . . . . . . . .   4
      1.1.  Notational Conventions  . . . . . . . . . . . . . . . . .   4
-     1.2.  Data Types  . . . . . . . . . . . . . . . . . . . . . . .   5
-     1.3.  Terminology . . . . . . . . . . . . . . . . . . . . . . .   5
+     1.2.  Data Types  . . . . . . . . . . . . . . . . . . . . . . .   4
+     1.3.  Terminology . . . . . . . . . . . . . . . . . . . . . . .   4
      1.4.  Data Model Overview . . . . . . . . . . . . . . . . . . .   5
        1.4.1.  UIDs and CalendarEvent Ids  . . . . . . . . . . . . .   6
      1.5.  Addition to the Capabilities Object . . . . . . . . . . .   6
        1.5.1.  urn:ietf:params:jmap:calendars  . . . . . . . . . . .   6
        1.5.2.  urn:ietf:params:jmap:principals:availability  . . . .   7
-       1.5.3.  urn:ietf:params:jmap:calendars:parse  . . . . . . . .   8
+       1.5.3.  urn:ietf:params:jmap:calendars:parse  . . . . . . . .   7
    2.  Principals and Sharing  . . . . . . . . . . . . . . . . . . .   8
      2.1.  Principal Capability urn:ietf:params:jmap:calendars . . .   8
      2.2.  Principal/getAvailability . . . . . . . . . . . . . . . .   8
      2.3.  Principal/query extension . . . . . . . . . . . . . . . .  11
    3.  Participant Identities  . . . . . . . . . . . . . . . . . . .  11
-     3.1.  ParticipantIdentity/get . . . . . . . . . . . . . . . . .  12
-     3.2.  ParticipantIdentity/changes . . . . . . . . . . . . . . .  12
-     3.3.  ParticipantIdentity/set . . . . . . . . . . . . . . . . .  12
-   4.  Calendars . . . . . . . . . . . . . . . . . . . . . . . . . .  13
-     4.1.  Calendar/get  . . . . . . . . . . . . . . . . . . . . . .  18
-     4.2.  Calendar/changes  . . . . . . . . . . . . . . . . . . . .  18
-     4.3.  Calendar/set  . . . . . . . . . . . . . . . . . . . . . .  18
-   5.  Calendar Events . . . . . . . . . . . . . . . . . . . . . . .  20
-     5.1.  Additional common-use JSCalendar properties . . . . . . .  22
-       5.1.1.  mayInviteSelf . . . . . . . . . . . . . . . . . . . .  22
-       5.1.2.  mayInviteOthers . . . . . . . . . . . . . . . . . . .  22
+     3.1.  ParticipantIdentity/get . . . . . . . . . . . . . . . . .  13
+     3.2.  ParticipantIdentity/changes . . . . . . . . . . . . . . .  13
+     3.3.  ParticipantIdentity/set . . . . . . . . . . . . . . . . .  13
+   4.  Calendars . . . . . . . . . . . . . . . . . . . . . . . . . .  14
+     4.1.  Calendar/get  . . . . . . . . . . . . . . . . . . . . . .  19
+     4.2.  Calendar/changes  . . . . . . . . . . . . . . . . . . . .  19
+     4.3.  Calendar/set  . . . . . . . . . . . . . . . . . . . . . .  19
+   5.  Calendar Events . . . . . . . . . . . . . . . . . . . . . . .  21
+     5.1.  Additional common-use JSCalendar properties . . . . . . .  23
+       5.1.1.  mayInviteSelf . . . . . . . . . . . . . . . . . . . .  23
+       5.1.2.  mayInviteOthers . . . . . . . . . . . . . . . . . . .  23
        5.1.3.  hideAttendees . . . . . . . . . . . . . . . . . . . .  23
      5.2.  Additional reserved JSCalendar properties . . . . . . . .  23
        5.2.1.  scheduleSequence  . . . . . . . . . . . . . . . . . .  23
-       5.2.2.  scheduleUpdated . . . . . . . . . . . . . . . . . . .  23
+       5.2.2.  scheduleUpdated . . . . . . . . . . . . . . . . . . .  24
      5.3.  Attachments . . . . . . . . . . . . . . . . . . . . . . .  24
      5.4.  Per-user properties . . . . . . . . . . . . . . . . . . .  24
-     5.5.  Recurring events  . . . . . . . . . . . . . . . . . . . .  24
+     5.5.  Recurring events  . . . . . . . . . . . . . . . . . . . .  25
      5.6.  Updating for "this-and-future"  . . . . . . . . . . . . .  25
-       5.6.1.  Splitting an event  . . . . . . . . . . . . . . . . .  25
-       5.6.2.  Updating the base event and overriding previous . . .  25
+       5.6.1.  Splitting an event  . . . . . . . . . . . . . . . . .  26
+       5.6.2.  Updating the base event and overriding previous . . .  26
      5.7.  CalendarEvent/get . . . . . . . . . . . . . . . . . . . .  26
-     5.8.  CalendarEvent/changes . . . . . . . . . . . . . . . . . .  27
-     5.9.  CalendarEvent/set . . . . . . . . . . . . . . . . . . . .  28
-       5.9.1.  Patching  . . . . . . . . . . . . . . . . . . . . . .  31
-       5.9.2.  Sending invitations and responses . . . . . . . . . .  34
-     5.10. CalendarEvent/copy  . . . . . . . . . . . . . . . . . . .  36
-     5.11. CalendarEvent/query . . . . . . . . . . . . . . . . . . .  36
-       5.11.1.  Filtering  . . . . . . . . . . . . . . . . . . . . .  37
-       5.11.2.  Sorting  . . . . . . . . . . . . . . . . . . . . . .  39
-     5.12. CalendarEvent/queryChanges  . . . . . . . . . . . . . . .  39
+     5.8.  CalendarEvent/changes . . . . . . . . . . . . . . . . . .  29
+     5.9.  CalendarEvent/set . . . . . . . . . . . . . . . . . . . .  29
+       5.9.1.  Patching  . . . . . . . . . . . . . . . . . . . . . .  33
+       5.9.2.  Sending invitations and responses . . . . . . . . . .  36
+     5.10. CalendarEvent/copy  . . . . . . . . . . . . . . . . . . .  38
+     5.11. CalendarEvent/query . . . . . . . . . . . . . . . . . . .  39
+       5.11.1.  Filtering  . . . . . . . . . . . . . . . . . . . . .  40
+       5.11.2.  Sorting  . . . . . . . . . . . . . . . . . . . . . .  42
+     5.12. CalendarEvent/queryChanges  . . . . . . . . . . . . . . .  42
 
 
 
-Jenkins & Douglass         Expires 9 May 2026                   [Page 2]
+Jenkins & Douglass        Expires 17 April 2027                 [Page 2]
 
-Internet-Draft               JMAP Calendars                November 2025
+Internet-Draft               JMAP Calendars                 October 2026
 
 
-     5.13. CalendarEvent/parse . . . . . . . . . . . . . . . . . . .  40
-   6.  Alerts  . . . . . . . . . . . . . . . . . . . . . . . . . . .  41
-     6.1.  Default alerts  . . . . . . . . . . . . . . . . . . . . .  41
-     6.2.  Acknowledging an alert  . . . . . . . . . . . . . . . . .  42
-     6.3.  Snoozing an alert . . . . . . . . . . . . . . . . . . . .  42
-     6.4.  Push events . . . . . . . . . . . . . . . . . . . . . . .  42
-   7.  Calendar Event Notifications  . . . . . . . . . . . . . . . .  43
-     7.1.  CalendarEventNotification/get . . . . . . . . . . . . . .  45
-     7.2.  CalendarEventNotification/changes . . . . . . . . . . . .  45
-     7.3.  CalendarEventNotification/set . . . . . . . . . . . . . .  45
-     7.4.  CalendarEventNotification/query . . . . . . . . . . . . .  45
-       7.4.1.  Filtering . . . . . . . . . . . . . . . . . . . . . .  45
-       7.4.2.  Sorting . . . . . . . . . . . . . . . . . . . . . . .  46
-     7.5.  CalendarEventNotification/queryChanges  . . . . . . . . .  46
-   8.  Examples  . . . . . . . . . . . . . . . . . . . . . . . . . .  46
-     8.1.  Fetching initial data . . . . . . . . . . . . . . . . . .  46
-     8.2.  Creating an event . . . . . . . . . . . . . . . . . . . .  49
-     8.3.  Snoozing an alert . . . . . . . . . . . . . . . . . . . .  51
-     8.4.  Changing the default calendar . . . . . . . . . . . . . .  54
-     8.5.  Parsing an iCalendar file . . . . . . . . . . . . . . . .  54
-   9.  Security Considerations . . . . . . . . . . . . . . . . . . .  56
-     9.1.  Privacy . . . . . . . . . . . . . . . . . . . . . . . . .  56
-     9.2.  Spoofing  . . . . . . . . . . . . . . . . . . . . . . . .  56
-     9.3.  Denial-of-service . . . . . . . . . . . . . . . . . . . .  57
-       9.3.1.  Expanding Recurrences . . . . . . . . . . . . . . . .  57
-       9.3.2.  Firing alerts . . . . . . . . . . . . . . . . . . . .  57
-       9.3.3.  Load spikes . . . . . . . . . . . . . . . . . . . . .  57
-     9.4.  Spam  . . . . . . . . . . . . . . . . . . . . . . . . . .  58
-   10. IANA Considerations . . . . . . . . . . . . . . . . . . . . .  58
-     10.1.  JMAP Capability Registration for "calendars" . . . . . .  58
+     5.13. CalendarEvent/parse . . . . . . . . . . . . . . . . . . .  42
+   6.  Alerts  . . . . . . . . . . . . . . . . . . . . . . . . . . .  43
+     6.1.  Default alerts  . . . . . . . . . . . . . . . . . . . . .  44
+     6.2.  Acknowledging an alert  . . . . . . . . . . . . . . . . .  44
+     6.3.  Snoozing an alert . . . . . . . . . . . . . . . . . . . .  44
+     6.4.  Push events . . . . . . . . . . . . . . . . . . . . . . .  45
+   7.  Calendar Event Notifications  . . . . . . . . . . . . . . . .  46
+     7.1.  CalendarEventNotification/get . . . . . . . . . . . . . .  48
+     7.2.  CalendarEventNotification/changes . . . . . . . . . . . .  48
+     7.3.  CalendarEventNotification/set . . . . . . . . . . . . . .  48
+     7.4.  CalendarEventNotification/query . . . . . . . . . . . . .  49
+       7.4.1.  Filtering . . . . . . . . . . . . . . . . . . . . . .  49
+       7.4.2.  Sorting . . . . . . . . . . . . . . . . . . . . . . .  49
+     7.5.  CalendarEventNotification/queryChanges  . . . . . . . . .  49
+   8.  Examples  . . . . . . . . . . . . . . . . . . . . . . . . . .  49
+     8.1.  Fetching initial data . . . . . . . . . . . . . . . . . .  49
+     8.2.  Creating an event . . . . . . . . . . . . . . . . . . . .  52
+     8.3.  Snoozing an alert . . . . . . . . . . . . . . . . . . . .  54
+     8.4.  Changing the default calendar . . . . . . . . . . . . . .  57
+     8.5.  Parsing an iCalendar file . . . . . . . . . . . . . . . .  57
+   9.  Security Considerations . . . . . . . . . . . . . . . . . . .  59
+     9.1.  Privacy . . . . . . . . . . . . . . . . . . . . . . . . .  59
+     9.2.  Spoofing  . . . . . . . . . . . . . . . . . . . . . . . .  59
+     9.3.  Denial-of-service . . . . . . . . . . . . . . . . . . . .  60
+       9.3.1.  Expanding Recurrences . . . . . . . . . . . . . . . .  60
+       9.3.2.  Firing alerts . . . . . . . . . . . . . . . . . . . .  60
+       9.3.3.  Load spikes . . . . . . . . . . . . . . . . . . . . .  60
+     9.4.  Spam  . . . . . . . . . . . . . . . . . . . . . . . . . .  61
+   10. IANA Considerations . . . . . . . . . . . . . . . . . . . . .  61
+     10.1.  JMAP Capability Registration for "calendars" . . . . . .  61
      10.2.  JMAP Capability Registration for
-            "principals:availability"  . . . . . . . . . . . . . . .  58
-     10.3.  JMAP Data Type Registration for "Calendar" . . . . . . .  58
-     10.4.  JMAP Data Type Registration for "CalendarEvent"  . . . .  59
-     10.5.  JMAP Data Type Registration for
-            "CalendarEventNotification"  . . . . . . . . . . . . . .  59
-     10.6.  JMAP Data Type Registration for "ParticipantIdentity"  .  59
-     10.7.  JMAP Error Codes Registry  . . . . . . . . . . . . . . .  59
-       10.7.1.  calendarHasEvent . . . . . . . . . . . . . . . . . .  59
-       10.7.2.  noSupportedScheduleMethods . . . . . . . . . . . . .  60
-       10.7.3.  expandDurationTooLarge . . . . . . . . . . . . . . .  60
-       10.7.4.  cannotCalculateOccurrences . . . . . . . . . . . . .  60
-     10.8.  Update to the JSCalendar Properties Registry . . . . . .  60
-       10.8.1.  Update to "JSCalendar Properties" Registry
-               Template  . . . . . . . . . . . . . . . . . . . . . .  60
-       10.8.2.  Initial values for existing registrations  . . . . .  61
-     10.9.  JSCalendar Property Registrations  . . . . . . . . . . .  61
-       10.9.1.  id . . . . . . . . . . . . . . . . . . . . . . . . .  61
+            "principals:availability"  . . . . . . . . . . . . . . .  61
+     10.3.  JMAP Capability Registration for "calendars:parse" . . .  61
+     10.4.  JMAP Data Type Registration for "Calendar" . . . . . . .  62
+     10.5.  JMAP Data Type Registration for "CalendarEvent"  . . . .  62
+     10.6.  JMAP Data Type Registration for
+            "CalendarEventNotification"  . . . . . . . . . . . . . .  62
+     10.7.  JMAP Data Type Registration for "ParticipantIdentity"  .  62
+     10.8.  JMAP Error Codes Registry  . . . . . . . . . . . . . . .  63
+       10.8.1.  calendarHasEvent . . . . . . . . . . . . . . . . . .  63
+       10.8.2.  noSupportedScheduleMethods . . . . . . . . . . . . .  63
+       10.8.3.  expandDurationTooLarge . . . . . . . . . . . . . . .  63
+       10.8.4.  cannotCalculateOccurrences . . . . . . . . . . . . .  63
+     10.9.  JSCalendar Properties Registry . . . . . . . . . . . . .  64
+       10.9.1.  Added Properties . . . . . . . . . . . . . . . . . .  64
+       10.9.2.  Updated Properties . . . . . . . . . . . . . . . . .  66
+   11. Normative References  . . . . . . . . . . . . . . . . . . . .  67
+   12. Informative References  . . . . . . . . . . . . . . . . . . .  68
 
 
 
-Jenkins & Douglass         Expires 9 May 2026                   [Page 3]
+Jenkins & Douglass        Expires 17 April 2027                 [Page 3]
 
-Internet-Draft               JMAP Calendars                November 2025
+Internet-Draft               JMAP Calendars                 October 2026
 
 
-       10.9.2.  baseEventId  . . . . . . . . . . . . . . . . . . . .  61
-       10.9.3.  calendarIds  . . . . . . . . . . . . . . . . . . . .  61
-       10.9.4.  isDraft  . . . . . . . . . . . . . . . . . . . . . .  61
-       10.9.5.  isOrigin . . . . . . . . . . . . . . . . . . . . . .  62
-       10.9.6.  utcStart . . . . . . . . . . . . . . . . . . . . . .  62
-       10.9.7.  utcEnd . . . . . . . . . . . . . . . . . . . . . . .  62
-       10.9.8.  useDefaultAlerts . . . . . . . . . . . . . . . . . .  62
-       10.9.9.  mayInviteSelf  . . . . . . . . . . . . . . . . . . .  62
-       10.9.10. mayInviteOthers  . . . . . . . . . . . . . . . . . .  62
-       10.9.11. hideAttendees  . . . . . . . . . . . . . . . . . . .  63
-       10.9.12. scheduleSequence . . . . . . . . . . . . . . . . . .  63
-       10.9.13. scheduleUpdated  . . . . . . . . . . . . . . . . . .  63
-       10.9.14. blobId . . . . . . . . . . . . . . . . . . . . . . .  63
-   11. Normative References  . . . . . . . . . . . . . . . . . . . .  63
-   12. Informative References  . . . . . . . . . . . . . . . . . . .  65
-   Authors' Addresses  . . . . . . . . . . . . . . . . . . . . . . .  65
+   Authors' Addresses  . . . . . . . . . . . . . . . . . . . . . . .  69
 
 1.  Introduction
 
@@ -214,24 +199,12 @@ Internet-Draft               JMAP Calendars                November 2025
    Type signatures, examples, and property descriptions in this document
    follow the conventions established in Section 1.1 of [RFC8620].
 
-
-
-
-
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                   [Page 4]
-
-Internet-Draft               JMAP Calendars                November 2025
-
-
 1.2.  Data Types
 
    The Id data type defined in Section 1.2 of [RFC8620] is used in this
    document.  So too are the UnsignedInt, UTCDateTime, LocalDateTime,
-   Duration, and TimeZoneId data types defined in Sections 1.4.3, 1.4.4,
-   1.4.5, 1.4.6, and 1.4.8 of [I-D.ietf-calext-jscalendarbis]
+   Duration, and TimeZoneId data types defined in Sections 1.5.3, 1.5.4,
+   1.5.5, 1.5.6, and 1.5.8 of [I-D.ietf-calext-jscalendarbis]
    respectively.
 
 1.3.  Terminology
@@ -244,13 +217,22 @@ Internet-Draft               JMAP Calendars                November 2025
    used to refer to the data types defined in this document and
    instances of those data types.
 
+
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                 [Page 4]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
+
 1.4.  Data Model Overview
 
    An Account (see Section 1.6.2 of [RFC8620]) with support for the
-   calendar data model contains zero or more Calendar objects, which is
-   a named collection of CalendarEvents.  Calendars can also provide
-   defaults, such as alerts and a color to apply to events in the
-   calendar.  Clients commonly let users toggle visibility of events
+   calendar data model contains zero or more Calendar objects, each of
+   which is a named collection of CalendarEvents.  Calendars can also
+   provide defaults, such as alerts and a color to apply to events in
+   the calendar.  Clients commonly let users toggle visibility of events
    belonging to a particular calendar on/off.  Servers may allow an
    event to belong to multiple Calendars within an account.
 
@@ -269,19 +251,14 @@ Internet-Draft               JMAP Calendars                November 2025
    The ParticipantIdentity data type represents the identities of the
    current user within an Account, which determines which events the
    user is a participant of and possibly their permissions related to
-   that event.
+   that event.  ParticipantIdentity objects are specific to the
+   authenticated user as well as the account, so different users with
+   access to the same account may see different ParticipantIdentity
+   objects (see Section 3).
 
    In servers with support for JMAP Sharing [RFC9670], data may be
    shared with other users.  Sharing permissions are managed per
    calendar.  For example, an individual may have separate calendars for
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                   [Page 5]
-
-Internet-Draft               JMAP Calendars                November 2025
-
-
    personal and work activities, with both contributing to their free-
    busy availability, but only the work calendar shared in its entirety
    with colleagues.  Principals (see Section 2 of [RFC9670]) may also
@@ -293,9 +270,21 @@ Internet-Draft               JMAP Calendars                November 2025
    stores whether the user would currently like to view the events in a
    subscribed calendar.
 
+
+
+
+
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                 [Page 5]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
+
 1.4.1.  UIDs and CalendarEvent Ids
 
-   Each CalendarEvent has a "uid" property (Section 4.1.1 of
+   Each CalendarEvent has a "uid" property (Section 3.1.1 of
    [I-D.ietf-calext-jscalendarbis]), which is a globally unique
    identifier that identifies the same event in different Accounts, or
    different instances of the same recurring event within an Account.
@@ -305,6 +294,11 @@ Internet-Draft               JMAP Calendars                November 2025
    values for their "recurrenceId" property.  (This situation occurs if
    the Principal is added to one or more specific instances of a
    recurring event without being invited to the whole series.)
+
+   Where an Account does contain multiple CalendarEvent objects with the
+   same uid, they MUST NOT have different values for their "privacy"
+   property (see Section 3.4.3 of [I-D.ietf-calext-jscalendarbis]).  See
+   Section 5.9 for how the server enforces this.
 
    Each CalendarEvent also has an id, which is scoped to the JMAP
    Account and used for referencing it in JMAP methods.  There is no
@@ -330,19 +324,19 @@ Internet-Draft               JMAP Calendars                November 2025
    property is an object that MUST contain the following information on
    server capabilities and permissions for that account:
 
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                   [Page 6]
-
-Internet-Draft               JMAP Calendars                November 2025
-
-
    *maxCalendarsPerEvent*: UnsignedInt|null
       The maximum number of Calendars (see Section 4) that can be
       assigned to a single CalendarEvent object (see Section 5).  This
       MUST be an integer >= 1, or null for no limit (or rather, the
       limit is always the number of Calendars in the account).
+
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                 [Page 6]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
 
    *minDateTime*: UTCDateTime
       The earliest date-time value the server is willing to accept for
@@ -381,19 +375,6 @@ Internet-Draft               JMAP Calendars                November 2025
       The maximum duration over which the server is prepared to
       calculate availability in a single call (see Section 2.2).
 
-
-
-
-
-
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                   [Page 7]
-
-Internet-Draft               JMAP Calendars                November 2025
-
-
 1.5.3.  urn:ietf:params:jmap:calendars:parse
 
    This represents support for the CalendarEvent/parse method (see
@@ -401,12 +382,25 @@ Internet-Draft               JMAP Calendars                November 2025
    the JMAP session "capabilities" property and an account's
    "accountCapabilities" property.
 
+
+
+
+
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                 [Page 7]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
+
 2.  Principals and Sharing
 
-   For systems that also support JMAP Sharing [RFC9670], the
-   urn:ietf:params:jmap:calendars capability is used to indicate that
-   this Principal may be used with calendaring.  A new method is defined
-   to allow users to query availability when scheduling events.
+   For systems that also support JMAP Sharing [RFC9670], the presence of
+   the urn:ietf:params:jmap:calendars capability in the "capabilities"
+   property of a Principal indicates that the Principal may be used with
+   calendaring.  A new method is defined to allow users to query
+   availability when scheduling events.
 
 2.1.  Principal Capability urn:ietf:params:jmap:calendars
 
@@ -433,9 +427,10 @@ Internet-Draft               JMAP Calendars                November 2025
       target (by adding them to the "shareWith" property of a calendar,
       see Section 4).
 
-   *calendarAddress*: String
+   *calendarAddress*: String|null
       If this Principal may be added as a participant to an event, this
-      is the calendarAddress to use to receive iTIP scheduling messages.
+      is the calendarAddress to use to receive iTIP scheduling messages;
+      otherwise, this is null.
 
 2.2.  Principal/getAvailability
 
@@ -443,15 +438,17 @@ Internet-Draft               JMAP Calendars                November 2025
    scheduling within a requested time period.  It takes the following
    arguments:
 
-
-
-Jenkins & Douglass         Expires 9 May 2026                   [Page 8]
-
-Internet-Draft               JMAP Calendars                November 2025
-
-
    *accountId*: Id
       The id of the account to use.
+
+
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                 [Page 8]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
 
    *id*: Id
       The id of the Principal to calculate availability for.
@@ -476,7 +473,7 @@ Internet-Draft               JMAP Calendars                November 2025
 
    The server will first find all relevant events, expanding any
    recurring events.  Relevant events are ones where all of the
-   following is true:
+   following are true:
 
    *  The Principal is subscribed to the calendar.
    *  The "includeInAvailability" property of the calendar for the
@@ -498,25 +495,25 @@ Internet-Draft               JMAP Calendars                November 2025
    The server then generates a BusyPeriod object for each of these
    events.  A *BusyPeriod* object has the following properties:
 
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                   [Page 9]
-
-Internet-Draft               JMAP Calendars                November 2025
-
-
    *utcStart*: UTCDateTime
       The start time (inclusive) of the period this represents.
+
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                 [Page 9]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
 
    *utcEnd*: UTCDateTime
       The end time (exclusive) of the period this represents.
 
-   *busyStatus*: String (optional, default "unavailable")
+   *busyStatus*: String (default: "unavailable")
       This MUST be one of:
 
       *  "confirmed" — The event status is "confirmed" and the
-         Principal's "participationStatus" is "attending".
+         Principal's "participationStatus" is "accepted".
       *  "tentative" — The event status is "tentative" or the
          Principal's "participationStatus" is "tentative".
       *  "unavailable" — The Principal is not available for scheduling
@@ -554,15 +551,16 @@ Internet-Draft               JMAP Calendars                November 2025
    choose the value in the following order: confirmed > unavailable >
    tentative.
 
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 10]
-
-Internet-Draft               JMAP Calendars                November 2025
-
-
    The response has the following argument:
+
+
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 10]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
 
    *list*: BusyPeriod[]
       The list of BusyPeriod objects calculated as described above.
@@ -600,6 +598,30 @@ Internet-Draft               JMAP Calendars                November 2025
    A ParticipantIdentity stores information about a URI that represents
    the user within that account in an event's participants.
 
+   The set of ParticipantIdentity objects in an account depends on the
+   authenticated user, as it represents who that user acts as when
+   accessing the account.  For example:
+
+   *  When user A accesses their own account, they see their own
+      identities.
+   *  If user A has delegated management of their calendars to user B,
+      user B acts on behalf of user A, and so sees user A's identities
+      when accessing user A's account.
+   *  In a shared team calendar account, where each user acts as
+      themselves, each user sees only their own identities.
+
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 11]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
+
+   Throughout this document, "the user's ParticipantIdentity objects in
+   the account" means the ParticipantIdentity objects in that account
+   that are visible to the currently authenticated user.
+
    A *ParticipantIdentity* object has the following properties:
 
    *id*: Id (immutable; server-set)
@@ -609,30 +631,26 @@ Internet-Draft               JMAP Calendars                November 2025
       The display name of the participant to use when adding this
       participant to an event, e.g. "Joe Bloggs".
 
-
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 11]
-
-Internet-Draft               JMAP Calendars                November 2025
-
-
    *calendarAddress*: String
       The URI that represents this participant for iTIP scheduling
       [RFC5546].
 
    *isDefault*: Boolean (server-set)
-      This SHOULD be true for exactly one participant identity in any
-      account, and MUST NOT be true for more than one participant
-      identity within an account.  The default identity should be used
-      by clients whenever they need to choose an identity for the user
-      within this account, and they do not have any other information on
-      which to make a choice.  For example, if creating a scheduled
-      event in this account, the default identity may be automatically
-      added as an owner.  (But the client may ignore this if, for
-      example, it has its own feature to allow users to choose which
-      identity to use based on the invitees.)
+      This SHOULD be true for exactly one of the participant identities
+      the user can see in any account, and MUST NOT be true for more
+      than one of them.  As with the set of identities itself, which
+      identity is the default may depend on the authenticated user, so
+      different users with access to the same account may have different
+      defaults.
+
+      The default identity should be used by clients whenever they need
+      to choose an identity for the user within this account, and they
+      do not have any other information on which to make a choice.  For
+      example, if creating a scheduled event in this account, the
+      default identity may be automatically added as an owner.  (But the
+      client may ignore this if, for example, it has its own feature to
+      allow users to choose which identity to use based on the
+      invitees.)
 
       If no participant identities have "isDefault" set, users with
       multiple clients may experience different default choices in each
@@ -642,9 +660,19 @@ Internet-Draft               JMAP Calendars                November 2025
    A participant in an event corresponds to a ParticipantIdentity if the
    "calendarAddress" property of the participant is equivalent to the
    "calendarAddress" property of the identity after syntax-based
-   normalisation, as per Section 6.2.2 of [RFC3986].
+   normalization, as per Section 6.2.2 of [RFC3986].
 
    The following JMAP methods are supported.
+
+
+
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 12]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
 
 3.1.  ParticipantIdentity/get
 
@@ -656,23 +684,17 @@ Internet-Draft               JMAP Calendars                November 2025
    This is a standard "/changes" method as described in Section 5.2 of
    [RFC8620].
 
+   As the set of ParticipantIdentity objects depends on the
+   authenticated user (see Section 3), the state string and changes
+   returned MUST reflect that user's view of the account.  The changes
+   reported are the differences between the objects that user would have
+   received from a "ParticipantIdentity/get" call at the old state and
+   the objects that user would receive now.
+
 3.3.  ParticipantIdentity/set
 
    This is a standard "/set" method as described in Section 5.3 of
    [RFC8620], but with the following additional request argument:
-
-
-
-
-
-
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 12]
-
-Internet-Draft               JMAP Calendars                November 2025
-
 
    *onSuccessSetIsDefault*: Id|null
       If an id is given, and all creates, updates and destroys (if any)
@@ -693,8 +715,27 @@ Internet-Draft               JMAP Calendars                November 2025
 
    The server MAY restrict the URI values the user may claim, for
    example only allowing mailto: URIs with email addresses that belong
-   to the user.  A standard forbidden error is returned to reject non-
-   permissible changes.
+   to the user.  A standard forbidden SetError is returned to reject
+   non-permissible changes.
+
+
+
+
+
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 13]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
+
+   Whether a change made by one user is also visible to other users with
+   access to the same account depends on the server and how the account
+   is configured.  In many cases, ParticipantIdentity objects will be
+   configured out of band, for example derived from the user's email
+   aliases or managed by an administrator.  In this case, the server
+   rejects all creates, updates and destroys with a forbidden SetError.
 
 4.  Calendars
 
@@ -720,16 +761,6 @@ Internet-Draft               JMAP Calendars                November 2025
       A color to be used when displaying events associated with the
       calendar.
 
-
-
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 13]
-
-Internet-Draft               JMAP Calendars                November 2025
-
-
       If not null, the value MUST be a case-insensitive color name taken
       from the set of names defined in Section 4.3 of CSS Color Module
       Level 3 [COLORS], or an RGB value in hexadecimal notation, as
@@ -743,7 +774,17 @@ Internet-Draft               JMAP Calendars                November 2025
    *sortOrder*: UnsignedInt (default: 0)
       Defines the sort order of calendars when presented in the client's
       UI, so it is consistent between devices.  The number MUST be an
-      integer in the range 0 <= sortOrder < 2^(31.)
+      integer in the range 0 <= sortOrder < 2^31.
+
+
+
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 14]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
 
       A calendar with a lower order is to be displayed before a calendar
       with a higher order in any list of calendars in the client's UI.
@@ -778,14 +819,6 @@ Internet-Draft               JMAP Calendars                November 2025
       The default calendar should be used by clients whenever they need
       to choose a calendar for the user within this account, and they do
       not have any other information on which to make a choice.  For
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 14]
-
-Internet-Draft               JMAP Calendars                November 2025
-
-
       example, if the user creates a new event, the client may
       automatically set the event as belonging to the default calendar
       from the user's primary account.
@@ -800,11 +833,20 @@ Internet-Draft               JMAP Calendars                November 2025
       *  "none" — all events are ignored (but may be considered if also
          in another calendar).
 
+
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 15]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
+
       This should default to "all" for the calendars in the user's own
       account, and "none" for calendars shared with the user.
 
    *defaultAlertsWithTime*: Id[Alert]|null
-      A map of alert ids to Alert objects (see Section 4.5.1 of
+      A map of alert ids to Alert objects (see Section 3.5.1 of
       [I-D.ietf-calext-jscalendarbis]) to apply for events where
       "showWithoutTime" is false and "useDefaultAlerts" is true.  Ids
       MUST be unique across all default alerts in the account, including
@@ -818,7 +860,7 @@ Internet-Draft               JMAP Calendars                November 2025
       the alerts from the default calendar.
 
    *defaultAlertsWithoutTime*: Id[Alert]|null
-      A map of alert ids to Alert objects (see Section 4.5.1 of
+      A map of alert ids to Alert objects (see Section 3.5.1 of
       [I-D.ietf-calext-jscalendarbis]) to apply for events where
       "showWithoutTime" is true (commonly referred to as "all day"
       events) and "useDefaultAlerts" is true.  Ids MUST be unique across
@@ -834,14 +876,6 @@ Internet-Draft               JMAP Calendars                November 2025
    *timeZone*: TimeZoneId|null (default: null)
       The time zone to use for events without a time zone when the
       server needs to resolve them into absolute time, e.g., for alerts
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 15]
-
-Internet-Draft               JMAP Calendars                November 2025
-
-
       or availability calculation.  The value MUST be a time zone id
       from the IANA Time Zone Database [IANA-TZDB].  If null, the
       timeZone of the account's associated Principal will be used.
@@ -854,6 +888,15 @@ Internet-Draft               JMAP Calendars                November 2025
       calendar.  The account id for the Principals may be found in the
       urn:ietf:params:jmap:principals:owner capability of the Account to
       which the calendar belongs.
+
+
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 16]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
 
       The Principal to which this calendar belongs MUST NOT be in the
       map.
@@ -889,15 +932,6 @@ Internet-Draft               JMAP Calendars                November 2025
       true, the mayWriteOwn, mayUpdatePrivate and mayRSVP properties
       MUST all also be true.
 
-
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 16]
-
-Internet-Draft               JMAP Calendars                November 2025
-
-
    *mayWriteOwn*: Boolean
       The user may create, modify or destroy an event on this calendar
       if either they are the owner of the event (see below) or the event
@@ -910,6 +944,15 @@ Internet-Draft               JMAP Calendars                November 2025
       permission to modify that event.  These properties MUST all be
       stored per-user, and changes do not affect any other user of the
       calendar.
+
+
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 17]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
 
       The user may also modify these properties on a per-occurrence
       basis for recurring events (updating the "recurrenceOverrides"
@@ -931,14 +974,13 @@ Internet-Draft               JMAP Calendars                November 2025
       the event with a calendarAddress property that is the same as the
       calendarAddress property of one of the user's ParticipantIdentity
       objects in the account.  The "roles" property of the participant
-      MUST only contain "attendee".
+      MUST be omitted.
 
       If the event has its "mayInviteOthers" property set to true (see
       Section 5.1.2) and there is an existing Participant in the event
       corresponding to one of the user's ParticipantIdentity objects in
       the account, then the user may also add new participants.  The
-      "roles" property of any new participant MUST only contain
-      "attendee".
+      "roles" property of any new participant MUST be omitted.
 
       The user may also do all of the above on a per-occurrence basis
       for recurring events (updating the "recurrenceOverrides" property
@@ -946,13 +988,6 @@ Internet-Draft               JMAP Calendars                November 2025
 
    *mayShare*: Boolean
       The user may modify the "shareWith" property for this calendar.
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 17]
-
-Internet-Draft               JMAP Calendars                November 2025
-
 
    *mayDelete*: Boolean
       The user may delete the calendar itself.
@@ -968,15 +1003,22 @@ Internet-Draft               JMAP Calendars                November 2025
    An event has no owner if its "participants" property is null or
    omitted, or if none of the Participant objects have the "owner" role.
 
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 18]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
+
 4.1.  Calendar/get
 
    This is a standard "/get" method as described in Section 5.1 of
    [RFC8620].  The "ids" argument may be null to fetch all at once.
 
    If mayReadFreeBusy is the only permission the user has, the calendar
-   MUST NOT be returned in "Calendar/get" and "Calendar/query"; it must
-   behave as though it did not exist.  The data is just used as part of
-   "Principal/getAvailability".
+   MUST NOT be returned in "Calendar/get" or "Calendar/changes"
+   responses; it must behave as though it did not exist.  The data is
+   just used as part of "Principal/getAvailability".
 
 4.2.  Calendar/changes
 
@@ -987,28 +1029,6 @@ Internet-Draft               JMAP Calendars                November 2025
 
    This is a standard "/set" method as described in Section 5.3 of
    [RFC8620] but with the following additional request arguments:
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 18]
-
-Internet-Draft               JMAP Calendars                November 2025
-
 
    *onDestroyRemoveEvents*: Boolean (default: false)
       If false, any attempt to destroy a Calendar that still has
@@ -1038,6 +1058,14 @@ Internet-Draft               JMAP Calendars                November 2025
       default calendar (if any) will remain as such.  No error is
       returned to the client in this case.
 
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 19]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
+
       As per Section 5.3 of [RFC8620], if the default is successfully
       changed, any changed objects MUST be reported in either the
       "created" or "updated" argument in the response as appropriate,
@@ -1057,14 +1085,6 @@ Internet-Draft               JMAP Calendars                November 2025
 
    The following properties may be set by anyone who is subscribed to
    the calendar and are always stored per-user:
-
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 19]
-
-Internet-Draft               JMAP Calendars                November 2025
-
 
    *  name
    *  color
@@ -1095,6 +1115,13 @@ Internet-Draft               JMAP Calendars                November 2025
       The Calendar has at least one CalendarEvent assigned to it, and
       the "onDestroyRemoveEvents" argument was false.
 
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 20]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
+
 5.  Calendar Events
 
    A *CalendarEvent* object contains information about an event, or
@@ -1114,27 +1141,12 @@ Internet-Draft               JMAP Calendars                November 2025
       recurring event (see Section 5.11).  This property gives the id of
       the "real" CalendarEvent this was generated from.
 
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 20]
-
-Internet-Draft               JMAP Calendars                November 2025
-
-
    *calendarIds*: Id[Boolean]
       The set of Calendar ids this event belongs to.  An event MUST
       belong to one or more Calendars at all times (until it is
       destroyed).  The set is represented as an object, with each key
       being a Calendar id.  The value for each key in the object MUST be
       true.
-
-   *isDraft*: Boolean (default: false)
-      If true, this event is to be considered a draft.  The server will
-      not send any scheduling messages to participants or send push
-      notifications for alerts.  This may only be set to true upon
-      creation.  Once set to false, the value cannot be updated to true.
-      This property MUST NOT appear in "recurrenceOverrides".
 
    *isOrigin*: Boolean (server-set)
       Is this the authoritative source for this event (i.e., does it
@@ -1146,7 +1158,26 @@ Internet-Draft               JMAP Calendars                November 2025
       *  the account will receive messages sent to the
          "organizerCalendarAddress" URI.
 
+   *isDraft*: Boolean (default: false)
+      If true, this event is to be considered a draft.  The server will
+      not send any scheduling messages to participants or send push
+      notifications for alerts.  This may only be set to true upon
+      creation.  Once set to false, the value cannot be updated to true.
+      This property MUST NOT appear in "recurrenceOverrides".
+
+   *useDefaultAlerts*: Boolean (default: false)
+      If true, use the user's default alerts and ignore the value of the
+      alerts property (see Section 6.1).
+
    *utcStart*: UTCDateTime
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 21]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
+
       For simple clients that do not implement time zone support.
       Clients should only use this if also asking the server to expand
       recurrences, as you cannot accurately expand a recurrence without
@@ -1160,23 +1191,15 @@ Internet-Draft               JMAP Calendars                November 2025
 
       If set, the server will convert the UTC date to the event's
       current time zone and store the local time.  If the event does not
-      have a non-null "timeZone" property, the server MUST also set this
-      property (and return it in the created/updated response, as per
-      Section 5.3 of [RFC8620]).  The value MUST be the "timeZone"
-      property of the Calendar(s) the event is in if all of them have
-      the same non-null value.  Otherwise, the time zone is to be set to
-      "Etc/UTC".
+      have a non-null "timeZone" property, the server MUST also set the
+      "timeZone" property (and return it in the created/updated
+      response, as per Section 5.3 of [RFC8620]).  The value MUST be the
+      "timeZone" property of the Calendar(s) the event is in if all of
+      them have the same non-null value.  Otherwise, the time zone is to
+      be set to "Etc/UTC".
 
       This property is not included in "CalendarEvent/get" responses by
       default and must be requested explicitly.
-
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 21]
-
-Internet-Draft               JMAP Calendars                November 2025
-
 
       Floating events (events without a time zone) will be interpreted
       as per the time zone given as a "CalendarEvent/get" argument.
@@ -1197,13 +1220,19 @@ Internet-Draft               JMAP Calendars                November 2025
       zone data changes.  Floating events will be interpreted as per the
       time zone given as a "CalendarEvent/get" argument.
 
-   *useDefaultAlerts*: Boolean (optional, default: false)
-      If true, use the user's default alerts and ignore the value of the
-      alerts property (see Section 6.1).
+   CalendarEvent objects stored on the server MUST NOT have a "method"
+   property, as this is only used when representing iTIP [RFC5546]
+   scheduling messages, not events in a data store.  This restriction
+   does not apply to CalendarEvent objects returned by "CalendarEvent/
+   parse" (see Section 5.13), which represent the contents of an
+   iCalendar file rather than stored events.
 
-   CalendarEvent objects MUST NOT have a "method" property as this is
-   only used when representing iTIP [RFC5546] scheduling messages, not
-   events in a data store.
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 22]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
 
 5.1.  Additional common-use JSCalendar properties
 
@@ -1211,55 +1240,55 @@ Internet-Draft               JMAP Calendars                November 2025
 
 5.1.1.  mayInviteSelf
 
-   Type: Boolean (default: false)
+   Type: Boolean (optional; default: false)
 
    Context: Event, Task
 
-   If true, anyone may add themselves to the event as a participant with
-   the "attendee" role.  This property MUST NOT be altered in the
-   recurrenceOverrides; it may only be set on the base object.
+   If true, anyone may add themselves to the event as a participant.
+   This property MUST NOT be altered in the recurrenceOverrides; it may
+   only be set on the base object.
 
 5.1.2.  mayInviteOthers
 
-   Type: Boolean (default: false)
+   Type: Boolean (optional; default: false)
 
    Context: Event, Task
 
-
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 22]
-
-Internet-Draft               JMAP Calendars                November 2025
-
-
-   If true, any current participant with the "attendee" role may add new
-   participants with the "attendee" role to the event.  This property
-   MUST NOT be altered in the recurrenceOverrides; it may only be set on
-   the base object.
+   If true, any current participant may add new participants to the
+   event.  This property MUST NOT be altered in the recurrenceOverrides;
+   it may only be set on the base object.
 
 5.1.3.  hideAttendees
 
-   Type: Boolean (default: false)
+   Type: Boolean (optional; default: false)
 
    Context: Event, Task
 
-   If true, only the owners of the event may see the full set of
-   participants.  Other users with access to the event may only see the
-   owners and themselves.  This property MUST NOT be altered in the
-   recurrenceOverrides; it may only be set on the base object.
+   If true, only users with full permission to modify the event may see
+   the complete set of participants.  Other users with access to the
+   event may only see the owners and themselves (see Section 5.7).  This
+   property MUST NOT be altered in the recurrenceOverrides; it may only
+   be set on the base object.
 
 5.2.  Additional reserved JSCalendar properties
 
-   This document also reserves two new JSCalendar properties in the
-   Participant object for use in JMAP Calendars:
+   [I-D.ietf-calext-jscalendarbis] reserves the following two
+   Participant properties for use in JMAP Calendars.  This document
+   defines them as follows:
 
 5.2.1.  scheduleSequence
 
-   Type: UnsignedInt (default: 0)
+   Type: UnsignedInt (optional; default: 0)
 
    Context: Participant
+
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 23]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
 
    This is the sequence property of the most recent iTIP response that
    has been applied for this participant.  It can be compared to the
@@ -1281,21 +1310,12 @@ Internet-Draft               JMAP Calendars                November 2025
    responses delivered out of order (if the "scheduleSequence" is the
    same).
 
-
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 23]
-
-Internet-Draft               JMAP Calendars                November 2025
-
-
    Whenever an event is updated due to an iTIP response, whether by the
    server or the client, this property MUST be set appropriately.
 
 5.3.  Attachments
 
-   The Link object, as defined in Section 1.4.11 of
+   The Link object, as defined in Section 1.5.11 of
    [I-D.ietf-calext-jscalendarbis], with a "rel" property equal to
    "enclosure" is used to represent attachments.  Instead of mandating
    an "href" property, clients may set a "blobId" property instead to
@@ -1309,14 +1329,23 @@ Internet-Draft               JMAP Calendars                November 2025
 
 5.4.  Per-user properties
 
-   In shared calendars, any top-level property registered in the IANA
-   registry as "Is Per-User: yes" (see Section 10.8) MUST be stored per-
-   user.  This includes:
+   In shared calendars, any top-level property with "Is Per-User" set to
+   "Yes" in the IANA "JSCalendar Properties" registry (see Section 7.4
+   of [I-D.ietf-calext-jscalendarbis]) MUST be stored per-user.  This
+   includes:
 
    *  keywords
    *  color
    *  freeBusyStatus
    *  useDefaultAlerts
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 24]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
+
    *  alerts
 
    If the user modifies any such properties on a per-occurrence basis
@@ -1336,15 +1365,6 @@ Internet-Draft               JMAP Calendars                November 2025
    event, containing a recurrence rule and/or recurrence overrides; or,
    a set of individual instances (when invited to specific occurrences
    only).
-
-
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 24]
-
-Internet-Draft               JMAP Calendars                November 2025
-
 
    The client may ask the server to expand recurrences within a specific
    time range in "CalendarEvent/query".  This will generate synthetic
@@ -1368,14 +1388,28 @@ Internet-Draft               JMAP Calendars                November 2025
    update the base event and override all occurrences before the split
    point back to their original values.
 
+
+
+
+
+
+
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 25]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
+
 5.6.1.  Splitting an event
 
    If the event is not scheduled (has no participants), the simplest
    thing to do is to duplicate the event, modifying the recurrence rule
    of the original so it finishes before the split point, and the
-   duplicate so it starts at the split point.  As per JSCalendar
-   Section 4.1.2 of [I-D.ietf-calext-jscalendarbis], a "next" and
-   "first" relation MUST be set on the new objects respectively.
+   duplicate so it starts at the split point.  As per Section 3.1.3 of
+   [I-D.ietf-calext-jscalendarbis], a "next" relation MUST be set on the
+   original object, and a "first" relation MUST be set on the duplicate.
 
 5.6.2.  Updating the base event and overriding previous
 
@@ -1394,16 +1428,8 @@ Internet-Draft               JMAP Calendars                November 2025
    required to split the event (e.g., if they are not an owner of the
    event).
 
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 25]
-
-Internet-Draft               JMAP Calendars                November 2025
-
-
    This approach is RECOMMENDED if making changes to properties other
-   than "start", "timeZone", or recurrenceRule", as the single event
+   than "start", "timeZone", or "recurrenceRule", as the single event
    update is easier for participants to understand.
 
    Modifying the recurrence rule or start date/time zone with this
@@ -1423,6 +1449,15 @@ Internet-Draft               JMAP Calendars                November 2025
       If given, only recurrence overrides with a recurrence id before
       this date (when translated into UTC) will be returned.
 
+
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 26]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
+
    *recurrenceOverridesAfter*: UTCDateTime|null
       If given, only recurrence overrides with a recurrence id on or
       after this date (when translated into UTC) will be returned.
@@ -1433,7 +1468,7 @@ Internet-Draft               JMAP Calendars                November 2025
       "participants" property of the base event and any recurrence
       overrides.  If false, all participants will be returned.
 
-   *timeZone*: TimeZoneId (default "Etc/UTC")
+   *timeZone*: TimeZoneId (default: "Etc/UTC")
       The time zone to use when calculating the "utcStart"/"utcEnd"
       property of floating events.  This argument has no effect if those
       properties are not requested.
@@ -1442,25 +1477,15 @@ Internet-Draft               JMAP Calendars                November 2025
    arbitrary properties.  If the client makes a "CalendarEvent/get" call
    with a null or omitted "properties" argument, all properties that are
    defined on the JSCalendar Event object in the store are returned
-   except for "iCalComponent".  In addition, the "id", "calendarIds",
-   "isDraft", and "isOrigin" properties MUST be included on each object.
-   The "utcStart" and "utcEnd" computed properties are only returned if
-   explicitly requested.  If either are requested, the
+   except for "iCalendar" (see [I-D.ietf-calext-jscalendar-icalendar]).
+   In addition, the "id", "calendarIds", "isOrigin", "isDraft", and
+   "useDefaultAlerts" properties MUST be included on each object.  The
+   "utcStart" and "utcEnd" computed properties are only returned if
+   explicitly requested.  If either is requested, the
    "recurrenceOverrides" property MUST NOT be requested (recurrence
    overrides cannot be interpreted accurately with just the UTC times).
-   The "iCalComponent" property is also only returned if explicitly
+   The "iCalendar" property is also only returned if explicitly
    requested.
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 26]
-
-Internet-Draft               JMAP Calendars                November 2025
-
-
-   If specific properties are requested from the JSCalendar Event and
-   the property is not present on the object in the server's store, the
-   server MUST return the default value if known for that property.
 
    A requested id may represent a server-expanded single instance of a
    recurring event if the client asked the server to expand recurrences
@@ -1476,10 +1501,49 @@ Internet-Draft               JMAP Calendars                November 2025
    per-user properties, difference in permissions, etc.
 
    The "hideAttendees" property of a JSCalendar Event object allows the
-   event owner(s) to hide the full set of participants when sharing the
-   event.  If this is true, when a non-owner fetches the event the
-   server MUST only return participants with the "owner" role or
-   corresponding to the user's participant identities.
+   event owner(s) to hide the full set of participants from other users
+   who can see the event.  If this is true, and the user does not have
+   permission to modify the event (as determined by the "mayWriteAll"
+   and "mayWriteOwn" rights; see Section 4), the server MUST filter the
+   event before returning it, as follows:
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 27]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
+
+   *  The "participants" property MUST only include participants with
+      the "owner" role or corresponding to one of the user's
+      ParticipantIdentity objects in the account.
+   *  Each PatchObject in the "recurrenceOverrides" property MUST be
+      filtered such that applying it to the filtered event gives the
+      same "participants" property as applying the original PatchObject
+      to the unfiltered event and then filtering the result.  In
+      particular, any patch to a participant that is not included after
+      filtering is omitted.
+
+   For a server-expanded instance of a recurring event, the server
+   resolves the overrides for that instance and then filters the
+   "participants" property of the result in the same way.
+
+   This filtering applies wherever the server returns or matches event
+   data for such a user, not just in "CalendarEvent/get".  In
+   particular:
+
+   *  The "event" property of a BusyPeriod object returned by
+      "Principal/getAvailability" (see Section 2.2) MUST be filtered.
+   *  The "text", "owner", and "participant" filter conditions of
+      "CalendarEvent/query" (see Section 5.11.1) MUST only match against
+      participants included after filtering.
+   *  An event created by "CalendarEvent/copy" (see Section 5.10) MUST
+      be based on the filtered representation of the event being copied.
+   *  The "event" and "eventPatch" properties of a
+      CalendarEventNotification are filtered as described in Section 7.
+   *  If the "iCalendar" property contains any data about participants
+      not included after filtering, the server MUST either remove that
+      data or omit the property.
 
    The "privacy" property of a JSCalendar Event object allows the
    Principal that owns the calendar to override how the event is exposed
@@ -1488,13 +1552,23 @@ Internet-Draft               JMAP Calendars                November 2025
    properties that are:
 
    *  the basic time and metadata properties of the JSCalendar Event
-      object as specified in Section 4.4.3 of
+      object as specified in Section 3.4.3 of
       [I-D.ietf-calext-jscalendarbis]; or
    *  properties that are wholly derived from these permitted properties
       (i.e., utcStart, utcEnd); or
-   *  Additional CalendarEvent properties not derived from the
+   *  additional CalendarEvent properties not derived from the
       JSCalendar Event data (i.e., id, baseEventId, calendarIds,
-      isDraft, isOrigin).
+      isDraft, isOrigin); or
+   *  per-user properties (see Section 5.4), as these values do not come
+      from the owner's data.
+
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 28]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
 
    If "privacy" is set to "secret", the server MUST behave as though the
    event does not exist for all users other than the Principal that owns
@@ -1504,15 +1578,6 @@ Internet-Draft               JMAP Calendars                November 2025
 
    This is a standard "/changes" method as described in Section 5.2 of
    [RFC8620].
-
-
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 27]
-
-Internet-Draft               JMAP Calendars                November 2025
-
 
    Synthetic ids generated by the server expanding recurrences in
    "CalendarEvent/query" do not appear in "CalendarEvent/changes"
@@ -1545,12 +1610,21 @@ Internet-Draft               JMAP Calendars                November 2025
    initially invited to a specific instance or instances of a recurring
    event, then later invited to the whole series.
 
-   If a property is set to null in a create/update, this is equivalent
-   to omitting/removing the property from the JSCalendar Event object.
+   The client may send a null value for any optional JSCalendar Event
+   property on create.  This MUST be treated the same as omitting the
+   property from the JSCalendar Event object.  Note, this only applies
+   to top-level properties of the CalendarEvent object.
 
    Servers MUST enforce the user's permissions as returned in the
    "myRights" property of the Calendar objects and reject changes with a
    forbidden SetError if not allowed.
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 29]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
 
    The "privacy" property of a JSCalendar Event object allows the
    Principal that owns the calendar to override how the event is exposed
@@ -1562,38 +1636,67 @@ Internet-Draft               JMAP Calendars                November 2025
    behave as though the event does not exist for all users other than
    the Principal that owns the calendar.
 
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 28]
-
-Internet-Draft               JMAP Calendars                November 2025
-
-
    The "privacy" property MUST NOT be set to anything other than
    "public" (the default) for events in a calendar that does not belong
    to the user (e.g. a shared team calendar, or a calendar shared by
    another user).  The server MUST reject this with an invalidProperties
    SetError.
 
+   As specified in Section 1.4.1, all CalendarEvent objects with the
+   same uid in an Account MUST have the same value for their "privacy"
+   property.  After applying all the creates, updates, and destroys in
+   the "/set" request, if the Account would contain two or more
+   CalendarEvent objects with the same uid but different values for
+   their "privacy" property, the server MUST reject each create or
+   update in the request that affects a CalendarEvent with that uid with
+   an invalidProperties SetError.  Changes in the request to
+   CalendarEvent objects with other uids are unaffected.  Note that a
+   client wishing to change the privacy of an event that exists as
+   multiple instances in the Account must therefore update every
+   instance in the same "/set" request.
+
+   When a CalendarEvent is created or updated as a result of a
+   scheduling message (e.g., an iTIP REQUEST message), whether by the
+   server or at the user's request by a client, and the Account already
+   contains a CalendarEvent with the same uid, the "privacy" property of
+   the created or updated event MUST be set to the value of the
+   "privacy" property of the existing event.  The privacy the user has
+   assigned to an event in their Account is never changed by the
+   organizer sending an update.
+
    If omitted on create, the server MUST set the following properties:
 
    *  @type MUST be set to "Event"
+   *  version MUST be set to the JSCalendar version the event conforms
+      to, e.g., "2.0" (see Section 3.1.2 of
+      [I-D.ietf-calext-jscalendarbis]).
    *  uid MUST be set to a new globally unique identifier, such as a
       UUID.
    *  created MUST be set to the current date-time.
 
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 30]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
+
    If (and only if) the server is the origin of the event (i.e., the
-   event's "isOrigin" property is true), the "updated" property MUST be
-   set to the current time by the server whenever an event is created or
-   updated.  If the client tries to set a value for this property it is
-   not an error, but it MUST be overridden and replaced with the
-   server's time.  If the event is being created and the overridden
-   "updated" time is now earlier than a client-supplied "created" time,
-   the "created" time MUST also be overridden to the server's time.  If
-   the server is not the origin of the event it MUST NOT automatically
-   set an "updated" time, as this can break correct processing of
-   scheduling messages.
+   event's "isOrigin" property is true):
+
+   *  Whenever an event is created or updated, the "updated" property
+      MUST be set to the current time by the server.
+   *  If the client tries to set a value for this property it is not an
+      error, but it MUST be overridden and replaced with the server's
+      time.  If the event is being created and the overridden "updated"
+      time is now earlier than a client-supplied "created" time, the
+      "created" time MUST also be overridden to the server's current
+      time.
+
+   Otherwise (i.e., if the event's "isOrigin" property is false), the
+   server MUST NOT override or automatically set an "updated" time, as
+   this can break correct processing of scheduling messages.
 
    Clients MUST NOT allow users to edit anything other than per-user
    properties when the "isOrigin" property is false, even if the
@@ -1617,15 +1720,6 @@ Internet-Draft               JMAP Calendars                November 2025
 
    then the server MUST increment the "sequence" value by one.
 
-
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 29]
-
-Internet-Draft               JMAP Calendars                November 2025
-
-
    The "method" property MUST NOT be set.  Any attempt to do so is
    rejected with a standard invalidProperties SetError.
 
@@ -1635,12 +1729,21 @@ Internet-Draft               JMAP Calendars                November 2025
    "recurrenceOverrides"; this MUST be rejected with an
    invalidProperties SetError.
 
+
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 31]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
+
    Similarly, the "utcEnd" property is translated into a "duration"
    property if set.  It MUST NOT be set in addition to a "duration"
    property and it cannot be set inside "recurrenceOverrides"; this MUST
    be rejected with an invalidProperties SetError.
 
-   The server does not automatically reset the "partipationStatus" or
+   The server does not automatically reset the "participationStatus" or
    "expectReply" properties of a Participant when changing other event
    details.  Clients should either be intelligent about whether the
    change invalidates previous RSVPs, or ask the user whether to reset
@@ -1658,7 +1761,43 @@ Internet-Draft               JMAP Calendars                November 2025
    present.  Clients SHOULD NOT set the "organizerCalendarAddress"
    property for events when the user adds participants, as the server is
    better placed to choose the best address (for example, it might
-   choose to user a different address per event).
+   choose to use a different address per event).
+
+   If a user who only has access to the filtered representation of an
+   event because of its "hideAttendees" property (see Section 5.7) adds
+   a participant (as permitted by the "mayInviteSelf" or
+   "mayInviteOthers" property of the event; see the "mayRSVP" right in
+   Section 4), the server MUST process the addition as follows, so as
+   not to reveal anything about participants not included in that
+   representation:
+
+   *  If the "calendarAddress" property of the new participant is
+      equivalent to that of an existing participant in the event (as
+      defined in Section 3), the addition is ignored and the existing
+      participant is left unchanged.
+   *  Otherwise, if the id of the new participant is already in use by a
+      participant not included in the user's representation, the server
+      MUST assign a different id to the new participant.
+
+   The change MUST NOT be rejected because of either conflict.  In all
+   cases where a user with a filtered view of the participants tries to
+   add a new participant, the server MUST return the "participants"
+   property, filtered for that user, in the "created" or "updated"
+   argument of the response, as per Section 5.3 of [RFC8620].  The
+   client's copy of the event after applying the response is then the
+   same as it would receive from a subsequent "CalendarEvent/get".  By
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 32]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
+
+   definition, this will not include the new participant unless it
+   corresponds to one of the user's own ParticipantIdentity objects.
+   The client can infer that the participant is now in the event from
+   the change not being rejected with a SetError.
 
    The following extra SetError type is defined:
 
@@ -1667,31 +1806,16 @@ Internet-Draft               JMAP Calendars                November 2025
       support any of the methods available for at least one of the
       recipients.
 
-
-
-
-
-
-
-
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 30]
-
-Internet-Draft               JMAP Calendars                November 2025
-
-
 5.9.1.  Patching
 
    The JMAP "/set" method allows you to update an object by sending a
    patch, rather than having to supply the whole object.  When doing so,
    care must be taken if updating a property of a CalendarEvent where
-   the value is itself a PatchObject, e.g. inside "localizations" or
-   "recurrenceOverrides".  In particular, you cannot add a property with
-   value null to the CalendarEvent using a direct patch on that
-   property, as this is interpreted instead as a patch to remove the
-   property.
+   the value is itself a PatchObject, such as the values of the
+   "recurrenceOverrides" property.  In particular, you cannot add a
+   property with value null to the CalendarEvent using a direct patch on
+   that property, as this is interpreted instead as a patch to remove
+   the property.
 
    This is more easily understood with an example.  Suppose you have a
    CalendarEvent object like so:
@@ -1721,21 +1845,9 @@ Internet-Draft               JMAP Calendars                November 2025
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 31]
+Jenkins & Douglass        Expires 17 April 2027                [Page 33]
 
-Internet-Draft               JMAP Calendars                November 2025
+Internet-Draft               JMAP Calendars                 October 2026
 
 
    {
@@ -1746,17 +1858,14 @@ Internet-Draft               JMAP Calendars                November 2025
        "@type": "RecurrenceRule",
        "frequency": "weekly"
      },
-     "organizerCalendarAddress": "mailto:6489-4f14-a57f-c1@schedule.example.com",
+     "organizerCalendarAddress": "mailto:6489-4f14@itip.example.com",
      "participants": {
        "dG9tQGZvb2Jhci5xlLmNvbQ": {
          "@type": "Participant",
          "name": "Tom",
          "email": "tom@foobar.example.com",
-         "calendarAddress": "mailto:6489-4f14-a57f-c1@calendar.example.com",
-         "participationStatus": "accepted",
-         "roles": {
-           "attendee": true
-         }
+         "calendarAddress": "mailto:tom@foobar.example.com",
+         "participationStatus": "accepted"
        },
        "em9lQGZvb2GFtcGxlLmNvbQ": {
          "@type": "Participant",
@@ -1766,16 +1875,15 @@ Internet-Draft               JMAP Calendars                November 2025
          "participationStatus": "accepted",
          "roles": {
            "owner": true,
-           "attendee": true,
            "chair": true
          }
-       },
-       "recurrenceOverrides": {
-         "2025-03-05T09:00:00": {
-           "start": "2025-03-05T10:00:00",
-           "participants/dG9tQGZvb2Jhci5xlLmNvbQ/participationStatus":
-             "declined"
-         }
+       }
+     },
+     "recurrenceOverrides": {
+       "2025-03-05T09:00:00": {
+         "start": "2025-03-05T10:00:00",
+         "participants/dG9tQGZvb2Jhci5xlLmNvbQ/participationStatus":
+           "declined"
        }
      }
    }
@@ -1789,9 +1897,13 @@ Internet-Draft               JMAP Calendars                November 2025
 
 
 
-Jenkins & Douglass         Expires 9 May 2026                  [Page 32]
+
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 34]
 
-Internet-Draft               JMAP Calendars                November 2025
+Internet-Draft               JMAP Calendars                 October 2026
 
 
    [[ "CalendarEvent/set", {
@@ -1832,7 +1944,8 @@ Internet-Draft               JMAP Calendars                November 2025
      "update": {
        "123": {
          "recurrenceOverrides/2025-03-05T09:00:00/\
-           participants~1dG9tQGZvb2Jhci5xlLmNvbQ~1participationStatus": null
+           participants~1dG9tQGZvb2Jhci5xlLmNvbQ~1participationStatus":
+             null
        }
      }
    }, "0" ]]
@@ -1840,15 +1953,17 @@ Internet-Draft               JMAP Calendars                November 2025
        Figure 4: "methodCalls" Property of a JMAP Request.  NOTE: '\'
                         line wrapping per [RFC8792].
 
+
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 35]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
+
    However, if you instead want to remove Tom from this instance
    altogether, you could not send this patch:
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 33]
-
-Internet-Draft               JMAP Calendars                November 2025
-
 
    [[ "CalendarEvent/set", {
      "accountId": "a0x9",
@@ -1888,24 +2003,24 @@ Internet-Draft               JMAP Calendars                November 2025
 5.9.2.  Sending invitations and responses
 
    If "sendSchedulingMessages" is true, the server MUST send appropriate
-   iTIP [RFC5546] scheduling messages after successfuly creating,
+   iTIP [RFC5546] scheduling messages after successfully creating,
    updating or destroying a calendar event.
 
    When determining which scheduling messages to send, the server must
    first establish whether it is the *origin* of the event, as described
    in the "isOrigin" property.
 
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 36]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
+
    The server sends the scheduling message via iTIP [RFC5546] to the
    "calendarAddress" property of a participant (if the server is the
    origin) or the "organizerCalendarAddress" property of the event
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 34]
-
-Internet-Draft               JMAP Calendars                November 2025
-
-
    (otherwise).  If any of the recipients do not have a calendar address
    the server can send to, the server MUST reject the change with a
    noSupportedScheduleMethods SetError.
@@ -1935,10 +2050,11 @@ Internet-Draft               JMAP Calendars                November 2025
 
    Note, if the only change is adding an additional instance (not
    generated by the event's recurrence rule) to the recurrenceOverrides,
-   this MAY be handled via sending an ADD message (Section 3.2.4 of
-   [RFC5546]) for the single instance rather than a REQUEST message for
-   the base event.  However, for interoperability reasons this is not
-   recommended due to poor support in the wild for this type of message.
+   this MAY be handled via sending an ADD message ([RFC5546],
+   Section 3.2.4) for the single instance rather than a REQUEST message
+   for the base event.  However, for interoperability reasons this is
+   not recommended due to poor support in the wild for this type of
+   message.
 
    The server MUST ensure participants are only sent information about
    recurrence instances they are added to when sending scheduling
@@ -1947,20 +2063,20 @@ Internet-Draft               JMAP Calendars                November 2025
    messages MUST be sent for just those expanded occurrences
    individually.  If a participant is invited to a recurring event, but
    removed via a recurrence override from a particular instance, any
-   scheduling messages to this participant MUST return the instance as
-   "excluded" (if it matches a recurrence rule for the event) or omit
-   the instance entirely (otherwise).
+   scheduling messages sent to this participant MUST mark the instance
+   as excluded (if it is generated by the recurrence rule of the event)
+   or omit the instance entirely (otherwise).
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 37]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
 
    If the event's "hideAttendees" property is set to true, the recipient
-   MUST be the only attendee in the message; all others are omitted.
-
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 35]
-
-Internet-Draft               JMAP Calendars                November 2025
-
+   MUST be the only non-owner participant in the message; all others are
+   omitted.
 
 5.9.2.2.  CANCEL
 
@@ -1984,7 +2100,7 @@ Internet-Draft               JMAP Calendars                November 2025
 
    When the server is *not* the origin for the event, a REPLY message
    ([RFC5546], Section 3.2.3) is sent for every participant
-   corresponding to one of the user's ParticipantIdentitities in the
+   corresponding to one of the user's ParticipantIdentities in the
    account if any of the following changes are made:
 
    *  The "participationStatus" property of the participant is changed,
@@ -2004,19 +2120,39 @@ Internet-Draft               JMAP Calendars                November 2025
    This is a standard "/copy" method as described in Section 5.4 of
    [RFC8620].
 
+
+
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 38]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
+
+   As specified in Section 5.9, the "privacy" property MUST NOT be set
+   to anything other than "public" (the default) for events in a
+   calendar that does not belong to the user.  If the account being
+   copied into does not belong to the user and the "privacy" property of
+   the event to be created would be anything other than "public"
+   (whether inherited from the event being copied or set explicitly in
+   the "create" patch), the server MUST reject the copy with an
+   invalidProperties SetError.
+
+   A user with whom a calendar is shared does not have access to the
+   full data of an event with its "privacy" property set to "private"
+   (see Section 5.7), so cannot copy such an event.  If the account
+   being copied from does not belong to the user and the "privacy"
+   property of the event being copied is "private", the server MUST
+   reject the copy with a forbidden SetError.  (An event with "privacy"
+   set to "secret" does not exist as far as any user other than the
+   owner of the calendar is concerned, so an attempt to copy it will be
+   rejected with a notFound SetError.)
+
 5.11.  CalendarEvent/query
 
    This is a standard "/query" method as described in Section 5.5 of
    [RFC8620], with two extra arguments:
-
-
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 36]
-
-Internet-Draft               JMAP Calendars                November 2025
-
 
    *expandRecurrences*: Boolean (default: false)
       If true, the server will expand any recurring event.  If true, the
@@ -2025,8 +2161,10 @@ Internet-Draft               JMAP Calendars                November 2025
       the server is not asked to return an infinite number of results.
 
    *timeZone*: TimeZoneId
-      The time zone for before/after filter conditions (default: "Etc/
-      UTC")
+      The time zone in which to interpret the before/after filter
+      conditions, and in which to interpret the start time of any
+      floating event (an event with a null "timeZone" property) when
+      filtering or sorting (default: "Etc/UTC").
 
    If expandRecurrences is true, a separate id will be returned for each
    instance of a recurring event that matches the query.  This synthetic
@@ -2038,6 +2176,15 @@ Internet-Draft               JMAP Calendars                November 2025
 
    There is no necessary correspondence between the ids of different
    instances of the same expanded event.
+
+
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 39]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
 
    The following additional error may be returned instead of the
    "CalendarEvent/query" response:
@@ -2062,28 +2209,22 @@ Internet-Draft               JMAP Calendars                November 2025
    *after*: LocalDateTime
       The end of the event, or any recurrence of the event, in the time
       zone given as the "timeZone" argument, must be after this date to
-      match the condition.
-
-
-
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 37]
-
-Internet-Draft               JMAP Calendars                November 2025
-
+      match the condition.  For a floating event, the end is calculated
+      by interpreting the event's local start time in the time zone
+      given as the "timeZone" argument.
 
    *before*: LocalDateTime
       The start of the event, or any recurrence of the event, in the
       time zone given as the "timeZone" argument, must be before this
-      date to match the condition.
+      date to match the condition.  For a floating event, the start is
+      interpreted as a local time in the time zone given as the
+      "timeZone" argument.
 
    *text*: String
       Looks for the text in the "title", "description", "locations"
-      (matching name/description), "participants" (matching name/email)
-      and any other textual properties of the event or any recurrence of
-      the event.
+      (matching name), "participants" (matching name/email) and any
+      other textual properties of the event or any recurrence of the
+      event.
 
    *title*: String
       Looks for the text in the "title" property of the event, or the
@@ -2093,10 +2234,18 @@ Internet-Draft               JMAP Calendars                November 2025
       Looks for the text in the "description" property of the event, or
       the overridden "description" property of a recurrence.
 
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 40]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
+
    *location*: String
       Looks for the text in the "locations" property of the event
-      (matching name/description of a location), or the overridden
-      "locations" property of a recurrence.
+      (matching the name of a location), or the overridden "locations"
+      property of a recurrence.
 
    *owner*: String
       Looks for the text in the name or email fields of a participant in
@@ -2104,11 +2253,10 @@ Internet-Draft               JMAP Calendars                November 2025
       "participants" property of a recurrence, where the participant has
       a role of "owner".
 
-   *attendee*: String
+   *participant*: String
       Looks for the text in the name or email fields of a participant in
       the "participants" property of the event, or the overridden
-      "participants" property of a recurrence, where the participant has
-      a role of "attendee".
+      "participants" property of a recurrence.
 
    *uid*: String
       The uid of the event is exactly the given string.
@@ -2117,18 +2265,6 @@ Internet-Draft               JMAP Calendars                November 2025
    same instance of a recurring event for the instance to match.  If
    expandRecurrences is false, all conditions must match, but they may
    each match any instance of the event.
-
-
-
-
-
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 38]
-
-Internet-Draft               JMAP Calendars                November 2025
-
 
    If zero properties are specified on the FilterCondition, the
    condition MUST always evaluate to true.  If multiple properties are
@@ -2153,38 +2289,42 @@ Internet-Draft               JMAP Calendars                November 2025
       example a text search for bus would match "buses" but not
       "business").
 
+
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 41]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
+
 5.11.2.  Sorting
 
    The following properties MUST be supported for sorting:
 
-   *  start
+   *  id
    *  uid
-   *  recurrenceId
+   *  start
 
    The following properties SHOULD be supported for sorting:
 
    *  created
    *  updated
 
+   When sorting by "start", events are ordered by the absolute point in
+   time at which they start, not by the lexical value of the "start"
+   property.  For example, an event starting at 09:00 in the "America/
+   New_York" time zone sorts before an event starting at 09:00 in the
+   "America/Los_Angeles" time zone on the same date.  The start time of
+   a floating event (an event with a null "timeZone" property) is
+   interpreted as a local time in the time zone given as the "timeZone"
+   argument to the "CalendarEvent/query" call (or "Etc/UTC" if not
+   given).
+
 5.12.  CalendarEvent/queryChanges
 
    This is a standard "/queryChanges" method as described in Section 5.6
    of [RFC8620].
-
-
-
-
-
-
-
-
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 39]
-
-Internet-Draft               JMAP Calendars                November 2025
-
 
 5.13.  CalendarEvent/parse
 
@@ -2207,16 +2347,23 @@ Internet-Draft               JMAP Calendars                November 2025
 
    The "CalendarEvent/parse" method takes the following arguments:
 
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 42]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
+
    *accountId*: Id
       The id of the account to use.
 
    *blobIds*: Id[]
       The ids of the blobs to parse.
 
-   *properties*: String[]
+   *properties*: String[]|null
       If supplied, only the properties listed in the array are returned
-      for each CalendarEvent object.  If omitted, defaults to all the
-      properties.
+      for each CalendarEvent object.  If null or omitted, defaults to
+      all the properties.
 
    The response object contains the following arguments:
 
@@ -2224,7 +2371,7 @@ Internet-Draft               JMAP Calendars                November 2025
       The id of the account used for the call.
 
    *parsed*: Id[CalendarEvent[]]|null
-      A map of blob ids to parsed CalendarEvent objects representations
+      A map of blob ids to parsed CalendarEvent object representations
       for each successfully parsed blob, or null if none.
 
    *notFound*: Id[]|null
@@ -2234,22 +2381,15 @@ Internet-Draft               JMAP Calendars                November 2025
       A list of blob ids given that corresponded to blobs that could not
       be parsed as CalendarEvents, or null if none.
 
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 40]
-
-Internet-Draft               JMAP Calendars                November 2025
-
-
    Parsed iCalendars are to be converted into CalendarEvent objects
-   following the process defined in the JSCalendar: Converting from and
-   to iCalendar (https://datatracker.ietf.org/doc/draft-ietf-calext-
-   jscalendar-icalendar) document.
+   following the process defined in
+   [I-D.ietf-calext-jscalendar-icalendar].  In particular, if the
+   iCalendar file has a METHOD property, the "method" property MUST be
+   set on each parsed CalendarEvent object.
 
 6.  Alerts
 
-   Alerts may be specified on events as described in Section 4.5 of
+   Alerts may be specified on events as described in Section 3.5 of
    [I-D.ietf-calext-jscalendarbis].
 
    Alerts MUST only be triggered for events in calendars where the user
@@ -2259,6 +2399,16 @@ Internet-Draft               JMAP Calendars                November 2025
    send an email to the user to notify them of the event.  The content
    of the email is implementation specific.  Clients MUST NOT perform an
    action for these alerts.
+
+
+
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 43]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
 
    When an alert with a "display" action is triggered, clients should
    display an alert in a platform-appropriate manner to the user to
@@ -2281,22 +2431,10 @@ Internet-Draft               JMAP Calendars                November 2025
       alert for the event is dismissed.  The id of the alert MUST be the
       same as the id of the default alert in the calendar.  See
       Section 6.2 on acknowledging alerts.
-   *  If an alert has a "relatedTo" property where the parent is the id
-      of one of the calendar default alerts, it is processed as normal
-      and not ignored.  This is to support snoozing default alerts; see
-      Section 6.3.
-
-
-
-
-
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 41]
-
-Internet-Draft               JMAP Calendars                November 2025
-
+   *  If an alert has a "relatedTo" property with a "snooze" relation to
+      the id of one of the calendar default alerts, it is processed as
+      normal and not ignored.  This is to support snoozing default
+      alerts; see Section 6.3.
 
 6.2.  Acknowledging an alert
 
@@ -2311,7 +2449,7 @@ Internet-Draft               JMAP Calendars                November 2025
 
    Setting the "acknowledged" property MUST NOT create a new recurrence
    override.  For a recurring calendar object, the "acknowledged"
-   property of the parent object MUST be updated, unless the alert is
+   property of the base object MUST be updated, unless the alert is
    already overridden in the "recurrenceOverrides" property.
 
 6.3.  Snoozing an alert
@@ -2320,6 +2458,14 @@ Internet-Draft               JMAP Calendars                November 2025
    after a specific period of time.  To do this, clients MUST:
 
    1.  Acknowledge the alert as described in Section 6.2.
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 44]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
+
    2.  Add a new alert to the event that has an AbsoluteTrigger
        specifying the date-time when the alert will trigger again.  Add
        a "relatedTo" property to the new alert, setting the "snooze"
@@ -2347,13 +2493,6 @@ Internet-Draft               JMAP Calendars                November 2025
    *@type*: String
       This MUST be the string "CalendarAlert".
 
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 42]
-
-Internet-Draft               JMAP Calendars                November 2025
-
-
    *accountId*: Id
       The account id for the calendar in which the alert triggered.
 
@@ -2372,6 +2511,16 @@ Internet-Draft               JMAP Calendars                November 2025
 
    *alertId*: String
       The id for the alert that triggered.
+
+
+
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 45]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
 
 7.  Calendar Event Notifications
 
@@ -2395,20 +2544,48 @@ Internet-Draft               JMAP Calendars                November 2025
       an iTIP message.  Note, whether to auto-process such messages is
       an implementation policy.
 
-   The CalendarEventNotification does not have any per-user data.  A
-   single instance may therefore be maintained on the server for all
-   users with whom the calendar is shared.  The server need only keep
-   track of which users have yet to destroy the notification.
+   A CalendarEventNotification exposes the full details of the event
+   that changed, so MUST only be created for users that are allowed to
+   see those details.  If the "privacy" property of the event is
+   "private" or "secret", either before or after the change, the server
+   MUST NOT create a notification for any user other than the Principal
+   that owns the calendar, as other users do not have access to the full
+   details of such an event (see Section 5.7).  The Principal that owns
+   the calendar still receives notifications for these events as normal.
+
+   If the "hideAttendees" property of the event is true, either before
+   or after the change, the "event" and "eventPatch" properties of a
+   CalendarEventNotification created for a user without permission to
+   modify the event MUST be calculated from the filtered representations
+   of the event for that user, as described in Section 5.7.  Each of the
+   representations before and after the change is filtered according to
+   its own value of "hideAttendees".  If the change only affects
+   participants that are not included after filtering, so the
+   "eventPatch" would be empty, the server MUST NOT create a
+   notification for that user.
 
 
 
 
 
 
-Jenkins & Douglass         Expires 9 May 2026                  [Page 43]
+
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 46]
 
-Internet-Draft               JMAP Calendars                November 2025
+Internet-Draft               JMAP Calendars                 October 2026
 
+
+   Apart from this filtering, the CalendarEventNotification does not
+   have any per-user data.  A single instance may therefore be
+   maintained on the server for all users with whom the calendar is
+   shared, with the server applying any filtering when it is fetched.  A
+   notification that would not be created for a particular user, as
+   described above, MUST be treated as not existing for that user.  The
+   server need only keep track of which users have yet to destroy the
+   notification.
 
    The server MAY limit the maximum number of notifications it will
    store for a user.  When the limit is reached, any new notification
@@ -2421,7 +2598,7 @@ Internet-Draft               JMAP Calendars                November 2025
 
    A *CalendarEventNotification* object has the following properties:
 
-   *id*: Id
+   *id*: Id (immutable; server-set)
       The id of the CalendarEventNotification.
 
    *created*: UTCDateTime
@@ -2439,17 +2616,27 @@ Internet-Draft               JMAP Calendars                November 2025
       *principalId*: Id|null
          The id of the Principal corresponding to the person who made
          the change, if any.  This will be null if the change was due to
-         an entity outside of this user's organisation, e.g. an iTIP
+         an entity outside of this user's organization, e.g. an iTIP
          invitation from an external person.
       *calendarAddress*: String|null
          The calendarAddress URI of the person who made the change, if
-         any.  This may be set if the change was made due to receving a
+         any.  This may be set if the change was made due to receiving a
          scheduling message, such as an iTIP message, in addition to
          changes made by internal users.
 
+
+
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 47]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
+
    *comment*: String|null
-      Comment sent along with the change by the user that made it. (e.g.
-      COMMENT property in an iTIP message), if any.
+      Comment sent along with the change by the user that made it (e.g.,
+      the COMMENT property in an iTIP message), if any.
 
    *type*: String
       This MUST be one of:
@@ -2457,14 +2644,6 @@ Internet-Draft               JMAP Calendars                November 2025
       *  "created"
       *  "updated"
       *  "destroyed"
-
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 44]
-
-Internet-Draft               JMAP Calendars                November 2025
-
 
    *calendarEventId*: Id
       The id of the CalendarEvent that this notification is about.
@@ -2502,6 +2681,15 @@ Internet-Draft               JMAP Calendars                November 2025
    Only destroy is supported; any attempt to create/update MUST be
    rejected with a forbidden SetError.
 
+
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 48]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
+
 7.4.  CalendarEventNotification/query
 
    This is a standard "/query" method as described in Section 5.5 of
@@ -2514,13 +2702,6 @@ Internet-Draft               JMAP Calendars                November 2025
    *after*: UTCDateTime|null
       The creation date must be on or after this date to match the
       condition.
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 45]
-
-Internet-Draft               JMAP Calendars                November 2025
-
 
    *before*: UTCDateTime|null
       The creation date must be before this date to match the condition.
@@ -2560,22 +2741,9 @@ Internet-Draft               JMAP Calendars                November 2025
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 46]
+Jenkins & Douglass        Expires 17 April 2027                [Page 49]
 
-Internet-Draft               JMAP Calendars                November 2025
+Internet-Draft               JMAP Calendars                 October 2026
 
 
    [
@@ -2629,9 +2797,9 @@ Internet-Draft               JMAP Calendars                November 2025
 
 
 
-Jenkins & Douglass         Expires 9 May 2026                  [Page 47]
+Jenkins & Douglass        Expires 17 April 2027                [Page 50]
 
-Internet-Draft               JMAP Calendars                November 2025
+Internet-Draft               JMAP Calendars                 October 2026
 
 
              "trigger": {
@@ -2685,9 +2853,9 @@ Internet-Draft               JMAP Calendars                November 2025
 
 
 
-Jenkins & Douglass         Expires 9 May 2026                  [Page 48]
+Jenkins & Douglass        Expires 17 April 2027                [Page 51]
 
-Internet-Draft               JMAP Calendars                November 2025
+Internet-Draft               JMAP Calendars                 October 2026
 
 
        "state": "$$/413/206"
@@ -2703,10 +2871,10 @@ Internet-Draft               JMAP Calendars                November 2025
    Suppose the user asks the client to create a new event.  The client
    should default to adding it to the "Work" calendar, as this is the
    default calendar for the user, unless it has information to make a
-   more informed decision. (e.g. The client may have a feature to
+   more informed decision (e.g., the client may have a feature to
    automatically choose the calendar based on the time of day, and the
    user indicates the event is at 7pm, so it knows to default to
-   "Private".)
+   "Private").
 
 
 
@@ -2741,9 +2909,9 @@ Internet-Draft               JMAP Calendars                November 2025
 
 
 
-Jenkins & Douglass         Expires 9 May 2026                  [Page 49]
+Jenkins & Douglass        Expires 17 April 2027                [Page 52]
 
-Internet-Draft               JMAP Calendars                November 2025
+Internet-Draft               JMAP Calendars                 October 2026
 
 
    [["CalendarEvent/set", {
@@ -2754,9 +2922,9 @@ Internet-Draft               JMAP Calendars                November 2025
          "calendarIds": {
            "3ddf2ad7-0e0c-4fb5-852d-f0ff56f3c662": true
          },
-         "title": "Party at Pete’s",
+         "title": "Party at Pete's",
          "start": "2023-02-03T19:00:00",
-         "duration": "PT3H0M0S",
+         "duration": "PT3H",
          "timeZone": "Australia/Melbourne",
          "showWithoutTime": false,
          "participants": {
@@ -2766,20 +2934,15 @@ Internet-Draft               JMAP Calendars                November 2025
              "calendarAddress": "mailto:jane@example.com",
              "kind": "individual",
              "roles": {
-               "attendee": true,
                "owner": true
              },
-             "participationStatus": "accepted",
-             "expectReply": false
+             "participationStatus": "accepted"
            },
            "2": {
              "@type": "Participant",
              "name": "Joe Bloggs",
              "calendarAddress": "mailto:joe@example.com",
              "kind": "individual",
-             "roles": {
-               "attendee": true
-             },
              "participationStatus": "needs-action",
              "expectReply": true
            }
@@ -2797,14 +2960,19 @@ Internet-Draft               JMAP Calendars                November 2025
 
 
 
-Jenkins & Douglass         Expires 9 May 2026                  [Page 50]
+
+
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 53]
 
-Internet-Draft               JMAP Calendars                November 2025
+Internet-Draft               JMAP Calendars                 October 2026
 
 
    As the event has participants, the server sets an
    "organizerCalendarAddress" property.  This server uses a special
-   email address for receiving iMIP RSVPs ([RFC5546]) rather than just
+   email address for receiving iMIP RSVPs ([RFC6047]) rather than just
    receiving them at the owner's regular email address.  The response
    may look something like this:
 
@@ -2815,17 +2983,16 @@ Internet-Draft               JMAP Calendars                November 2025
          "id": "E-5d5776f6-ff8e-4bfd-ab3e-fe2fe5d4fa91",
          "isOrigin": true,
          "@type": "Event",
-         "created": "20221005T20:42:13Z",
-         "updated": "20221005T20:42:13Z",
-         "sequence": 1,
-         "organizerCalendarAddress": "mailto:3e87-1b18bb5e6b4@itip.example.com"
+         "version": "2.0",
+         "created": "2022-10-05T20:42:13Z",
+         "updated": "2022-10-05T20:42:13Z",
+         "organizerCalendarAddress": "mailto:3e87-1b18@itip.example.com"
        }
      },
      ...
    }, "0"]]
 
-      Figure 10: "methodResponses" Property of a JMAP Response.  NOTE:
-                      '\' line wrapping per [RFC8792].
+          Figure 10: "methodResponses" Property of a JMAP Response
 
 8.3.  Snoozing an alert
 
@@ -2853,9 +3020,10 @@ Internet-Draft               JMAP Calendars                November 2025
 
 
 
-Jenkins & Douglass         Expires 9 May 2026                  [Page 51]
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 54]
 
-Internet-Draft               JMAP Calendars                November 2025
+Internet-Draft               JMAP Calendars                 October 2026
 
 
    [["CalendarEvent/get", {
@@ -2877,7 +3045,7 @@ Internet-Draft               JMAP Calendars                November 2025
          "3ddf2ad7-0e0c-4fb5-852d-f0ff56f3c662": true
        },
        "title": "Team catchup",
-       "start": "2023-02-10T17:00:00",
+       "start": "2023-02-10T18:00:00",
        "timeZone": "America/New_York",
        "useDefaultAlerts": false,
        "alerts": {
@@ -2909,9 +3077,9 @@ Internet-Draft               JMAP Calendars                November 2025
 
 
 
-Jenkins & Douglass         Expires 9 May 2026                  [Page 52]
+Jenkins & Douglass        Expires 17 April 2027                [Page 55]
 
-Internet-Draft               JMAP Calendars                November 2025
+Internet-Draft               JMAP Calendars                 October 2026
 
 
    +----------------------------------------+
@@ -2931,21 +3099,21 @@ Internet-Draft               JMAP Calendars                November 2025
      ["CalendarEvent/set", {
        "accountId": "a0x9",
        "update": {
-         "E-01c9626e-1490-43df-a34f-457021256281": {
+         "E-7e93e3ee-4e6e-408a-9adc-cbaf1dbd0a3f": {
            "alerts/7519a951-1e6f-4a6c-b08b-20dd2e5a89cd\
-             /acknowledged": "2023-02-10T23:00:29Z",
+             /acknowledged": "2023-02-10T22:00:29Z",
            "alerts/86b0-318b8291045f": {
              "@type": "Alert",
              "action": "display",
              "trigger": {
                "@type": "AbsoluteTrigger",
-               "when": "2023-02-10T23:30:00Z",
-               "relatedTo": {
-                 "7519a951-1e6f-4a6c-b08b-20dd2e5a89cd": {
-                   "@type": "Relation",
-                   "relation": {
-                     "snooze": true
-                   }
+               "when": "2023-02-10T22:30:00Z"
+             },
+             "relatedTo": {
+               "7519a951-1e6f-4a6c-b08b-20dd2e5a89cd": {
+                 "@type": "Relation",
+                 "relation": {
+                   "snooze": true
                  }
                }
              }
@@ -2965,9 +3133,9 @@ Internet-Draft               JMAP Calendars                November 2025
 
 
 
-Jenkins & Douglass         Expires 9 May 2026                  [Page 53]
+Jenkins & Douglass        Expires 17 April 2027                [Page 56]
 
-Internet-Draft               JMAP Calendars                November 2025
+Internet-Draft               JMAP Calendars                 October 2026
 
 
 8.4.  Changing the default calendar
@@ -3001,7 +3169,7 @@ Internet-Draft               JMAP Calendars                November 2025
 8.5.  Parsing an iCalendar file
 
    The client makes a request to parse the calendar event from a blob id
-   representing an icalendar file:
+   representing an iCalendar file:
 
    [[ "CalendarEvent/parse", {
      "accountId": "a0x9",
@@ -3021,9 +3189,9 @@ Internet-Draft               JMAP Calendars                November 2025
 
 
 
-Jenkins & Douglass         Expires 9 May 2026                  [Page 54]
+Jenkins & Douglass        Expires 17 April 2027                [Page 57]
 
-Internet-Draft               JMAP Calendars                November 2025
+Internet-Draft               JMAP Calendars                 October 2026
 
 
    [[ "CalendarEvent/parse", {
@@ -3043,7 +3211,7 @@ Internet-Draft               JMAP Calendars                November 2025
          "title": "jmap - JSON Mail Access Protocol",
          "freeBusyStatus": "busy",
          "descriptionContentType": "text/plain",
-         "description": "Session II\n\nRemember to sign the blue sheets!",
+         "description": "Session II\n\nPlease sign the blue sheets!",
          "locations": {
            "eec47e7589ce131d6331b10383f89f91f8d4a4ef": {
              "@type": "Location",
@@ -3052,9 +3220,7 @@ Internet-Draft               JMAP Calendars                November 2025
          },
          "status": "confirmed"
        }]
-     },
-     "notFound": null,
-     "notParsable": null
+     }
    }, "c1"]]
 
           Figure 19: "methodResponses" Property of a JMAP Response
@@ -3071,21 +3237,18 @@ Internet-Draft               JMAP Calendars                November 2025
    If the blob id had been found but was not parsable, the server would
    have responded:
 
-
-
-
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 55]
-
-Internet-Draft               JMAP Calendars                November 2025
-
-
    [[ "CalendarEvent/parse", {
      "accountId": "a0x9",
      "notParsable": ["Ge682d5d7aad50b3a4f7180a7ed9276476485ea52"]
    }, "c1" ]]
+
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 58]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
 
           Figure 21: "methodResponses" Property of a JMAP Response
 
@@ -3105,9 +3268,9 @@ Internet-Draft               JMAP Calendars                November 2025
    be mindful of the need to keep all data secure.
 
    Servers MUST enforce the ACLs set on calendars to ensure only
-   authorised data is shared.  The additional restrictions specified by
+   authorized data is shared.  The additional restrictions specified by
    the "privacy" property of a JSCalendar Event object (see
-   Section 4.4.3 of [I-D.ietf-calext-jscalendarbis]) MUST also be
+   Section 3.4.3 of [I-D.ietf-calext-jscalendarbis]) MUST also be
    enforced.
 
    Users may have multiple Participant Identities that they use for
@@ -3117,7 +3280,7 @@ Internet-Draft               JMAP Calendars                November 2025
    worklife@example.com MUST NOT reveal anything about another identity
    present in the account such as privatelife@example.org.
 
-   Severs SHOULD enforce that invitations sent to external systems are
+   Servers SHOULD enforce that invitations sent to external systems are
    only transmitted via secure encrypted and signed connections to
    protect against eavesdropping and modification of data.
 
@@ -3133,9 +3296,14 @@ Internet-Draft               JMAP Calendars                November 2025
 
 
 
-Jenkins & Douglass         Expires 9 May 2026                  [Page 56]
+
+
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 59]
 
-Internet-Draft               JMAP Calendars                November 2025
+Internet-Draft               JMAP Calendars                 October 2026
 
 
 9.3.  Denial-of-service
@@ -3167,7 +3335,7 @@ Internet-Draft               JMAP Calendars                November 2025
    Similarly, clients generating alerts from the data on device must
    take the same precautions.
 
-   The "email" alert type (see Section 4.5.1 of
+   The "email" alert type (see Section 3.5.1 of
    [I-D.ietf-calext-jscalendarbis]) causes an email to be sent when
    triggered.  Clients MUST ignore this alert type; the email is sent
    only by the calendar server.  There is no mechanism in JSCalendar to
@@ -3189,9 +3357,9 @@ Internet-Draft               JMAP Calendars                November 2025
 
 
 
-Jenkins & Douglass         Expires 9 May 2026                  [Page 57]
+Jenkins & Douglass        Expires 17 April 2027                [Page 60]
 
-Internet-Draft               JMAP Calendars                November 2025
+Internet-Draft               JMAP Calendars                 October 2026
 
 
 9.4.  Spam
@@ -3225,7 +3393,7 @@ Internet-Draft               JMAP Calendars                November 2025
    Specification document:  this document
    Intended use:  common
    Change Controller:  IETF
-   Security and privacy considerations:  this document, Section 1.5.1
+   Security and privacy considerations:  this document, Section 9
 
 10.2.  JMAP Capability Registration for "principals:availability"
 
@@ -3236,82 +3404,93 @@ Internet-Draft               JMAP Calendars                November 2025
    Specification document:  this document
    Intended use:  common
    Change Controller:  IETF
-   Security and privacy considerations:  this document, Section 1.5.2
+   Security and privacy considerations:  this document, Section 9
 
-10.3.  JMAP Data Type Registration for "Calendar"
+10.3.  JMAP Capability Registration for "calendars:parse"
+
+   IANA will register the "calendars:parse" JMAP Capability as follows:
+
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 61]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
+
+   Capability Name:  urn:ietf:params:jmap:calendars:parse
+   Specification document:  this document
+   Intended use:  common
+   Change Controller:  IETF
+   Security and privacy considerations:  this document, Section 9
+
+10.4.  JMAP Data Type Registration for "Calendar"
 
    IANA will register "Calendar" in the "JMAP Data Types" registry as
    follows:
 
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 58]
-
-Internet-Draft               JMAP Calendars                November 2025
-
-
    Type Name:  Calendar
-   Can reference blobs:  no
+   Can Reference Blobs:  no
    Can Use for State Change:  yes
    Capability:  urn:ietf:params:jmap:calendars
-   Specification document:  this document
+   Reference:  this document
 
-10.4.  JMAP Data Type Registration for "CalendarEvent"
+10.5.  JMAP Data Type Registration for "CalendarEvent"
 
    IANA will register "CalendarEvent" in the "JMAP Data Types" registry
    as follows:
 
    Type Name:  CalendarEvent
-   Can reference blobs:  yes
+   Can Reference Blobs:  yes
    Can Use for State Change:  yes
    Capability:  urn:ietf:params:jmap:calendars
-   Specification document:  this document
+   Reference:  this document
 
-10.5.  JMAP Data Type Registration for "CalendarEventNotification"
+10.6.  JMAP Data Type Registration for "CalendarEventNotification"
 
    IANA will register "CalendarEventNotification" in the "JMAP Data
    Types" registry as follows:
 
    Type Name:  CalendarEventNotification
-   Can reference blobs:  no
+   Can Reference Blobs:  no
    Can Use for State Change:  yes
    Capability:  urn:ietf:params:jmap:calendars
-   Specification document:  this document
+   Reference:  this document
 
-10.6.  JMAP Data Type Registration for "ParticipantIdentity"
+10.7.  JMAP Data Type Registration for "ParticipantIdentity"
 
    IANA will register "ParticipantIdentity" in the "JMAP Data Types"
    registry as follows:
 
    Type Name:  ParticipantIdentity
-   Can reference blobs:  no
+   Can Reference Blobs:  no
    Can Use for State Change:  yes
    Capability:  urn:ietf:params:jmap:calendars
-   Specification document:  this document
 
-10.7.  JMAP Error Codes Registry
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 62]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
+
+   Reference:  this document
+
+10.8.  JMAP Error Codes Registry
 
    The following subsections register some new error codes in the "JMAP
    Error Codes" registry, as defined in [RFC8620].
 
-10.7.1.  calendarHasEvent
+10.8.1.  calendarHasEvent
 
    JMAP Error Code:  calendarHasEvent
    Intended use:  common
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 59]
-
-Internet-Draft               JMAP Calendars                November 2025
-
-
    Change controller:  IETF
    Reference:  This document, Section 4.3
    Description:  The Calendar has at least one CalendarEvent assigned to
       it, and the "onDestroyRemoveEvents" argument was false.
 
-10.7.2.  noSupportedScheduleMethods
+10.8.2.  noSupportedScheduleMethods
 
    JMAP Error Code:  noSupportedScheduleMethods
    Intended use:  common
@@ -3321,7 +3500,7 @@ Internet-Draft               JMAP Calendars                November 2025
       but does not support any of the methods available for at least one
       of the recipients.
 
-10.7.3.  expandDurationTooLarge
+10.8.3.  expandDurationTooLarge
 
    JMAP Error Code:  expandDurationTooLarge
    Intended use:  common
@@ -3331,7 +3510,7 @@ Internet-Draft               JMAP Calendars                November 2025
       duration between the "before" and "after" properties exceeds the
       maxExpandedQueryDuration limit.
 
-10.7.4.  cannotCalculateOccurrences
+10.8.4.  cannotCalculateOccurrences
 
    JMAP Error Code:  cannotCalculateOccurrences
    Intended use:  common
@@ -3340,176 +3519,196 @@ Internet-Draft               JMAP Calendars                November 2025
    Description:  The server cannot expand a recurrence required to
       return the results for the requested query.
 
-10.8.  Update to the JSCalendar Properties Registry
-
-   IANA will update the "JSCalendar Properties" registry, originally
-   created in Section 8.2 of [RFC8984], to add a new column called "Is
-   Per-User".  The value in this column for each entry MUST be either
-   "yes" or "no", indicating whether each user with whom the object is
-   shared should be able to set their own value for this property
-   without affecting the value for other users.
-
-10.8.1.  Update to "JSCalendar Properties" Registry Template
-
-   An additional field is added to the template:
-
-   Is Per-User
 
 
 
-Jenkins & Douglass         Expires 9 May 2026                  [Page 60]
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 63]
 
-Internet-Draft               JMAP Calendars                November 2025
+Internet-Draft               JMAP Calendars                 October 2026
 
 
-10.8.2.  Initial values for existing registrations
+10.9.  JSCalendar Properties Registry
 
-   IANA will set "Is per-user: yes" on the following property
-   registrations:
+   The "Is Per-User" field used below is defined by Section 7.4 of
+   [I-D.ietf-calext-jscalendarbis].
 
-   *  keywords
-   *  color
-   *  freeBusyStatus
-   *  useDefaultAlerts
-   *  alerts
+10.9.1.  Added Properties
 
-   All other existing registrations will have "Is per-user: no".
+   IANA will add the following entries to the "JSCalendar Properties"
+   registry.
 
-10.9.  JSCalendar Property Registrations
-
-   IANA will register the following additional properties in the
-   JSCalendar Properties Registry.
-
-10.9.1.  id
+10.9.1.1.  id
 
    Property Name:  id
-   Property Type:  Not applicable
+   Property Type:  not applicable
    Property Context:  Event, Task
-   Intended Use:  Reserved
-   Is per-user:  no
+   Reference or Description:  This document, Section 5
+   Intended Usage:  reserved
+   Since Version:  2.0
+   Change Controller:  IETF
+   Is Per-User:  No
 
-10.9.2.  baseEventId
+10.9.1.2.  baseEventId
 
    Property Name:  baseEventId
-   Property Type:  Not applicable
+   Property Type:  not applicable
    Property Context:  Event, Task
-   Intended Use:  Reserved
-   Is per-user:  no
+   Reference or Description:  This document, Section 5
+   Intended Usage:  reserved
+   Since Version:  2.0
+   Change Controller:  IETF
+   Is Per-User:  No
 
-10.9.3.  calendarIds
+10.9.1.3.  calendarIds
 
    Property Name:  calendarIds
-   Property Type:  Not applicable
+   Property Type:  not applicable
    Property Context:  Event, Task
-   Intended Use:  Reserved
-   Is per-user:  no
+   Reference or Description:  This document, Section 5
+   Intended Usage:  reserved
+   Since Version:  2.0
+   Change Controller:  IETF
+   Is Per-User:  No
 
-10.9.4.  isDraft
+10.9.1.4.  isDraft
 
    Property Name:  isDraft
-   Property Type:  Not applicable
+   Property Type:  not applicable
    Property Context:  Event, Task
-   Intended Use:  Reserved
 
 
 
-Jenkins & Douglass         Expires 9 May 2026                  [Page 61]
+Jenkins & Douglass        Expires 17 April 2027                [Page 64]
 
-Internet-Draft               JMAP Calendars                November 2025
+Internet-Draft               JMAP Calendars                 October 2026
 
 
-   Is per-user:  no
+   Reference or Description:  This document, Section 5
+   Intended Usage:  reserved
+   Since Version:  2.0
+   Change Controller:  IETF
+   Is Per-User:  No
 
-10.9.5.  isOrigin
+10.9.1.5.  isOrigin
 
    Property Name:  isOrigin
-   Property Type:  Not applicable
+   Property Type:  not applicable
    Property Context:  Event, Task
-   Intended Use:  Reserved
-   Is per-user:  no
+   Reference or Description:  This document, Section 5
+   Intended Usage:  reserved
+   Since Version:  2.0
+   Change Controller:  IETF
+   Is Per-User:  No
 
-10.9.6.  utcStart
+10.9.1.6.  utcStart
 
    Property Name:  utcStart
-   Property Type:  Not applicable
+   Property Type:  not applicable
    Property Context:  Event, Task
-   Intended Use:  Reserved
-   Is per-user:  no
+   Reference or Description:  This document, Section 5
+   Intended Usage:  reserved
+   Since Version:  2.0
+   Change Controller:  IETF
+   Is Per-User:  No
 
-10.9.7.  utcEnd
+10.9.1.7.  utcEnd
 
    Property Name:  utcEnd
-   Property Type:  Not applicable
+   Property Type:  not applicable
    Property Context:  Event, Task
-   Intended Use:  Reserved
-   Is per-user:  no
+   Reference or Description:  This document, Section 5
+   Intended Usage:  reserved
+   Since Version:  2.0
+   Change Controller:  IETF
+   Is Per-User:  No
 
-10.9.8.  useDefaultAlerts
-
-   Property Name:  useDefaultAlerts
-   Property Type:  Not applicable
-   Property Context:  Event
-   Intended Use:  Reserved
-   Is per-user:  yes
-
-10.9.9.  mayInviteSelf
+10.9.1.8.  mayInviteSelf
 
    Property Name:  mayInviteSelf
-   Property Type:  Boolean (default: false)
+   Property Type:  Boolean
    Property Context:  Event, Task
-   Reference:  This document, Section 5.1.1.
-   Intended Use:  Common
-   Is per-user:  no
+   Reference or Description:  This document, Section 5.1.1
+   Intended Usage:  common
+   Since Version:  2.0
+   Change Controller:  IETF
 
-10.9.10.  mayInviteOthers
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 65]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
+
+   Is Per-User:  No
+
+10.9.1.9.  mayInviteOthers
 
    Property Name:  mayInviteOthers
-   Property Type:  Boolean (default: false)
+   Property Type:  Boolean
    Property Context:  Event, Task
+   Reference or Description:  This document, Section 5.1.2
+   Intended Usage:  common
+   Since Version:  2.0
+   Change Controller:  IETF
+   Is Per-User:  No
 
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 62]
-
-Internet-Draft               JMAP Calendars                November 2025
-
-
-   Reference:  This document, Section 5.1.2.
-   Intended Use:  Common
-   Is per-user:  no
-
-10.9.11.  hideAttendees
+10.9.1.10.  hideAttendees
 
    Property Name:  hideAttendees
-   Property Type:  Boolean (default: false)
+   Property Type:  Boolean
    Property Context:  Event, Task
-   Reference:  This document, Section 5.1.3.
-   Intended Use:  Common
-   Is per-user:  no
+   Reference or Description:  This document, Section 5.1.3
+   Intended Usage:  common
+   Since Version:  2.0
+   Change Controller:  IETF
+   Is Per-User:  No
 
-10.9.12.  scheduleSequence
-
-   Property Name:  scheduleSequence
-   Property Type:  Not applicable
-   Property Context:  Participant
-   Intended Use:  Reserved
-   Is per-user:  no
-
-10.9.13.  scheduleUpdated
-
-   Property Name:  scheduleUpdated
-   Property Type:  Not applicable
-   Property Context:  Participant
-   Intended Use:  Reserved
-   Is per-user:  no
-
-10.9.14.  blobId
+10.9.1.11.  blobId
 
    Property Name:  blobId
-   Property Type:  Not applicable
+   Property Type:  not applicable
    Property Context:  Link
-   Intended Use:  Reserved
-   Is per-user:  no
+   Reference or Description:  This document, Section 5.3
+   Intended Usage:  reserved
+   Since Version:  2.0
+   Change Controller:  IETF
+   Is Per-User:  No
+
+10.9.2.  Updated Properties
+
+   The following properties are already registered as reserved for use
+   by this document in the "JSCalendar Properties" registry by
+   [I-D.ietf-calext-jscalendarbis].  IANA will update these entries as
+   follows.  For each entry, the Property Name and its changed fields
+   are listed; unchanged fields are omitted.
+
+10.9.2.1.  useDefaultAlerts
+
+   Property Name:  useDefaultAlerts
+   Reference or Description:  This document, Section 5
+   Is Per-User:  Yes
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 66]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
+
+10.9.2.2.  scheduleSequence
+
+   Property Name:  scheduleSequence
+   Reference or Description:  This document, Section 5.2.1
+   Is Per-User:  No
+
+10.9.2.3.  scheduleUpdated
+
+   Property Name:  scheduleUpdated
+   Reference or Description:  This document, Section 5.2.2
+   Is Per-User:  No
 
 11.  Normative References
 
@@ -3521,14 +3720,6 @@ Internet-Draft               JMAP Calendars                November 2025
    [RFC2397]  Masinter, L., "The "data" URL scheme", RFC 2397,
               DOI 10.17487/RFC2397, August 1998,
               <https://www.rfc-editor.org/info/rfc2397>.
-
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 63]
-
-Internet-Draft               JMAP Calendars                November 2025
-
 
    [RFC3986]  Berners-Lee, T., Fielding, R., and L. Masinter, "Uniform
               Resource Identifier (URI): Generic Syntax", STD 66,
@@ -3545,45 +3736,22 @@ Internet-Draft               JMAP Calendars                November 2025
               DOI 10.17487/RFC5546, December 2009,
               <https://www.rfc-editor.org/info/rfc5546>.
 
-   [RFC6376]  Crocker, D., Ed., Hansen, T., Ed., and M. Kucherawy, Ed.,
-              "DomainKeys Identified Mail (DKIM) Signatures", STD 76,
-              RFC 6376, DOI 10.17487/RFC6376, September 2011,
-              <https://www.rfc-editor.org/info/rfc6376>.
-
    [RFC8174]  Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC
               2119 Key Words", BCP 14, RFC 8174, DOI 10.17487/RFC8174,
               May 2017, <https://www.rfc-editor.org/info/rfc8174>.
-
-   [RFC8551]  Schaad, J., Ramsdell, B., and S. Turner, "Secure/
-              Multipurpose Internet Mail Extensions (S/MIME) Version 4.0
-              Message Specification", RFC 8551, DOI 10.17487/RFC8551,
-              April 2019, <https://www.rfc-editor.org/info/rfc8551>.
 
    [RFC8620]  Jenkins, N. and C. Newman, "The JSON Meta Application
               Protocol (JMAP)", RFC 8620, DOI 10.17487/RFC8620, July
               2019, <https://www.rfc-editor.org/info/rfc8620>.
 
-   [RFC8792]  Watsen, K., Auerswald, E., Farrel, A., and Q. Wu,
-              "Handling Long Lines in Content of Internet-Drafts and
-              RFCs", RFC 8792, DOI 10.17487/RFC8792, June 2020,
-              <https://www.rfc-editor.org/info/rfc8792>.
-
-   [RFC8984]  Jenkins, N. and R. Stepanek, "JSCalendar: A JSON
-              Representation of Calendar Data", RFC 8984,
-              DOI 10.17487/RFC8984, July 2021,
-              <https://www.rfc-editor.org/info/rfc8984>.
-
-   [RFC9562]  Davis, K., Peabody, B., and P. Leach, "Universally Unique
-              IDentifiers (UUIDs)", RFC 9562, DOI 10.17487/RFC9562, May
-              2024, <https://www.rfc-editor.org/info/rfc9562>.
 
 
 
 
 
-Jenkins & Douglass         Expires 9 May 2026                  [Page 64]
+Jenkins & Douglass        Expires 17 April 2027                [Page 67]
 
-Internet-Draft               JMAP Calendars                November 2025
+Internet-Draft               JMAP Calendars                 October 2026
 
 
    [RFC9670]  Jenkins, N., Ed., "JSON Meta Application Protocol (JMAP)
@@ -3591,11 +3759,18 @@ Internet-Draft               JMAP Calendars                November 2025
               <https://www.rfc-editor.org/info/rfc9670>.
 
    [I-D.ietf-calext-jscalendarbis]
-              Jenkins, N. and R. Stepanek, "JSCalendar: A JSON
+              Jenkins, N. and R. Stepanek, "JSCalendar 2.0: A JSON
               Representation of Calendar Data", Work in Progress,
-              Internet-Draft, draft-ietf-calext-jscalendarbis-10, 16
-              October 2025, <https://datatracker.ietf.org/doc/html/
-              draft-ietf-calext-jscalendarbis-10>.
+              Internet-Draft, draft-ietf-calext-jscalendarbis-22, 4
+              October 2026, <https://datatracker.ietf.org/doc/html/
+              draft-ietf-calext-jscalendarbis-22>.
+
+   [I-D.ietf-calext-jscalendar-icalendar]
+              Stepanek, R., "JSCalendar: Converting from and to
+              iCalendar", Work in Progress, Internet-Draft, draft-ietf-
+              calext-jscalendar-icalendar-28, 16 September 2026,
+              <https://datatracker.ietf.org/doc/html/draft-ietf-calext-
+              jscalendar-icalendar-28>.
 
    [IANA-TZDB]
               IANA, "Time Zone Database",
@@ -3616,10 +3791,38 @@ Internet-Draft               JMAP Calendars                November 2025
               DOI 10.17487/RFC6047, December 2010,
               <https://www.rfc-editor.org/info/rfc6047>.
 
+   [RFC6376]  Crocker, D., Ed., Hansen, T., Ed., and M. Kucherawy, Ed.,
+              "DomainKeys Identified Mail (DKIM) Signatures", STD 76,
+              RFC 6376, DOI 10.17487/RFC6376, September 2011,
+              <https://www.rfc-editor.org/info/rfc6376>.
+
+   [RFC8551]  Schaad, J., Ramsdell, B., and S. Turner, "Secure/
+              Multipurpose Internet Mail Extensions (S/MIME) Version 4.0
+              Message Specification", RFC 8551, DOI 10.17487/RFC8551,
+              April 2019, <https://www.rfc-editor.org/info/rfc8551>.
+
+
+
+
+
+Jenkins & Douglass        Expires 17 April 2027                [Page 68]
+
+Internet-Draft               JMAP Calendars                 October 2026
+
+
    [RFC8607]  Daboo, C., Quillaud, A., and K. Murchison, Ed.,
               "Calendaring Extensions to WebDAV (CalDAV): Managed
               Attachments", RFC 8607, DOI 10.17487/RFC8607, June 2019,
               <https://www.rfc-editor.org/info/rfc8607>.
+
+   [RFC8792]  Watsen, K., Auerswald, E., Farrel, A., and Q. Wu,
+              "Handling Long Lines in Content of Internet-Drafts and
+              RFCs", RFC 8792, DOI 10.17487/RFC8792, June 2020,
+              <https://www.rfc-editor.org/info/rfc8792>.
+
+   [RFC9562]  Davis, K., Peabody, B., and P. Leach, "Universally Unique
+              IDentifiers (UUIDs)", RFC 9562, DOI 10.17487/RFC9562, May
+              2024, <https://www.rfc-editor.org/info/rfc9562>.
 
    [WCAG]     W3C, "Web Content Accessibility Guidelines",
               <https://www.w3.org/TR/WCAG21/>.
@@ -3633,13 +3836,6 @@ Authors' Addresses
    Australia
    Email: neilj@fastmailteam.com
    URI:   https://www.fastmail.com
-
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 65]
-
-Internet-Draft               JMAP Calendars                November 2025
 
 
    Michael Douglass (editor)
@@ -3665,32 +3861,4 @@ Internet-Draft               JMAP Calendars                November 2025
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-Jenkins & Douglass         Expires 9 May 2026                  [Page 66]
+Jenkins & Douglass        Expires 17 April 2027                [Page 69]

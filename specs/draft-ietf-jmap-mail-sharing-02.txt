@@ -4,13 +4,13 @@
 
 JMAP                                                       M. De Gennaro
 Internet-Draft                                             Stalwart Labs
-Updates: RFC8621 (if approved)                          29 November 2025
+Updates: RFC8621 (if approved)                              29 July 2026
 Intended status: Standards Track                                        
-Expires: 2 June 2026
+Expires: 30 January 2027
 
 
                            JMAP Mail Sharing
-                    draft-ietf-jmap-mail-sharing-00
+                    draft-ietf-jmap-mail-sharing-02
 
 Abstract
 
@@ -40,11 +40,11 @@ Status of This Memo
    time.  It is inappropriate to use Internet-Drafts as reference
    material or to cite them other than as "work in progress."
 
-   This Internet-Draft will expire on 2 June 2026.
+   This Internet-Draft will expire on 30 January 2027.
 
 Copyright Notice
 
-   Copyright (c) 2025 IETF Trust and the persons identified as the
+   Copyright (c) 2026 IETF Trust and the persons identified as the
    document authors.  All rights reserved.
 
    This document is subject to BCP 78 and the IETF Trust's Legal
@@ -53,9 +53,9 @@ Copyright Notice
 
 
 
-De Gennaro                 Expires 2 June 2026                  [Page 1]
+De Gennaro               Expires 30 January 2027                [Page 1]
 
-Internet-Draft              JMAP Mail Sharing              November 2025
+Internet-Draft              JMAP Mail Sharing                  July 2026
 
 
    Please review these documents carefully, as they describe your rights
@@ -109,9 +109,9 @@ Table of Contents
 
 
 
-De Gennaro                 Expires 2 June 2026                  [Page 2]
+De Gennaro               Expires 30 January 2027                [Page 2]
 
-Internet-Draft              JMAP Mail Sharing              November 2025
+Internet-Draft              JMAP Mail Sharing                  July 2026
 
 
    However, [RFC8621] was published prior to the standardization of the
@@ -165,9 +165,9 @@ Internet-Draft              JMAP Mail Sharing              November 2025
 
 
 
-De Gennaro                 Expires 2 June 2026                  [Page 3]
+De Gennaro               Expires 30 January 2027                [Page 3]
 
-Internet-Draft              JMAP Mail Sharing              November 2025
+Internet-Draft              JMAP Mail Sharing                  July 2026
 
 
 2.  Mailbox Sharing
@@ -206,14 +206,14 @@ Internet-Draft              JMAP Mail Sharing              November 2025
 
    This specification also extends the JMAP MailboxRights object defined
    in Section 2 of [RFC8621] to include the mayShare property as defined
-   below.  For servers that also support IMAP [RFC3501], this property
-   corresponds to the IMAP ACL "a" right as defined in [RFC4314]:
+   below:
 
    *mayShare*: Boolean
       The user may modify the shareWith property for this mailbox.  For
-      servers supporting IMAP access to the same data, this corresponds
-      to the IMAP ACL "a" right defined in [RFC4314], which grants the
-      ability to administer access control lists.
+      servers that also provide IMAP [RFC3501] access to the same mail
+      store, this corresponds to the IMAP ACL "a" right defined in
+      [RFC4314], which grants the ability to administer access control
+      lists.
 
 
 
@@ -221,9 +221,9 @@ Internet-Draft              JMAP Mail Sharing              November 2025
 
 
 
-De Gennaro                 Expires 2 June 2026                  [Page 4]
+De Gennaro               Expires 30 January 2027                [Page 4]
 
-Internet-Draft              JMAP Mail Sharing              November 2025
+Internet-Draft              JMAP Mail Sharing                  July 2026
 
 
 3.  Security Considerations
@@ -277,9 +277,9 @@ Internet-Draft              JMAP Mail Sharing              November 2025
 
 
 
-De Gennaro                 Expires 2 June 2026                  [Page 5]
+De Gennaro               Expires 30 January 2027                [Page 5]
 
-Internet-Draft              JMAP Mail Sharing              November 2025
+Internet-Draft              JMAP Mail Sharing                  July 2026
 
 
    Servers MAY implement audit logging of sharing configuration changes
@@ -333,9 +333,9 @@ Internet-Draft              JMAP Mail Sharing              November 2025
 
 
 
-De Gennaro                 Expires 2 June 2026                  [Page 6]
+De Gennaro               Expires 30 January 2027                [Page 6]
 
-Internet-Draft              JMAP Mail Sharing              November 2025
+Internet-Draft              JMAP Mail Sharing                  July 2026
 
 
 4.  IANA considerations
@@ -389,14 +389,25 @@ Internet-Draft              JMAP Mail Sharing              November 2025
 
 
 
-De Gennaro                 Expires 2 June 2026                  [Page 7]
+De Gennaro               Expires 30 January 2027                [Page 7]
 
-Internet-Draft              JMAP Mail Sharing              November 2025
+Internet-Draft              JMAP Mail Sharing                  July 2026
 
 
 Appendix A.  Changes
 
    [[This section to be removed by RFC Editor]]
+
+   *draft-ietf-jmap-mail-sharing-02*
+
+   *  Removed the duplicated description of the IMAP ACL "a" right
+      mapping from the paragraph introducing the mayShare property,
+      keeping a single description in the property definition itself and
+      moving the IMAP [RFC3501] reference there.
+
+   *draft-ietf-jmap-mail-sharing-01*
+
+   *  Republished with no substantive changes.
 
    *draft-ietf-jmap-mail-sharing-00*
 
@@ -434,15 +445,4 @@ Author's Address
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-De Gennaro                 Expires 2 June 2026                  [Page 8]
+De Gennaro               Expires 30 January 2027                [Page 8]

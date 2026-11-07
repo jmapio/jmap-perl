@@ -4,13 +4,13 @@
 
 calext                                                       R. Stepanek
 Internet-Draft                                                  Fastmail
-Updates: 5545, 7986, 9073 (if approved)                  19 January 2026
+Updates: 5545, 7986, 9073 (if approved)                  29 October 2026
 Intended status: Standards Track                                        
-Expires: 23 July 2026
+Expires: 2 May 2027
 
 
                iCalendar Format Extensions for JSCalendar
-          draft-ietf-calext-icalendar-jscalendar-extensions-05
+          draft-ietf-calext-icalendar-jscalendar-extensions-09
 
 Abstract
 
@@ -18,8 +18,7 @@ Abstract
    the use of existing ones.  Their main purpose is to extend the
    semantics of iCalendar with elements defined in JSCalendar, but the
    new definitions also aim to be useful within just the iCalendar
-   format.  This document updates RFC 5545 ("iCalendar") and its
-   extension documents RFC 7986 and RFC 9073.
+   format.  This document updates RFC 5545, RFC 7986, and RFC 9073.
 
 Status of This Memo
 
@@ -36,27 +35,12 @@ Status of This Memo
    time.  It is inappropriate to use Internet-Drafts as reference
    material or to cite them other than as "work in progress."
 
-   This Internet-Draft will expire on 23 July 2026.
+   This Internet-Draft will expire on 2 May 2027.
 
 Copyright Notice
 
    Copyright (c) 2026 IETF Trust and the persons identified as the
    document authors.  All rights reserved.
-
-
-
-
-
-
-
-
-
-
-
-Stepanek                  Expires 23 July 2026                  [Page 1]
-
-Internet-Draft       iCalendar JSCalendar Extensions        January 2026
-
 
    This document is subject to BCP 78 and the IETF Trust's Legal
    Provisions Relating to IETF Documents (https://trustee.ietf.org/
@@ -66,6 +50,13 @@ Internet-Draft       iCalendar JSCalendar Extensions        January 2026
    extracted from this document must include Revised BSD License text as
    described in Section 4.e of the Trust Legal Provisions and are
    provided without warranty as described in the Revised BSD License.
+
+
+
+Stepanek                   Expires 2 May 2027                   [Page 1]
+
+Internet-Draft       iCalendar JSCalendar Extensions        October 2026
+
 
 Table of Contents
 
@@ -85,36 +76,49 @@ Table of Contents
    6.  Security Considerations . . . . . . . . . . . . . . . . . . .   8
    7.  IANA Considerations . . . . . . . . . . . . . . . . . . . . .   8
      7.1.  Changes to the "Components" registry  . . . . . . . . . .   8
-     7.2.  Changes to the "Properties" registry  . . . . . . . . . .   8
+     7.2.  Changes to the "Properties" registry  . . . . . . . . . .   9
      7.3.  Changes to the "Participation Roles" registry . . . . . .   9
    8.  References  . . . . . . . . . . . . . . . . . . . . . . . . .   9
      8.1.  Normative References  . . . . . . . . . . . . . . . . . .   9
-   9.  Informative References  . . . . . . . . . . . . . . . . . . .  10
-   Author's Address  . . . . . . . . . . . . . . . . . . . . . . . .  10
+     8.2.  Informative References  . . . . . . . . . . . . . . . . .  10
+   Author's Address  . . . . . . . . . . . . . . . . . . . . . . . .  11
 
 1.  Introduction
 
-   The JSCalendar [I-D.stepanek-jscalendarbis] format aims to be an
+   The JSCalendar [I-D.ietf-calext-jscalendarbis] format aims to be an
    alternative to the iCalendar [RFC5545] format for representation of
    calendaring data.  It introduces new semantics that are not covered
    in the current definition of iCalendar and its various extensions.
    Converting calendaring data between the two formats is defined in
    [I-D.ietf-calext-jscalendar-icalendar] with the goal of not losing
    any semantics during conversion.  To achieve this, this document
-   defines new elements iCalendar and extends existing definitions.  To
+   defines new iCalendar elements and extends existing definitions.  To
    do so, it follows the recommendations for introducing new iCalendar
-   elements as specified in Section 3 of [RFC7986].  This document
-   updates the definitions of the GEO property [RFC5545]
-   (Section 3.8.1.6), the COLOR property [RFC7986] (Section 5.9) and the
+   elements as specified in Section 3 of [RFC7986].
+
+   This document updates the definitions of the GEO property [RFC5545]
+   (Section 3.8.1.6), the COLOR property [RFC7986] (Section 5.9), and
+   the VLOCATION component [RFC9073] (Section 7.2).
+
+   In addition, this document defines the new COORDINATES property
+   (Section 4.1) to align the representation of spatial coordinates in
+   iCalendar with the "coordinates" property
+   [I-D.ietf-calext-jscalendarbis] (Section 3.2.5) of the JSCalendar
+   Location object.  It defines the new SHOW-WITHOUT-TIME property
+   (Section 4.2), which is equivalent to the JSCalendar
 
 
 
-Stepanek                  Expires 23 July 2026                  [Page 2]
+Stepanek                   Expires 2 May 2027                   [Page 2]
 
-Internet-Draft       iCalendar JSCalendar Extensions        January 2026
+Internet-Draft       iCalendar JSCalendar Extensions        October 2026
 
 
-   VLOCATION component [RFC9073] (Section 7.2).
+   "showWithoutTime" property [I-D.ietf-calext-jscalendarbis]
+   (Section 3.2.4).  Finally, it defines the new OWNER (Section 5.1)
+   participation role to allow converting the "owner" role of the
+   JSCalendar Participant object [I-D.ietf-calext-jscalendarbis]
+   (Section 3.4.6).
 
 1.1.  Notational Conventions
 
@@ -157,19 +161,20 @@ Internet-Draft       iCalendar JSCalendar Extensions        January 2026
    supports specifying the location altitude and the spatial uncertainty
    of the coordinates.
 
+
+
+
+
+Stepanek                   Expires 2 May 2027                   [Page 3]
+
+Internet-Draft       iCalendar JSCalendar Extensions        October 2026
+
+
    Alternatively to deprecating, this specification could have updated
    the "GEO" property to allow its property value type to be URI.  This
    turned out to not interoperate, as implementations tended to reject
    such iCalendar data as invalid.  This was regardless if the "GEO"
    property was specified in a "VEVENT" component, or if it was
-
-
-
-Stepanek                  Expires 23 July 2026                  [Page 3]
-
-Internet-Draft       iCalendar JSCalendar Extensions        January 2026
-
-
    specified in iCalendar components that were unsupported by the
    implementation (e.g. an implementation that was unaware of the
    "VLOCATION" component still rejected the "GEO" property with value
@@ -209,22 +214,27 @@ Internet-Draft       iCalendar JSCalendar Extensions        January 2026
    Format Definition:  This property is defined by the following
       notation:
 
+
+
+
+
+
+
+
+Stepanek                   Expires 2 May 2027                   [Page 4]
+
+Internet-Draft       iCalendar JSCalendar Extensions        October 2026
+
+
       color       = "COLOR" colorparam ":" text CRLF
-                    ; Value is CSS3 color name or CSS3 six-digit RGB hex value.
+                    ; Value is a CSS3 color name or
+                    ; a CSS3 six-digit RGB hex value.
 
       colorparam     = *(";" other-param)
 
    Example:  The following are examples of this property:
 
       COLOR:turquoise
-
-
-
-
-Stepanek                  Expires 23 July 2026                  [Page 4]
-
-Internet-Draft       iCalendar JSCalendar Extensions        January 2026
-
 
       COLOR:#40E0D0
 
@@ -234,10 +244,10 @@ Internet-Draft       iCalendar JSCalendar Extensions        January 2026
 
 3.1.  VLOCATION component
 
-   This document updates the definition of the "VLOCATION" component.
-   It allows to specify the newly defined "COORDINATES" property
-   (Section 4.1) at most once in a "VLOCATION" component.  It appends
-   the following to the "Format Definition" of the "VLOCATION"
+   This document updates the definition of the "VLOCATION" component to
+   allow setting the newly defined "COORDINATES" property (Section 4.1)
+   at most once in the component.  To achieve this, the following
+   additions are made to the "Format Definition" of the "VLOCATION"
    component, defined in Section 7.2 of [RFC9073]:
 
    locprop /= *(
@@ -265,26 +275,25 @@ Internet-Draft       iCalendar JSCalendar Extensions        January 2026
    Property Parameters:  IANA and non-standard parameters MAY be
       specified on this property.
 
+
+
+Stepanek                   Expires 2 May 2027                   [Page 5]
+
+Internet-Draft       iCalendar JSCalendar Extensions        October 2026
+
+
    Conformance:  This property can be specified in a "VLOCATION"
       calendar component.
 
    Description:  This property represents spatial (geographic)
       coordinates.  In contrast to the the "GEO" property, this property
       allows to represent not only latitude and longitude but also
-      altitude of a location.  In addition, it supports to indicate the
-      uncertainty of the coordinates, is interoperable with other
-      internet standards making use of spatial information, and is
-
-
-
-Stepanek                  Expires 23 July 2026                  [Page 5]
-
-Internet-Draft       iCalendar JSCalendar Extensions        January 2026
-
-
-      extensible, such as for use with other coordinate reference
-      systems.  The property value MUST a URI in the "geo" URI scheme,
-      as defined in [RFC5870] and updates.
+      altitude of a location, and to indicate the uncertainty of the
+      coordinates.  It improves interoperability with other internet
+      standards making use of spatial information, and is extensible,
+      such as for use with other coordinate reference systems.  The
+      property value MUST a URI in the "geo" URI scheme, as defined in
+      [RFC5870] and updates.
 
    Format Definition:
       coord       = "COORDINATES" coordparam ":" uri CRLF
@@ -322,22 +331,14 @@ Internet-Draft       iCalendar JSCalendar Extensions        January 2026
    Conformance:  This property can be specified in a "VEVENT" or "VTODO"
       calendar component.
 
-   Description:  This indicates that the exact time span is not
 
 
-
-
-
-
-
-
-
-
-Stepanek                  Expires 23 July 2026                  [Page 6]
+Stepanek                   Expires 2 May 2027                   [Page 6]
 
-Internet-Draft       iCalendar JSCalendar Extensions        January 2026
+Internet-Draft       iCalendar JSCalendar Extensions        October 2026
 
 
+   Description:  This indicates that the exact time span is not
       important to display when rendering this calendar object.  An
       example of this is an event that occurs over a full or almost full
       day, but in contrast to a DATE value is limited to a specific time
@@ -388,10 +389,9 @@ Internet-Draft       iCalendar JSCalendar Extensions        January 2026
 
 
 
-
-Stepanek                  Expires 23 July 2026                  [Page 7]
+Stepanek                   Expires 2 May 2027                   [Page 7]
 
-Internet-Draft       iCalendar JSCalendar Extensions        January 2026
+Internet-Draft       iCalendar JSCalendar Extensions        October 2026
 
 
 5.  New Values
@@ -405,9 +405,10 @@ Internet-Draft       iCalendar JSCalendar Extensions        January 2026
       changes that affect all calendar users participating in this
       calendar object (for example, rescheduling the calendar object,
       adding and removing attendees and roles).  The presence of this
-      role only is indicative, its semantics are subject to the
-      calendaring exchange protocol being used.  See [jmap-calendars]
-      for an example for making use of this role.
+      role is only indicative; its semantics are subject to the
+      calendaring exchange protocol being used.  See
+      [I-D.ietf-jmap-calendars] for an example of making use of this
+      role.
 
    Conformance:  This value can be used with the "ROLE" parameter.
 
@@ -418,6 +419,18 @@ Internet-Draft       iCalendar JSCalendar Extensions        January 2026
 
    This specification extends [RFC5545].  The same security
    considerations as outlined in Section 7 of [RFC5545] apply.
+   [RFC7986] describes security considerations for the COLOR property.
+
+   The OWNER participation role (Section 5.1) is indicative only: its
+   presence in an iCalendar object does not by itself grant any
+   authorization.  Implementations MUST NOT grant a calendar user the
+   ability to make changes to a calendar object based solely on the
+   presence of this role; authorization is determined by the calendaring
+   exchange protocol in use.  In the context of JMAP Calendars
+   [I-D.ietf-jmap-calendars], this role is equivalent to the "owner"
+   role of the Participant object.  Its semantics in the context of
+   other calendaring exchange protocols, such as CalDAV [RFC4791], are
+   not defined by this document.
 
 7.  IANA Considerations
 
@@ -428,13 +441,22 @@ Internet-Draft       iCalendar JSCalendar Extensions        January 2026
    IANA will update the entry of the "VLOCATION" component: it will add
    Section 3.1 of this document to the References.
 
+
+
+
+
+Stepanek                   Expires 2 May 2027                   [Page 8]
+
+Internet-Draft       iCalendar JSCalendar Extensions        October 2026
+
+
 7.2.  Changes to the "Properties" registry
 
    IANA will change the entry for the "GEO" property: it will set the
    Status from "Current" to "Deprecated" and add Section 2.1 of this
    document to the References.
 
-   IANA will change the entry for the "COLOR" property: tt will add
+   IANA will change the entry for the "COLOR" property: it will add
    Section 2.2 of this document to the References.
 
    IANA will add the following entries:
@@ -442,13 +464,6 @@ Internet-Draft       iCalendar JSCalendar Extensions        January 2026
    Property  COORDINATES
    Status  Current
    Reference  Section 4.1
-
-
-
-Stepanek                  Expires 23 July 2026                  [Page 8]
-
-Internet-Draft       iCalendar JSCalendar Extensions        January 2026
-
 
    Property  SHOW-WITHOUT-TIME
    Status  Current
@@ -480,6 +495,17 @@ Internet-Draft       iCalendar JSCalendar Extensions        January 2026
               DOI 10.17487/RFC5234, January 2008,
               <https://www.rfc-editor.org/info/rfc5234>.
 
+
+
+
+
+
+
+Stepanek                   Expires 2 May 2027                   [Page 9]
+
+Internet-Draft       iCalendar JSCalendar Extensions        October 2026
+
+
    [RFC5545]  Desruisseaux, B., Ed., "Internet Calendaring and
               Scheduling Core Object Specification (iCalendar)",
               RFC 5545, DOI 10.17487/RFC5545, September 2009,
@@ -498,39 +524,48 @@ Internet-Draft       iCalendar JSCalendar Extensions        January 2026
               2119 Key Words", BCP 14, RFC 8174, DOI 10.17487/RFC8174,
               May 2017, <https://www.rfc-editor.org/info/rfc8174>.
 
-
-
-
-Stepanek                  Expires 23 July 2026                  [Page 9]
-
-Internet-Draft       iCalendar JSCalendar Extensions        January 2026
-
-
    [RFC9073]  Douglass, M., "Event Publishing Extensions to iCalendar",
               RFC 9073, DOI 10.17487/RFC9073, August 2021,
               <https://www.rfc-editor.org/info/rfc9073>.
 
-9.  Informative References
+8.2.  Informative References
 
    [I-D.ietf-calext-jscalendar-icalendar]
               Stepanek, R., "JSCalendar: Converting from and to
               iCalendar", Work in Progress, Internet-Draft, draft-ietf-
-              calext-jscalendar-icalendar, 16 October 2025,
-              <https://datatracker.ietf.org/doc/draft-ietf-calext-
-              jscalendar-icalendar/>.
+              calext-jscalendar-icalendar-28, 16 September 2026,
+              <https://datatracker.ietf.org/doc/html/draft-ietf-calext-
+              jscalendar-icalendar-28>.
 
-   [I-D.stepanek-jscalendarbis]
-              Jenkins, N.M. and R. Stepanek, "JSCalendar: A JSON
+   [I-D.ietf-calext-jscalendarbis]
+              Jenkins, N. and R. Stepanek, "JSCalendar 2.0: A JSON
               Representation of Calendar Data", Work in Progress,
-              Internet-Draft, draft-stepanek-jscalendarbis, 16 October
-              2025, <https://datatracker.ietf.org/doc/draft-stepanek-
-              jscalendarbis/>.
+              Internet-Draft, draft-ietf-calext-jscalendarbis-22, 4
+              October 2026, <https://datatracker.ietf.org/doc/html/
+              draft-ietf-calext-jscalendarbis-22>.
 
-   [jmap-calendars]
-              Jenkins, N.M. and M. Douglass, "JMAP for Calendars", Work
-              in Progress, Internet-Draft, draft-ietf-jmap-calendars, 8
-              October 2025, <https://datatracker.ietf.org/doc/draft-
-              ietf-jmap-calendars/>.
+   [I-D.ietf-jmap-calendars]
+              Jenkins, N. and M. Douglass, "JSON Meta Application
+              Protocol (JMAP) for Calendars", Work in Progress,
+              Internet-Draft, draft-ietf-jmap-calendars-33, 13 October
+              2026, <https://datatracker.ietf.org/doc/html/draft-ietf-
+              jmap-calendars-33>.
+
+
+
+
+
+
+
+Stepanek                   Expires 2 May 2027                  [Page 10]
+
+Internet-Draft       iCalendar JSCalendar Extensions        October 2026
+
+
+   [RFC4791]  Daboo, C., Desruisseaux, B., and L. Dusseault,
+              "Calendaring Extensions to WebDAV (CalDAV)", RFC 4791,
+              DOI 10.17487/RFC4791, March 2007,
+              <https://www.rfc-editor.org/info/rfc4791>.
 
 Author's Address
 
@@ -557,4 +592,25 @@ Author's Address
 
 
 
-Stepanek                  Expires 23 July 2026                 [Page 10]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Stepanek                   Expires 2 May 2027                  [Page 11]

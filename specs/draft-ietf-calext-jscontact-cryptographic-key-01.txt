@@ -1,0 +1,1120 @@
+
+
+
+
+Network Working Group                                 P. M. Hallam-Baker
+Internet-Draft                                            MPlace2.social
+Intended status: Standards Track                             3 July 2026
+Expires: 4 January 2027
+
+
+                 JSContact Cryptographic Key Extensions
+            draft-ietf-calext-jscontact-cryptographic-key-01
+
+Abstract
+
+   Extensions to the JSContact data model for contact card data are
+   defined to improve support for describing cryptographic credentials
+   to be used with applications and services by specifying which
+   credential is used for which online service.  This allows a contact
+   application to identify the specific credential to be used with an
+   application without the need for the contact application to
+   understand the syntax or semantics of the credential used.
+
+   An additional extension allows a contact to specify one of more
+   mechanisms for obtaining updates to itself with optional verification
+   under specified signature keys.  The mechanisms used are outside the
+   scope of this document.  These features in combination provide a
+   basis for establishing and maintaining peer-to-peer trust.
+
+Status of This Memo
+
+   This Internet-Draft is submitted in full conformance with the
+   provisions of BCP 78 and BCP 79.
+
+   Internet-Drafts are working documents of the Internet Engineering
+   Task Force (IETF).  Note that other groups may also distribute
+   working documents as Internet-Drafts.  The list of current Internet-
+   Drafts is at https://datatracker.ietf.org/drafts/current/.
+
+   Internet-Drafts are draft documents valid for a maximum of six months
+   and may be updated, replaced, or obsoleted by other documents at any
+   time.  It is inappropriate to use Internet-Drafts as reference
+   material or to cite them other than as "work in progress."
+
+   This Internet-Draft will expire on 4 January 2027.
+
+Copyright Notice
+
+   Copyright (c) 2026 IETF Trust and the persons identified as the
+   document authors.  All rights reserved.
+
+
+
+
+
+Hallam-Baker             Expires 4 January 2027                 [Page 1]
+
+Internet-Draft   JSContact Cryptographic Key Extensions        July 2026
+
+
+   This document is subject to BCP 78 and the IETF Trust's Legal
+   Provisions Relating to IETF Documents (https://trustee.ietf.org/
+   license-info) in effect on the date of publication of this document.
+   Please review these documents carefully, as they describe your rights
+   and restrictions with respect to this document.  Code Components
+   extracted from this document must include Revised BSD License text as
+   described in Section 4.e of the Trust Legal Provisions and are
+   provided without warranty as described in the Revised BSD License.
+
+Table of Contents
+
+   1.  Introduction  . . . . . . . . . . . . . . . . . . . . . . . .   3
+     1.1.  Link Keys to Services . . . . . . . . . . . . . . . . . .   3
+     1.2.  Enhanced specification of cryptographic credentials . . .   4
+     1.3.  Groups  . . . . . . . . . . . . . . . . . . . . . . . . .   5
+     1.4.  Authentication  . . . . . . . . . . . . . . . . . . . . .   8
+     1.5.  Authenticated Updates . . . . . . . . . . . . . . . . . .   8
+   2.  Definitions . . . . . . . . . . . . . . . . . . . . . . . . .  10
+     2.1.  Requirements Language . . . . . . . . . . . . . . . . . .  10
+     2.2.  Defined Terms . . . . . . . . . . . . . . . . . . . . . .  10
+     2.3.  Related Specifications  . . . . . . . . . . . . . . . . .  10
+     2.4.  Implementation Status . . . . . . . . . . . . . . . . . .  10
+   3.  Card Extensions . . . . . . . . . . . . . . . . . . . . . . .  10
+     3.1.  Additional Card Properties  . . . . . . . . . . . . . . .  10
+       3.1.1.  updates . . . . . . . . . . . . . . . . . . . . . . .  11
+       3.1.2.  serviceGroups . . . . . . . . . . . . . . . . . . . .  11
+     3.2.  Extension to the EmailAddress Object  . . . . . . . . . .  11
+       3.2.1.  cryptoKeyIds  . . . . . . . . . . . . . . . . . . . .  12
+     3.3.  Extension to the OnlineService Object . . . . . . . . . .  12
+       3.3.1.  cryptoKeyIds  . . . . . . . . . . . . . . . . . . . .  12
+     3.4.  New Object JsonWebKeySet  . . . . . . . . . . . . . . . .  12
+       3.4.1.  jsonWebKeys . . . . . . . . . . . . . . . . . . . . .  12
+   4.  Application Profiles  . . . . . . . . . . . . . . . . . . . .  12
+     4.1.  S/MIME  . . . . . . . . . . . . . . . . . . . . . . . . .  12
+     4.2.  OpenPGP . . . . . . . . . . . . . . . . . . . . . . . . .  13
+     4.3.  SSH . . . . . . . . . . . . . . . . . . . . . . . . . . .  14
+     4.4.  Code Signing  . . . . . . . . . . . . . . . . . . . . . .  17
+     4.5.  Commit Signing  . . . . . . . . . . . . . . . . . . . . .  18
+   5.  IANA Considerations . . . . . . . . . . . . . . . . . . . . .  19
+   6.  Acknowledgements  . . . . . . . . . . . . . . . . . . . . . .  19
+   7.  Appendix A: Collected Example<include=..\Examples\
+           JSContactComplete.md> . . . . . . . . . . . . . . . . . .  19
+   8.  Normative References  . . . . . . . . . . . . . . . . . . . .  19
+   9.  Informative References  . . . . . . . . . . . . . . . . . . .  20
+   Author's Address  . . . . . . . . . . . . . . . . . . . . . . . .  20
+
+
+
+
+
+
+Hallam-Baker             Expires 4 January 2027                 [Page 2]
+
+Internet-Draft   JSContact Cryptographic Key Extensions        July 2026
+
+
+1.  Introduction
+
+   This document defines extensions to the JSContact data model for
+   contact card data [RFC9553] to provide improved support for
+   describing cryptographic credentials to be used with applications and
+   services and to provide support for authenticated updates to a
+   contact card.
+
+   The key design considerations for these extensions are as follows:
+
+   *  Maintain compatibility with the approach in the base
+      specification.
+
+   *  Allow cryptographic credentials to be specified as JSON Web Key
+      Sets [RFC7517].
+
+   *  Provide more descriptive information for use of cryptographic
+      credentials, in particular specifying which key is to be used with
+      which information service.
+
+   *  Allow specification of groups of related email addresses and
+      information services.
+
+   *  Enable automated updates to the contact card data with
+      cryptographic authentication.
+
+   In addition, specific guidance is provided on specifying credentials
+   for use with S/MIME, OpenPGP, SSH and Code Signing.
+
+1.1.  Link Keys to Services
+
+   [RFC9553] allows a card to specify online services and cryptographic
+   keys but does not provide a means of specifying which key is to be
+   used for which purpose.  This results in ambiguity with key formats
+   used to support a wide range of applications, a key presented in
+   OpenPGP encoding may be used to sign email, sign a repository commit,
+   encrypt a file system or used for many other purposes.  For example,
+   a user can specify the separate OpenPGP keys they use for email and
+   signing commits to their source code repository but does not allow
+   the user to specify which key is to be used for which.
+
+
+
+
+
+
+
+
+
+
+
+Hallam-Baker             Expires 4 January 2027                 [Page 3]
+
+Internet-Draft   JSContact Cryptographic Key Extensions        July 2026
+
+
+   Best practices for use of cryptographic applications encourage the
+   use of different keys for different cryptographic functions
+   (encryption, signing, authentication), different application
+   protocols and different uses.  Without the ability to specify which
+   key is to be used for which purpose, an attacker that has compromised
+   a weakly protected key intended for low consequence purposes (e.g.
+   signing development builds) for a high consequence purpose (e.g.
+   signing production builds and authorizing financial transactions.)
+
+   The EmailAddress object and OnlineService object are extended to add
+   a keys property which MAY be used to specify the key identifiers of
+   the related keys.
+
+   For example, Alice has many OpenPGP keys but only one that she uses
+   with her email address alice@example.com:
+
+   {
+     "@type":"Card",
+     ...
+       ...
+     "emails" : {
+       "email1" : {
+           "@type": "EmailAddress",
+           "address": "alice@example.com",
+           "cryptoKeyIds": {
+             "emailKey1": "bundle",
+             "emailKey3": "sign",
+             "emailKey4": "encrypt"}}
+       },
+     "cryptoKeys" : {
+       "emailKey1" : {
+           "@type": "CryptoKey",
+           "uri": "data:application/pgp-keys;base64,9jhpthtFpOVS0FWXsg
+   5rF3W2-vE.."}
+       ...
+       }
+     }
+
+1.2.  Enhanced specification of cryptographic credentials
+
+   The Card object's cryptoKeysSP 800-57 Part 1 Revision 5
+   (http://whatever) property allows a card to specify cryptographic
+   credentials as URIs but not their intended uses.  A data URI
+   containing an X.509v3 certificate might be intended for use with S/
+   MIME, for code signing or some entirely unrelated purpose.  Best
+   design practice (see e.g.  section 5.2) encourages the use of common
+   cryptographic infrastructures to support a wide range of applications
+   but best use practices encourage limiting the use of particular
+
+
+
+Hallam-Baker             Expires 4 January 2027                 [Page 4]
+
+Internet-Draft   JSContact Cryptographic Key Extensions        July 2026
+
+
+   cryptographic keys to a single application.
+
+   The use of the JSON Web Key (JWK) format provides a much richer
+   format for describing cryptographic keys and their properties than a
+   URI and a media type.
+
+   For example, Alice uses SSH to securely access resources in her
+   network.  In accordance with best security practices, she create a
+   separate SSH keypair for each of the devices she uses as a client
+   terminal.  Accordingly, her contact has an onlineService entry that
+   describes this use of the SSH protocol that specifies the keys to be
+   used with SSH and a separate JsonWebKeySet entry for each key
+   specifying the key parameters:
+
+   {
+     "@type":"Card",
+     ...
+       ...
+     "onlineServices" : {
+       ...
+       "ssh1" : {
+           "@type": "OnlineService",
+           "service": "ssh",
+           "cryptoKeyIds": {
+             "sshKey1": "sign",
+             "sshKey2": "sign",
+             "sshKey3": "sign"}}
+       ...
+       },
+     "cryptoKeys" : {
+       ...
+       "sshKey1" : {
+           "@type": "JsonWebKeySet",
+           "jsonWebKeys": [{
+               "kty": "OKP",
+               "kid": "MBWQ-TY2X-SFBR-DWYL-LURE-GHD4-CCP3",
+               "crv": "Ed25519",
+               "x": "5tKZn7_cQYNz7SU65Vqm4JplTToA4kIIwyX_vWT76ZY"}
+             ]}
+       ...
+       }
+     }
+
+1.3.  Groups
+
+   It is often convenient to organize related email addresses and online
+   services used for a common purpose into groups.
+
+
+
+
+Hallam-Baker             Expires 4 January 2027                 [Page 5]
+
+Internet-Draft   JSContact Cryptographic Key Extensions        July 2026
+
+
+   For example, Alice might create a ServiceGroup bundling the set of
+   cryptographic keys she uses for code development.  This would allow
+   her to create separate sets of keys for different clients she works
+   with and to distinguish the set of keys used for development purposes
+   from those she uses for production use.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Hallam-Baker             Expires 4 January 2027                 [Page 6]
+
+Internet-Draft   JSContact Cryptographic Key Extensions        July 2026
+
+
+   {
+     "@type":"Card",
+     ...
+     "updates" : {
+       "group1" : {
+           "@type": "ServiceGroup",
+           "members": {
+             "email1": true,
+             "git1": true,
+             "ssh1": true}}
+       },
+     "serviceGroups" : {
+       "group1" : {
+           "@type": "ServiceGroup",
+           "members": {
+             "email1": true,
+             "git1": true,
+             "ssh1": true}}
+       }
+     "emails" : {
+       "email1" : {
+           "@type": "EmailAddress",
+           "address": "alice@example.com",
+           "cryptoKeyIds": {
+             "emailKey1": "bundle",
+             "emailKey3": "sign",
+             "emailKey4": "encrypt"}}
+       },
+     "onlineServices" : {
+       "git1" : {
+           "@type": "OnlineService",
+           "service": "commit",
+           "user": "alice.example.com",
+           "cryptoKeyIds": {
+             "gitKey1": "sign"}}
+       "ssh1" : {
+           "@type": "OnlineService",
+           "service": "ssh",
+           "cryptoKeyIds": {
+             "sshKey1": "sign",
+             "sshKey2": "sign",
+             "sshKey3": "sign"}}
+       ...
+       },
+       ...
+     }
+
+
+
+
+
+Hallam-Baker             Expires 4 January 2027                 [Page 7]
+
+Internet-Draft   JSContact Cryptographic Key Extensions        July 2026
+
+
+1.4.  Authentication
+
+   The use of an authenticated exchange mechanism such as [RFC7515] or
+   [draft-hallambaker-earl] allows a JSContact card to be used as an
+   aggregate credential whose contents are used to automatically
+   configure cryptographic applications that use the credentials
+   contained therein.
+
+   Instead of having to configure every server that Alice might want to
+   access using her SSH keys, Alice can add her keys to her JSContact
+   card and run a script to create the necessary access control entries
+   on each server.
+
+   The power of this approach is further increased if an authenticated
+   contact update mechanism is used.  In this case, updates can be
+   propagated to the target devices automatically by either polling or
+   through a push update mechanism.
+
+1.5.  Authenticated Updates
+
+   The authenticated locator mechanisms described above are intended to
+   be used to establish a 'first contact' between the parties preserving
+   the maximum possible degree of trust from the context.
+
+   Once the initial contact exchange has been achieved, the credentials
+   exchanged in that first contact SHOULD be used to obtain and
+   authenticate future updates.
+
+   Contact cards that support updates MUST include a uid property.
+   Updates to contact cards MUST specify the same uid value.
+
+   The updates property provides an open framework for describing the
+   update mechanisms supported.  The mechanisms provided to update the
+   contact MAY be different from the mechanism originally used to
+   distribute it.
+
+   For example, Alice publishes her current contact card by means of a
+   DNS TXT record containing an EARL [draft-hallambaker-earl] and a QR
+   code encoding the same EARL on the business card she presents when
+   meeting people in person.  Applications MAY update the card by
+   polling the URI specified in the updates entry and verifying the
+   signature on the plaintext enveloped data returned.
+
+
+
+
+
+
+
+
+
+Hallam-Baker             Expires 4 January 2027                 [Page 8]
+
+Internet-Draft   JSContact Cryptographic Key Extensions        July 2026
+
+
+   {
+     "@type":"Card",
+     ...
+       ...
+     "cryptoKeys" : {
+       ...
+       "updateKey1" : {
+           "@type": "JsonWebKeySet",
+           "jsonWebKeys": [{
+               "kty": "OKP",
+               "kid": "MDMY-XH52-PLPK-H7DZ-WAXW-LDNS-5I7R",
+               "crv": "Ed448",
+               "x": "QKvMwR_qwWUJoWEeFMb6SlVxnA8MUa8p_diWxgORiVxjPwSqF
+   vgKvoCZBpRqMx5-u8u5d6g6auIA"}
+             ]}
+       }
+     }
+
+   Since it is easier to update information on a Web site than in DNS or
+   on a business card, it is likely that some users will prefer to use
+   these mechanisms to distribute pro-forma contact information
+   consisting of basic contact information and update information alone.
+   Therefore, contact applications SHOULD attempt to update contact
+   cards providing update information on receipt.
+
+   Retrieving a plaintext signed contact assertion via HTTPS provides a
+   simple but limited update mechanism providing end-to-end integrity
+   but not confidentiality.  While the contact information is delivered
+   over an encrypted transport, the contact card is stored unencrypted
+   on the server which may not be acceptable in certain applications.
+   Another limitation is that the relying party is required to poll the
+   contact service for updates.  A more sophisticated updates protocol
+   might provide update notifications.  Such considerations are outside
+   the scope of this document and left for future work.
+
+   [Remark: Addition of a JOSE based encryption scheme would be
+   straightforward.  This would require extension of the envelope
+   specification and to pass a decryption key to the parties the contact
+   is passed to.]
+
+   A contact card MAY specify multiple update mechanisms providing a
+   degree of resilience in the case that a publication service stops
+   providing service.
+
+
+
+
+
+
+
+
+Hallam-Baker             Expires 4 January 2027                 [Page 9]
+
+Internet-Draft   JSContact Cryptographic Key Extensions        July 2026
+
+
+   For example, Alice might choose three independent contact directory
+   services publishing her contact information on all three ensuring
+   that the people she has shared her contact information with can
+   remain in contact years or even decades after the initial contact
+   exchange.
+
+2.  Definitions
+
+   This section presents the related specifications and standards, the
+   terms that are used as terms of art within the documents and the
+   terms used as requirements language.
+
+2.1.  Requirements Language
+
+   The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT",
+   "SHOULD", "SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this
+   document are to be interpreted as described in RFC 2119 [RFC2119].
+
+2.2.  Defined Terms
+
+   TBS
+
+2.3.  Related Specifications
+
+   JSContact: A JSON Representation of Contact Data [RFC9553].  Describes
+      the format used for contact data interchange.
+
+   JSON Web Key (JWK) [RFC7517].  Describes publishing public keys in
+      JSON format.
+
+   Encrypted Authenticated Resource Locator [draft-hallambaker-earl].  Describes
+      a URI form that provides means of retrieving, decrypting and
+      authenticating an associated ciphertext.
+
+2.4.  Implementation Status
+
+   Reference code under the MIT Open-Source license has been developed
+   to demonstrate all the features described in this document.
+
+3.  Card Extensions
+
+   The JSContact objects specified in [RFC9553] is extended as described
+   in the following sections.
+
+3.1.  Additional Card Properties
+
+   The following properties are added to the Card object specified in
+   [RFC9553].
+
+
+
+Hallam-Baker             Expires 4 January 2027                [Page 10]
+
+Internet-Draft   JSContact Cryptographic Key Extensions        July 2026
+
+
+3.1.1.  updates
+
+   "updates": String[Update] (optional) Specifies mechanisms for
+   obtaining updates to the card.
+
+   An Update object has all the properties of the Resource data type,
+   with the following additional definitions:
+
+   "protocol": String (optional) The IANA update protocol identifier
+
+   "cryptoKeyIds": String[String] (optional) The identifiers of the set
+   of cryptographic keys to be used to authenticate the updated contact
+   information and their use.
+
+   "updates": {
+     "update1": {
+       "@type": "Update",
+       "uri": "https://contacts.example.com/",
+       "cryptoKeyIds": {
+         "updateKey1": "sign"}}}
+
+3.1.2.  serviceGroups
+
+   "serviceGroups": String[ServiceGroup] (optional) Specifies groups of
+   related email addresses and online services.
+
+   A ServiceGroup object has all the properties of the Resource data
+   type, with the following additional definition:
+
+   "members": String[Boolean] (optional) The identifiers of the service
+   group members.  The boolean value corresponding to each MUST be true.
+
+   "serviceGroups": {
+     "group1": {
+       "@type": "ServiceGroup",
+       "members": {
+         "email1": true,
+         "git1": true,
+         "ssh1": true}}}
+
+3.2.  Extension to the EmailAddress Object
+
+   The EmailAddress object specified in [RFC9553] is extended to add the
+   specified property.
+
+
+
+
+
+
+
+Hallam-Baker             Expires 4 January 2027                [Page 11]
+
+Internet-Draft   JSContact Cryptographic Key Extensions        July 2026
+
+
+3.2.1.  cryptoKeyIds
+
+   "cryptoKeyIds": String[String] (optional) The identifiers of the set
+   of cryptographic keys to be used to authenticate the updated contact
+   information and their use.
+
+   "cryptoKeyIds": {
+     "emailKey1": "bundle",
+     "emailKey3": "sign",
+     "emailKey4": "encrypt"}
+
+3.3.  Extension to the OnlineService Object
+
+   The OnlineService object specified in [RFC9553] is extended to add
+   the specified property.
+
+3.3.1.  cryptoKeyIds
+
+   "cryptoKeyIds": String[String] (optional) The identifiers of the set
+   of cryptographic keys to be used to authenticate the updated contact
+   information and their use.
+
+3.4.  New Object JsonWebKeySet
+
+   The JsonWebKeySet object is added to the Card object with the
+   following properties:
+
+3.4.1.  jsonWebKeys
+
+   "jsonWebKeys": JWK[] (optional) A Json Web Key Set.
+
+   The JWK object is defined in [TBS].
+
+4.  Application Profiles
+
+   This section _will_ provide guidance on how to encode cryptographic
+   keys for specific applications.  It is currently a placeholder so the
+   relevant expert groups have an opportunity to advise the precise
+   means by which the relevant information is presented.
+
+4.1.  S/MIME
+
+   S/MIME (Secure/Multipurpose Internet Mail Extensions) provides a
+   consistent way to send and receive secure MIME data over SMTP and
+   other messaging transports.
+
+
+
+
+
+
+Hallam-Baker             Expires 4 January 2027                [Page 12]
+
+Internet-Draft   JSContact Cryptographic Key Extensions        July 2026
+
+
+   Certificates issued for use with S/MIME are commonly used for other
+   purposes, for example TLS client authentication.  For the purposes of
+   this discussion, our focus is strictly limited to the use of the
+   certificate for messaging.
+
+   If the messaging protocol is SMTP, the service is specified as an
+   EmailAddress, otherwise the OnlineService structure is used with the
+   appropriate service specifier.
+
+   Strawman proposal:
+
+   *  Use a single JWK entry with an x5c to specify the encryption key
+      cert, signature key cert and cert path.
+
+   *  Specify the JWK in the keys section of the corresponding
+      EmailAddress or OnlineService with the key identifier of the
+      corresponding JWK and the 'smime' use.
+
+   {
+     "@type":"Card",
+     ...
+       ...
+     "cryptoKeys" : {
+       ...
+       "emailKey3" : {
+           "@type": "CryptoKey",
+           "uri": "data:application/pkix-cert;base64,VQSUcf253buwsfIgF
+   UyqNeQ1Ky4.."}
+       "emailKey4" : {
+           "@type": "CryptoKey",
+           "uri": "data:application/pkix-cert;base64,du0OqLzpeCHLXXJD-
+   HUpt1nN36o.."}
+       ...
+       }
+     }
+
+4.2.  OpenPGP
+
+   OpenPGP provides encryption with public key or symmetric
+   cryptographic algorithms, digital signatures, compression, and key
+   management.
+
+   OpenPGP key management is commonly used for many purposes including
+   signing repository commits.  For the purposes of this section, our
+   focus is strictly limited to the use of keys for messaging.
+
+
+
+
+
+
+Hallam-Baker             Expires 4 January 2027                [Page 13]
+
+Internet-Draft   JSContact Cryptographic Key Extensions        July 2026
+
+
+   If the messaging protocol is SMTP, the service is specified as an
+   EmailAddress, otherwise the OnlineService structure is used with the
+   appropriate service specifier.
+
+   Strawman proposal:
+
+   *  User specifies their OpenPGP primary key as an OnlineService with
+      service type 'openpgp'.  This is also the place any key server
+      information would be placed.
+
+   *  The first key in the keys entry of the service is the key
+      identifier of the primary key
+
+   *  The sub keys are the following keys
+
+   *  The corresponding key entries are of type JsonWebKey
+
+   *  The key data is specified as a binary data property
+
+   *  Other services specify the subkeys that they use.
+
+   {
+     "@type":"Card",
+     ...
+       ...
+     "cryptoKeys" : {
+       "emailKey1" : {
+           "@type": "CryptoKey",
+           "uri": "data:application/pgp-keys;base64,9jhpthtFpOVS0FWXsg
+   5rF3W2-vE.."}
+       ...
+       }
+     }
+
+4.3.  SSH
+
+   The SSH protocol used for remote shell and file system access
+   supports authentication by means of either passwords or public keys.
+   The set of public keys authorized to allow access to a device is
+   specified by means of:
+
+   *  A raw public key
+
+   *  An SSH user certificate as specified in [draft-ietf-sshm-cert].
+
+   *  A PKIX certificate as specified in [RFC6187].
+
+
+
+
+
+Hallam-Baker             Expires 4 January 2027                [Page 14]
+
+Internet-Draft   JSContact Cryptographic Key Extensions        July 2026
+
+
+   While use of certificates offers clear management advantages and SSH
+   certificates are widely supported in applications and libraries, most
+   users only use raw keys.  The JsonWebKey object provides the most
+   convenient means of encoding a raw key.
+
+   For example, Alice defines separate raw public keys for each of her
+   two user devices and has separately created an SSH user certificate
+   for one of the keys:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Hallam-Baker             Expires 4 January 2027                [Page 15]
+
+Internet-Draft   JSContact Cryptographic Key Extensions        July 2026
+
+
+   {
+     "@type":"Card",
+     ...
+       ...
+     "onlineServices" : {
+       ...
+       "ssh1" : {
+           "@type": "OnlineService",
+           "service": "ssh",
+           "cryptoKeyIds": {
+             "sshKey1": "sign",
+             "sshKey2": "sign",
+             "sshKey3": "sign"}}
+       ...
+       },
+     "cryptoKeys" : {
+       ...
+       "sshKey1" : {
+           "@type": "JsonWebKeySet",
+           "jsonWebKeys": [{
+               "kty": "OKP",
+               "kid": "MBWQ-TY2X-SFBR-DWYL-LURE-GHD4-CCP3",
+               "crv": "Ed25519",
+               "x": "5tKZn7_cQYNz7SU65Vqm4JplTToA4kIIwyX_vWT76ZY"}
+             ]}
+       "sshKey2" : {
+           "@type": "JsonWebKeySet",
+           "jsonWebKeys": [{
+               "kty": "OKP",
+               "kid": "MAAF-677S-5LR7-LZC5-QSZV-EDTW-LYVV",
+               "crv": "Ed25519",
+               "x": "uWTosF21Jr2cC_JBdM9woCvUHUBFyOA9kZ-ealN2b4Q"}
+             ]}
+       "sshKey3" : {
+           "@type": "CryptoKey",
+           "uri": "data:application/ssh-TBS;base64,G1gwyQEpuvag5WQysXs
+   WjY4qD64.."}
+       ...
+       }
+     }
+
+   [Remark: The SSH certificate draft is nearing completion, comments
+   have been submitted on how to bind SSH certificates in JOSE JWK and
+   suggesting creation of a media type.]
+
+
+
+
+
+
+
+Hallam-Baker             Expires 4 January 2027                [Page 16]
+
+Internet-Draft   JSContact Cryptographic Key Extensions        July 2026
+
+
+4.4.  Code Signing
+
+   Code signing is an important security control both in development and
+   production environments.  Most modern executable code formats and
+   many scripting languages support one or more code signing mechanisms.
+   While most signature mechanisms support use of PKIX certificate
+   credentials, OpenPGP keys and even raw keys are used and sometimes
+   required.
+
+   It is highly desirable for code signing keys used to sign published
+   releases of code be kept separate from those used to sign development
+   builds.  In addition, many software distribution channels require the
+   use of credentials issued by the channel operator.  Consequently, the
+   number of code signing keys used by a developer may be very large.
+
+   This use is specified by means of an OnlineService with the service
+   type 'code' with key entries for the set of authorized signing keys.
+
+   Alice has a single code signing key with a PKIX credential specified
+   in her JsContact card:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Hallam-Baker             Expires 4 January 2027                [Page 17]
+
+Internet-Draft   JSContact Cryptographic Key Extensions        July 2026
+
+
+   {
+     "@type":"Card",
+     ...
+       ...
+     "onlineServices" : {
+       ...
+       "code1" : {
+           "@type": "OnlineService",
+           "service": "code",
+           "cryptoKeyIds": {
+             "codeSign1": "sign"}}
+       "code2" : {
+           "@type": "OnlineService",
+           "service": "code",
+           "cryptoKeyIds": {
+             "codeSign1": "sign"}}
+       },
+     "cryptoKeys" : {
+       ...
+       "codeSign1" : {
+           "@type": "CryptoKey",
+           "uri": "data:application/pkix-cert;base64,GvDh6w1P9K3aRa_tH
+   TxEoF5ya3I.."}
+       "codeSign2" : {
+           "@type": "CryptoKey",
+           "uri": "data:application/pkix-cert;base64,mMT2044jV8LOoWy4u
+   plhZkQvG1I.."}
+       ...
+       }
+     }
+
+4.5.  Commit Signing
+
+   Most modern source code repository systems support application of
+   signatures to commit operations.  While OpenPGP key management is
+   commonly used for this purpose, the popular git source code
+   repository also supports use of raw keys.
+
+   This use is specified by means of an OnlineService with the service
+   type 'commit' with key entries for the set of authorized signing
+   keys.
+
+
+
+
+
+
+
+
+
+
+Hallam-Baker             Expires 4 January 2027                [Page 18]
+
+Internet-Draft   JSContact Cryptographic Key Extensions        July 2026
+
+
+   {
+     "@type":"Card",
+     ...
+       ...
+     "onlineServices" : {
+       "git1" : {
+           "@type": "OnlineService",
+           "service": "commit",
+           "user": "alice.example.com",
+           "cryptoKeyIds": {
+             "gitKey1": "sign"}}
+       ...
+       },
+     "cryptoKeys" : {
+       ...
+       "gitKey1" : {
+           "@type": "CryptoKey",
+           "uri": "data:application/pgp-keys;base64,EBIHlPDVEY2rshD2rO
+   _JQNamX0s.."}
+       ...
+       }
+     }
+
+5.  IANA Considerations
+
+   This document does not specify any actions for IANA yet but it
+   will...[TBS]
+
+6.  Acknowledgements
+
+   Many thanks to Robert Stepanek who helped refine the approach to
+   extending the schema.
+
+7.  Appendix A: Collected Example<include=..\Examples\
+    JSContactComplete.md>
+
+8.  Normative References
+
+   [draft-hallambaker-earl]
+              Hallam-Baker, P., "Encrypted Authenticated Resource
+              Locator", Work in Progress, Internet-Draft, draft-
+              hallambaker-earl-01, 6 October 2025,
+              <https://datatracker.ietf.org/doc/html/draft-hallambaker-
+              earl-01>.
+
+
+
+
+
+
+
+Hallam-Baker             Expires 4 January 2027                [Page 19]
+
+Internet-Draft   JSContact Cryptographic Key Extensions        July 2026
+
+
+   [draft-ietf-sshm-cert]
+              Miller, D., "SSH Certificate Format", Work in Progress,
+              Internet-Draft, draft-ietf-sshm-cert-01, 14 June 2026,
+              <https://datatracker.ietf.org/doc/html/draft-ietf-sshm-
+              cert-01>.
+
+   [RFC2119]  Bradner, S., "Key words for use in RFCs to Indicate
+              Requirement Levels", BCP 14, RFC 2119,
+              DOI 10.17487/RFC2119, March 1997,
+              <https://www.rfc-editor.org/rfc/rfc2119>.
+
+   [RFC6187]  Igoe, K. and D. Stebila, "X.509v3 Certificates for Secure
+              Shell Authentication", RFC 6187, DOI 10.17487/RFC6187,
+              March 2011, <https://www.rfc-editor.org/rfc/rfc6187>.
+
+   [RFC7517]  Jones, M., "JSON Web Key (JWK)", RFC 7517,
+              DOI 10.17487/RFC7517, May 2015,
+              <https://www.rfc-editor.org/rfc/rfc7517>.
+
+   [RFC9553]  Stepanek, R. and M. Loffredo, "JSContact: A JSON
+              Representation of Contact Data", RFC 9553,
+              DOI 10.17487/RFC9553, May 2024,
+              <https://www.rfc-editor.org/rfc/rfc9553>.
+
+9.  Informative References
+
+   [RFC7515]  Jones, M., Bradley, J., and N. Sakimura, "JSON Web
+              Signature (JWS)", RFC 7515, DOI 10.17487/RFC7515, May
+              2015, <https://www.rfc-editor.org/rfc/rfc7515>.
+
+Author's Address
+
+   Phillip Hallam-Baker
+   MPlace2.social
+   Email: phill@hallambaker.com
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Hallam-Baker             Expires 4 January 2027                [Page 20]

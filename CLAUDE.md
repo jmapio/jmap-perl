@@ -291,8 +291,9 @@ blobext draft lets `Blob/get` and `Blob/lookup` run under `blob` or `blob2`).
 
 ## Specs
 
-Normative sources are checked into `specs/` (RFCs 8620/8621, 9553–9555, 9610, the
-jscalendarbis/jscontact/jmap-calendars drafts, etc.). Check compliance against these
+Normative sources are checked into `specs/` (RFCs 8620/8621, 9553–9555, 9610, 9982, 10050,
+the jscalendarbis/jscalendar-icalendar/jmap-calendars drafts, etc.), each draft at its latest
+revision (checked with the ietf-llm `draft_status` tool; last refreshed 2026-11-07). Check compliance against these
 files rather than from memory; `ROADMAP.md` tracks per-feature status.
 
 ## Deployment

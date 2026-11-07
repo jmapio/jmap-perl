@@ -231,6 +231,19 @@ Internal refactoring to improve maintainability; no user-visible changes.
 ## Phase 9: RFC Compliance
 
 Gap analysis (April 2026) against RFC 8620, RFC 8621, draft-ietf-jmap-calendars-26, and RFC 9610.
+
+`specs/` moved to the latest revisions on 2026-11-07; the work below was checked against the
+older ones, so each needs re-checking against the new text:
+- [ ] jmap-calendars -26 -> -33 (in the RFC Editor queue)
+- [ ] jscalendarbis -15 -> -22, jscalendar-icalendar -22 -> -29, icalendar-jscalendar-extensions
+      -05 -> -09 (Text::JSCalendar; first known gap: -29 maps a link by `rel` to ATTACH, IMAGE,
+      URL (`describedby`, at most one) or LINK, where the module writes URL for every
+      non-enclosure link)
+- [ ] jscontact-uid -07 -> RFC 9982 (JSContact 2.0: `uid` optional), jscontact-profiles -14 ->
+      RFC 10050, jscontact-cryptographic-key -00 -> -01 (Text::JSContact)
+- [ ] filenode -13 -> -20, blobext -01 -> -03, emailpush -02 -> -04, metadata -01 -> -05,
+      mail-sharing -00 -> -02, refplus -01 -> -02
+- [ ] mailmaint-pacc -02 -> -04, mailmaint-oauth-public -05 -> -06
 All referenced specs are in `specs/`.
 
 ### RFC 8620 — JMAP Core

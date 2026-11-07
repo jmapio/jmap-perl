@@ -1,0 +1,1904 @@
+
+
+
+
+JMAP                                                       M. De Gennaro
+Internet-Draft                                             Stalwart Labs
+Intended status: Standards Track                         28 October 2026
+Expires: 1 May 2027
+
+
+                          JMAP Object Metadata
+                      draft-ietf-jmap-metadata-05
+
+Abstract
+
+   This document defines an extension to the JSON Meta Application
+   Protocol (JMAP) that lets clients and servers attach metadata to
+   objects of existing JMAP data types.  Each data type the server lists
+   gains two new properties, metadata and privateMetadata, whose values
+   are objects keyed by _namespace identifier_. A namespace identifier
+   is either a name registered with IANA or a domain name controlled by
+   the vendor providing the namespace; the latter allows vendors and
+   applications to extend the metadata schema without prior
+   coordination.  Because metadata is carried as a property on the
+   related object, clients use the existing /get, /set, /changes, and
+   /query methods to read, modify, and synchronize it.
+
+Status of This Memo
+
+   This Internet-Draft is submitted in full conformance with the
+   provisions of BCP 78 and BCP 79.
+
+   Internet-Drafts are working documents of the Internet Engineering
+   Task Force (IETF).  Note that other groups may also distribute
+   working documents as Internet-Drafts.  The list of current Internet-
+   Drafts is at https://datatracker.ietf.org/drafts/current/.
+
+   Internet-Drafts are draft documents valid for a maximum of six months
+   and may be updated, replaced, or obsoleted by other documents at any
+   time.  It is inappropriate to use Internet-Drafts as reference
+   material or to cite them other than as "work in progress."
+
+   This Internet-Draft will expire on 1 May 2027.
+
+Copyright Notice
+
+   Copyright (c) 2026 IETF Trust and the persons identified as the
+   document authors.  All rights reserved.
+
+   This document is subject to BCP 78 and the IETF Trust's Legal
+   Provisions Relating to IETF Documents (https://trustee.ietf.org/
+   license-info) in effect on the date of publication of this document.
+
+
+
+De Gennaro                 Expires 1 May 2027                   [Page 1]
+
+Internet-Draft            JMAP Object Metadata              October 2026
+
+
+   Please review these documents carefully, as they describe your rights
+   and restrictions with respect to this document.  Code Components
+   extracted from this document must include Revised BSD License text as
+   described in Section 4.e of the Trust Legal Provisions and are
+   provided without warranty as described in the Revised BSD License.
+
+Table of Contents
+
+   1.  Introduction  . . . . . . . . . . . . . . . . . . . . . . . .   3
+     1.1.  Notational Conventions  . . . . . . . . . . . . . . . . .   4
+     1.2.  Addition to the Capabilities Object . . . . . . . . . . .   4
+       1.2.1.  urn:ietf:params:jmap:metadata . . . . . . . . . . . .   4
+   2.  The Metadata Properties . . . . . . . . . . . . . . . . . . .   6
+     2.1.  Namespaces  . . . . . . . . . . . . . . . . . . . . . . .   6
+       2.1.1.  Binary Values . . . . . . . . . . . . . . . . . . . .   8
+       2.1.2.  Data in Unsupported Namespaces  . . . . . . . . . . .   9
+     2.2.  State Behavior  . . . . . . . . . . . . . . . . . . . . .   9
+   3.  Standard Method Extensions  . . . . . . . . . . . . . . . . .   9
+     3.1.  /get  . . . . . . . . . . . . . . . . . . . . . . . . . .  10
+     3.2.  /set  . . . . . . . . . . . . . . . . . . . . . . . . . .  11
+       3.2.1.  Quota Enforcement on /set . . . . . . . . . . . . . .  12
+     3.3.  /changes  . . . . . . . . . . . . . . . . . . . . . . . .  12
+     3.4.  /copy . . . . . . . . . . . . . . . . . . . . . . . . . .  13
+     3.5.  /queryChanges . . . . . . . . . . . . . . . . . . . . . .  13
+     3.6.  /query  . . . . . . . . . . . . . . . . . . . . . . . . .  14
+   4.  Access Control  . . . . . . . . . . . . . . . . . . . . . . .  15
+     4.1.  The maySetMetadata Right  . . . . . . . . . . . . . . . .  16
+     4.2.  Account Delegation and Administrative Access  . . . . . .  17
+   5.  Quota . . . . . . . . . . . . . . . . . . . . . . . . . . . .  17
+   6.  Examples  . . . . . . . . . . . . . . . . . . . . . . . . . .  17
+     6.1.  Capability  . . . . . . . . . . . . . . . . . . . . . . .  17
+     6.2.  Fetching a Mailbox with Its Metadata  . . . . . . . . . .  18
+     6.3.  Patching a Single Property within a Namespace . . . . . .  19
+     6.4.  Creating an Email with Private Metadata . . . . . . . . .  20
+     6.5.  Attaching Photography Metadata to a FileNode  . . . . . .  21
+     6.6.  Updating a CalendarEvent and Its Metadata Atomically  . .  23
+     6.7.  Querying by Metadata and a Primary Property Together  . .  24
+     6.8.  Detecting a Metadata-Only Change through /changes . . . .  25
+   7.  Security Considerations . . . . . . . . . . . . . . . . . . .  25
+     7.1.  Metadata Confidentiality  . . . . . . . . . . . . . . . .  25
+     7.2.  User Identity and Authentication  . . . . . . . . . . . .  26
+     7.3.  Untrusted Namespace Values  . . . . . . . . . . . . . . .  26
+     7.4.  Resource Exhaustion . . . . . . . . . . . . . . . . . . .  26
+   8.  IANA Considerations . . . . . . . . . . . . . . . . . . . . .  27
+     8.1.  JMAP Capability Registration for "metadata" . . . . . . .  27
+     8.2.  Creation of the "JMAP Metadata Namespaces" Registry . . .  27
+       8.2.1.  Preliminary Community Review  . . . . . . . . . . . .  28
+       8.2.2.  Change Procedures . . . . . . . . . . . . . . . . . .  28
+
+
+
+De Gennaro                 Expires 1 May 2027                   [Page 2]
+
+Internet-Draft            JMAP Object Metadata              October 2026
+
+
+       8.2.3.  "JMAP Metadata Namespaces" Registry Template  . . . .  28
+       8.2.4.  Submit Request to IANA  . . . . . . . . . . . . . . .  29
+       8.2.5.  Designated Expert Review  . . . . . . . . . . . . . .  29
+       8.2.6.  Initial Contents  . . . . . . . . . . . . . . . . . .  29
+   9.  References  . . . . . . . . . . . . . . . . . . . . . . . . .  29
+     9.1.  Normative References  . . . . . . . . . . . . . . . . . .  29
+     9.2.  Informative References  . . . . . . . . . . . . . . . . .  30
+   Appendix A.  Changes  . . . . . . . . . . . . . . . . . . . . . .  31
+   Author's Address  . . . . . . . . . . . . . . . . . . . . . . . .  34
+
+1.  Introduction
+
+   The JSON Meta Application Protocol (JMAP) [RFC8620] is a generic
+   protocol for synchronizing data, such as mail, calendars or contacts,
+   between a client and a server.  It is optimized for mobile and web
+   environments, and aims to provide a consistent interface to different
+   data types.
+
+   Metadata, or annotations, are auxiliary data elements that provide
+   additional context, user-defined properties, or system-specific
+   information about primary data objects.  They enable user
+   annotations, application-specific settings, collaborative tagging,
+   and similar functionality.  Other protocols have addressed this need
+   with mechanisms such as the IMAP METADATA extension [RFC5464] and
+   WebDAV dead properties [RFC4918]; this specification provides an
+   analogous facility within JMAP.  The term "metadata" in this document
+   refers only to the properties defined here, not to the Email
+   properties described in Section 4.1.1 of [RFC8621].
+
+   This document defines a uniform mechanism for managing such metadata.
+   Each listed JMAP data type gains a metadata property (shared
+   metadata) and, optionally, a privateMetadata property (per-user
+   metadata).  The value of each property is an object keyed by
+   _namespace identifier_. This document defines no initial namespaces;
+   vendors use domain-name identifiers for proprietary extensions, and
+   additional registered identifiers may be defined by future
+   specifications.
+
+   Because metadata is carried as a property on the related object, the
+   existing JMAP methods for that data type apply unchanged.  Clients
+   fetch metadata with the type's /get method, modify it through /set
+   patches, learn of changes through /changes, and search across
+   metadata and primary properties together through /query.
+
+
+
+
+
+
+
+
+De Gennaro                 Expires 1 May 2027                   [Page 3]
+
+Internet-Draft            JMAP Object Metadata              October 2026
+
+
+1.1.  Notational Conventions
+
+   The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT",
+   "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and
+   "OPTIONAL" in this document are to be interpreted as described in
+   BCP 14 [RFC2119] [RFC8174] when, and only when, they appear in all
+   capitals, as shown here.
+
+   The definitions of JSON keys and datatypes in this document follow
+   the conventions described in Section 1.1 of [RFC8620].  The terms
+   "Foo", "SetError", "PatchObject" and "state string" are used as
+   defined in [RFC8620].  This document also uses the following terms:
+
+   *  _related object_: the JMAP object carrying the metadata and
+      privateMetadata properties.
+
+   *  _listed data type_: a data type that appears in the dataTypes
+      field of the account capability (Section 1.2.1).
+
+   *  _user_: the authenticated identity of the session, which is not
+      necessarily the owner of the account.
+
+1.2.  Addition to the Capabilities Object
+
+   The capabilities object is returned as part of the JMAP Session
+   object; see Section 2 of [RFC8620].  This document defines one
+   additional capability URI.
+
+1.2.1.  urn:ietf:params:jmap:metadata
+
+   This capability represents support for the metadata extension defined
+   in this document.  Servers that include this capability provide the
+   metadata and (optionally) privateMetadata properties on the data
+   types they list.
+
+   The value of this property in the JMAP Session "capabilities"
+   property is an empty object.
+
+   The value of this property in an account's "accountCapabilities"
+   property is an object containing the following field:
+
+   *dataTypes*: String[DataTypeMetadataInfo]
+      An object whose keys are the names of JMAP data types for which
+      the server supports metadata in this account.  A type that does
+      not appear in this object does not gain the metadata or
+      privateMetadata properties in this account.  The value associated
+      with each type is a DataTypeMetadataInfo object as defined below.
+
+
+
+
+De Gennaro                 Expires 1 May 2027                   [Page 4]
+
+Internet-Draft            JMAP Object Metadata              October 2026
+
+
+   A *DataTypeMetadataInfo* object has the following fields:
+
+   *namespaces*: String[]
+      The set of IANA-registered metadata namespace names (as defined in
+      Section 8.2) that the server supports on this data type.  Each
+      value MUST be a registered name (Section 2.1).  A registered
+      namespace MUST NOT be listed for a data type, or written under a
+      property, that its registration does not allow.  Vendor (domain-
+      name) namespaces MUST NOT appear in this list; their support is
+      signalled by supportsVendorNamespaces instead.
+
+   *supportsVendorNamespaces*: Boolean (default: false)
+      Indicates whether the server accepts vendor (domain-name)
+      namespaces on this data type.  If true, any well-formed domain-
+      name namespace (Section 2.1) may be written by clients, subject to
+      the other constraints of this specification (access control,
+      maxDepth, quota).  If false, any /set operation that targets a
+      domain-name namespace MUST be rejected with an "invalidProperties"
+      SetError, and any subselector or filter condition referencing such
+      a namespace MUST be treated as unsupported per the rules of
+      Section 3.1 and Section 3.6.
+
+   *supportsPrivate*: Boolean (default: false)
+      Indicates whether this account, on this data type, supports per-
+      user privateMetadata.  This is a server feature flag, not a per-
+      user permission.  If false, the privateMetadata property MUST be
+      absent from response objects of this type, all privateMetadata*
+      filter conditions (Section 3.6) MUST be rejected with an
+      "unsupportedFilter" error, and any /set operation that targets
+      privateMetadata MUST be rejected with an "invalidProperties"
+      SetError.  Per-user authorization of a privateMetadata write that
+      the server otherwise supports is defined in Section 4.
+
+   *maxDepth*: UnsignedInt|null (default: null)
+      Maximum depth of nested objects within a namespace value on this
+      data type.  A depth of 1 indicates only flat properties are
+      supported; a depth of 2 allows one level of nesting; and so forth.
+      If not null, the value MUST be at least 1.  A value of null means
+      there is no server-enforced depth limit beyond quota and size
+      limits.  Depth is defined in Section 2.1.
+
+   A server SHOULD NOT advertise a data type that supports neither
+   registered namespaces (empty namespaces) nor vendor namespaces
+   (supportsVendorNamespaces: false), since such an entry advertises
+   support for nothing.  If no data type would be listed in dataTypes,
+   the server SHOULD NOT include the capability in the account's
+   "accountCapabilities".
+
+
+
+
+De Gennaro                 Expires 1 May 2027                   [Page 5]
+
+Internet-Draft            JMAP Object Metadata              October 2026
+
+
+   A worked example of the capability object appears in Section 6.1.
+
+2.  The Metadata Properties
+
+   This extension introduces two properties on each listed data type:
+
+   *metadata*: String[Object] (default: {})
+      An object containing shared metadata associated with the object.
+      Each key is a namespace identifier (see Section 2.1) and each
+      value is structured according to the namespace's definition.
+      Shared metadata is visible to every user with read access to the
+      related object, subject to Section 4.  When returned, its value
+      MUST be an object ({} when no metadata is set), never null.
+
+   *privateMetadata*: String[Object] (default: {})
+      An object containing per-user metadata associated with the object,
+      with the same structure as metadata.  Private metadata is visible
+      only to the user who set it; the server MUST filter responses so
+      that each user sees only their own privateMetadata content, as
+      described in Section 4.  When returned, its value MUST be an
+      object ({} if the user has set no private metadata on the object),
+      never null.  When supportsPrivate is false for the data type, this
+      property MUST NOT be returned.
+
+   Both properties are mutable and behave like any other property of the
+   related object.  They appear in /get responses, accept patches
+   through /set, contribute to the related type's state string
+   (Section 2.2), and may be searched through the /query filter
+   conditions defined in Section 3.6.
+
+2.1.  Namespaces
+
+   The keys of the metadata and privateMetadata objects are _namespace
+   identifiers_. Each identifier MUST be one of:
+
+   *  A _registered name_: a sequence of lowercase US-ASCII letters,
+      digits, hyphens, and underscores, with no dot (".").  Registered
+      names may be registered using the procedure in Section 8.2; this
+      document defines no registered names.
+
+
+
+
+
+
+
+
+
+
+
+
+De Gennaro                 Expires 1 May 2027                   [Page 6]
+
+Internet-Draft            JMAP Object Metadata              October 2026
+
+
+   *  A _domain name_ controlled by the vendor providing the namespace,
+      in DNS form (containing at least one ".", e.g., example.com,
+      acme.example.org).  Vendors MAY use domain-name namespaces for
+      proprietary metadata without registration; the dot in the name
+      guarantees no collision with registered names.  Domain-name
+      identifiers MUST be in lowercase, with internationalized labels in
+      A-label form.  Servers MUST reject, with an "invalidProperties"
+      SetError, a /set operation that uses a key that is not a valid
+      namespace identifier, including a domain name containing uppercase
+      ASCII letters.
+
+   A namespace is _supported_ on a data type if it is a registered name
+   listed in that type's namespaces, or a domain name and the type's
+   supportsVendorNamespaces is true.
+
+   The value associated with each namespace key MUST be a JSON object,
+   whose internal structure is defined by the specification or vendor
+   owning that namespace; a namespace set to {} remains stored until it
+   is removed with null.  Property names within the namespace object
+   follow normal JSON conventions; they do not need to be domain-
+   prefixed, since cross-namespace isolation is already provided by the
+   top-level key.
+
+   Example:
+
+   {
+     "metadata": {
+       "acme.example.com": {
+         "color": "blue",
+         "priority": "high",
+         "project": {
+           "id": "ALPHA-2024",
+           "deadline": "2024-12-31"
+         }
+       }
+     }
+   }
+
+   The depth of a value is defined recursively: a scalar (string,
+   number, boolean or null) or a Binary value (Section 2.1.1) has depth
+   0; an array has the maximum depth of its elements (0 if empty); an
+   object has depth 1 plus the maximum depth of its member values (1 if
+   empty).  For example, {"a": 1} has depth 1 and {"x": [{"y": 1}]} has
+   depth 2.  If the account capability specifies a maxDepth for a data
+   type, the depth of a namespace value MUST NOT exceed it; servers MUST
+   reject writes that would exceed it with an "invalidProperties"
+   SetError.
+
+
+
+
+De Gennaro                 Expires 1 May 2027                   [Page 7]
+
+Internet-Draft            JMAP Object Metadata              October 2026
+
+
+   A patch that targets one namespace MUST NOT remove or alter any other
+   namespace, including namespaces that are not supported on the data
+   type.
+
+   Vendors are encouraged to register namespace identifiers that are
+   likely to be useful beyond the vendor's own products, using the
+   procedure in Section 8.2.  Registration enhances interoperability and
+   avoids fragmentation.
+
+2.1.1.  Binary Values
+
+   JSON strings hold Unicode text, so a namespace value cannot carry
+   arbitrary bytes directly.  A namespace that needs to store bytes uses
+   a *Binary* object, which has exactly the following members:
+
+   *@type*: String
+      The value "Binary".
+
+   *base64*: String
+      The bytes, encoded in base64 with padding (Section 4 of
+      [RFC4648]).
+
+   Any object within a namespace value that has an @type member with the
+   value "Binary" is a Binary value.  A namespace definition MUST NOT
+   use such an object for anything else.  A Binary value that has any
+   other member, or whose base64 member is not valid base64 with
+   padding, is malformed.
+
+   A Binary value is a single value, like a string: it has depth 0
+   (Section 2.1), a patch path or filter path cannot address its
+   members, and the text-match filter conditions (Section 3.6) never
+   match it.  The server stores and returns it exactly as given.
+
+   Example, a vendor namespace holding a 32-byte value:
+
+   {
+     "metadata": {
+       "acme.example.com": {
+         "label": "draft copy",
+         "thumbprint": {
+           "@type": "Binary",
+           "base64": "VEVYVHR0eHQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+         }
+       }
+     }
+   }
+
+
+
+
+
+De Gennaro                 Expires 1 May 2027                   [Page 8]
+
+Internet-Draft            JMAP Object Metadata              October 2026
+
+
+2.1.2.  Data in Unsupported Namespaces
+
+   Data can be stored under a namespace that is not supported on the
+   data type, for example after a server reconfiguration, after a vendor
+   withdraws support, or when the data was copied from another account
+   (Section 3.4).  Such data MUST continue to be returned by /get for
+   read-only access.  Any /set operation that targets the namespace,
+   other than a patch that removes the namespace entirely
+   ("metadata/<namespace>": null or "privateMetadata/<namespace>":
+   null), MUST be rejected with an "invalidProperties" SetError.  A
+   complete replacement of metadata or privateMetadata MAY include such
+   a namespace only with a value equal to the stored one, where two JSON
+   objects are equal when they have the same members with equal values,
+   regardless of member order; omitting the namespace from a complete
+   replacement removes it.  This ensures clients can always migrate data
+   off an unsupported namespace, but cannot continue to extend it.
+
+2.2.  State Behavior
+
+   Changes to metadata or privateMetadata are changes to the related
+   object.  They advance the related type's state string, appear in the
+   related type's /changes response, and are otherwise indistinguishable
+   from changes to any other property of that type, with the following
+   clarification:
+
+   Because privateMetadata is filtered per viewer, a change made by user
+   A to privateMetadata on a shared object MUST advance the related
+   type's state string for user A and SHOULD NOT advance it for any
+   other user.  Such a change MUST NOT cause the object to be reported
+   in any other user's Foo/changes or Foo/queryChanges response.  A
+   server that advances other users' state reveals when a private change
+   occurred (see Section 7).
+
+   Changes to metadata or privateMetadata alone MUST NOT update server-
+   maintained modification timestamps of the related object, such as the
+   changed property of FileNode [I-D.ietf-jmap-filenode] or the updated
+   property of CalendarEvent [I-D.ietf-jmap-calendars].  This overrides
+   any requirement of those specifications that the timestamp change on
+   every update.
+
+3.  Standard Method Extensions
+
+   For each data type listed in the dataTypes field of the account
+   capability, the standard JMAP methods for that type are extended as
+   described in the following subsections; a server MUST implement these
+   extensions for every listed data type.
+
+
+
+
+
+De Gennaro                 Expires 1 May 2027                   [Page 9]
+
+Internet-Draft            JMAP Object Metadata              October 2026
+
+
+   These extensions apply to requests whose using includes
+   urn:ietf:params:jmap:metadata.  For other requests, metadata and
+   privateMetadata are not default properties of Foo/get (although they
+   are still returned when requested by name), Foo/set MUST reject any
+   write to them with an "invalidProperties" SetError, and Foo/changes
+   MUST behave as if ignoreMetadataOnlyChanges were true.  The state
+   string is the same as for requests that use this capability.
+
+   This document does not extend methods that create or parse objects
+   from uploaded data, such as Email/import and Email/parse ([RFC8621]).
+   Objects created or returned by such methods have empty metadata and
+   privateMetadata.
+
+3.1.  /get
+
+   For a listed data type, when properties is omitted or null, the
+   server MUST include metadata and, where supportsPrivate is true,
+   privateMetadata in each returned object, except for Email/get, whose
+   default property list (Section 4.2 of [RFC8621]) is unchanged.  The
+   two properties may also be requested explicitly by name in the
+   properties array, like any other JMAP property.
+
+   When a client wants only a subset of the metadata, it MAY request
+   individual namespaces using slash-separated subselector paths in the
+   properties argument.  The following rules apply to subselectors
+   introduced by this specification:
+
+   *  A subselector has the form metadata/<namespace> or
+      privateMetadata/<namespace>, where <namespace> is a non-empty
+      namespace identifier.  Any other properties entry beginning with
+      metadata/ or privateMetadata/ MUST be rejected with an
+      "invalidArguments" method-level error.
+
+   *  Multiple subselectors with the same root combine by union.  For
+      example, ["metadata/x", "metadata/y"] returns {"metadata": {"x":
+      ..., "y": ...}} (and nothing else under metadata).
+
+   *  An explicit root entry supersedes subselectors with the same root.
+      For example, ["metadata", "metadata/x"] returns the complete
+      metadata object; the metadata/x entry is redundant rather than
+      restrictive.
+
+   *  A subselector naming a namespace that is not supported
+      (Section 2.1) on the data type MUST be silently omitted from the
+      response, unless the object has data stored under that namespace
+      (Section 2.1.2), which is then returned.  This lets clients
+      perform capability-tolerant fetches without first consulting the
+      session capability.
+
+
+
+De Gennaro                 Expires 1 May 2027                  [Page 10]
+
+Internet-Draft            JMAP Object Metadata              October 2026
+
+
+   *  This specification defines slash-path subselectors only for
+      metadata and privateMetadata.  The use of slash-path subselectors
+      with any other property name is outside the scope of this
+      document.
+
+3.2.  /set
+
+   The metadata and privateMetadata properties are mutable.
+
+   In a create entry of Foo/set, each property's value MUST be a
+   complete JSON object (possibly the empty object {}).  A value of null
+   for either property MUST be rejected with an "invalidProperties"
+   SetError; the canonical "no metadata" form is {}. In an update, null
+   is equivalent to {}.
+
+   In an update entry of Foo/set, clients MAY either send a complete
+   object as the value of metadata or privateMetadata (replacing the
+   previous value entirely), or use the PatchObject form (Section 5.3 of
+   [RFC8620]).  Patch paths start with metadata/<namespace> or
+   privateMetadata/<namespace> (replacing or removing an entire
+   namespace value) and MAY continue to any depth below it (for example,
+   metadata/<namespace>/<key>/<subkey>), with the semantics of
+   Section 5.3 of [RFC8620]: the parent of the target MUST exist, and a
+   path that traverses an array or a Binary value (Section 2.1.1) is
+   rejected with an "invalidPatch" SetError.
+
+   Setting a patch value to null removes the targeted key, per standard
+   PatchObject semantics (Section 5.3 of [RFC8620]).  Setting a path to
+   a complete object value replaces whatever was previously at that
+   path; in particular, a patch of the shape "metadata/<namespace>": {
+   ... } replaces the entire content of that namespace, deleting any
+   keys not present in the new value.  Clients that want to add or
+   update individual properties without removing others need to patch
+   the specific keys.
+
+   The server MUST validate every write against the account capability
+   for the data type.  When more than one of the following rules
+   applies, the server MUST evaluate them in the order listed; the first
+   matching rule determines the SetError:
+
+   1.  If the user cannot read the related object, reject with
+       "notFound".  If the write targets metadata and the user lacks
+       maySetMetadata (Section 4.1), reject with "forbidden".
+
+   2.  If the path begins with privateMetadata and supportsPrivate is
+       false for this data type, reject with "invalidProperties".
+
+
+
+
+
+De Gennaro                 Expires 1 May 2027                  [Page 11]
+
+Internet-Draft            JMAP Object Metadata              October 2026
+
+
+   3.  If the targeted namespace is not supported on this data type,
+       reject with "invalidProperties" (except for the migration case in
+       Section 2.1.2).
+
+   4.  If a namespace value would exceed maxDepth, reject with
+       "invalidProperties".
+
+   5.  If a namespace value contains a malformed Binary value
+       (Section 2.1.1), reject with "invalidProperties".
+
+   Patch errors that can be determined from the request alone (for
+   example, two paths where one is a prefix of the other) MUST be
+   reported with "invalidPatch" before rule 1 is evaluated.  Patch
+   errors that depend on the current value of the property (a missing
+   parent, or a path through an array or a Binary value) MUST be
+   reported with "invalidPatch" after rule 3 and before rule 4.
+
+3.2.1.  Quota Enforcement on /set
+
+   Servers SHOULD enforce quota limits on the total storage consumed by
+   metadata within an account, as described in Section 5.  If a create,
+   update, or copy would cause the account to exceed its metadata quota,
+   the server MUST reject the operation with an "overQuota" SetError.
+
+3.3.  /changes
+
+   For each data type listed in dataTypes, the Foo/changes request
+   accepts the following additional optional argument:
+
+   *ignoreMetadataOnlyChanges*: Boolean (default: false)
+      If true, the server MUST exclude from the updated array any id
+      whose only changes since sinceState, from the viewer's
+      perspective, are confined to metadata and/or privateMetadata.  Ids
+      with any other change remain in updated.  If the server cannot
+      determine that an id's changes are metadata-only, it MUST include
+      the id.  Excluded ids do not count toward maxChanges.  The state
+      string still advances normally, so a client using this argument
+      continues to see correct synchronization for all non-metadata-only
+      changes; metadata-only changes are simply not reported to this
+      client.  When this argument is true, updatedProperties (defined
+      below) MUST NOT list metadata or privateMetadata.  For Mailbox/
+      changes it may list the count properties (Section 2.2 of
+      [RFC8621]); for other types it MUST be null.
+
+   The response is extended to include the following additional
+   argument:
+
+   *updatedProperties*: String[]|null  This argument is determined _per
+
+
+
+De Gennaro                 Expires 1 May 2027                  [Page 12]
+
+Internet-Draft            JMAP Object Metadata              October 2026
+
+
+      viewer_: each user's Foo/changes response is computed against the
+      changes visible to that user (in particular, privateMetadata
+      written by other users is invisible).  If, from the viewer's
+      perspective, the only properties that have changed on every id in
+      the updated array since the old state are metadata and/or
+      privateMetadata, this argument MUST be set to a list containing
+      only those property names (e.g., ["metadata"],
+      ["privateMetadata"], or ["metadata", "privateMetadata"]).  If any
+      other property (apart from the Mailbox count properties described
+      below) of any id in the array may also have changed (from the
+      viewer's perspective), or if the server cannot determine the
+      answer for any id in the array, this argument MUST be null.  The
+      argument applies uniformly to all ids in updated; per-id
+      granularity is not provided.  It is always present, and is null
+      when updated is empty.
+
+   This argument follows the same convention used by Mailbox/changes in
+   Section 2.2 of [RFC8621].  For Mailbox/changes, when every id in
+   updated changed only in its counts (as defined there) and/or in
+   metadata or privateMetadata, the value is the union of the count
+   property names and the metadata property names that may have changed.
+
+3.4.  /copy
+
+   Foo/copy copies metadata to the new object.  The copying user's
+   privateMetadata on the source object becomes that user's
+   privateMetadata on the new object; other users' privateMetadata MUST
+   NOT be copied.  When the request does not use this capability, only
+   metadata is copied.  The create object MAY include metadata and
+   privateMetadata to override the copied values, with the same rules as
+   a create in Foo/set; for Email/copy, this extends the list of
+   properties that may be set in Section 4.7 of [RFC8621].  Copied
+   metadata counts against quota (Section 5) as any other write.
+
+   Copied values are not revalidated against the destination account:
+   data in a copied namespace that is not supported there is handled as
+   described in Section 2.1.2, and maxDepth applies only to values
+   supplied in the create object. privateMetadata is not copied when the
+   destination does not support it, and neither property is copied when
+   the data type is not listed in the destination account.  With
+   onSuccessDestroyOriginal, other users' privateMetadata on the source
+   object is destroyed together with it.
+
+3.5.  /queryChanges
+
+   Foo/queryChanges is unchanged in its method signature and follows the
+   per-viewer rule in Section 2.2.
+
+
+
+
+De Gennaro                 Expires 1 May 2027                  [Page 13]
+
+Internet-Draft            JMAP Object Metadata              October 2026
+
+
+3.6.  /query
+
+   For each data type listed in dataTypes, the FilterCondition object
+   for Foo/query is extended with the optional fields defined below.
+   Several of those fields take a MetadataTextMatch value.
+
+   A *MetadataTextMatch* object has the following fields:
+
+   *path*: String
+      The path within the metadata object to match against: a namespace
+      identifier, optionally followed by a JSON Pointer [RFC6901] into
+      the namespace value (for example, <namespace>, <namespace>/<key>
+      or <namespace>/<key>/<subkey>).  Object members are addressed by
+      name; a path that would traverse an array, a scalar or a Binary
+      value (Section 2.1.1) addresses no value.  A path that is not well
+      formed (for example, one with an invalid ~ escape) MUST be
+      rejected with an "invalidArguments" error.
+
+   *value*: String
+      The string to search for at path.  The interpretation of this
+      string (substring containment versus exact equality) is determined
+      by the FilterCondition field that carries the MetadataTextMatch.
+
+   The extended FilterCondition fields are:
+
+   *metadataExists*: String
+      A path, with the syntax defined for MetadataTextMatch.  Matches an
+      object if and only if a value is present at the given path within
+      the object's metadata property.  A namespace-only path matches if
+      the namespace key is present and its value is not the empty object
+      {}.
+
+   *privateMetadataExists*: String
+      As metadataExists, but matches against the authenticated user's
+      privateMetadata.
+
+   *metadataTextContains*: MetadataTextMatch
+      Matches an object if the metadata value at the supplied path is a
+      string that contains the supplied value as a substring under the
+      "i;unicode-casemap" collation [RFC5051].  The condition does not
+      match if the path does not exist within metadata, or if the value
+      at the path is not a string.
+
+   *privateMetadataTextContains*: MetadataTextMatch
+      As metadataTextContains, but searches the authenticated user's
+      privateMetadata.
+
+   *metadataTextEquals*: MetadataTextMatch
+
+
+
+De Gennaro                 Expires 1 May 2027                  [Page 14]
+
+Internet-Draft            JMAP Object Metadata              October 2026
+
+
+      Matches an object if the metadata value at the supplied path is a
+      string that is exactly equal to the supplied value, comparing
+      Unicode code points without case folding or normalization.  The
+      condition does not match if the path does not exist within
+      metadata, or if the value at the path is not a string.
+
+   *privateMetadataTextEquals*: MetadataTextMatch
+      As metadataTextEquals, but searches the authenticated user's
+      privateMetadata.
+
+   The following availability rules apply to all six conditions:
+
+   *  Servers MUST support metadataExists and privateMetadataExists
+      (where supportsPrivate is true).
+
+   *  Servers MAY reject any of the four text-match conditions with an
+      "unsupportedFilter" error if implementation cost or storage layout
+      makes them infeasible.  Clients need to be prepared to fall back
+      to a client-side scan in this case.
+
+   *  Any privateMetadata* condition (existence or text) MUST be
+      rejected with an "unsupportedFilter" error if supportsPrivate is
+      false for the data type.
+
+   *  Conditions are evaluated against the stored data whether or not
+      the namespace is supported on the data type, so data stored under
+      an unsupported namespace (Section 2.1.2) can still be found.  A
+      condition naming an unsupported namespace with no stored data, or
+      a string that is not a valid namespace identifier, matches no
+      objects; it does not produce an error.
+
+   These conditions compose with the data type's existing filter
+   conditions through the usual AND/OR/NOT operators (Section 5.5 of
+   [RFC8620]).  For example, a client may query for Email objects in a
+   particular mailbox whose vendor metadata contains a search term in a
+   single server-side query, as shown in Section 6.7.
+
+4.  Access Control
+
+   Access control for metadata follows the access control of the related
+   object.  The two properties are governed by different rules:
+
+   *  The metadata property is shared.  A user who can read the related
+      object can read its metadata.  Modifying it requires the
+      maySetMetadata right (Section 4.1).
+
+
+
+
+
+
+De Gennaro                 Expires 1 May 2027                  [Page 15]
+
+Internet-Draft            JMAP Object Metadata              October 2026
+
+
+   *  The privateMetadata property is per-user.  The server MUST filter
+      responses so that each user sees only the privateMetadata content
+      they themselves wrote.  Private metadata written by another user
+      on the same related object MUST NOT be visible.  To write
+      privateMetadata on a related object, the user needs only read
+      access to the related object; write access on the related object
+      is not required.
+
+4.1.  The maySetMetadata Right
+
+   For every data type that has a myRights property (for example Mailbox
+   [RFC8621], Calendar [I-D.ietf-jmap-calendars], AddressBook [RFC9610]
+   and FileNode [I-D.ietf-jmap-filenode]) and that is a listed data type
+   or contains objects of a listed data type, the rights object gains
+   the following property:
+
+   *maySetMetadata*: Boolean
+      The user may modify the shared metadata of this object, and of the
+      objects it contains that have no rights object of their own.  For
+      Mailbox, this corresponds to the IMAP ACL "n" right [RFC5257].
+
+   The right is returned in myRights and can be granted through
+   shareWith ([RFC9670]) like any other right of that type.
+
+   An object without a rights object of its own, such as an Email,
+   CalendarEvent or ContactCard, takes the right from its containers.
+   Modifying its metadata requires maySetMetadata on every container it
+   belongs to; when the same update changes its containers, on every
+   container both before and after the change; and on create, on the
+   containers given in the create.  For a listed data type that neither
+   has a rights object nor belongs to a container that has one, such as
+   SieveScript [RFC9661], modifying metadata requires that the account
+   is not read-only (isReadOnly is false, Section 2 of [RFC8620]).
+
+   The server MUST enforce these rules consistently across /get, /set,
+   /query, /queryChanges, and /changes.  An object the user cannot read
+   is treated for metadata and privateMetadata exactly as for its other
+   properties (for example, it is reported in notFound).  A write to an
+   object the user cannot read MUST be rejected with a "notFound"
+   SetError, so that the existence of the object is not revealed.  A
+   write to metadata without maySetMetadata MUST be rejected with a
+   "forbidden" SetError.
+
+   When sharing permissions on a related object change, the visibility
+   of its metadata changes accordingly. privateMetadata belonging to a
+   user remains visible to that user as long as the user retains read
+   access to the related object.  If read access is revoked, the object,
+   including the user's privateMetadata, becomes inaccessible to that
+
+
+
+De Gennaro                 Expires 1 May 2027                  [Page 16]
+
+Internet-Draft            JMAP Object Metadata              October 2026
+
+
+   user; the server MAY delete that privateMetadata, and if it does not
+   and access is restored, it is visible again.  A user's
+   privateMetadata is destroyed together with the related object.
+
+4.2.  Account Delegation and Administrative Access
+
+   privateMetadata is keyed by the authenticated identity of the
+   session.  A delegate, an impersonating administrator, or any other
+   session authenticated as a different identity than the account owner
+   MUST see and write only its own privateMetadata, never the account
+   owner's.  Exposing the account owner's privateMetadata to such a
+   session is outside the scope of this document.
+
+5.  Quota
+
+   Servers SHOULD enforce quota limits on the storage consumed by
+   metadata within an account.  Unbounded metadata growth could be
+   exploited to exhaust resources, particularly because privateMetadata
+   is per-user and so a single shared object can carry one private
+   payload per user with access to it.
+
+   Servers that support the JMAP Quotas extension [RFC9425] SHOULD
+   integrate metadata storage into the quota framework defined there.
+   Servers that do not implement [RFC9425] SHOULD still enforce
+   implementation-defined limits and reject overruns with an "overQuota"
+   SetError.
+
+   The size metric used for metadata quota is implementation-defined;
+   clients cannot assume that two servers compute identical sizes for
+   the same data.  Servers can document the metric they use.
+
+   A server that also exposes the related object over other protocols
+   (for example, as WebDAV dead properties [RFC4918] or IMAP METADATA
+   [RFC5464]) MAY count data that is not visible through JMAP against
+   the quota and limits described in this section.  Clients therefore
+   need to be prepared for a limit error on an object whose visible
+   metadata is small.
+
+6.  Examples
+
+6.1.  Capability
+
+   A session for an account whose server supports metadata on four data
+   types, with varying private-metadata and depth settings:
+
+
+
+
+
+
+
+De Gennaro                 Expires 1 May 2027                  [Page 17]
+
+Internet-Draft            JMAP Object Metadata              October 2026
+
+
+   {
+     "capabilities": {
+       "urn:ietf:params:jmap:metadata": {}
+     },
+     "accounts": {
+       "A1": {
+         "accountCapabilities": {
+           "urn:ietf:params:jmap:metadata": {
+             "dataTypes": {
+               "Email": {
+                 "namespaces": [],
+                 "supportsVendorNamespaces": true,
+                 "supportsPrivate": true,
+                 "maxDepth": 4
+               },
+               "Mailbox": {
+                 "namespaces": [],
+                 "supportsVendorNamespaces": true,
+                 "supportsPrivate": true,
+                 "maxDepth": null
+               },
+               "CalendarEvent": {
+                 "namespaces": [],
+                 "supportsVendorNamespaces": true,
+                 "supportsPrivate": false,
+                 "maxDepth": 2
+               },
+               "FileNode": {
+                 "namespaces": ["photography"],
+                 "supportsVendorNamespaces": false,
+                 "supportsPrivate": false,
+                 "maxDepth": 3
+               }
+             }
+           }
+         }
+       }
+     }
+   }
+
+6.2.  Fetching a Mailbox with Its Metadata
+
+   Request the shared metadata and the user's private metadata for a
+   single Mailbox:
+
+
+
+
+
+
+
+De Gennaro                 Expires 1 May 2027                  [Page 18]
+
+Internet-Draft            JMAP Object Metadata              October 2026
+
+
+   [
+     ["Mailbox/get", {
+       "accountId": "A1",
+       "ids": ["MB1"],
+       "properties": [
+         "id", "name",
+         "metadata/acme.example.com",
+         "privateMetadata/acme.example.com"
+       ]
+     }, "c1"]
+   ]
+
+   Response:
+
+   [
+     ["Mailbox/get", {
+       "accountId": "A1",
+       "state": "mb-100",
+       "list": [
+         {
+           "id": "MB1",
+           "name": "Team Inbox",
+           "metadata": {
+             "acme.example.com": {
+               "color": "blue",
+               "owner": "team-alpha"
+             }
+           },
+           "privateMetadata": {
+             "acme.example.com": {
+               "workflowState": "pending-review"
+             }
+           }
+         }
+       ],
+       "notFound": []
+     }, "c1"]
+   ]
+
+6.3.  Patching a Single Property within a Namespace
+
+   Update one property inside a namespace without disturbing the others:
+
+
+
+
+
+
+
+
+
+De Gennaro                 Expires 1 May 2027                  [Page 19]
+
+Internet-Draft            JMAP Object Metadata              October 2026
+
+
+   [
+     ["Mailbox/set", {
+       "accountId": "A1",
+       "update": {
+         "MB1": {
+           "metadata/acme.example.com/color": "green"
+         }
+       }
+     }, "c1"]
+   ]
+
+   Removing a single property uses a patch to null:
+
+   [
+     ["Mailbox/set", {
+       "accountId": "A1",
+       "update": {
+         "MB1": {
+           "metadata/acme.example.com/color": null
+         }
+       }
+     }, "c1"]
+   ]
+
+6.4.  Creating an Email with Private Metadata
+
+   Create a draft Email and attach a private workflow annotation
+   atomically.  The metadata is just another property on the create:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+De Gennaro                 Expires 1 May 2027                  [Page 20]
+
+Internet-Draft            JMAP Object Metadata              October 2026
+
+
+   [
+     ["Email/set", {
+       "accountId": "A1",
+       "create": {
+         "draft1": {
+           "mailboxIds": { "MB1": true },
+           "keywords": { "$draft": true },
+           "subject": "Project Update",
+           "from": [{ "email": "alice@example.com" }],
+           "to":   [{ "email": "bob@example.com" }],
+           "bodyStructure": {
+             "type": "text/plain",
+             "partId": "1"
+           },
+           "bodyValues": {
+             "1": { "value": "Here is the project update..." }
+           },
+           "privateMetadata": {
+             "acme.example.com": {
+               "workflowState": "pending-review",
+               "assignedTo": "carol@example.com"
+             }
+           }
+         }
+       }
+     }, "c1"]
+   ]
+
+   The response is a single Email/set response; there is no separate
+   metadata response, because metadata is part of the Email object.
+
+6.5.  Attaching Photography Metadata to a FileNode
+
+   This example uses a _fictional_ IANA-registered namespace
+   photography, assumed for the purpose of this example to be specified
+   for photographic information about image files and applicable to the
+   FileNode data type.  The capability for the account in Section 6.1
+   advertises FileNode as supporting photography and no vendor
+   namespaces.
+
+   Request:
+
+
+
+
+
+
+
+
+
+
+De Gennaro                 Expires 1 May 2027                  [Page 21]
+
+Internet-Draft            JMAP Object Metadata              October 2026
+
+
+   [
+     ["FileNode/set", {
+       "accountId": "A1",
+       "update": {
+         "F456": {
+           "metadata/photography": {
+             "geoLocation": {
+               "latitude": 46.362,
+               "longitude": 14.090
+             },
+             "cameraMake": "Canon",
+             "cameraModel": "EOS R5",
+             "aperture": "f/2.8",
+             "shutterSpeed": "1/250",
+             "iso": 400,
+             "focalLength": "50mm",
+             "dateTaken": "2023-10-01T01:14:00Z",
+             "imageSize": {
+               "width": 6000,
+               "height": 4000
+             }
+           }
+         }
+       }
+     }, "c1"]
+   ]
+
+   Subsequent retrieval of the FileNode, requesting only the relevant
+   metadata namespace:
+
+   [
+     ["FileNode/get", {
+       "accountId": "A1",
+       "ids": ["F456"],
+       "properties": [
+         "id", "name", "type", "size",
+         "metadata/photography"
+       ]
+     }, "c2"]
+   ]
+
+   Response:
+
+
+
+
+
+
+
+
+
+De Gennaro                 Expires 1 May 2027                  [Page 22]
+
+Internet-Draft            JMAP Object Metadata              October 2026
+
+
+   [
+     ["FileNode/get", {
+       "accountId": "A1",
+       "state": "f-200",
+       "list": [
+         {
+           "id": "F456",
+           "name": "lake-island.jpg",
+           "type": "image/jpeg",
+           "size": 2458624,
+           "metadata": {
+             "photography": {
+               "geoLocation": {
+                 "latitude": 46.362,
+                 "longitude": 14.090
+               },
+               "cameraMake": "Canon",
+               "cameraModel": "EOS R5",
+               "aperture": "f/2.8",
+               "shutterSpeed": "1/250",
+               "iso": 400,
+               "focalLength": "50mm",
+               "dateTaken": "2023-10-01T01:14:00Z",
+               "imageSize": {
+                 "width": 6000,
+                 "height": 4000
+               }
+             }
+           }
+         }
+       ],
+       "notFound": []
+     }, "c2"]
+   ]
+
+6.6.  Updating a CalendarEvent and Its Metadata Atomically
+
+   This example updates a primary property of a CalendarEvent and two
+   vendor metadata properties in the same /set call.  As with any update
+   entry, either all of these changes apply or none do.
+
+   Request:
+
+
+
+
+
+
+
+
+
+De Gennaro                 Expires 1 May 2027                  [Page 23]
+
+Internet-Draft            JMAP Object Metadata              October 2026
+
+
+   [
+     ["CalendarEvent/set", {
+       "accountId": "A1",
+       "update": {
+         "CE789": {
+           "title": "Quarterly Review Meeting",
+           "start": "2024-12-15T14:00:00",
+           "metadata/acme.example.com/lastModifiedReason":
+               "Rescheduled per manager request",
+           "metadata/acme.example.com/approvalStatus": "pending"
+         }
+       }
+     }, "c1"]
+   ]
+
+   A successful response is a single CalendarEvent/set response;
+   metadata changes do not produce a separate response because they are
+   properties of the event itself:
+
+   [
+     ["CalendarEvent/set", {
+       "accountId": "A1",
+       "oldState": "c-200",
+       "newState": "c-201",
+       "updated": {
+         "CE789": null
+       }
+     }, "c1"]
+   ]
+
+6.7.  Querying by Metadata and a Primary Property Together
+
+   Find all Email objects in a particular Mailbox whose private vendor
+   memo contains the text "follow up":
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+De Gennaro                 Expires 1 May 2027                  [Page 24]
+
+Internet-Draft            JMAP Object Metadata              October 2026
+
+
+   [
+     ["Email/query", {
+       "accountId": "A1",
+       "filter": {
+         "operator": "AND",
+         "conditions": [
+           { "inMailbox": "MB-inbox" },
+           {
+             "privateMetadataTextContains": {
+               "path":  "acme.example.com/memo",
+               "value": "follow up"
+             }
+           }
+         ]
+       }
+     }, "c1"]
+   ]
+
+6.8.  Detecting a Metadata-Only Change through /changes
+
+   After another client updates the shared metadata of two Emails, the
+   next Email/changes call returns:
+
+   [
+     ["Email/changes", {
+       "accountId": "A1",
+       "oldState": "e-100",
+       "newState": "e-103",
+       "hasMoreChanges": false,
+       "created": [],
+       "updated": ["EM1", "EM2"],
+       "destroyed": [],
+       "updatedProperties": ["metadata"]
+     }, "c1"]
+   ]
+
+   The client knows it only needs to refetch the metadata property of
+   EM1 and EM2, not the full Email objects.
+
+7.  Security Considerations
+
+7.1.  Metadata Confidentiality
+
+   Metadata may contain sensitive information: personal notes, workflow
+   states, application-specific data, and other user-generated content.
+   Servers MUST enforce the access-control rules in Section 4.  Failures
+   here are direct privacy breaches.
+
+
+
+
+De Gennaro                 Expires 1 May 2027                  [Page 25]
+
+Internet-Draft            JMAP Object Metadata              October 2026
+
+
+   privateMetadata is per-user.  The server MUST ensure that each user
+   sees only their own content, even on shared related objects.  This is
+   the most common implementation pitfall in this specification: a query
+   or /get implementation that returns another user's privateMetadata is
+   a serious bug.  Servers MUST verify that result filtering applies
+   uniformly to /get, /query, /changes, /queryChanges, and to any cached
+   or denormalized representation.
+
+   A server that advances the related type's state for user B in
+   response to user A's private write (Section 2.2) does not reveal the
+   metadata content, but it does reveal that something private changed
+   in the account, and when.  Such a server also wakes up every client
+   of every user sharing the data.  Keeping state per viewer avoids
+   both.
+
+7.2.  User Identity and Authentication
+
+   The private-metadata model relies on accurate user identification.
+   Servers need to identify the authenticated user reliably for every
+   metadata operation and keep each privateMetadata value associated
+   with the user that wrote it, so that identity spoofing or
+   authentication bypass cannot expose another user's private metadata.
+   Delegated and administrative sessions are covered in Section 4.2.
+
+7.3.  Untrusted Namespace Values
+
+   Namespace values are arbitrary client-supplied content.  Servers and
+   clients need to treat them as untrusted input: validate them before
+   use, apply context-appropriate output encoding (for example, when
+   rendering them in a web page or storing them in a database), and
+   never interpret them as code.  Servers store namespace values as
+   given; they do not alter them, since clients and metadataTextEquals
+   rely on exact values.
+
+   Clients that render metadata need appropriate sandboxing and Content
+   Security Policy, and need to distinguish clearly in their user
+   interface between metadata (visible to others) and privateMetadata
+   (visible only to the user), so that users do not inadvertently
+   disclose private notes.  Clients also cannot assume the structure of
+   a namespace value without checking it.
+
+7.4.  Resource Exhaustion
+
+   Without controls, metadata can be abused for denial of service:
+
+   *  Storage exhaustion: bulk creation of large metadata payloads,
+      particularly under privateMetadata, where every user with access
+      to a shared object can independently consume space.
+
+
+
+De Gennaro                 Expires 1 May 2027                  [Page 26]
+
+Internet-Draft            JMAP Object Metadata              October 2026
+
+
+   *  Processing exhaustion: deeply nested or pathologically large
+      namespace values.
+
+   *  Query complexity: text-match filter conditions
+      (metadataTextContains/metadataTextEquals and their private
+      variants) that require expensive scanning, particularly when
+      combined with per-user filtering across many users.  Servers MAY
+      reject such conditions with "unsupportedFilter" (Section 3.6) to
+      bound the cost.
+
+   Servers SHOULD apply the quota mechanism in Section 5, and can also
+   bound value sizes, enforce maxDepth, time out long-running queries,
+   rate-limit metadata writes, and monitor for unusual usage patterns
+   (for example, a single user creating private metadata on unusually
+   many objects).  Per-user filtering of privateMetadata needs to be
+   efficient so that it does not itself become a denial-of-service
+   vector.
+
+8.  IANA Considerations
+
+8.1.  JMAP Capability Registration for "metadata"
+
+   IANA will register the "metadata" JMAP Capability as follows:
+
+   *Capability Name:* urn:ietf:params:jmap:metadata
+   *Specification document:* this document
+   *Intended use:* common
+   *Change Controller:* IETF
+   *Security and privacy considerations:* this document, Section 7
+
+8.2.  Creation of the "JMAP Metadata Namespaces" Registry
+
+   IANA is requested to create the "JMAP Metadata Namespaces" registry
+   to record metadata namespace identifiers used as top-level keys in
+   the metadata and privateMetadata properties defined by this
+   specification.
+
+   This registry uses the Expert Review process (Section 4.5 of
+   [RFC8126]).  Registrants must propose a name without a dot ("."),
+   since names containing a dot are reserved for vendor domain-name
+   namespaces and need no registration.  The designated expert MUST
+   ensure that the proposed name does not collide with an existing
+   registration and that the specification provides sufficient detail
+   for interoperability (in particular, the structure of the namespace's
+   value).
+
+
+
+
+
+
+De Gennaro                 Expires 1 May 2027                  [Page 27]
+
+Internet-Draft            JMAP Object Metadata              October 2026
+
+
+   Registrations may be of Intended Use "common", "reserved", or
+   "obsolete".  A "reserved" registration reserves a name without
+   assigning semantics; an "obsolete" registration marks a name that
+   should no longer be used by up-to-date implementations.
+
+8.2.1.  Preliminary Community Review
+
+   Notice of a potential new registration SHOULD be sent to the JMAP
+   mailing list jmap@ietf.org (mailto:jmap@ietf.org) for review.  The
+   intent is to solicit comments on the namespace identifier, the
+   clarity of the specification, and any interoperability or security
+   considerations.  The submitter MAY revise or withdraw the proposal at
+   any time.
+
+8.2.2.  Change Procedures
+
+   The change controller for a registration MAY request changes to its
+   definition using the same procedure as the original registration.
+   Significant changes that would invalidate existing data SHOULD be
+   made only to correct serious errors.  Registrations MUST NOT be
+   deleted; namespaces that are no longer appropriate for use can be
+   marked obsolete by a change to their intended-use field.
+
+   The change controller of a registration MAY transfer responsibility
+   to another person or agency by informing IANA.
+
+8.2.3.  "JMAP Metadata Namespaces" Registry Template
+
+   *Namespace Identifier*:
+      The name registered for use as a key in the metadata or
+      privateMetadata object.  MUST consist of lowercase US-ASCII
+      letters, digits, hyphens, and underscores, and MUST NOT contain a
+      dot.
+
+   *Value Type*:
+      A description of the structure of values stored under this
+      namespace key (for example, "object whose values are strings").
+
+   *Applicable Properties*:
+      One of: "metadata" (this namespace may appear only under
+      metadata), "privateMetadata" (only under privateMetadata), or
+      "both" (under either).
+
+   *Applicable Data Types*:
+      A list of JMAP data type names on which this namespace is
+      meaningful, or "any" if the namespace is not restricted.
+
+   *Reference or Description*:
+
+
+
+De Gennaro                 Expires 1 May 2027                  [Page 28]
+
+Internet-Draft            JMAP Object Metadata              October 2026
+
+
+      A brief description, or an RFC number and section reference,
+      describing the namespace's contents.  May be omitted for
+      "reserved" entries.
+
+   *Intended Use*:
+      "common", "reserved", or "obsolete".
+
+   *Change Controller*:
+      Who may request changes to this entry (IETF for RFCs from the IETF
+      stream).
+
+8.2.4.  Submit Request to IANA
+
+   Registration requests can be sent to iana@iana.org
+   (mailto:iana@iana.org).
+
+8.2.5.  Designated Expert Review
+
+   The designated expert (DE) is primarily concerned with preventing
+   name collisions and ensuring that the specification provides enough
+   detail for interoperability.  For common-use registrations, the DE is
+   expected to confirm that suitable documentation (per Section 4.6 of
+   [RFC8126]) is available.  A published specification is not required
+   for reserved or obsolete registrations.
+
+   The DE will either approve or deny the registration and publish a
+   notice of the decision to the JMAP working group mailing list (or its
+   successor) and to IANA.  A denial MUST be justified and SHOULD
+   include concrete suggestions for how the request can be modified to
+   become acceptable.
+
+8.2.6.  Initial Contents
+
+   This document defines no initial entries for the "JMAP Metadata
+   Namespaces" registry.  Future specifications may register entries
+   through the procedure defined in this section.
+
+9.  References
+
+9.1.  Normative References
+
+   [RFC2119]  Bradner, S., "Key words for use in RFCs to Indicate
+              Requirement Levels", BCP 14, RFC 2119,
+              DOI 10.17487/RFC2119, March 1997,
+              <https://www.rfc-editor.org/rfc/rfc2119>.
+
+
+
+
+
+
+De Gennaro                 Expires 1 May 2027                  [Page 29]
+
+Internet-Draft            JMAP Object Metadata              October 2026
+
+
+   [RFC4648]  Josefsson, S., "The Base16, Base32, and Base64 Data
+              Encodings", RFC 4648, DOI 10.17487/RFC4648, October 2006,
+              <https://www.rfc-editor.org/rfc/rfc4648>.
+
+   [RFC5051]  Crispin, M., "i;unicode-casemap - Simple Unicode Collation
+              Algorithm", RFC 5051, DOI 10.17487/RFC5051, October 2007,
+              <https://www.rfc-editor.org/rfc/rfc5051>.
+
+   [RFC6901]  Bryan, P., Ed., Zyp, K., and M. Nottingham, Ed.,
+              "JavaScript Object Notation (JSON) Pointer", RFC 6901,
+              DOI 10.17487/RFC6901, April 2013,
+              <https://www.rfc-editor.org/rfc/rfc6901>.
+
+   [RFC8126]  Cotton, M., Leiba, B., and T. Narten, "Guidelines for
+              Writing an IANA Considerations Section in RFCs", BCP 26,
+              RFC 8126, DOI 10.17487/RFC8126, June 2017,
+              <https://www.rfc-editor.org/rfc/rfc8126>.
+
+   [RFC8174]  Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC
+              2119 Key Words", BCP 14, RFC 8174, DOI 10.17487/RFC8174,
+              May 2017, <https://www.rfc-editor.org/rfc/rfc8174>.
+
+   [RFC8620]  Jenkins, N. and C. Newman, "The JSON Meta Application
+              Protocol (JMAP)", RFC 8620, DOI 10.17487/RFC8620, July
+              2019, <https://www.rfc-editor.org/rfc/rfc8620>.
+
+   [RFC9670]  Jenkins, N., Ed., "JSON Meta Application Protocol (JMAP)
+              Sharing", RFC 9670, DOI 10.17487/RFC9670, November 2024,
+              <https://www.rfc-editor.org/rfc/rfc9670>.
+
+9.2.  Informative References
+
+   [I-D.ietf-jmap-calendars]
+              Jenkins, N. and M. Douglass, "JSON Meta Application
+              Protocol (JMAP) for Calendars", Work in Progress,
+              Internet-Draft, draft-ietf-jmap-calendars-33, 13 October
+              2026, <https://datatracker.ietf.org/doc/html/draft-ietf-
+              jmap-calendars-33>.
+
+   [I-D.ietf-jmap-filenode]
+              Gondwana, B., "JMAP File Storage extension", Work in
+              Progress, Internet-Draft, draft-ietf-jmap-filenode-19, 27
+              October 2026, <https://datatracker.ietf.org/doc/html/
+              draft-ietf-jmap-filenode-19>.
+
+
+
+
+
+
+
+De Gennaro                 Expires 1 May 2027                  [Page 30]
+
+Internet-Draft            JMAP Object Metadata              October 2026
+
+
+   [RFC4918]  Dusseault, L., Ed., "HTTP Extensions for Web Distributed
+              Authoring and Versioning (WebDAV)", RFC 4918,
+              DOI 10.17487/RFC4918, June 2007,
+              <https://www.rfc-editor.org/rfc/rfc4918>.
+
+   [RFC5257]  Daboo, C. and R. Gellens, "Internet Message Access
+              Protocol - ANNOTATE Extension", RFC 5257,
+              DOI 10.17487/RFC5257, June 2008,
+              <https://www.rfc-editor.org/rfc/rfc5257>.
+
+   [RFC5464]  Daboo, C., "The IMAP METADATA Extension", RFC 5464,
+              DOI 10.17487/RFC5464, February 2009,
+              <https://www.rfc-editor.org/rfc/rfc5464>.
+
+   [RFC8621]  Jenkins, N. and C. Newman, "The JSON Meta Application
+              Protocol (JMAP) for Mail", RFC 8621, DOI 10.17487/RFC8621,
+              August 2019, <https://www.rfc-editor.org/rfc/rfc8621>.
+
+   [RFC9425]  Cordier, R., Ed., "JSON Meta Application Protocol (JMAP)
+              for Quotas", RFC 9425, DOI 10.17487/RFC9425, June 2023,
+              <https://www.rfc-editor.org/rfc/rfc9425>.
+
+   [RFC9610]  Jenkins, N., Ed., "JSON Meta Application Protocol (JMAP)
+              for Contacts", RFC 9610, DOI 10.17487/RFC9610, December
+              2024, <https://www.rfc-editor.org/rfc/rfc9610>.
+
+   [RFC9661]  Murchison, K., "The JSON Meta Application Protocol (JMAP)
+              for Sieve Scripts", RFC 9661, DOI 10.17487/RFC9661,
+              September 2024, <https://www.rfc-editor.org/rfc/rfc9661>.
+
+Appendix A.  Changes
+
+   [[This section to be removed by RFC Editor]]
+
+   *draft-ietf-jmap-metadata-05*
+
+   *  Added the Binary value, so namespaces can store bytes that are not
+      UTF-8 text.
+
+   *draft-ietf-jmap-metadata-04*
+
+   *  Replaced the mapping of metadata write access onto existing rights
+      with a new maySetMetadata right.
+
+   *  Relaxed the per-viewer state requirement for private writes to
+      SHOULD NOT, while still forbidding other users' /changes and
+      /queryChanges from reporting the object.
+
+
+
+
+De Gennaro                 Expires 1 May 2027                  [Page 31]
+
+Internet-Draft            JMAP Object Metadata              October 2026
+
+
+   *draft-ietf-jmap-metadata-03*
+
+   *  Clarified that metadata-only changes do not update server-
+      maintained modification timestamps.
+
+   *  Defined behavior for requests that do not use the capability.
+
+   *  Allowed patch paths at any depth, and placed "invalidPatch" in the
+      /set validation order.
+
+   *  Defined the interaction of updatedProperties and
+      ignoreMetadataOnlyChanges with the Mailbox count properties.
+
+   *  Added /copy behavior; excluded /import and /parse style methods.
+
+   *  Excluded metadata from the Email/get default property list.
+
+   *  Specified the "i;unicode-casemap" collation for
+      metadataTextContains.
+
+   *  Required lowercase domain-name namespace identifiers.
+
+   *  Defined read and write rights for the data types of JMAP Mail,
+      Calendars, Contacts, FileNode and Sieve, and the rule for objects
+      in several containers.
+
+   *  Clarified handling of data in unsupported namespaces in
+      subselectors, filters, complete replacements and copies.
+
+   *  Allowed filter condition paths at any depth below a namespace.
+
+   *  Added terminology, defined depth recursively, and made editorial
+      clarifications throughout.
+
+   *  Recommended omitting the capability when no data type is listed,
+      and noted that limits may count data from other protocols.
+
+   *draft-ietf-jmap-metadata-02*
+
+   *  Redesigned the extension around two properties (metadata and
+      privateMetadata) on each opted-in JMAP data type, rather than a
+      separate Metadata data type with its own methods.  Removed the
+      Metadata data type, all Metadata/* methods, the related object
+      types, the extended /get//set arguments, and the uniqueness and
+      cascading-deletion machinery.
+
+
+
+
+
+
+De Gennaro                 Expires 1 May 2027                  [Page 32]
+
+Internet-Draft            JMAP Object Metadata              October 2026
+
+
+   *  Added a per-data-type capability advertising IANA-registered
+      namespace support (namespaces), vendor (domain-name) namespace
+      support (supportsVendorNamespaces), private-metadata support
+      (supportsPrivate), and a nesting limit (maxDepth).
+
+   *  Added updatedProperties to Foo/changes for opted-in types,
+      modelled on Mailbox/changes in RFC 8621.  Specified per-viewer
+      behavior for /changes and /queryChanges on shared objects carrying
+      per-user private metadata.
+
+   *  Added FilterCondition fields to Foo/query: metadataExists,
+      privateMetadataExists, metadataTextContains, metadataTextEquals,
+      and the corresponding private variants.  Servers MAY reject the
+      text-match conditions with "unsupportedFilter" when implementation
+      cost is prohibitive.
+
+   *  Added an ignoreMetadataOnlyChanges argument to Foo/changes,
+      letting metadata-uninterested clients skip wakeups for metadata-
+      only changes on data types they otherwise care about.
+
+   *  Specified PatchObject semantics for metadata and privateMetadata,
+      including handling of unknown namespaces, error ordering on /set,
+      and the migration case where a namespace is removed from the
+      server's advertised set after data has been written.
+
+   *  Replaced the previous metadata-types and metadata-properties
+      registries with a single "JMAP Metadata Namespaces" registry.
+      This document defines no initial entries; bindings to other
+      protocols (e.g., IMAP METADATA, WebDAV dead properties) are
+      expected to be defined in separate specifications.
+
+   *draft-ietf-jmap-metadata-01*
+
+   *  Renamed parentType and parentId properties to relatedType and
+      relatedId throughout the document to better reflect their purpose
+      and avoid implying a strict hierarchy.
+
+   *  Added filterRelatedType and filterMetadataType optional parameters
+      to Metadata/changes method to allow filtering changes by related
+      object type and metadata type.
+
+   *  Changed the error type from "invalidProperties" to "alreadyExists"
+      when a client attempts to create a Metadata object that violates
+      the uniqueness constraint.
+
+   *  Added requirement that relatedType must be specified in the same
+      FilterCondition object whenever relatedIds is used in Metadata/
+      query.
+
+
+
+De Gennaro                 Expires 1 May 2027                  [Page 33]
+
+Internet-Draft            JMAP Object Metadata              October 2026
+
+
+   *  Added id as a MUST support property for sorting in Metadata/query;
+      other properties changed to SHOULD support.
+
+   *  Replaced the metadataTypes argument with a fetchMetadata Boolean
+      argument (default: false) in the extended /get method.
+
+   *  Added onSuccessCreateMetadata and onSuccessUpdateMetadata
+      arguments to the extended /set method to enable transactional
+      metadata operations that are conditional on the success of the
+      related object operation.
+
+   *draft-ietf-jmap-metadata-00*
+
+   *  Initial version
+
+Author's Address
+
+   Mauro De Gennaro
+   Stalwart Labs LLC
+   1309 Coffeen Avenue, Suite 1200
+   Sheridan, WY 82801
+   United States of America
+   Email: mauro@stalw.art
+   URI:   https://stalw.art
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+De Gennaro                 Expires 1 May 2027                  [Page 34]
