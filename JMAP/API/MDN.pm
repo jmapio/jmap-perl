@@ -7,9 +7,83 @@ use JSON;
 use Encode;
 use Email::Simple;
 use Email::MIME;
+use Email::Address::XS;
 use POSIX qw(strftime);
 
 sub _is_true_json { my $v = shift; return JSON::is_bool($v) && $v }
+
+# RFC 9007 S2: the Disposition values, each one of a fixed set
+my %MDN_DISPOSITION = (
+  actionMode  => { map { $_ => 1 } qw(manual-action automatic-action) },
+  sendingMode => { map { $_ => 1 } qw(mdn-sent-manually mdn-sent-automatically) },
+  type        => { map { $_ => 1 } qw(deleted dispatched displayed processed) },
+);
+
+# The client values that become header fields, checked before any of them
+# is written: a line break in one would add fields of the client's choosing
+# (to the message or to the machine-readable report).
+sub _mdn_invalid_properties {
+  my ($mdn) = @_;
+  my @bad;
+  for my $prop (qw(subject reportingUA finalRecipient)) {
+    my $v = $mdn->{$prop};
+    next unless defined $v;
+    push @bad, $prop if ref $v or $v =~ /[\x00-\x1f\x7f]/;
+  }
+  my $disp = $mdn->{disposition};
+  if (ref $disp ne 'HASH') {
+    push @bad, 'disposition';
+  } else {
+    for my $k (sort keys %MDN_DISPOSITION) {
+      next unless defined $disp->{$k};
+      push @bad, "disposition/$k" unless !ref $disp->{$k} && $MDN_DISPOSITION{$k}{ $disp->{$k} };
+    }
+  }
+  push @bad, 'textBody' if defined $mdn->{textBody} && ref $mdn->{textBody};
+  return @bad;
+}
+
+# The MDN (RFC 8098 S3): a multipart/report whose first part is the text and
+# whose second is the message/disposition-notification fields.  Email::MIME
+# encodes the header fields (RFC 2047 for a non-ASCII subject or name), the
+# text (quoted-printable, so no line of it can be taken for a boundary) and
+# picks the boundary.
+sub _mdn_message {
+  my (%a) = @_;
+  my $fields = '';
+  my @f = @{ $a{fields} };
+  while (my ($name, $value) = splice(@f, 0, 2)) {
+    $fields .= "$name: $value\r\n";
+  }
+  my $from = Email::Address::XS->new($a{from_name}, $a{from_email})->format;
+  my @parts = (
+    Email::MIME->create(
+      attributes => { content_type => 'text/plain', charset => 'utf-8',
+                      encoding => 'quoted-printable' },
+      body_str   => $a{text},
+    ),
+    Email::MIME->create(
+      attributes => { content_type => 'message/disposition-notification',
+                      encoding => '8bit' },
+      body       => Encode::encode_utf8($fields),
+    ),
+  );
+  # Email::MIME->create dates every part; only the message has a Date
+  for my $part (@parts) { $part->header_set($_) for qw(Date MIME-Version) }
+  my $mime = Email::MIME->create(
+    header_str => [
+      From         => $from,
+      To           => $a{to},
+      Subject      => $a{subject},
+      Date         => $a{date},
+      'Message-ID' => $a{message_id},
+    ],
+    attributes => { content_type => 'multipart/report' },
+    parts      => \@parts,
+  );
+  $mime->content_type_attribute_set('report-type' => 'disposition-notification');
+  return $mime->as_string;
+}
 
 sub api_MDN_send {
   my $Self = shift;
@@ -112,35 +186,25 @@ sub api_MDN_send {
     my $textbody = $mdn->{textBody}
       // "This is a Message Disposition Notification.\r\n";
 
-    my $boundary  = '=_mdn_' . time() . "_$$";
+    if (my @bad = _mdn_invalid_properties($mdn)) {
+      $notSent{$cid} = { type => 'invalidProperties', properties => \@bad };
+      next;
+    }
+
     my $date      = strftime('%a, %d %b %Y %H:%M:%S %z', localtime);
     my $new_msgid = '<mdn.' . time() . ".$$\@"
       . (($from_email =~ /@(.+)$/)[0] // 'localhost') . '>';
 
-    my $mdn_headers = "Reporting-UA: $reporting_ua\r\n"
-      . "Final-Recipient: $final_recipient\r\n"
-      . ($orig_msgid ? "Original-Message-ID: $orig_msgid\r\n" : '')
-      . "Disposition: $action_mode/$sending_mode;$disp_type\r\n";
-
-    my $mdn_rfc822 =
-        "From: $from_name <$from_email>\r\n"
-      . "To: $notif_to\r\n"
-      . "Subject: $subject\r\n"
-      . "Date: $date\r\n"
-      . "Message-ID: $new_msgid\r\n"
-      . "MIME-Version: 1.0\r\n"
-      . "Content-Type: multipart/report; report-type=disposition-notification;\r\n"
-      . "\tboundary=\"$boundary\"\r\n"
-      . "\r\n"
-      . "--$boundary\r\n"
-      . "Content-Type: text/plain; charset=utf-8\r\n"
-      . "\r\n"
-      . $textbody . "\r\n"
-      . "--$boundary\r\n"
-      . "Content-Type: message/disposition-notification\r\n"
-      . "\r\n"
-      . $mdn_headers . "\r\n"
-      . "--$boundary--\r\n";
+    my $mdn_rfc822 = _mdn_message(
+      from_name => $from_name, from_email => $from_email, to => $notif_to,
+      subject => $subject, date => $date, message_id => $new_msgid,
+      text => $textbody,
+      fields => [
+        'Reporting-UA'        => $reporting_ua,
+        'Final-Recipient'     => $final_recipient,
+        ($orig_msgid ? ('Original-Message-ID' => $orig_msgid) : ()),
+        'Disposition'         => "$action_mode/$sending_mode;$disp_type",
+      ]);
 
     eval { $Self->{db}->backend_cmd('send_email', $mdn_rfc822, undef) };
     if ($@) {
