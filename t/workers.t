@@ -31,4 +31,8 @@ is_deeply([JMAP::Workers::reapable(now => $now, timeout => 300, last_active => \
 is_deeply([JMAP::Workers::reapable(now => $now, timeout => 300, last_active => { a => $now - 300 },
   busy => {}, keep => {})], [], 'exactly the timeout is not yet idle');
 
+is_deeply([JMAP::Workers::unresponsive(now => 5000, timeout => 1800,
+  busy => { stuck => 1, slow => 1 }, last_heard => { stuck => 3000, slow => 4000, idle => 0 })],
+  ['stuck'], 'a busy worker silent past the timeout is unresponsive; a slow one and an idle one are not');
+
 done_testing;

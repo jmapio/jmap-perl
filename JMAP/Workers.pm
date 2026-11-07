@@ -43,4 +43,17 @@ sub reapable {
   return @out;
 }
 
+# The workers to give up on: ones with requests waiting that have said
+# nothing for longer than $timeout (a blocking read on a server that never
+# answers).  Every request queued on one waits on it, each holding a client
+# connection open, so the worker is killed and they are failed.
+#   now, timeout   seconds
+#   busy           { name => 1 }  requests in flight
+#   last_heard     { name => epoch }  its last answer, or when it was
+#                  handed work while idle
+sub unresponsive {
+  my (%a) = @_;
+  return sort grep { $a{busy}{$_} && $a{now} - ($a{last_heard}{$_} // $a{now}) > $a{timeout} } keys %{ $a{last_heard} };
+}
+
 1;

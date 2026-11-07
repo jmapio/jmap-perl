@@ -118,7 +118,7 @@ my $child_watcher = AnyEvent->signal(signal => 'CHLD', cb => sub {
 #
 # Backend connection management
 #
-my %backend;     # name => [AnyEvent::Handle, cmd_counter, pid, last_active]
+my %backend;     # name => [AnyEvent::Handle, cmd_counter, pid, last_active, last_heard]
 my %waiting;     # name => { cmd_id => [success_cb, error_cb] }
 my %backfilling; # accountid => 1 while prod_backfill loop is active
 my %sync_times;  # accountid => unix timestamp of last successful sync
@@ -209,6 +209,7 @@ sub mk_json {
   my $accountid = shift;
   return sub {
     my ($hdl, $res) = @_;
+    $backend{$accountid}[4] = time() if $backend{$accountid};
     if ($res->[0] eq 'push') {
       PushEvent($accountid, 'state', { '@type' => 'StateChange', changed => { $accountid => $res->[1] } });
       _push_state_change($accountid, $res->[1]);
@@ -1747,6 +1748,8 @@ sub send_backend_request {
   # Background requests (the periodic sync) are not use: counting them would
   # keep every worker from ever being reaped as idle.
   my $background = JMAP::Workers::is_background($request);
+  # an idle worker's clock for an answer starts now
+  $backend->[4] = time() unless %{ $waiting{$accountid} || {} };
   $backend->[3] = time() unless $background;
   $waiting{$accountid}{$cmd} = [$cb || sub { 1 }, $errcb || sub { 1 }, $background];
   $backend->[0]->push_write(json => [$request, $args, $cmd]);
@@ -4843,6 +4846,33 @@ if ($idle_timeout) {
     },
   );
 }
+
+#
+# Unresponsive workers: one with requests waiting that has said nothing for
+# JMAP_WORKER_TIMEOUT seconds (default 30 minutes -- a first sync of a large
+# account is one long command) is stuck, most likely in a read from a server
+# that never answers.  Every request queued on it would wait for ever, each
+# holding a client connection, so it is killed and they are failed.
+#
+my $worker_timeout = $ENV{JMAP_WORKER_TIMEOUT} // 1800;
+my $stuck_timer = $worker_timeout && AnyEvent->timer(
+  after    => 60,
+  interval => 60,
+  cb       => sub {
+    for my $name (JMAP::Workers::unresponsive(
+        now        => time(),
+        timeout    => $worker_timeout,
+        busy       => { map { $_ => 1 } grep { %{ $waiting{$_} || {} } } keys %waiting },
+        last_heard => { map { $_ => $backend{$_}[4] } grep { defined $backend{$_}[4] } keys %backend })) {
+      my $pid = $backend{$name}[2];
+      warn "Worker $name (pid $pid) has not answered for over ${worker_timeout}s: killing it\n";
+      kill 'TERM', $pid if $pid;
+      delete $backend{$name};
+      _fail_pending($name, "worker did not answer within ${worker_timeout}s");
+      _maybe_finish_shutdown() if $shutting_down;
+    }
+  },
+);
 
 #
 # Token touch flush: write cached last_used/last_ip to accounts DB every 5 min

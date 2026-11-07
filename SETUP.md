@@ -65,6 +65,7 @@ All variables are optional unless marked **required**.
 | `JMAP_DATADIR` | `/data` | Directory for SQLite databases (`accounts.sqlite3` + per-account files). |
 | `JMAP_HOME` | `/home/jmap/jmap-perl` | Directory containing the proxy source. Set automatically in Docker. |
 | `JMAP_IDLE_TIMEOUT` | `300` | Seconds of inactivity before a per-account worker is killed. Set to `0` to disable. |
+| `JMAP_WORKER_TIMEOUT` | `1800` | Seconds a worker with requests waiting may go without answering before it is killed and those requests fail (a read from a server that never answers). `0` disables. |
 | `JMAP_SYNC_INTERVAL` | `30` | Seconds between background IMAP/CalDAV/CardDAV sync polls. |
 | `JMAP_IMAP_TIMEOUT` | `120` | Seconds of silence after which an IMAP connection counts as dead. Counts from the last data received, so slow downloads aren't cut off. |
 | `JMAP_FILES_DROPPABLE_PRINCIPALS` | _(empty)_ | Comma-separated user principal names (a bare name matches only the user principal of that name) or whole principal hrefs (matched exactly) whose ACEs FileNode sharing may drop when the WebDAV server refuses to take back an ACE it lists itself (`DAV:recognized-principal`; Cyrus lists principals it cannot resolve, such as an `admin` from `defaultacl`). Each drop is logged. Anything not listed makes the share fail (`serverFail`) and leaves the ACL alone. The test stack sets `admin`. |
