@@ -550,6 +550,32 @@ Follow-ups:
 
 ---
 
+## Architecture review (2026-11-07)
+
+Four reviews of the proxy (server process, storage/sync, method layer, FileNode) and three of
+the conversion modules. The core designs are sound; what grew by accretion is per-type copies
+that drifted, leaky layer boundaries and no single error model. Confirmed bugs, each small:
+- [ ] One `die` in the `__accounts__` worker makes the parent drop it and fail every queued
+      request (bin/jmap-proxy.pl ~238 vs ~1660: that worker stays alive on error)
+- [ ] Workers are never reaped: every send, the 30 s sync included, refreshes `last_active`
+- [ ] `commit` saves `jhighestmodseq`/`jstate*` only when `change_cb` is set (DB.pm ~227): after
+      an OAuth signup `/changes` is empty until the worker is recycled
+- [ ] `JMAP::Sync::AOL` is never loaded (ImapDB.pm ~192), and reads a hard-coded config path
+- [ ] Events (and contacts on upsert) are keyed by UID alone: `delete_event` ignores the calendar,
+      so removing one copy of a UID in two calendars removes both (schema v15: collection + UID)
+- [ ] `ContactCard/*` and `AddressBook/*` aliases rename an `error` response to the method name
+- [ ] `Calendar/set` destroys a calendar's events before the calendar destroy has succeeded
+- [ ] MDN/send writes client `subject`, `reportingUA`, `finalRecipient` into headers unencoded
+- [ ] FileNode: unsharing a directory removes a subdirectory's own grant (-20 makes inherited
+      rights a floor; store each directory's own shareWith and compute the ACL)
+Reported, to verify: Calendar/Addressbook `/changes` compare maxChanges with all rows;
+`ifInState` ignored by Calendar/Contact `/set`; no timeout across the parent/worker boundary;
+`sessionState` unchanged when FileNode becomes advertised; PDPA export zips in the parent;
+`maxObjectsInGet`/`maxObjectsInSet` not enforced; EmailSubmission filter `operator` ignored.
+Next, as for the modules: a table-driven test of every method in the Dispatch table through
+`handle_request` against a temp DB and fake backend; then generic `/changes`, `/query`, the
+`/set` envelope and one `JMAP::Error`; a backend module with typed messages and deadlines.
+
 ## Phase 8: Documentation & Developer Experience
 
 - [x] Landing page (proxy.jmap.io/): describes what the proxy is, signup form
