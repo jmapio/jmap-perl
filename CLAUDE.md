@@ -269,8 +269,8 @@ The test image is derived with `munge8bit: no` (Cyrus's default rewrites 8-bit h
 bytes to `X`, so EAI mail, RFC 8621 S4.8, could never be stored). The test stack
 registers `user1@example.com` (the image's users are in example.com) and sends through the image's Postfix on 8587 (AUTH PLAIN, no TLS); suite logins are the
 account's email. The run needs the conversion modules' fix branches on `PERL5LIB`
-(`participant-jsid`, `rfc9982` (Text-JSContact, on top of `media-uri-values`),
-`encoding-problem-and-bare-addresses`) until
+(Text-JSCalendar `jscalendar-29` (on top of `participant-jsid`), Text-JSContact `rfc9982`
+(on top of `media-uri-values`), Data-JSEmail `encoding-problem-and-bare-addresses`) until
 they are released.
 
 **Every `api_*` method lives in exactly one module.** `JMAP::API::*` all declare

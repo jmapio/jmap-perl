@@ -235,10 +235,19 @@ Gap analysis (April 2026) against RFC 8620, RFC 8621, draft-ietf-jmap-calendars-
 `specs/` moved to the latest revisions on 2026-11-07; the work below was checked against the
 older ones, so each needs re-checking against the new text:
 - [ ] jmap-calendars -26 -> -33 (in the RFC Editor queue)
-- [ ] jscalendarbis -15 -> -22, jscalendar-icalendar -22 -> -29, icalendar-jscalendar-extensions
-      -05 -> -09 (Text::JSCalendar; first known gap: -29 maps a link by `rel` to ATTACH, IMAGE,
-      URL (`describedby`, at most one) or LINK, where the module writes URL for every
-      non-enclosure link)
+- [x] jscalendarbis -15 -> -22, jscalendar-icalendar -22 -> -29, icalendar-jscalendar-extensions
+      -05 -> -09: every normative change is in Text::JSCalendar branch `jscalendar-29` (links by
+      `rel`, no null `timeZone`, unknown CLASS private, SHOW-WITHOUT-TIME, Task end-relative
+      alerts, SENT-BY/`sentBy`, RDATE PERIOD, COLOR)
+- [ ] Text::JSCalendar gaps that predate those revisions (found in the same review):
+      VLOCATION and COORDINATES (and DERIVED=TRUE on a GEO written beside them); GEO and LOCATION
+      as one Location; ACTION:AUDIO kept (it becomes display, so AUDIO is lost on write-back);
+      the JSID property on VALARM and the JSID parameter on CONFERENCE (it uses X-JMAP-ID);
+      LAST-MODIFIED must not set `updated`; VTODO PARTSTAT=COMPLETED is `accepted` plus
+      `progress: completed`; no organizer participant when an ATTENDEE has ROLE=OWNER and
+      ORGANIZER has no parameters; Tasks get `duration: PT0S`; reserved Participant properties
+      (scheduleAgent/Sequence/Updated) still written; a due-only VTODO cannot be converted;
+      `showWithoutTime` is wrongly top-level-only in overrides
 - [x] jscontact-uid -07 -> RFC 9982 (JSContact 2.0: `uid` optional): Text::JSContact writes
       version "2.0" and no uid for a vCard without UID; the proxy gives such a card a uid made
       from its href (`JMAP::DB::card_uid_for_href`). RFC 10050 (jscontact-profiles) only creates
