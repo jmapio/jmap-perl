@@ -138,7 +138,8 @@ sub delete {
   my $Self = shift;
   my $accountid = $Self->accountid();
   delete $Self->{dbh};
-  unlink("$DATADIR/$accountid.sqlite3");
+  if (my $c = delete $Self->{_conn}) { $c->[1]->disconnect if $c->[0] == $$ }
+  unlink("$DATADIR/$accountid.sqlite3", "$DATADIR/$accountid.sqlite3-wal", "$DATADIR/$accountid.sqlite3-shm");
   my $dir = "$DATADIR/$accountid";
   if (-d $dir) {
     for my $sub (glob("$dir/*")) {
@@ -198,8 +199,30 @@ sub begin {
   my $accountid = $Self->accountid();
   # we need this because sqlite locking isn't as robust as you might hope
   $Self->{t} = {lock => $Self->{superlock} || IO::LockedFile->new(">$DATADIR/$accountid.lock")};
-  $Self->{t}{dbh} = DBI->connect("dbi:SQLite:dbname=$DATADIR/$accountid.sqlite3");
+  $Self->{t}{dbh} = $Self->_conn();
+  # a transaction an error path left open (a fresh connection used to drop it)
+  $Self->{t}{dbh}->rollback() unless $Self->{t}{dbh}{AutoCommit};
   $Self->{t}{dbh}->begin_work();
+}
+
+# One connection for the life of the process (a new one after a fork):
+# connecting per transaction threw away SQLite's page cache and every
+# prepared statement, several times a request.  WAL lets the backfill
+# worker write while the jmap worker reads the same file; the flock above
+# still orders the writers.
+sub _conn {
+  my $Self = shift;
+  my $c = $Self->{_conn};
+  return $c->[1] if $c && $c->[0] == $$ && $c->[1]->ping;
+  my $accountid = $Self->accountid();
+  my $dbh = DBI->connect("dbi:SQLite:dbname=$DATADIR/$accountid.sqlite3", undef, undef,
+                         { RaiseError => 0, PrintError => 1, AutoCommit => 1 });
+  $dbh->do('PRAGMA journal_mode = WAL');
+  $dbh->do('PRAGMA synchronous = NORMAL');
+  $dbh->do('PRAGMA cache_size = -20000');   # 20MB
+  $dbh->do('PRAGMA busy_timeout = 10000');
+  $Self->{_conn} = [$$, $dbh];
+  return $dbh;
 }
 
 sub commit {
@@ -1177,7 +1200,7 @@ sub dget {
 
   $Self->log('debug', $sql, _dbl(@vals));
 
-  return $Self->dbh->selectall_arrayref($sql, {Slice => {}}, @vals);
+  return $Self->dbh->selectall_arrayref($Self->dbh->prepare_cached($sql), {Slice => {}}, @vals);
 }
 
 sub dcount {
@@ -1217,7 +1240,7 @@ sub dgetone {
 
   $Self->log('debug', $sql, _dbl(map { $filter->{$_} } @lkeys));
 
-  my $data = $Self->dbh->selectall_arrayref($sql, {Slice => {}}, @vals);
+  my $data = $Self->dbh->selectall_arrayref($Self->dbh->prepare_cached($sql), {Slice => {}}, @vals);
   # built only when it will be logged: dgetone runs in per-row loops
   if ($ENV{DEBUGDB}) { require Data::Dumper; $Self->log('debug', Data::Dumper::Dumper($data)) }
   return $data->[0];
