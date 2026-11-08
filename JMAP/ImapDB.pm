@@ -3753,10 +3753,16 @@ sub imap_search {
     my $res = $Self->backend_cmd('imap_search', $item->{imapname}, 'uid', "$from:$to", @search);
     # XXX - uidvaldity changed
     next unless $res->[2] == $item->{uidvalidity};
+    # the matching uids' msgids, 500 to a query (one query per uid was a
+    # round trip per match: thousands for a common word)
+    my @uids = @{$res->[3] || []};
+    next unless @uids;
     $Self->begin();
-    foreach my $uid (@{$res->[3]}) {
-      my $msgid = $Self->dgetfield('imessages', { ifolderid => $item->{ifolderid}, uid => $uid }, 'msgid');
-      $matches{$msgid} = 1 if $msgid;
+    my $dbh = $Self->dbh;
+    while (my @chunk = splice @uids, 0, 500) {
+      my $ids = $dbh->selectcol_arrayref('SELECT msgid FROM imessages WHERE ifolderid = ? AND uid IN ('
+        . join(',', ('?') x @chunk) . ')', {}, $item->{ifolderid}, @chunk);
+      $matches{$_} = 1 for grep { $_ } @$ids;
     }
     $Self->commit();
   }
