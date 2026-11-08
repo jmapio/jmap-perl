@@ -1563,7 +1563,7 @@ sub run_accounts_worker {
           return ['auth', undef] unless ($stored->{authType} || 'basic') eq 'basic';
           require JMAP::CredentialStore;
           my $actual = JMAP::CredentialStore->decrypt($stored->{password} // '');
-          unless ($actual eq $password) {
+          unless (_ct_eq($actual, $password)) {
             warn "AUTH: wrong password for $email (account $aid)\n" if $ENV{JMAP_DEBUG};
             return ['auth', undef];
           }
@@ -1576,7 +1576,7 @@ sub run_accounts_worker {
           # Stored encrypted (ImapDB::setuser); decrypt passes plaintext through.
           require JMAP::CredentialStore;
           my $actual = JMAP::CredentialStore->decrypt($stored->{password} // '');
-          unless ($actual eq $password) {
+          unless (_ct_eq($actual, $password)) {
             warn "AUTH: wrong password for $email (account $aid)\n" if $ENV{JMAP_DEBUG};
             return ['auth', undef];
           }
@@ -1618,7 +1618,7 @@ sub run_accounts_worker {
           return ['verify_credentials', undef]
             unless ($stored->{authType} || 'basic') eq 'basic';
           my $actual = JMAP::CredentialStore->decrypt($stored->{password} // '');
-          return ['verify_credentials', undef] unless $actual eq $password;
+          return ['verify_credentials', undef] unless _ct_eq($actual, $password);
           return ['verify_credentials', { accountid => $aid }];
         }
 
@@ -1627,7 +1627,7 @@ sub run_accounts_worker {
         my $stored = $udb->selectrow_hashref("SELECT password FROM iserver LIMIT 1");
         return ['verify_credentials', undef] unless $stored;
         my $actual = JMAP::CredentialStore->decrypt($stored->{password} // '');
-        return ['verify_credentials', undef] unless $actual eq $password;
+        return ['verify_credentials', undef] unless _ct_eq($actual, $password);
         return ['verify_credentials', { accountid => $aid }];
       }
 
@@ -3069,6 +3069,38 @@ sub _get_auth_accountid {
   # Note: if not cached, caller must use _authenticate() for async resolution
 }
 
+# Passwords compared in constant time: a plain eq returns at the first
+# differing byte, which a client can time.
+sub _ct_eq {
+  my ($a, $b) = @_;
+  return 0 unless defined $a && defined $b && length $a == length $b;
+  my $d = 0;
+  $d |= ord(substr($a, $_, 1)) ^ ord(substr($b, $_, 1)) for 0 .. length($a) - 1;
+  return !$d;
+}
+
+# Failed password logins per client address: more than $AUTH_FAIL_MAX in
+# $AUTH_FAIL_WINDOW seconds and that address gets 429 until the window has
+# passed, so a password cannot be guessed at full speed.
+my %auth_fail;   # ip => [count, window start]
+my $AUTH_FAIL_MAX    = $ENV{JMAP_AUTH_FAIL_MAX} || 20;
+my $AUTH_FAIL_WINDOW = 900;
+sub _auth_throttled {
+  my ($ip) = @_;
+  my $f = $auth_fail{$ip // ''} or return 0;
+  if (time() - $f->[1] > $AUTH_FAIL_WINDOW) { delete $auth_fail{$ip}; return 0 }
+  return $f->[0] >= $AUTH_FAIL_MAX;
+}
+sub _auth_failed {
+  my ($ip) = @_;
+  $ip //= '';
+  my $f = $auth_fail{$ip};
+  $f = $auth_fail{$ip} = [0, time()] if !$f || time() - $f->[1] > $AUTH_FAIL_WINDOW;
+  $f->[0]++;
+  # the table stays small: forget windows that have passed
+  if (keys %auth_fail > 10_000) { my $now = time(); delete @auth_fail{ grep { $now - $auth_fail{$_}[1] > $AUTH_FAIL_WINDOW } keys %auth_fail } }
+}
+
 # Cache auth results: key => [accountid, expire_time]
 my %auth_cache;
 my $AUTH_CACHE_TTL = 300;  # 5 minutes
@@ -3185,6 +3217,11 @@ sub _authenticate {
     my $decoded = eval { decode_base64($b64) };
     if ($decoded && $decoded =~ /^([^:]+):(.+)$/) {
       my ($user, $pass) = ($1, $2);
+      my $ip = _client_ip($req);
+      if (_auth_throttled($ip)) {
+        return $req->respond([429, 'too many requests', { 'Retry-After' => $AUTH_FAIL_WINDOW, 'Content-Type' => 'text/plain' },
+                              'too many failed logins; try again later']);
+      }
       $httpd->stop_request();
       send_backend_request('__accounts__', 'auth', { username => $user, password => $pass }, sub {
         my $result = shift;
@@ -3192,6 +3229,7 @@ sub _authenticate {
           $auth_cache{"basic:$b64"} = [$result->{accountid}, time() + $AUTH_CACHE_TTL];
           $cb->($result->{accountid});
         } else {
+          _auth_failed($ip);
           $errcb->();
         }
       }, sub { $errcb->() });
@@ -4303,6 +4341,8 @@ sub do_oidc_authorize_post {
   unless ($redirect_uri && $username && $password) {
     return $req->respond([400, 'bad request', {}, 'Missing required fields']);
   }
+  return $req->respond([429, 'too many requests', { 'Retry-After' => $AUTH_FAIL_WINDOW }, 'too many failed logins; try again later'])
+    if _auth_throttled(_client_ip($req));
   if (my $why = _oidc_request_problem($client_id, $redirect_uri, $challenge, $method)) {
     return $req->respond([400, 'bad request', { 'Content-Type' => 'text/plain' }, $why]);
   }
@@ -4315,6 +4355,7 @@ sub do_oidc_authorize_post {
     sub {
       my $result = shift;
       unless ($result && $result->{accountid}) {
+        _auth_failed(_client_ip($req));
         # Bad credentials — re-show the form with error
         my $html = '';
         $TT->process('index.html', {
