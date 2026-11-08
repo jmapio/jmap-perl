@@ -102,6 +102,8 @@ their **metadata only**: every method reads the mirror, every write goes to WebD
 - **Sync cadence**: one PROPFIND per collection, so not every tick — 60 s on demand from a
   FileNode method, 300 s from the periodic `sync`, first walk in the backfill worker. Never
   prune a subtree on an unchanged collection ETag: Cyrus does not propagate them upwards.
+  Nor is RFC 6578 sync-collection a way out on Cyrus: it refuses `sync-level: infinite`, and
+  a collection's sync report lists new files but not new subcollections (checked 2026-11-08).
 - **Server values go in columns, client values in dead props** under
   `https://jmap.io/ns/filenode` (R4). Dead-prop support is learnt by reading one back:
   Cyrus answers a file's PROPPATCH 200 and stores nothing.
