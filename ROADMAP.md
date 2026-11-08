@@ -260,7 +260,16 @@ older ones, so each needs re-checking against the new text:
       a registry; jscontact-cryptographic-key -01 has no vCard mapping and is not implemented
 - [x] blobext -01 -> -03: Blob/set size and digest checks, its SetErrors and no ifInState, the
       dataSourceProperties default, ArchiveEntry created (zip UT field)
-- [ ] filenode -13 -> -20, emailpush -02 -> -04, metadata -01 -> -05,
+- [x] filenode -13 -> -20: @type/mediaType and per-type properties, supportedNodeTypes, onExists
+      without newest, depth from the top, type-only filter conditions, text as a substring, sort
+      of nodes without the property, forbidden for top level and roles, created null and its
+      right, replace needs mayDelete, same-account copy, direct write ETag/If-Match/Content-Type
+      and modified, the -20 sharing model.  JMAP-TestSuite branch filenode-tests is updated to
+      match (local commit 20c8c66, not pushed).  Still open from -20: Direct HTTP Write PATCH
+      (415 today, though blob2 advertises patch types) and Repr-Digest/Content-Digest; the S7
+      blob integration (ArchiveEntry nodeId, ExtractRecipe parentNodeId); S8 xattr (needs
+      JMAP-METADATA); onSuccessDestroyOriginal still destroys explicit ids
+- [ ] emailpush -02 -> -04, metadata -01 -> -05,
       mail-sharing -00 -> -02, refplus -01 -> -02
 - [ ] mailmaint-pacc -02 -> -04, mailmaint-oauth-public -05 -> -06
 All referenced specs are in `specs/`.
