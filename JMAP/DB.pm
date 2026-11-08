@@ -233,10 +233,39 @@ sub commit {
   my $t = $Self->{t};
 
   my $mbupdates = delete $t->{update_mailbox_counts};
+
+  # Mailbox counts by delta: each thread a change touched contributed
+  # something to each mailbox's four counts before the transaction, and
+  # something after; the difference is applied to the stored counts.  The
+  # cost is the touched threads' messages, not the mailbox's (marking one
+  # message read used to recount the whole mailbox, and scan the whole
+  # account for unreadThreads).  A mailbox also queued for a full recount
+  # (update_mailbox_counts, from a path that does not track threads) gets
+  # that instead.
+  if (my $before = delete $t->{thread_before}) {
+    my %delta;
+    for my $thrid (keys %$before) {
+      my $after = $Self->_thread_contrib($thrid);
+      for my $mb (keys %{{ %{ $before->{$thrid} }, %$after }}) {
+        next if $mbupdates && $mbupdates->{$mb};
+        my ($b, $a) = ($before->{$thrid}{$mb} || [0,0,0,0], $after->{$mb} || [0,0,0,0]);
+        $delta{$mb}[$_] += $a->[$_] - $b->[$_] for 0 .. 3;
+      }
+    }
+    my @cols = qw(totalEmails unreadEmails totalThreads unreadThreads);
+    for my $mb (keys %delta) {
+      next unless grep { $_ } @{ $delta{$mb} };
+      my $cur = $Self->dgetone('jmailboxes', { jmailboxid => $mb }, join(',', @cols)) or next;
+      my %update = map { ($cols[$_] => ($cur->{ $cols[$_] } // 0) + $delta{$mb}[$_]) } 0 .. 3;
+      $Self->dmaybedirty('jmailboxes', \%update, { jmailboxid => $mb });
+    }
+  }
+
   if ($mbupdates) {
     foreach my $jmailboxid (keys %$mbupdates) {
       my %update;
-      # re-calculate all the counts.  In theory we could do something clever with delta updates, but this will work
+      # re-calculate all the counts (a path that changed messages without
+      # telling _thread_mark which threads)
       ($update{totalEmails}) = $Self->dbh->selectrow_array("SELECT COUNT(DISTINCT msgid) FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmailboxid = ? AND jmessages.active = 1 AND jmessagemap.active = 1", {}, $jmailboxid);
       ($update{unreadEmails}) = $Self->dbh->selectrow_array("SELECT COUNT(DISTINCT msgid) FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmailboxid = ? AND jmessages.isUnread = 1 AND NOT jmessages.isDraft AND jmessages.active = 1 AND jmessagemap.active = 1", {}, $jmailboxid);
       ($update{totalThreads}) = $Self->dbh->selectrow_array("SELECT COUNT(DISTINCT thrid) FROM jmessages JOIN jmessagemap USING (msgid) WHERE jmailboxid = ? AND jmessages.active = 1 AND jmessagemap.active = 1", {}, $jmailboxid);
@@ -369,6 +398,7 @@ sub add_message {
 
   return unless @$mailboxes; # no mailboxes, no message
 
+  $Self->_thread_mark(thrid => $data->{thrid});
   $Self->dmake('jmessages', {%$data, keywords => $json->encode($data->{keywords})});
   foreach my $mailbox (@$mailboxes) {
     $Self->add_message_to_mailbox($data->{msgid}, $mailbox);
@@ -394,6 +424,37 @@ sub update_prefs {
   return {};
 }
 
+# A thread's contribution to each mailbox's counts: { jmailboxid =>
+# [totalEmails, unreadEmails, totalThreads, unreadThreads] }.  A thread is
+# unread if any of its live messages, in any mailbox, is unread and not a
+# draft (as the full recount has it).  One indexed query over the thread.
+sub _thread_contrib {
+  my ($Self, $thrid) = @_;
+  my $rows = $Self->dbh->selectall_arrayref($Self->dbh->prepare_cached(
+    "SELECT jmessagemap.jmailboxid, jmessages.msgid, jmessages.isUnread, jmessages.isDraft"
+    . " FROM jmessages JOIN jmessagemap USING (msgid)"
+    . " WHERE jmessages.thrid = ? AND jmessages.active = 1 AND jmessagemap.active = 1"), {}, $thrid) || [];
+  my $unread_thread = grep { $_->[2] && !$_->[3] } @$rows;
+  my (%c, %seen);
+  for my $r (@$rows) {
+    my ($mb, $msgid, $unread, $draft) = @$r;
+    next if $seen{"$mb\0$msgid"}++;
+    my $x = $c{$mb} ||= [0, 0, 1, $unread_thread ? 1 : 0];
+    $x->[0]++;
+    $x->[1]++ if $unread && !$draft;
+  }
+  return \%c;
+}
+
+# Note a thread's contribution before the first change this transaction
+# makes to it (see commit).  $thrid, or the thread of $msgid.
+sub _thread_mark {
+  my ($Self, %a) = @_;
+  my $thrid = $a{thrid} // (defined $a{msgid} ? $Self->dgetfield('jmessages', { msgid => $a{msgid} }, 'thrid') : undef);
+  return unless defined $thrid && length $thrid;
+  $Self->{t}{thread_before}{$thrid} //= $Self->_thread_contrib($thrid);
+}
+
 sub update_mailbox_counts {
   my $Self = shift;
   my ($jmailboxid, $jmodseq) = @_;
@@ -407,8 +468,8 @@ sub add_message_to_mailbox {
   my ($msgid, $jmailboxid) = @_;
 
   my $data = {msgid => $msgid, jmailboxid => $jmailboxid};
+  $Self->_thread_mark(msgid => $msgid);
   $Self->dmake('jmessagemap', $data);
-  $Self->update_mailbox_counts($jmailboxid, $data->{jmodseq});
   $Self->ddirty('jmessages', {}, {msgid => $msgid});
 }
 
@@ -417,8 +478,8 @@ sub delete_message_from_mailbox {
   my ($msgid, $jmailboxid) = @_;
 
   my $data = {active => 0};
+  $Self->_thread_mark(msgid => $msgid);
   $Self->dmaybedirty('jmessagemap', $data, {msgid => $msgid, jmailboxid => $jmailboxid});
-  $Self->update_mailbox_counts($jmailboxid, $data->{jmodseq});
   $Self->ddirty('jmessages', {}, {msgid => $msgid});
 }
 
@@ -427,6 +488,7 @@ sub change_message {
   my ($msgid, $data, $newids) = @_;
 
   my $keywords = $data->{keywords} || {};
+  $Self->_thread_mark(msgid => $msgid);
   my $bump = $Self->dmaybedirty('jmessages', {
     keywords => $json->encode($keywords),
     isDraft => $keywords->{'$draft'} ? 1 : 0,
@@ -438,8 +500,7 @@ sub change_message {
 
   foreach my $jmailboxid (@$newids) {
     if (delete $old{$jmailboxid}) {
-      # just bump the modseq
-      $Self->update_mailbox_counts($jmailboxid, $data->{jmodseq}) if $bump;
+      # already in it: its counts follow by thread delta, at commit
     }
     else {
       $Self->add_message_to_mailbox($msgid, $jmailboxid);
@@ -819,6 +880,7 @@ sub delete_message {
   my $Self = shift;
   my ($msgid) = @_;
 
+  $Self->_thread_mark(msgid => $msgid);
   $Self->dmaybedirty('jmessages', {active => 0}, {msgid => $msgid});
   my $oldids = $Self->dgetcol('jmessagemap', { msgid => $msgid, active => 1 }, 'jmailboxid');
   $Self->delete_message_from_mailbox($msgid, $_) for @$oldids;
