@@ -47,8 +47,8 @@ sub _post_sort {
       }
       elsif ($field eq 'hasKeyword') {
         my $keyword = $arg->{keyword} // '';
-        my $av = $a->{keywords}{$keyword} ? 1 : 0;
-        my $bv = $b->{keywords}{$keyword} ? 1 : 0;
+        my $av = _kw($a)->{$keyword} ? 1 : 0;
+        my $bv = _kw($b)->{$keyword} ? 1 : 0;
         $res = $av <=> $bv;
       }
       elsif ($field eq 'allInThreadHaveKeyword') {
@@ -112,6 +112,16 @@ sub _load_hasatt {
   return { map { $_ => 1 } @$data };
 }
 
+# A message row's keywords, decoded the first time a filter or sort asks:
+# most queries never look, and decoding every message in the account was a
+# large part of their cost.
+sub _kw {
+  my ($item) = @_;
+  my $k = $item->{keywords};
+  return $k if ref $k;
+  return $item->{keywords} = decode_json($k || '{}');
+}
+
 sub _hasthreadkeyword {
   my $data = shift;
   my %res;
@@ -120,19 +130,19 @@ sub _hasthreadkeyword {
 
     # have already seen a message for this thread
     if ($res{$item->{thrid}}) {
-      foreach my $keyword (keys %{$item->{keywords}}) {
+      foreach my $keyword (keys %{_kw($item)}) {
         # if not already known about, it wasn't present on previous messages, so it's a "some"
         $res{$item->{thrid}}{$keyword} ||= 1;
       }
       foreach my $keyword (keys %{$res{$item->{thrid}}}) {
         # if it was known already, but isn't on this one, it's a some
-        $res{$item->{thrid}}{$keyword} = 1 unless $item->{keywords}{$keyword};
+        $res{$item->{thrid}}{$keyword} = 1 unless _kw($item)->{$keyword};
       }
     }
 
     # first message, it's "all" for every keyword
     else {
-      $res{$item->{thrid}} = { map { $_ => 2 } keys %{$item->{keywords}} };
+      $res{$item->{thrid}} = { map { $_ => 2 } keys %{_kw($item)} };
     }
   }
   return \%res;
@@ -207,11 +217,11 @@ sub _match {
   }
 
   if ($condition->{hasKeyword}) {
-    return 0 unless $item->{keywords}->{$condition->{hasKeyword}};
+    return 0 unless _kw($item)->{$condition->{hasKeyword}};
   }
 
   if ($condition->{notKeyword}) {
-    return 0 if $item->{keywords}->{$condition->{notKeyword}};
+    return 0 if _kw($item)->{$condition->{notKeyword}};
   }
 
   if (exists $condition->{hasAttachment}) {
@@ -378,6 +388,63 @@ sub api_SearchSnippet_get {
   return $messages;
 }
 
+# The rows (msgid, thrid, jmodseq at least) an Email/query or queryChanges
+# answers, in order.  Called inside the transaction; commits it.
+#
+# The shapes nearly every client sends -- a mailbox listing (no filter, or
+# just inMailbox) in receivedAt order, or no sort -- are answered by SQLite
+# from the mailbox's rows alone.  Anything else loads every message in the
+# account and filters and sorts it in Perl.  Both give the same order:
+# _post_sort's, whose final tie-break is msgid ascending.
+sub _email_query_rows {
+  my ($Self, $args) = @_;
+  if (my $rows = $Self->_email_query_fast($args)) {
+    $Self->commit();
+    return $args->{collapseThreads} ? $Self->_collapse_messages($rows) : $rows;
+  }
+
+  my $data = $Self->{db}->dget('jmessages', { active => 1 });
+  # commit before applying the filter, because it might call out for searches
+  $Self->commit();
+
+  my $storage = { data => $data };
+  # Filter before sorting: $data is every message in the account, and sorting
+  # all of it to keep one mailbox was most of the query's time.
+  $data = $Self->_messages_filter($data, $args->{filter}, $storage) if $args->{filter};
+  $data = $Self->_post_sort($data, $args->{sort}, $storage);
+  $data = $Self->_collapse_messages($data) if $args->{collapseThreads};
+  return $data;
+}
+
+# The SQL path for _email_query_rows, or undef when the query has another shape.
+sub _email_query_fast {
+  my ($Self, $args) = @_;
+  return undef if $ENV{JMAP_NO_QUERY_FASTPATH};   # t/email-query-fast.t compares the two
+  my $filter = $args->{filter};
+  my $sort = $args->{sort} || [];
+  return undef if defined $filter
+    and !(ref $filter eq 'HASH' && keys %$filter == 1 && defined $filter->{inMailbox} && !ref $filter->{inMailbox});
+  return undef if @$sort > 1;
+  my $order = 'm.msgid';
+  if (@$sort) {
+    return undef unless ref $sort->[0] eq 'HASH' && ($sort->[0]{property} // '') eq 'receivedAt';
+    my $desc = defined $sort->[0]{isAscending} && !$sort->[0]{isAscending};
+    # COALESCE: _post_sort compares a missing date as 0
+    $order = 'COALESCE(m.internaldate, 0)' . ($desc ? ' DESC' : '') . ', m.msgid';
+  }
+  my $dbh = $Self->{db}->dbh;
+  if (defined $filter) {
+    my $jmailboxid = $Self->idmap($filter->{inMailbox});
+    return $dbh->selectall_arrayref($dbh->prepare_cached(
+      "SELECT m.msgid, m.thrid, m.jmodseq FROM jmessagemap mm JOIN jmessages m ON m.msgid = mm.msgid"
+      . " WHERE mm.jmailboxid = ? AND mm.active = 1 AND m.active = 1 ORDER BY $order"),
+      {Slice => {}}, $jmailboxid);
+  }
+  return $dbh->selectall_arrayref($dbh->prepare_cached(
+    "SELECT m.msgid, m.thrid, m.jmodseq FROM jmessages m WHERE m.active = 1 ORDER BY $order"),
+    {Slice => {}});
+}
+
 sub api_Email_query {
   my $Self = shift;
   my $args = shift;
@@ -395,18 +462,8 @@ sub api_Email_query {
     return $Self->_transError(['error', $err]);
   }
 
-  my $data = $Self->{db}->dget('jmessages', { active => 1 });
-
-  # commit before applying the filter, because it might call out for searches
-  $Self->commit();
-
-  map { $_->{keywords} = decode_json($_->{keywords} || {}) } @$data;
-  my $storage = {data => $data};
-  # Filter before sorting: $data is every message in the account, and sorting
-  # all of it to keep one mailbox was most of the query's time.
-  $data = $Self->_messages_filter($data, $args->{filter}, $storage) if $args->{filter};
-  $data = $Self->_post_sort($data, $args->{sort}, $storage);
-  $data = $Self->_collapse_messages($data) if $args->{collapseThreads};
+  # commits the transaction: the filter might call out for searches
+  my $data = $Self->_email_query_rows($args);
 
   $Self->{db}->save_query('Email', {
     filter          => $args->{filter},
@@ -482,9 +539,7 @@ sub api_Email_queryChanges {
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newQueryState => $newQueryState}])
     if ($user->{jdeletedmodseq} and $args->{sinceQueryState} <= $user->{jdeletedmodseq});
 
-  my $data = $Self->{db}->dget('jmessages', { active => 1 });
-
-  $Self->commit();
+  my $data = $Self->_email_query_rows($args);
 
   my $qparams = {
     filter          => $args->{filter},
@@ -495,13 +550,6 @@ sub api_Email_queryChanges {
 
   return $Self->_transError(['error', {type => 'cannotCalculateChanges', newQueryState => $newQueryState}])
     unless defined $old_ids;
-
-  map { $_->{keywords} = decode_json($_->{keywords} || {}) } @$data;
-  my $storage = { data => $data };
-  # filter before sorting, as in Email/query
-  $data = $Self->_messages_filter($data, $args->{filter}, $storage) if $args->{filter};
-  $data = $Self->_post_sort($data, $args->{sort}, $storage);
-  $data = $Self->_collapse_messages($data) if $args->{collapseThreads};
 
   my @new_ids = map { $_->{msgid} } @$data;
 
