@@ -1823,6 +1823,7 @@ my %KNOWN_CAPABILITIES = map { $_ => 1 } qw(
   urn:ietf:params:jmap:mdn
   urn:ietf:params:jmap:quota
   urn:ietf:params:jmap:calendars
+  urn:ietf:params:jmap:calendars:parse
   urn:ietf:params:jmap:contacts
   urn:ietf:params:jmap:principals
   urn:ietf:params:jmap:principals:availability

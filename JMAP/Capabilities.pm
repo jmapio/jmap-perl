@@ -20,6 +20,14 @@ our $MAX_DELAYED_SEND = 30 * 86400;
 # RFC 8620 S2 core limits: advertised in the session (bin/jmap-proxy.pl) and
 # enforced by JMAP::API::handle_request, so the two cannot drift.
 our $MAX_OBJECTS_IN_GET = 4096;
+
+# How many calendars one CalendarEvent may be put in.  An event can be read
+# in several (CalDAV lets a UID be in more than one calendar, and the proxy
+# shows every copy in calendarIds), but RFC 6638 S3.2.4.1 makes a scheduling
+# object's UID unique across a user's calendars, and Cyrus refuses a second
+# copy of any event (403 unique-scheduling-object-resource).  So a client
+# may put an event in one; raise this for a backend that allows more.
+our $MAX_CALENDARS_PER_EVENT = 1;
 our $MAX_OBJECTS_IN_SET = 4096;
 
 # The accountCapabilities for an IMAP-backed account, as it appears both in the
@@ -78,7 +86,7 @@ sub imap_account_capabilities {
     'urn:ietf:params:jmap:mdn'   => {},
     'urn:ietf:params:jmap:quota' => {},
     ($conf->{caldavURL} ? ('urn:ietf:params:jmap:calendars' => {
-      maxCalendarsPerEvent     => 1,
+      maxCalendarsPerEvent     => $MAX_CALENDARS_PER_EVENT,
       minDateTime              => '1970-01-01T00:00:00Z',
       maxDateTime              => '2099-12-31T23:59:59Z',
       # a JSCalendar Duration has no year unit (RFC 8984 S1.4.6)
@@ -91,9 +99,12 @@ sub imap_account_capabilities {
     },
     'urn:ietf:params:jmap:principals:availability' => {
       maxAvailabilityDuration => 'P366D',
-    }) : ()),
+    },
+    # draft-ietf-jmap-calendars-33 S1.5.3: CalendarEvent/parse
+    'urn:ietf:params:jmap:calendars:parse' => {}) : ()),
     ($conf->{carddavURL} ? ('urn:ietf:params:jmap:contacts' => {
-      maxAddressBooksPerCard => 1,
+      # a card is in every address book holding a copy of its UID
+      maxAddressBooksPerCard => undef,
       mayCreateAddressBook   => JSON::true,
     }) : ()),
     # draft-ietf-jmap-filenode S2: only for an account with a WebDAV home

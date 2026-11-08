@@ -234,7 +234,13 @@ Gap analysis (April 2026) against RFC 8620, RFC 8621, draft-ietf-jmap-calendars-
 
 `specs/` moved to the latest revisions on 2026-11-07; the work below was checked against the
 older ones, so each needs re-checking against the new text:
-- [ ] jmap-calendars -26 -> -33 (in the RFC Editor queue)
+- [x] jmap-calendars -26 -> -33: the calendars:parse capability (CalendarEvent/parse was
+      unreachable: the capability was not known), the participant filter (was attendee), sort by
+      id and by start instant, after/before as LocalDateTimes in the query's timeZone (recurring
+      events matched by any occurrence, expanded instances each in their own zone),
+      useDefaultAlerts on get, lowercase parse method, version and the origin-only updated rules
+      on /set.  maxCalendarsPerEvent stays 1: Cyrus refuses a UID's second copy (RFC 6638).
+      Not done: useDefaultAlerts is not stored (needs a Text::JSCalendar X-property mapping)
 - [x] jscalendarbis -15 -> -22, jscalendar-icalendar -22 -> -29, icalendar-jscalendar-extensions
       -05 -> -09: every normative change is in Text::JSCalendar branch `jscalendar-29` (links by
       `rel`, no null `timeZone`, unknown CLASS private, SHOW-WITHOUT-TIME, Task end-relative

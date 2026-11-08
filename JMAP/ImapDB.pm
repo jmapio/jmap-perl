@@ -4802,6 +4802,14 @@ sub _set_schedule_agent_client {
 # calendarIds: "An event MUST belong to one or more Calendars at all times
 # ... The value for each key in the object MUST be true" (S5), and an id
 # that is not a calendar is an invalid foreign key (RFC 8620 S5.3).
+# draft-ietf-jmap-calendars S5.1 isOrigin: no organizer, or the organizer is
+# this account's user.
+sub _event_is_origin {
+  my ($organizer, $user_email) = @_;
+  return 1 unless defined $organizer;
+  return lc($organizer =~ s{^mailto:}{}ri) eq lc($user_email // '');
+}
+
 # The copies of an event on the server: one per calendar holding its UID,
 # as [{ href, icalendarid, jcalendarid }] in calendar order.  In a transaction.
 sub _event_copies {
@@ -4831,8 +4839,12 @@ sub _event_copy_gone {
 }
 
 sub _event_calendarids_ok {
-  my ($Self, $cids) = @_;
+  my ($Self, $cids, $have) = @_;
   return 0 unless ref $cids eq 'HASH' && %$cids;
+  # no more than maxCalendarsPerEvent -- unless the event already has more
+  # (copies another client made) and is not being given any further ones
+  my $max = $JMAP::Capabilities::MAX_CALENDARS_PER_EVENT;
+  return 0 if defined $max && keys %$cids > $max && keys %$cids > ($have // 0);
   for my $id (keys %$cids) {
     return 0 unless JSON::XS::is_bool($cids->{$id}) && $cids->{$id};
     return 0 unless $Self->dgetfield('icalendars', { jcalendarid => $id }, 'href');
@@ -4973,20 +4985,18 @@ sub create_calendar_events {
       $notcreated{$cid} = { type => 'invalidProperties', properties => $utc_bad };
       next;
     }
-    # S5.9: if omitted the server sets @type, uid and created; on an event
-    # this server originates, updated is always the server's time, and a
-    # client created later than that is reset with it.
+    # S5.9: if omitted the server sets @type, uid, created and version; on
+    # an event this server originates, updated is always the server's time,
+    # and a client created later than that is reset with it.  On any other
+    # it "MUST NOT override or automatically set an updated time".
     my %server_set = %$utc_set;
     $server_set{uid} = $uid unless defined $calendar->{uid};
     $server_set{'@type'} = $ev{'@type'} = 'Event' unless defined $ev{'@type'};
+    $server_set{version} = $ev{version} = '2.0' unless defined $ev{version};
     $server_set{created} = $ev{created} = $now unless defined $ev{created};
-    my $organizer = lc($ev{organizerCalendarAddress} // '') =~ s{^mailto:}{}r;
-    if (!defined $ev{organizerCalendarAddress} || $organizer eq $user_email) {
+    if (_event_is_origin($ev{organizerCalendarAddress}, $user_email)) {
       $server_set{updated} = $ev{updated} = $now;
       $server_set{created} = $ev{created} = $now if $ev{created} gt $now;
-    }
-    else {
-      $ev{updated} //= $now;
     }
     my $no_sched = defined $ev{sendSchedulingMessages} ? !$ev{sendSchedulingMessages} : 0;
     delete $ev{sendSchedulingMessages};
@@ -5034,6 +5044,7 @@ sub update_calendar_events {
   return ({}, {}) unless %$update;
 
   $Self->begin();
+  my $user_email = lc($Self->get_user()->{email} // '');
 
   # Every change goes to every copy of the event (one per calendar).
   my %todo;             # uid => [[href, ...], event_data]
@@ -5058,13 +5069,18 @@ sub update_calendar_events {
       }
       my %patch = %$calendar;
       delete @patch{qw(calendarIds calendarId)};
-      $patch{updated} //= _utcnow();
+      # S5.9: the server sets updated on an event it originates, and only then
+      my $master = $Self->read_jevent_payload($master_uid) // {};
+      if (_event_is_origin($master->{organizerCalendarAddress}, $user_email)) {
+        $patch{updated} = _utcnow();
+        $changed{$uid} = { updated => $patch{updated} };
+      }
       my $no_sched_occ = defined $patch{sendSchedulingMessages} ? !$patch{sendSchedulingMessages} : 0;
       delete $patch{sendSchedulingMessages};
       $patch{_no_schedule} = 1 if $no_sched_occ;
       $todo_occurrence{$master_uid}[0] = \@hrefs;
       push @{$todo_occurrence{$master_uid}[1]}, [$recurrence_id, $uid, \%patch];
-      $changed{$uid} = undef;
+      $changed{$uid} //= undef;
       next;
     }
 
@@ -5075,7 +5091,7 @@ sub update_calendar_events {
     }
 
     if (exists $calendar->{calendarIds}
-        && !$Self->_event_calendarids_ok($calendar->{calendarIds})) {
+        && !$Self->_event_calendarids_ok($calendar->{calendarIds}, scalar @$copies)) {
       $notchanged{$uid} = { type => 'invalidProperties', properties => ['calendarIds'] };
       next;
     }
@@ -5113,7 +5129,13 @@ sub update_calendar_events {
         next;
       }
     }
-    $ev{updated} //= _utcnow();
+    # S5.9: on an event this server originates, updated is the server's time
+    # (a client's value is replaced) and is reported; on any other it is left
+    # as the client gives it
+    my $current = $Self->read_jevent_payload($uid) // {};
+    my $org = exists $ev{organizerCalendarAddress} ? $ev{organizerCalendarAddress} : $current->{organizerCalendarAddress};
+    my $server_updated;
+    $server_updated = $ev{updated} = _utcnow() if _event_is_origin($org, $user_email);
     my $no_sched = defined $ev{sendSchedulingMessages} ? !$ev{sendSchedulingMessages} : 0;
     delete $ev{sendSchedulingMessages};
     if ($no_sched) {
@@ -5122,7 +5144,7 @@ sub update_calendar_events {
     }
     $todo{$uid} = [\@hrefs, \%ev];
 
-    $changed{$uid} = undef;
+    $changed{$uid} = defined $server_updated ? { updated => $server_updated } : undef;
   }
 
   $Self->commit();

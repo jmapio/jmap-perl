@@ -84,6 +84,18 @@ $db->dinsert('ievents', { icalendarid => $_->[0], uid => 'u1', href => $_->[1], 
 $db->set_event($db->_event_calendars('u1'), { uid => 'u1', '@type' => 'Event', title => 'Both' });
 $db->commit();
 
+# the writes below put an event in two calendars: allowed only where the
+# backend takes it (maxCalendarsPerEvent; Cyrus refuses a second copy)
+{
+  local $JMAP::Capabilities::MAX_CALENDARS_PER_EVENT = 1;
+  my ($made, $not) = $db->create_calendar_events({ c0 => { '@type' => 'Event', title => 'Two',
+    calendarIds => { $ja => JSON::XS::true, $jb => JSON::XS::true } } });
+  is_deeply($not->{c0}{properties}, ['calendarIds'], 'more calendars than maxCalendarsPerEvent: invalidProperties');
+  my ($ch) = $db->update_calendar_events({ u1 => { calendarIds => { $ja => JSON::XS::true, $jb => JSON::XS::true } } });
+  ok(exists $ch->{u1}, 'but an event that already has two copies may keep them');
+}
+$JMAP::Capabilities::MAX_CALENDARS_PER_EVENT = undef;
+
 @FakeCalDAV::calls = ();
 my ($changed, $not) = $db->update_calendar_events({ u1 => { title => 'New' } });
 is_deeply([sort map { $_->[1] } grep { $_->[0] eq 'update_event' } @FakeCalDAV::calls],

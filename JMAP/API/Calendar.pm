@@ -104,39 +104,60 @@ sub _window_overrides {
 # rule (every part of it, RDATE-style additions, exclusions; bounded); an
 # occurrence counts by where it actually starts, so one moved out of the
 # window is left out and one moved into it from outside is added.
+# The instances of a recurring event that overlap the query's range.
+# $after and $before are LocalDateTimes in the query's timeZone (draft-ietf-
+# jmap-calendars-33 S5.11.1): an instance matches if it starts before
+# $before and ends after $after, each instance in its own time zone (a
+# floating one in the query's).  Returns { id, rid, start, instant }: start
+# local, instant the UTC start the "start" sort orders by.  $max stops early.
 sub _expand_event_occurrences {
-  my ($Self, $row, $master, $after_str, $before_str) = @_;
+  my ($Self, $row, $master, $after_str, $before_str, $max) = @_;
   return () unless defined $master->{start};
+  my $qtz = $Self->{_query_tz} // 'Etc/UTC';
+  my $tz  = $master->{timeZone} // $qtz;
+  my ($after, $before) = map { defined $_ && length $_ ? _parse_jscal_dt(s/Z$//r, $qtz) : undef } $after_str, $before_str;
 
-  # after/before may carry a trailing Z; compared as local times, as the
-  # string-compare filter does
-  (my $after_cmp  = $after_str  // '') =~ s/Z$//;
-  (my $before_cmp = $before_str // '') =~ s/Z$//;
+  # the bounds the expander works in: the event's own local time, widened by
+  # its duration on the after side so an instance that starts before the
+  # range but ends inside it is found
+  my $local = sub { my $dt = shift; $dt->clone->set_time_zone($tz)->strftime('%Y-%m-%dT%H:%M:%S') };
+  my $span = do {
+    my $z = DateTime->from_epoch(epoch => 0);
+    my $e = _dt_add_duration($z, $master->{duration} // 'PT0S') // $z;
+    $e->epoch - $z->epoch;
+  };
+  my %bound;
+  $bound{after}  = $local->($after->clone->subtract(seconds => $span + 86400)) if $after;
+  $bound{before} = $local->($before->clone->add(seconds => 86400)) if $before;
 
   my $overrides = $master->{recurrenceOverrides} // {};
   my $item = sub {
     my $rid = shift;
-    my $patch = $overrides->{$rid};
-    my $actual_start = (ref $patch eq 'HASH' && defined $patch->{start}) ? $patch->{start} : $rid;
-    return () if length $after_cmp  && $actual_start lt $after_cmp;
-    return () if length $before_cmp && $actual_start ge $before_cmp;
-    return { id => JMAP::EventId::instance_id($row->{eventuid}, $rid),
-             rid => $rid, start => $actual_start };
+    my $patch = ref $overrides->{$rid} eq 'HASH' ? $overrides->{$rid} : {};
+    my $start = $patch->{start} // $rid;
+    my $st = _parse_jscal_dt($start, $patch->{timeZone} // $tz) or return ();
+    my $en = _dt_add_duration($st, $patch->{duration} // $master->{duration} // 'PT0S') // $st;
+    return () if $before && DateTime->compare($st, $before) >= 0;
+    return () if $after  && DateTime->compare($en, $after) <= 0;
+    return { id => JMAP::EventId::instance_id($row->{eventuid}, $rid), rid => $rid, start => $start,
+             instant => $st->clone->set_time_zone('UTC')->strftime('%Y-%m-%dT%H:%M:%SZ') };
   };
 
-  my @rids = eval { Text::JSCalendar->occurrences($master,
-    (length $after_cmp ? (after => $after_cmp) : ()),
-    (length $before_cmp ? (before => $before_cmp) : ())) };
+  my @rids = eval { Text::JSCalendar->occurrences($master, %bound) };
   warn "CalendarEvent/query: $row->{eventuid}: cannot expand: $@" if $@;
   my %seen = map { $_ => 1 } @rids;
-  my @items = map { $item->($_) } @rids;
-
+  my @items;
+  for my $rid (@rids) {
+    push @items, $item->($rid);
+    return @items if $max && @items >= $max;
+  }
   # moved overrides whose natural occurrence is outside the window
   for my $rid (sort keys %$overrides) {
     next if $seen{$rid};
     my $patch = $overrides->{$rid};
     next unless ref $patch eq 'HASH' && !$patch->{excluded};
     push @items, $item->($rid);
+    return @items if $max && @items >= $max;
   }
   return @items;
 }
@@ -393,7 +414,7 @@ sub _event_match {
   }
 
   my $needs_payload = grep { defined $condition->{$_} }
-      qw(after before text title description location owner attendee);
+      qw(after before text title description location owner participant attendee);
 
   if ($needs_payload) {
     my $uid     = $item->{eventuid};
@@ -402,6 +423,9 @@ sub _event_match {
     if ($condition->{after} || $condition->{before}) {
       my $start      = $payload->{start} // '';
       my $is_recur   = $payload->{recurrenceRule};
+      # S5.11.1: "The end of the event, or any recurrence of the event"
+      return 0 if $is_recur
+        && !$Self->_expand_event_occurrences($item, $payload, $condition->{after}, $condition->{before}, 1);
       unless ($is_recur) {
         # draft-ietf-jmap-calendars S5.10: before/after are local date-times
         # in the query's timeZone (default Etc/UTC); compare as instants,
@@ -456,8 +480,9 @@ sub _event_match {
       return 0 unless $found;
     }
 
-    if (defined $condition->{attendee}) {
-      my $needle = lc($condition->{attendee});
+    # -33 S5.11.1 "participant" (it was "attendee", still taken), any role
+    if (defined(my $who = $condition->{participant} // $condition->{attendee})) {
+      my $needle = lc($who);
       my $found  = 0;
       for my $p (values %{$payload->{participants} || {}}) {
         my $addr = $p->{calendarAddress} // '';
@@ -500,13 +525,27 @@ sub _event_filter {
 }
 
 my %CALENDAR_EVENT_FILTER_PROPS = map { $_ => 1 }
-  qw(inCalendar inCalendars uid after before text title description location owner attendee);
+  qw(inCalendar inCalendars uid after before text title description location owner participant attendee);
 
-my %CALENDAR_EVENT_SORT = map { $_ => 1 } qw(start uid recurrenceId);
+# -33 S5.11.2: id, uid and start MUST be supported (recurrenceId is kept)
+my %CALENDAR_EVENT_SORT = map { $_ => 1 } qw(id start uid recurrenceId);
 
-# Sort query entries ({ id, start, uid, recurrenceId }) by a list of
-# Comparators; a null recurrenceId (a base event) sorts first, and the id
+# Sort query entries ({ id, start, instant, uid, recurrenceId }) by a list
+# of Comparators.  "start" orders by the instant an event starts (-33
+# S5.11.2: "not by the lexical value"), a floating one read in the query's
+# timeZone; a null recurrenceId (a base event) sorts first, and the id
 # breaks ties so the order is total.
+# What _sort_calendar_events needs of a stored (base) event.
+sub _event_sort_row {
+  my ($Self, $row, $payload) = @_;
+  $row->{start}        = $payload->{start} // '';
+  $row->{instant}      = _utc_start($payload->{start}, $payload->{timeZone} // $Self->{_query_tz} // 'Etc/UTC');
+  $row->{uid}          = $row->{eventuid};
+  $row->{recurrenceId} = undef;   # a stored event is a base event
+  $row->{id}           = JMAP::EventId::master_id($row->{eventuid});
+  return $row;
+}
+
 sub _sort_calendar_events {
   my ($items, $sort) = @_;
   my %keys;
@@ -516,6 +555,8 @@ sub _sort_calendar_events {
       my $p = $cmp->{property};
       if ($p eq 'uid') {
         $res = JMAP::Collation::compare($cmp->{collation}, $a->{uid}, $b->{uid}, \%keys);
+      } elsif ($p eq 'start') {
+        $res = ($a->{instant} // $a->{start} // '') cmp ($b->{instant} // $b->{start} // '');
       } else {
         my ($x, $y) = ($a->{$p}, $b->{$p});
         $res = !defined $x ? (defined $y ? -1 : 0) : !defined $y ? 1 : $x cmp $y;
@@ -592,9 +633,7 @@ sub api_CalendarEvent_query {
                         grep { defined $_->{id} }
                         $Self->_expand_event_occurrences($row, $master, $after, $before);
       } else {
-        push @expanded, { id => JMAP::EventId::master_id($row->{eventuid}),
-                          start => $master->{start} // '',
-                          uid => $row->{eventuid}, recurrenceId => undef };
+        push @expanded, $Self->_event_sort_row({ eventuid => $row->{eventuid} }, $master);
       }
     }
 
@@ -626,10 +665,7 @@ sub api_CalendarEvent_query {
   if ($args->{sort}) {
     for my $row (@$data) {
       $storage{$row->{eventuid}} //= $Self->{db}->read_jevent_payload($row->{eventuid}) // {};
-      $row->{start}        = $storage{$row->{eventuid}}{start} // '';
-      $row->{uid}          = $row->{eventuid};
-      $row->{recurrenceId} = undef;   # a stored event is a base event
-      $row->{id}           = $row->{eventuid};
+      $Self->_event_sort_row($row, $storage{$row->{eventuid}});
     }
     $data = [_sort_calendar_events($data, $args->{sort})];
   }
@@ -784,6 +820,8 @@ sub api_CalendarEvent_get {
       $item->{calendarIds} = { map { ("$_" => JSON::true) } JMAP::DB::event_calendar_ids($data) } if _prop_wanted($args, 'calendarIds');
       $item->{isOrigin}    = _is_origin($organizer, $user->{email})   if _prop_wanted($args, 'isOrigin');
       $item->{isDraft}     = $JSON::false if _prop_wanted($args, 'isDraft');
+      # -33 S5.8: a get without properties MUST include useDefaultAlerts
+      $item->{useDefaultAlerts} //= $JSON::false if _prop_wanted($args, 'useDefaultAlerts');
       # draft-ietf-jmap-calendars S10.9.2: set only on a synthetic instance id,
       # and it names the real event the instance was generated from.
       $item->{baseEventId} = JMAP::EventId::master_id($master_uid) if _prop_wanted($args, 'baseEventId');
@@ -819,6 +857,7 @@ sub api_CalendarEvent_get {
     $item->{isOrigin}    = _is_origin($organizer, $user->{email})   if _prop_wanted($args, 'isOrigin');
     $item->{isDraft}     = $JSON::false if _prop_wanted($args, 'isDraft');
     $item->{baseEventId} = undef        if _prop_wanted($args, 'baseEventId');
+    $item->{useDefaultAlerts} //= $JSON::false if _prop_wanted($args, 'useDefaultAlerts');
 
     push @list, $item;
   }
@@ -845,6 +884,8 @@ sub api_CalendarEvent_changes {
 sub api_CalendarEvent_queryChanges {
   my $Self = shift;
   my $args = shift;
+  # the same time zone the /query used, for floating events
+  local $Self->{_query_tz} = $args->{timeZone} // 'Etc/UTC';
 
   my ($user, $accountid) = $Self->_api_init($args);
   return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
@@ -883,10 +924,7 @@ sub api_CalendarEvent_queryChanges {
     }
     for my $row (@$data) {
       $storage{$row->{eventuid}} //= $Self->{db}->read_jevent_payload($row->{eventuid}) // {};
-      $row->{start}        = $storage{$row->{eventuid}}{start} // '';
-      $row->{uid}          = $row->{eventuid};
-      $row->{recurrenceId} = undef;
-      $row->{id}           = $row->{eventuid};
+      $Self->_event_sort_row($row, $storage{$row->{eventuid}});
     }
     $data = [_sort_calendar_events($data, $args->{sort})];
   }
@@ -954,6 +992,8 @@ sub api_CalendarEvent_parse {
 
     for my $event (@events) {
       delete $event->{calendarIds};
+      # jscalendarbis S3.1.8: method is lowercase (the iTIP METHOD is not)
+      $event->{method} = lc $event->{method} if defined $event->{method};
     }
 
     $parsed{$blobId} = \@events;
