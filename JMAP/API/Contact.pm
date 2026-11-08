@@ -163,33 +163,31 @@ sub api_Contact_query {
       return $Self->_transError(['error', {type => 'unsupportedSort', sort => $cmp}])
         unless $CONTACT_SORT_PROPS{$cmp->{property} // ''};
     }
+    # Each card's value for each comparator, worked out once (not twice per
+    # comparison): RFC 9610 S3.3.2 created/updated are the Card's own
+    # UTCDateTimes, name its full name, name/<kind> that component.
+    my @cmps = @{$args->{sort}};
+    my %key;
+    for my $row (@$data) {
+      my $card = $storage{payloads}{$row->{contactuid}}
+        //= ($Self->{db}->read_jcontact_payload($row->{contactuid}) // {});
+      $key{$row->{contactuid}} = [ map {
+        my $prop = $_->{property};
+        $prop eq 'created' || $prop eq 'updated' ? ($card->{$prop} // '')
+          : $prop eq 'name' ? $card->{name}{full}
+          : _contact_name_component($card, $prop =~ s{^name/}{}r)
+      } @cmps ];
+    }
+    my $ckeys = $storage{collation_keys} //= {};
     $data = [sort {
+      my ($ka, $kb) = ($key{$a->{contactuid}}, $key{$b->{contactuid}});
       my $res = 0;
-      for my $cmp (@{$args->{sort}}) {
+      for my $i (0 .. $#cmps) {
+        my $cmp = $cmps[$i];
         my $prop = $cmp->{property};
-        if ($prop eq 'created' || $prop eq 'updated') {
-          # RFC 9610 S3.3.2: the Card's own created/updated (UTCDateTime)
-          my $acard = $storage{payloads}{$a->{contactuid}}
-            //= ($Self->{db}->read_jcontact_payload($a->{contactuid}) // {});
-          my $bcard = $storage{payloads}{$b->{contactuid}}
-            //= ($Self->{db}->read_jcontact_payload($b->{contactuid}) // {});
-          $res = ($acard->{$prop} // '') cmp ($bcard->{$prop} // '');
-        } else {
-          # name/* sort: load payload
-          my $acard = $storage{payloads}{$a->{contactuid}}
-            //= ($Self->{db}->read_jcontact_payload($a->{contactuid}) // {});
-          my $bcard = $storage{payloads}{$b->{contactuid}}
-            //= ($Self->{db}->read_jcontact_payload($b->{contactuid}) // {});
-          if ($prop eq 'name') {
-            $res = JMAP::Collation::compare($cmp->{collation}, $acard->{name}{full}, $bcard->{name}{full},
-                                            $storage{collation_keys} //= {});
-          } else {
-            my $kind = ($prop =~ s{^name/}{}r);
-            $res = JMAP::Collation::compare($cmp->{collation},
-                     _contact_name_component($acard, $kind), _contact_name_component($bcard, $kind),
-                     $storage{collation_keys} //= {});
-          }
-        }
+        $res = ($prop eq 'created' || $prop eq 'updated')
+          ? $ka->[$i] cmp $kb->[$i]
+          : JMAP::Collation::compare($cmp->{collation}, $ka->[$i], $kb->[$i], $ckeys);
         $res = -$res if defined($cmp->{isAscending}) && !$cmp->{isAscending};
         last if $res;
       }
@@ -235,13 +233,21 @@ sub api_Contact_get {
 
   #properties: String[] A list of properties to fetch for each message.
 
-  my $data = $Self->{db}->dgetby('jcontacts', 'contactuid', { active => 1 }, 'contactuid,jaddressbookid,jaddressbookids');
-
-  my %want;
+  my (%want, $data);
   if ($args->{ids}) {
     %want = map { $Self->idmap($_) => 1 } @{$args->{ids}};
+    # only the rows asked for, not every card in the account
+    my @ids = keys %want;
+    my $dbh = $Self->{db}->dbh;
+    while (my @chunk = splice @ids, 0, 500) {
+      my $rows = $dbh->selectall_arrayref(
+        'SELECT contactuid, jaddressbookid, jaddressbookids FROM jcontacts WHERE active = 1 AND contactuid IN ('
+        . join(',', ('?') x @chunk) . ')', {Slice => {}}, @chunk);
+      $data->{$_->{contactuid}} = $_ for @$rows;
+    }
   }
   else {
+    $data = $Self->{db}->dgetby('jcontacts', 'contactuid', { active => 1 }, 'contactuid,jaddressbookid,jaddressbookids');
     %want = map { $_ => 1 } keys %$data;
   }
 
