@@ -4457,6 +4457,53 @@ sub do_oidc_userinfo {
 # Start HTTP server
 #
 
+# AnyEvent::HTTPD reads all of a request's declared Content-Length into
+# memory before any handler runs -- before authentication -- and the
+# parent is one process for every user: a few requests declaring gigabyte
+# bodies would take it down.  Its header reader is replaced with one that
+# refuses (413) a body over the limit for its path before reading any of it.
+my %MAX_BODY = (
+  '/jmap'     => 10_000_000,                     # maxSizeRequest
+  '/upload'   => 50_000_000,                     # maxSizeUpload
+  '/filenode' => JMAP::FileNode::max_bytes(),    # JMAP_FILES_MAX_BYTES
+  '/pdpa'     => $ENV{JMAP_PDPA_MAX_BYTES} || 200_000_000,
+);
+my $MAX_BODY_DEFAULT = 1_000_000;   # forms, OAuth, signup
+sub _max_body_for {
+  my ($url) = @_;
+  my ($path) = ($url // '') =~ m{^([^?#]*)};
+  for my $p (sort { length $b <=> length $a } keys %MAX_BODY) {
+    return $MAX_BODY{$p} if $path eq $p || index($path, "$p/") == 0;
+  }
+  return $MAX_BODY_DEFAULT;
+}
+{
+  no warnings 'redefine';
+  *AnyEvent::HTTPD::HTTPConnection::push_header = sub {
+    my ($self, $hdl) = @_;
+    $self->{hdl}->unshift_read (line => qr{(?<![^\012])\015?\012}o, sub {
+      my ($hdl, $data) = @_;
+      my $hdr = AnyEvent::HTTPD::HTTPConnection::_parse_headers($data);
+      return $self->error(599 => "garbled headers") unless defined $hdr;
+      push @{$self->{last_header}}, $hdr;
+      if (defined $hdr->{'content-length'}) {
+        my $len = $hdr->{'content-length'};
+        my $max = _max_body_for($self->{last_header}[1]);
+        if ($len !~ /\A\d+\z/ or $len > $max) {
+          $stat{http_too_large}++;
+          return $self->error(413 => "request too large (over $max bytes)");
+        }
+        $self->{hdl}->unshift_read (chunk => $len, sub {
+          my ($hdl, $data) = @_;
+          $self->handle_request(@{$self->{last_header}}, $data);
+        });
+      } else {
+        $self->handle_request(@{$self->{last_header}});
+      }
+    });
+  };
+}
+
 my $port = $ENV{JMAP_PORT} || 9000;
 my $httpd = AnyEvent::HTTPD->new(port => $port, allowed_methods => [qw(GET HEAD POST PUT PATCH)]);
 

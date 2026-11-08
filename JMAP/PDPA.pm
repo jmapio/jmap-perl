@@ -17,6 +17,7 @@ use IO::Compress::Zip     qw($ZipError);
 use IO::Uncompress::Unzip qw($UnzipError);
 
 my $JSON = JSON::XS->new->utf8->canonical;
+our $MAX_ENTRIES = 200_000;
 
 sub _jmap {
   my ($call, $cap, @calls) = @_;
@@ -150,12 +151,21 @@ sub unzip {
   my $u = IO::Uncompress::Unzip->new(\$bytes, Transparent => 0) or die "not a zip: $UnzipError\n";
   my %files;
   my $status = 1;
+  # a zip bomb inflates a small upload to gigabytes: count what is inflated,
+  # and stop at the limits while reading, not after
+  my ($total, $entries) = (0, 0);
+  my $max = $ENV{JMAP_PDPA_MAX_UNZIPPED} || 500_000_000;
   while ($status > 0) {
     my $h = $u->getHeaderInfo() or die "not a zip\n";
+    die "zip: more than $MAX_ENTRIES entries\n" if ++$entries > $MAX_ENTRIES;
     my $name = $h->{Name};
     my $content = '';
     my $buf;
-    while (($status = $u->read($buf)) > 0) { $content .= $buf }
+    while (($status = $u->read($buf)) > 0) {
+      $total += length $buf;
+      die "zip: more than $max bytes uncompressed\n" if $total > $max;
+      $content .= $buf;
+    }
     die "zip: $UnzipError\n" if $status < 0;
     $files{$name} = $content if defined $name && $name !~ m{/\z};
     $status = $u->nextStream();

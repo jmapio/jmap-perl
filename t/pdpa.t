@@ -97,4 +97,17 @@ is_deeply($events[0]{calendarIds}, { 'Calendar-new' => JSON::XS::true }, 'an eve
 
 ok(!eval { JMAP::PDPA::import_archive(call => $import_call, zip => 'not a zip', tmpdir => $tmp); 1 }, 'a bad zip dies');
 
+# a zip bomb: stopped while inflating, at JMAP_PDPA_MAX_UNZIPPED
+{
+  require IO::Compress::Zip;
+  my $bomb = '';
+  my $z = IO::Compress::Zip->new(\$bomb, Name => 'mail/INBOX/1.eml', Method => IO::Compress::Zip::ZIP_CM_DEFLATE());
+  $z->print("\0" x 1_000_000) for 1 .. 20;   # 20MB of zeros, a few KB compressed
+  $z->close;
+  local $ENV{JMAP_PDPA_MAX_UNZIPPED} = 5_000_000;
+  ok(length($bomb) < 100_000, 'a small zip');
+  ok(!eval { JMAP::PDPA::unzip($bomb); 1 }, 'that inflates past the limit is refused');
+  like($@, qr/uncompressed/, 'while inflating');
+}
+
 done_testing;
