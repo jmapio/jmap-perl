@@ -3681,6 +3681,12 @@ sub do_folder {
     }
   }
 
+  # QRESYNC: what the server says was expunged since the last sync.  The
+  # count below still decides whether that was all of it.
+  if ($res->{vanished}) {
+    $Self->deleted_record($ifolderid, $_) for @{$res->{vanished}};
+  }
+
   $Self->dupdate('ifolders', {highestmodseq => $res->{newstate}{highestmodseq}, uidfirst => $uidfirst, uidnext => $res->{newstate}{uidnext}}, {ifolderid => $ifolderid});
 
   $Self->commit();

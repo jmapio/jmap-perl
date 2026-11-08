@@ -987,6 +987,12 @@ sub imap_fetch {
 
   my $imap = $Self->connect_imap();
 
+  # RFC 7162 QRESYNC, where the server has it: the flag update below then
+  # also names the UIDs expunged since the last sync (VANISHED), so the
+  # caller need not list every UID in the folder to find them.  ENABLE is
+  # for the authenticated state, before EXAMINE; IMAPTalk remembers it.
+  my $qresync = $imap->capability->{qresync} && $imap->enable('qresync');
+
   my $r = $imap->examine($imapname);
   die "EXAMINE FAILED $imapname" unless $r;
 
@@ -1029,13 +1035,36 @@ sub imap_fetch {
     }
     next if ($highestmodseq and $item->[3] and $item->[3] == $highestmodseq);
     my @extra;
-    push @extra, "(changedsince $item->[3])" if ($item->[3] and $imap->capability->{condstore});
+    my $vanished = $item->[3] && $qresync;
+    push @extra, "(changedsince $item->[3]" . ($vanished ? ' vanished' : '') . ")"
+      if ($item->[3] and $imap->capability->{condstore});
+    # IMAPTalk keeps a response code until replaced: an old VANISHED must
+    # not be read as this fetch's
+    $imap->clear_response_code('vanished') if $vanished;
     my $data = $imap->fetch("$from:$to", "(@flags)", @extra) || {};
     $res{$key} = [$item, $data];
+    if ($vanished) {
+      # [ ['EARLIER'], '2,4:5' ]; IMAPTalk keeps only the last VANISHED
+      # response, so the caller still checks the count afterwards
+      my $v = $imap->get_response_code('vanished');
+      my $set = ref $v eq 'ARRAY' ? (grep { !ref } @$v)[0] : undef;
+      $res{vanished} = [ grep { $_ >= $from && $_ <= $to } _uid_set($set) ] if defined $set;
+    }
   }
   $Self->_unselect($imap);
 
   return \%res;
+}
+
+# The UIDs of an IMAP sequence set ("2,4:5"); a reversed range counts too.
+sub _uid_set {
+  my ($set) = @_;
+  my @uids;
+  for my $part (split /,/, $set // '') {
+    if ($part =~ /^(\d+):(\d+)$/) { push @uids, ($1 < $2 ? ($1 .. $2) : ($2 .. $1)) }
+    elsif ($part =~ /^(\d+)$/)    { push @uids, $1 }
+  }
+  return @uids;
 }
 
 # RFC 8474 EMAILID/THREADID of every message in a folder, for re-keying the
