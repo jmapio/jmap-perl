@@ -65,6 +65,9 @@ Hard rules that are easy to violate:
   snapshot, the new results and the set of results that may have changed; also reports
   ids that moved without changing (the fewest: those outside the longest run that kept its
   order). Email, Mailbox, CalendarEvent and ContactCard use it. Pure; `t/query-changes.t`.
+- `JMAP/EventSpan.pm` — each event's span (`jevents.firststart`/`lastend`, naive epochs,
+  schema v17) and the widened SQL prefilter range queries use; the exact check still runs on
+  what passes. Pure; `t/event-span.t` requires the same answers with spans and without.
 - `JMAP/FileNode.pm` — pure FileNode logic: ids, blob ids, name rules, globs, rights,
   reconciliation, `/set` ordering, filters and sorts. No I/O, no DB; `t/filenode-*.t`.
 - `JMAP/Sync/WebDAVTalk.pm` — a `Net::DAVTalk` subclass for FileNode: PROPFIND normalised to
