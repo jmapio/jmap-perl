@@ -1752,8 +1752,20 @@ sub _account_details_child {
 # kept in the account's own DB).
 my %pool_cache;
 my $POOL_TTL = 30;
-my %ACCOUNTS_READONLY = map { $_ => 1 } qw(get_pool resolve_token auth push_list push_targets
-  push_accounts list_tokens list_accounts get_account verify_credentials ping);
+# __accounts__ commands that cannot change a pool (lookups, and the frequent
+# bookkeeping ones)
+my %POOL_KEEPS = map { $_ => 1 } qw(get_pool resolve_token auth push_list push_targets
+  push_accounts list_tokens list_accounts get_account verify_credentials ping
+  create_token touch_tokens set_nextsend get_nextsends set_needs_backfill get_needs_backfill
+  clear_backfill push_set push_delete);
+# Commands (to any worker) that can end a credential's validity: a token
+# deleted, an account deleted or moved, a password changed.  They empty the
+# auth cache when sent and again when answered -- a worker answers in order,
+# so a lookup it answered before the change cannot put a revoked credential
+# back.  Without this a deleted token or an old password kept working for
+# $AUTH_CACHE_TTL.
+my %AUTH_CHANGES = map { $_ => 1 } qw(delete_token delete_tokens delete_account set_poolid
+  signup signup_jmap signup_oauth create_account update_settings setup);
 sub get_pool_cached {
   my ($aid, $cb, $errcb) = @_;
   my $c = $pool_cache{$aid};
@@ -1770,13 +1782,19 @@ sub get_pool_cached {
 sub send_backend_request {
   my $accountid = shift;
   my $request = shift;
-  if ($accountid eq '__accounts__' && !$ACCOUNTS_READONLY{$request}) {
-    my $gen = ($pool_cache{''} // 0) + 1;
-    %pool_cache = ('' => $gen);
-  }
   my $args = shift;
   my $cb = shift;
   my $errcb = shift;
+  if (($accountid eq '__accounts__' && !$POOL_KEEPS{$request}) || $request eq 'update_settings' || $request eq 'setup') {
+    my $gen = ($pool_cache{''} // 0) + 1;
+    %pool_cache = ('' => $gen);
+  }
+  if ($AUTH_CHANGES{$request}) {
+    _clear_auth_cache();
+    my ($ok, $err) = ($cb, $errcb);
+    $cb    = sub { _clear_auth_cache(); $ok ? $ok->(@_) : 1 };
+    $errcb = sub { _clear_auth_cache(); $err ? $err->(@_) : 1 };
+  }
   my $backend = get_backend($accountid);
   my $cmd = "#" . $backend->[1]++;
   # Background requests (the periodic sync) are not use: counting them would
@@ -3132,6 +3150,7 @@ sub _auth_failed {
 
 # Cache auth results: key => [accountid, expire_time]
 my %auth_cache;
+sub _clear_auth_cache { %auth_cache = () }
 my $AUTH_CACHE_TTL = 300;  # 5 minutes
 
 # Checks that $auth_aid has pool access to $accountid, then calls $ok_cb or $fail_cb.
@@ -3595,7 +3614,11 @@ sub do_cb_oauth {
       my ($body, $hdrs) = @_;
       warn "OAUTH_CB: token exchange response status=" . ($hdrs->{Status} // '?') . "\n";
       unless (($hdrs->{Status} // 0) =~ /^2/) {
-        warn "OAUTH_CB: token exchange body: $body\n";
+        # only the error fields (RFC 6749 S5.2): the body of a failed
+        # exchange may still carry secrets, and the log is not the place
+        my $e = eval { decode_json($body // q()) };
+        my $why = ref $e eq q(HASH) ? join(q(: ), grep { defined } @{$e}{qw(error error_description)}) : q(not JSON);
+        warn "OAUTH_CB: token exchange failed: " . substr($why =~ s/[^\x20-\x7e]/?/gr, 0, 200) . "\n";
         return $err_html->("Token exchange failed ($hdrs->{Status}). Please try again.");
       }
       my $tokens = eval { decode_json($body) };
