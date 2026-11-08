@@ -14,6 +14,8 @@ use Data::UUID::LibUUID qw(new_uuid_string);
 plan skip_all => 'set CYRUS_URL and JMAP_PROXY_URL' unless $ENV{CYRUS_URL} && $ENV{JMAP_PROXY_URL};
 my $user = $ENV{CYRUS_USER} || 'user1';
 my $http = HTTP::Tiny->new;
+# the proxy's management API takes a token (JMAP_MGMT_TOKEN)
+my $mgmt_http = HTTP::Tiny->new(timeout => 60, default_headers => { Authorization => 'Bearer ' . ($ENV{JMAP_MGMT_TOKEN} // 'test-mgmt-token-for-the-local-stack') });
 my $auth = 'Basic ' . MIME::Base64::encode_base64("$user:password", '');
 my @using = ('urn:ietf:params:jmap:core', 'urn:ietf:params:jmap:filenode');
 my $mgmt = ($ENV{JMAP_MGMT_URL} || 'http://localhost:8081') =~ s{/\z}{}r;
@@ -22,7 +24,7 @@ my $mgmt = ($ENV{JMAP_MGMT_URL} || 'http://localhost:8081') =~ s{/\z}{}r;
 # old (spec "Sync"); an explicit management-API sync always does.  Use it
 # after changing the drive behind the proxy's back.
 sub force_sync {
-  my $res = $http->post("$mgmt/api/accounts/$user/sync");
+  my $res = $mgmt_http->post("$mgmt/api/accounts/$user/sync");
   die "sync: HTTP $res->{status}: $res->{content}" unless $res->{success};
 }
 
@@ -634,7 +636,7 @@ SKIP: {
   # registered the way bin/restart-test-proxy.sh registers the test user,
   # in the test user's pool so one login sees both accounts; whatever an
   # earlier run left goes first, and this one's goes however the block ends
-  $http->delete("$mgmt/api/accounts/$other");
+  $mgmt_http->delete("$mgmt/api/accounts/$other");
   my ($ojmap, $ohome, %src);
   my $guard = bless sub {
     eval {
@@ -655,9 +657,9 @@ SKIP: {
       jmap(['FileNode/set', { onDestroyRemoveChildren => JSON::true, destroy => [ grep { defined && get1($_) } @src{qw(one d)} ] }]);
       1;
     } or diag "tidying up: $@";
-    $http->delete("$mgmt/api/accounts/$other");
+    $mgmt_http->delete("$mgmt/api/accounts/$other");
   }, 'TestGuard';
-  my $reg = $http->post("$mgmt/api/accounts", { headers => { 'Content-Type' => 'application/json' },
+  my $reg = $mgmt_http->post("$mgmt/api/accounts", { headers => { 'Content-Type' => 'application/json' },
     content => encode_json({ accountid => $other, email => $other, type => 'imap', username => $other,
       password => 'password', imapHost => 'localhost', imapPort => ($ENV{CYRUS_IMAP_PORT} || 8143), imapSSL => 1,
       smtpHost => 'localhost', smtpPort => 25, smtpSSL => 1, caldavURL => $ENV{CYRUS_URL}, carddavURL => $ENV{CYRUS_URL},

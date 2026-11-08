@@ -54,6 +54,7 @@ use JMAP::OAuth::PACC;
 use JMAP::OAuth::OIDC;
 use JMAP::Push;
 use JMAP::Dispatch;
+use JMAP::NetGuard ();
 use JMAP::Workers;
 use JMAP::FileNodeCopy;
 use JMAP::FileNode;   # max_bytes, is_too_large: the in-memory cap on one file's content
@@ -294,6 +295,10 @@ sub get_backend {
 
       eval {
         if ($accountid ne '__accounts__') {
+          # every connection an account's worker makes is to a server a user
+          # named: none to a private address unless the operator allows it
+          require JMAP::NetGuard;
+          JMAP::NetGuard::install();
           require IO::Socket::SSL;
           require JMAP::API;
           require JMAP::ImapDB;
@@ -3283,7 +3288,7 @@ sub _discover_fallback {
   my ($domain, $email, $auth_aid, $req) = @_;
 
   my $pacc_url = "https://ua-auto-config.$domain/.well-known/user-agent-configuration.json";
-  AnyEvent::HTTP::http_get($pacc_url, timeout => 5,
+  AnyEvent::HTTP::http_get($pacc_url, timeout => 5, tcp_connect => \&JMAP::NetGuard::tcp_connect,
     headers => { Accept => 'application/json' },
     sub {
       my ($body, $hdrs) = @_;
@@ -3319,7 +3324,7 @@ sub _discover_fallback {
           # If PACC advertises OAuth, fetch RFC 8414 metadata
           if (my $issuer = $cfg->{authentication}{'oauth-public'}{issuer}) {
             my $meta_url = "${issuer}/.well-known/oauth-authorization-server";
-            AnyEvent::HTTP::http_get($meta_url, timeout => 5,
+            AnyEvent::HTTP::http_get($meta_url, timeout => 5, tcp_connect => \&JMAP::NetGuard::tcp_connect,
               headers => { Accept => 'application/json' },
               sub {
                 my ($mbody, $mhdrs) = @_;
@@ -3355,7 +3360,7 @@ sub _discover_fallback {
 sub _try_mozilla_autoconfig {
   my ($domain, $email, $auth_aid, $req) = @_;
   my $url = "https://autoconfig.$domain/mail/config-v1.1.xml";
-  AnyEvent::HTTP::http_get($url, timeout => 5, sub {
+  AnyEvent::HTTP::http_get($url, timeout => 5, tcp_connect => \&JMAP::NetGuard::tcp_connect, sub {
     my ($body, $hdrs) = @_;
     my %prefill;
     if (($hdrs->{Status} // 0) == 200 && $body) {
@@ -3485,7 +3490,7 @@ sub do_cb_oauth {
     $req->respond([500, 'error', { 'Content-Type' => 'text/html' }, $html]);
   };
 
-  AnyEvent::HTTP::http_request('POST', $state->{token_url},
+  AnyEvent::HTTP::http_request('POST', $state->{token_url}, tcp_connect => \&JMAP::NetGuard::tcp_connect,
     headers => { 'Content-Type' => 'application/x-www-form-urlencoded' },
     body    => $form_body,
     timeout => 15,
@@ -3602,7 +3607,7 @@ sub do_cb_oauth {
       };
 
       if ($userinfo_url) {
-        AnyEvent::HTTP::http_get($userinfo_url,
+        AnyEvent::HTTP::http_get($userinfo_url, tcp_connect => \&JMAP::NetGuard::tcp_connect,
           headers => { Authorization => "Bearer $access_token" },
           timeout => 10,
           sub {
@@ -4881,11 +4886,54 @@ sub mgmt_metrics {
 
 $mgmt->reg_cb(request => sub { $stat{mgmt_requests}++ });
 
+# The management API creates accounts and rebinds them into pools, so it
+# takes a token: JMAP_MGMT_TOKEN, or one generated into $datadir/mgmt-token
+# (0600) on first start.  Being on loopback is not enough: a request a user
+# can make the proxy itself send (a passthrough upstream's URLs, a DAV URL)
+# comes from loopback too.  /healthz and /metrics stay open for probes and
+# scrapers.  The token goes as a Bearer token, or as the password of Basic
+# auth (so a browser can open the dashboard).
+my $MGMT_TOKEN = $ENV{JMAP_MGMT_TOKEN} // do {
+  my $file = "$datadir/mgmt-token";
+  my $t;
+  if (open my $fh, '<', $file) { chomp($t = <$fh> // '') }
+  unless (defined $t && length $t >= 32) {
+    $t = _generate_token();
+    my $old = umask 077;
+    open my $fh, '>', $file or die "cannot write $file: $!";
+    print $fh "$t\n";
+    close $fh;
+    umask $old;
+    warn "Management API token written to $file\n";
+  }
+  $t;
+};
+sub _mgmt_authorised {
+  my ($req) = @_;
+  my $h = $req->headers->{authorization} // '';
+  my $given;
+  if ($h =~ /^Bearer\s+(\S+)/i) { $given = $1 }
+  elsif ($h =~ /^Basic\s+(\S+)/i) { (undef, $given) = split /:/, (MIME::Base64::decode_base64($1) // ''), 2 }
+  return 0 unless defined $given && length $given == length $MGMT_TOKEN;
+  my $diff = 0;
+  $diff |= ord(substr($given, $_, 1)) ^ ord(substr($MGMT_TOKEN, $_, 1)) for 0 .. length($MGMT_TOKEN) - 1;
+  return !$diff;
+}
+sub _mgmt_guard {
+  my ($handler) = @_;
+  return sub {
+    my ($httpd, $req) = @_;
+    return $handler->(@_) if _mgmt_authorised($req);
+    $req->respond([401, 'unauthorized', { 'WWW-Authenticate' => 'Basic realm="jmap-proxy management"',
+                                          'Content-Type' => 'text/plain' }, 'management API token required']);
+  };
+}
+
 $mgmt->reg_cb(
   '/healthz' => \&mgmt_healthz,
   '/metrics' => \&mgmt_metrics,
-  '/api'     => \&mgmt_api_accounts,
-  '/'        => \&mgmt_dashboard,
+  '/api'     => _mgmt_guard(\&mgmt_api_accounts),
+  '/'        => _mgmt_guard(\&mgmt_dashboard),
 );
 
 warn "Management UI on http://$mgmt_host:$mgmt_port/\n";

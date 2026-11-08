@@ -13,6 +13,8 @@ FRONTEND_PORT=9000
 JMAP_HOME="${JMAP_HOME:-$(cd "$(dirname "$0")/.." && pwd)}"
 CYRUS_USER="${CYRUS_USER:-user1}"
 CYRUS_PASS="${CYRUS_PASS:-password}"
+# the management API token (it is required: see JMAP_MGMT_TOKEN in SETUP.md)
+JMAP_MGMT_TOKEN="${JMAP_MGMT_TOKEN:-test-mgmt-token-for-the-local-stack}"
 # The test image puts its users in example.com (virtdomains: userid), and its
 # Postfix takes submissions with AUTH PLAIN on 8587 (no TLS needed).
 CYRUS_DOMAIN="${CYRUS_DOMAIN:-example.com}"
@@ -105,7 +107,8 @@ JMAP_MGMT_PORT="${JMAP_MGMT_PORT:-8081}"
 export JMAP_MGMT_PORT
 export JMAP_PORT="$FRONTEND_PORT"
 
-perl -I"$JMAP_HOME" -Ilib "$JMAP_HOME/bin/jmap-proxy.pl" 2>/tmp/jmap-proxy.log &
+# the test Cyrus, Postfix and WebDAV are on localhost: allow private addresses
+JMAP_ALLOW_PRIVATE_BACKENDS=1 JMAP_MGMT_TOKEN="$JMAP_MGMT_TOKEN" perl -I"$JMAP_HOME" -Ilib "$JMAP_HOME/bin/jmap-proxy.pl" 2>/tmp/jmap-proxy.log &
 
 # Wait for the management port to be ready
 for i in $(seq 1 30); do
@@ -125,6 +128,7 @@ if [ "$CLEAN" = "1" ]; then
     if [ "$BACKEND" = "jmap" ]; then
         # Register as JMAP passthrough account pointing at Cyrus's native JMAP
         RESULT=$(curl -sf -X POST http://localhost:${JMAP_MGMT_PORT}/api/accounts \
+            -H "Authorization: Bearer $JMAP_MGMT_TOKEN" \
             -H 'Content-Type: application/json' \
             -d "{
                 \"accountid\":  \"$CYRUS_USER\",
@@ -138,6 +142,7 @@ if [ "$CLEAN" = "1" ]; then
     else
         # Register as IMAP account (default)
         curl -sf -X POST http://localhost:${JMAP_MGMT_PORT}/api/accounts \
+            -H "Authorization: Bearer $JMAP_MGMT_TOKEN" \
             -H 'Content-Type: application/json' \
             -d "{
                 \"accountid\": \"$CYRUS_USER\",
@@ -167,6 +172,7 @@ cat > "$DATADIR/test-config.json" <<TESTCONFIG
   "accountIds"                 : [ "$CYRUS_USER" ],
   "base_uri"                   : "http://localhost:$FRONTEND_PORT/",
   "mgmt_uri"                   : "http://localhost:$JMAP_MGMT_PORT/",
+  "mgmt_token"                 : "$JMAP_MGMT_TOKEN",
   "cyrus_host"                 : "localhost",
   "cyrus_port"                 : $CYRUS_IMAP_PORT,
   "cyrus_http_url"             : "$CYRUS_URL",

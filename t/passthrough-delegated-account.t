@@ -61,6 +61,8 @@ $imap->setacl("user$sep$shared", $primary, "lrswipkxtecdan")
   or die "delegate: " . $imap->LastError;
 
 my $http = HTTP::Tiny->new(timeout => 30);
+# the proxy's management API takes a token (JMAP_MGMT_TOKEN)
+my $mgmt_http = HTTP::Tiny->new(timeout => 60, default_headers => { Authorization => 'Bearer ' . ($ENV{JMAP_MGMT_TOKEN} // 'test-mgmt-token-for-the-local-stack') });
 
 # Sanity: the upstream session for the primary must list BOTH accounts.
 my $sres = $http->get("$cyrus_url/jmap", {
@@ -76,7 +78,7 @@ ok($session->{accounts}{$shared},
 
 my $register = sub {
   my (%args) = @_;
-  my $res = $http->post("$mgmt_url/api/accounts", {
+  my $res = $mgmt_http->post("$mgmt_url/api/accounts", {
     headers => { 'Content-Type' => 'application/json' },
     content => encode_json({
       sessionUrl => "$cyrus_url/jmap",
@@ -106,7 +108,7 @@ isnt($body2->{accountid}, $primary,
 is($body2->{accountid}, $shared, "delegated account kept its requested accountid");
 
 # 3. Both accounts exist, each bound to its own upstream account.
-my $list = $http->get("$mgmt_url/api/accounts");
+my $list = $mgmt_http->get("$mgmt_url/api/accounts");
 my $all  = eval { decode_json($list->{content}) } || [];
 my %got  = map { $_->{accountid} => $_ } @$all;
 is($got{$primary}{backendAccountId}, $primary,

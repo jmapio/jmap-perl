@@ -59,11 +59,13 @@ $imap->setacl("user$sep$shared", $primary, "lrswipkxtecdan")
   or die "delegate: " . $imap->LastError;
 
 my $http = HTTP::Tiny->new(timeout => 60);
+# the proxy's management API takes a token (JMAP_MGMT_TOKEN)
+my $mgmt_http = HTTP::Tiny->new(timeout => 60, default_headers => { Authorization => 'Bearer ' . ($ENV{JMAP_MGMT_TOKEN} // 'test-mgmt-token-for-the-local-stack') });
 
 # Register both proxy accounts against the SAME upstream login.
 for my $spec ([$primary, undef], [$shared, $shared]) {
   my ($aid, $backend) = @$spec;
-  my $res = $http->post("$mgmt_url/api/accounts", {
+  my $res = $mgmt_http->post("$mgmt_url/api/accounts", {
     headers => { 'Content-Type' => 'application/json' },
     content => encode_json({
       accountid  => $aid,
