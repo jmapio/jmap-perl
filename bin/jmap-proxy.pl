@@ -3032,12 +3032,38 @@ sub _time_ago {
   return int($diff/86400). ' days ago';
 }
 
+# The session cookie: HttpOnly (no script reads it), SameSite=Lax (not
+# sent on another site's POST), Secure where the proxy is served over https.
+sub _session_cookie {
+  my ($value, $expires) = @_;
+  return bake_cookie("jmap_proxy", { value => $value, path => '/', expires => $expires,
+                                     httponly => 1, samesite => 'Lax',
+                                     ($BASEURL =~ m{^https://}i ? (secure => 1) : ()) });
+}
+
+# A request a browser sent from another site, carrying our cookie: a
+# state-changing method whose Origin (or, without one, Referer) is not this
+# proxy's.  Browsers send Origin on every cross-site POST, so a form on
+# another site cannot act with the user's cookie (CSRF).  API clients use
+# Bearer or Basic auth and are not affected.
+sub _cross_site {
+  my ($req) = @_;
+  return 0 if $req->method =~ /\A(?:GET|HEAD|OPTIONS)\z/i;
+  my $from = $req->headers->{origin} // $req->headers->{referer};
+  return 0 unless defined $from && length $from;   # no browser said where it came from
+  return 1 if $from eq 'null';                      # an opaque origin (sandboxed frame, file:)
+  my ($ours)   = $BASEURL =~ m{^(https?://[^/]+)}i;
+  my ($theirs) = $from    =~ m{^(https?://[^/]+)}i;
+  return (defined $ours && defined $theirs && lc $ours eq lc $theirs) ? 0 : 1;
+}
+
 sub _get_auth_accountid {
   my ($req) = @_;
   # Cookie contains a token, not an accountid — check the cache
   my $cookies = crush_cookie($req->headers->{cookie} || '');
   my $token = $cookies->{jmap_proxy};
   return undef unless $token;
+  return undef if _cross_site($req);
   my $cached = _check_cache("bearer:$token");
   return $cached;
   # Note: if not cached, caller must use _authenticate() for async resolution
@@ -3063,7 +3089,7 @@ sub _try_authenticate {
   my ($req, $httpd, $cb) = @_;
   my $cookies = crush_cookie($req->headers->{cookie} || '');
   my $token = $cookies->{jmap_proxy};
-  unless ($token) { $cb->(undef); return; }
+  unless ($token && !_cross_site($req)) { $cb->(undef); return; }
   my $cached = _check_cache("bearer:$token");
   if ($cached) { $cb->($cached); return; }
   $httpd->stop_request();
@@ -3129,6 +3155,10 @@ sub _authenticate {
   # Cookie — token in cookie, resolve to accountid
   my $cookies = crush_cookie($req->headers->{cookie} || '');
   if (my $token = $cookies->{jmap_proxy}) {
+    if (_cross_site($req)) {
+      warn "refusing a cross-site " . $req->method . " with the session cookie (Origin: " . ($req->headers->{origin} // $req->headers->{referer} // '') . ")\n";
+      return $errcb->();
+    }
     my $ip = _client_ip($req);
     my $cached = _check_cache("bearer:$token");
     if ($cached) { _touch_token($token, $ip); $cb->($cached); return; }
@@ -3559,7 +3589,7 @@ sub do_cb_oauth {
               { token => $token, accountid => $final_aid,
                 last_ip => _client_ip($req), last_used => time() }, sub {
               $auth_cache{"bearer:$token"} = [$final_aid, time() + $AUTH_CACHE_TTL];
-              my $cookie = bake_cookie("jmap_proxy", { value => $token, path => '/', expires => '+3M' });
+              my $cookie = _session_cookie($token, '+3M');
               $req->respond([302, 'Found',
                 { 'Set-Cookie' => $cookie, Location => "$BASEURL/accounts" }, '']);
             }, sub { $err_html->('Failed to create session after OAuth login') });
@@ -3595,7 +3625,7 @@ sub do_cb_oauth {
             { token => $token, accountid => $final_aid,
               last_ip => _client_ip($req), last_used => time() }, sub {
             $auth_cache{"bearer:$token"} = [$final_aid, time() + $AUTH_CACHE_TTL];
-            my $cookie = bake_cookie("jmap_proxy", { value => $token, path => '/', expires => '+3M' });
+            my $cookie = _session_cookie($token, '+3M');
             $req->respond([302, 'Found',
               { 'Set-Cookie' => $cookie, Location => "$BASEURL/accounts" }, '']);
           }, sub { $err_html->('Failed to create session after OAuth login') });
@@ -3665,7 +3695,7 @@ sub do_signup {
             { token => $token, accountid => $existing_aid,
               last_ip => _client_ip($req), last_used => time() }, sub {
             $auth_cache{"bearer:$token"} = [$existing_aid, time() + $AUTH_CACHE_TTL];
-            my $cookie = bake_cookie("jmap_proxy", { value => $token, path => '/', expires => '+3M' });
+            my $cookie = _session_cookie($token, '+3M');
             $req->respond([301, 'redirected',
               { 'Set-Cookie' => $cookie, Location => "$BASEURL/accounts" }, "Redirected"]);
           }, sub {
@@ -3721,7 +3751,7 @@ sub _do_signup_new {
         { token => $token, accountid => $final_accountid,
           last_ip => _client_ip($req), last_used => time() }, sub {
         $auth_cache{"bearer:$token"} = [$final_accountid, time() + $AUTH_CACHE_TTL];
-        my $cookie = bake_cookie("jmap_proxy", { value => $token, path => '/', expires => '+3M' });
+        my $cookie = _session_cookie($token, '+3M');
         $req->respond([301, 'redirected',
           { 'Set-Cookie' => $cookie, Location => "$BASEURL/accounts" }, "Redirected"]);
       }, sub {
@@ -3779,7 +3809,7 @@ sub do_signup_jmap {
         { token => $token, accountid => $final_aid,
           last_ip => _client_ip($req), last_used => time() }, sub {
         $auth_cache{"bearer:$token"} = [$final_aid, time() + $AUTH_CACHE_TTL];
-        my $cookie = bake_cookie("jmap_proxy", { value => $token, path => '/', expires => '+3M' });
+        my $cookie = _session_cookie($token, '+3M');
         $req->respond([301, 'redirected',
           { 'Set-Cookie' => $cookie, Location => "$BASEURL/accounts" }, "Redirected"]);
       }, sub {
@@ -3916,7 +3946,7 @@ sub _do_accounts_authed {
     send_backend_request('__accounts__', 'delete_token', { token => $token }, sub {
       # If the user deleted their own session token, log them out
       if ($my_token && $token eq $my_token) {
-        my $cookie = bake_cookie("jmap_proxy", { value => '', path => '/', expires => '-1d' });
+        my $cookie = _session_cookie('', '-1d');
         if ($is_fetch) {
           $req->respond([200, 'ok', { 'Set-Cookie' => $cookie,
             'Content-Type' => 'application/json' }, '{"ok":1,"logout":true}']);
@@ -4001,7 +4031,7 @@ sub _do_accounts_authed {
         send_backend_request('__accounts__', 'delete_account', { accountid => $aid }, sub {
           # If we deleted the authenticated account, clear cookie and go home
           if ($aid eq $auth_aid) {
-            my $cookie = bake_cookie("jmap_proxy", { value => '', path => '/', expires => '-1d' });
+            my $cookie = _session_cookie('', '-1d');
             $req->respond([301, 'redirected',
               { 'Set-Cookie' => $cookie, Location => "$BASEURL/" }, "Redirected"]);
           } else {
@@ -4070,7 +4100,7 @@ sub _do_accounts_authed {
 
 sub do_logout {
   my ($httpd, $req) = @_;
-  my $cookie = bake_cookie("jmap_proxy", { value => '', path => '/', expires => '-1d' });
+  my $cookie = _session_cookie('', '-1d');
   my $finish = sub {
     $req->respond([301, 'redirected',
       { 'Set-Cookie' => $cookie, Location => "$BASEURL/" }, "Redirected"]);
