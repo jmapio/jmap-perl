@@ -73,6 +73,9 @@
     <form action="/oauth/authorize" method="post">
       <input type="hidden" name="redirect_uri" value="[% oidc.redirect_uri | html %]">
       <input type="hidden" name="state"        value="[% oidc.state        | html %]">
+      <input type="hidden" name="client_id"    value="[% oidc.client_id    | html %]">
+      <input type="hidden" name="code_challenge" value="[% oidc.code_challenge | html %]">
+      <input type="hidden" name="code_challenge_method" value="[% oidc.code_challenge_method | html %]">
       <label>Email address</label>
       <input type="email" name="username" required autofocus placeholder="you@example.com">
       <label>Password</label>

@@ -4188,23 +4188,51 @@ sub do_oidc_jwks {
   $req->respond({ content => ['application/json', $body] });
 }
 
+# The OAuth clients the proxy issues codes to, registered by the operator:
+# JMAP_OIDC_CLIENTS is a JSON object { client_id => [ redirect_uri, ... ] },
+# each URI matched exactly.  With none, /oauth/authorize and /oauth/token
+# are off.  A code went to whatever redirect_uri a link named, for any
+# logged-in user who followed it, and /oauth/token took any client: one
+# click on a crafted link gave the link's author a 90-day token.
+my %OIDC_CLIENTS = do {
+  my $c = eval { decode_json($ENV{JMAP_OIDC_CLIENTS} // '{}') };
+  warn "JMAP_OIDC_CLIENTS is not a JSON object of client_id => [redirect_uri, ...]\n" unless ref $c eq 'HASH';
+  ref $c eq 'HASH' ? (map { $_ => { map { $_ => 1 } grep { !ref } (ref $c->{$_} eq 'ARRAY' ? @{ $c->{$_} } : $c->{$_}) } } keys %$c) : ();
+};
+
+# Why an authorization request must be refused, or undef: the client and
+# its exact redirect_uri must be registered, and (public clients, RFC 7636)
+# a PKCE S256 challenge given.  Refused requests are never redirected.
+sub _oidc_request_problem {
+  my ($client_id, $redirect_uri, $challenge, $method) = @_;
+  return 'OpenID Connect is not enabled on this server' unless %OIDC_CLIENTS;
+  return 'unknown client_id' unless defined $client_id && $OIDC_CLIENTS{$client_id};
+  return 'redirect_uri is not registered for this client' unless defined $redirect_uri && $OIDC_CLIENTS{$client_id}{$redirect_uri};
+  return 'code_challenge with code_challenge_method S256 is required'
+    unless defined $challenge && $challenge =~ /\A[A-Za-z0-9_-]{43}\z/ && ($method // '') eq 'S256';
+  return undef;
+}
+
 # GET /oauth/authorize — show login form or issue auth code
 sub do_oidc_authorize {
   my ($httpd, $req) = @_;
   my $redirect_uri  = $req->parm('redirect_uri')  // '';
   my $state         = $req->parm('state')         // '';
   my $client_id     = $req->parm('client_id')     // '';
+  my $challenge     = $req->parm('code_challenge');
+  my $method        = $req->parm('code_challenge_method');
 
-  unless ($redirect_uri) {
-    return $req->respond([400, 'bad request', {}, 'Missing redirect_uri']);
+  if (my $why = _oidc_request_problem($client_id, $redirect_uri, $challenge, $method)) {
+    return $req->respond([400, 'bad request', { 'Content-Type' => 'text/plain' }, $why]);
   }
+  my %pkce = (client_id => $client_id, code_challenge => $challenge);
 
   # If already authenticated, issue code immediately
   $httpd->stop_request();
   _try_authenticate($req, $httpd, sub {
     my ($auth_aid) = @_;
     if ($auth_aid) {
-      _oidc_issue_code($auth_aid, $redirect_uri, $state, $req);
+      _oidc_issue_code($auth_aid, $redirect_uri, $state, $req, \%pkce);
       return;
     }
     # Not logged in — show login form with OIDC params embedded
@@ -4217,6 +4245,8 @@ sub do_oidc_authorize {
         redirect_uri => $redirect_uri,
         state        => $state,
         client_id    => $client_id,
+        code_challenge => $challenge,
+        code_challenge_method => $method,
       },
       ($error ? (error => $error) : ()),
     }, \$html) || return $req->respond([500, 'error', {}, $Template::ERROR]);
@@ -4231,10 +4261,17 @@ sub do_oidc_authorize_post {
   my $state        = $req->parm('state')        // '';
   my $username     = $req->parm('username')     // '';
   my $password     = $req->parm('password')     // '';
+  my $client_id    = $req->parm('client_id')    // '';
+  my $challenge    = $req->parm('code_challenge');
+  my $method       = $req->parm('code_challenge_method');
 
   unless ($redirect_uri && $username && $password) {
     return $req->respond([400, 'bad request', {}, 'Missing required fields']);
   }
+  if (my $why = _oidc_request_problem($client_id, $redirect_uri, $challenge, $method)) {
+    return $req->respond([400, 'bad request', { 'Content-Type' => 'text/plain' }, $why]);
+  }
+  my %pkce = (client_id => $client_id, code_challenge => $challenge);
 
   $httpd->stop_request();
   send_backend_request('__accounts__', 'auth',
@@ -4249,20 +4286,21 @@ sub do_oidc_authorize_post {
           baseurl => $BASEURL,
           step    => 'oidc_login',
           error   => 'Invalid email or password.',
-          oidc    => { redirect_uri => $redirect_uri, state => $state },
+          oidc    => { redirect_uri => $redirect_uri, state => $state, client_id => $client_id,
+                       code_challenge => $challenge, code_challenge_method => $method },
         }, \$html) || return $req->respond([500, 'error', {}, $Template::ERROR]);
         return $req->respond([401, 'unauthorized',
           { 'Content-Type' => 'text/html' }, $html]);
       }
       my $aid = $result->{accountid};
-      _oidc_issue_code($aid, $redirect_uri, $state, $req);
+      _oidc_issue_code($aid, $redirect_uri, $state, $req, \%pkce);
     },
     sub { $req->respond([500, 'error', {}, 'Authentication backend error']) }
   );
 }
 
 sub _oidc_issue_code {
-  my ($aid, $redirect_uri, $state, $req) = @_;
+  my ($aid, $redirect_uri, $state, $req, $pkce) = @_;
   # Look up email for this account
   send_backend_request('__accounts__', 'get_pool',
     { accountid => $aid },
@@ -4276,6 +4314,8 @@ sub _oidc_issue_code {
         accountid    => $aid,
         email        => $email,
         redirect_uri => $redirect_uri,
+        client_id    => $pkce->{client_id},
+        code_challenge => $pkce->{code_challenge},
         exp          => time() + 300,
       };
       my $loc = URI->new($redirect_uri);
@@ -4287,6 +4327,13 @@ sub _oidc_issue_code {
   );
 }
 
+sub _pkce_s256 {
+  my ($verifier) = @_;
+  return '' unless defined $verifier && $verifier =~ /\A[A-Za-z0-9._~-]{43,128}\z/;
+  require Digest::SHA; require MIME::Base64;
+  return MIME::Base64::encode_base64url(Digest::SHA::sha256($verifier));
+}
+
 # POST /oauth/token — exchange code for access_token + id_token
 sub do_oidc_token {
   my ($httpd, $req) = @_;
@@ -4296,6 +4343,9 @@ sub do_oidc_token {
   my $grant_type   = $req->parm('grant_type')   // '';
   my $code         = $req->parm('code')         // '';
   my $redirect_uri = $req->parm('redirect_uri') // '';
+  my $client_id    = $req->parm('client_id')    // '';
+  my $verifier     = $req->parm('code_verifier') // '';
+  return $req->respond([404, 'not found', {}, '']) unless %OIDC_CLIENTS;
 
   unless ($grant_type eq 'authorization_code' && $code) {
     return $req->respond([400, 'bad request', {},
@@ -4307,7 +4357,13 @@ sub do_oidc_token {
     return $req->respond([400, 'bad request', {},
       encode_json({ error => 'invalid_grant' })]);
   }
-  if ($redirect_uri && $entry->{redirect_uri} ne $redirect_uri) {
+  # RFC 6749 S4.1.3 and RFC 7636 S4.6: the same client, the same
+  # redirect_uri, and the verifier of the challenge the code was issued for
+  my $ok = $entry->{redirect_uri} eq $redirect_uri
+        && defined $entry->{client_id} && $entry->{client_id} eq $client_id
+        && defined $entry->{code_challenge}
+        && _pkce_s256($verifier) eq $entry->{code_challenge};
+  unless ($ok) {
     return $req->respond([400, 'bad request', {},
       encode_json({ error => 'invalid_grant' })]);
   }
