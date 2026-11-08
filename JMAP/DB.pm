@@ -16,6 +16,7 @@ use IO::LockedFile;
 use JSON::XS qw(decode_json encode_json);
 use Digest::SHA qw(sha1_hex);
 use JMAP::EventId;
+use JMAP::EventSpan;
 use Email::MIME;
 # seriously, it's parsable, get over it
 $Email::MIME::ContentType::STRICT_PARAMS = 0;
@@ -930,6 +931,8 @@ sub set_event {
   my $eventuid = delete $event->{uid};
   $Self->write_jevent_payload($eventuid, $event);
   my %cal = _event_calendar_cols($calendars);
+  # where in time it can be, so a range query reads only the events near it
+  @cal{qw(firststart lastend)} = JMAP::EventSpan::span($event);
   if ($Self->dgetfield('jevents', { eventuid => $eventuid }, 'eventuid')) {
     $Self->ddirty('jevents', { active => 1, %cal,
                                jeventhash => JMAP::EventId::hash_id($eventuid) }, { eventuid => $eventuid });
@@ -1350,7 +1353,7 @@ sub get_submission_changes {
     {}, $since_modseq);
 }
 
-my $USER_SCHEMA_VERSION = 16;
+my $USER_SCHEMA_VERSION = 17;
 
 # The /queryChanges snapshots: one row per (type, params, state), the ids
 # in order.  The same query at the same state has the same result, so a
@@ -2009,6 +2012,30 @@ EOF
     if ($@) { $dbh->rollback; die "user DB migration to v16 failed: $@" }
     $v = 16;
   }
+
+  if ($v < 17) {
+    # jevents.firststart/lastend (JMAP::EventSpan), for range queries: the
+    # columns were always there and never written.  A NULL is "unknown" and
+    # never filtered out, so an event that cannot be read is left so.
+    $dbh->begin_work;
+    eval {
+      my %cols = map { $_->[1] => 1 } @{ $dbh->selectall_arrayref("PRAGMA table_info(jevents)") || [] };
+      if (%cols) {
+        $dbh->do("ALTER TABLE jevents ADD COLUMN firststart DATE") unless $cols{firststart};
+        $dbh->do("ALTER TABLE jevents ADD COLUMN lastend DATE") unless $cols{lastend};
+        my $uids = $dbh->selectcol_arrayref("SELECT eventuid FROM jevents WHERE active = 1");
+        my $sth = $dbh->prepare("UPDATE jevents SET firststart = ?, lastend = ? WHERE eventuid = ?");
+        for my $uid (@$uids) {
+          my $payload = eval { $Self->read_jevent_payload($uid) } or next;
+          $sth->execute(JMAP::EventSpan::span($payload), $uid);
+        }
+      }
+      $dbh->do('PRAGMA user_version = 17');
+      $dbh->commit;
+    };
+    if ($@) { $dbh->rollback; die "user DB migration to v17 failed: $@" }
+    $v = 17;
+  }
   $Self->_ensure_indexes($dbh);
 }
 
@@ -2034,6 +2061,7 @@ sub _ensure_indexes {
     $dbh->do("CREATE INDEX IF NOT EXISTS ${t}_jmodseq ON $t (jmodseq)") if $has->($t, 'jmodseq');
   }
   $dbh->do("CREATE INDEX IF NOT EXISTS jeventhash ON jevents (jeventhash)") if $has->('jevents', 'jeventhash');
+  $dbh->do("CREATE INDEX IF NOT EXISTS jevents_span ON jevents (active, firststart)") if $has->(q(jevents), q(firststart));
   $dbh->do("CREATE INDEX IF NOT EXISTS jmessages_date ON jmessages (active, internaldate)")
     if $has->('jmessages', 'active', 'internaldate');
   $dbh->do("CREATE INDEX IF NOT EXISTS jqueries_mtime ON jqueries (mtime)") if $has->('jqueries', 'mtime');

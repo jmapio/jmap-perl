@@ -3,6 +3,7 @@ use strict;
 use JMAP::Collation;
 use JMAP::QueryChanges;
 use JMAP::EventId;
+use JMAP::EventSpan;
 use warnings;
 
 use JSON::XS;
@@ -143,14 +144,24 @@ sub _expand_event_occurrences {
              instant => $st->clone->set_time_zone('UTC')->strftime('%Y-%m-%dT%H:%M:%SZ') };
   };
 
-  my @rids = eval { Text::JSCalendar->occurrences($master, %bound) };
-  warn "CalendarEvent/query: $row->{eventuid}: cannot expand: $@" if $@;
-  my %seen = map { $_ => 1 } @rids;
-  my @items;
-  for my $rid (@rids) {
-    push @items, $item->($rid);
-    return @items if $max && @items >= $max;
+  # With $max (a filter asking only whether any instance matches), take the
+  # occurrences a few at a time: an endless rule with no "before" would
+  # otherwise be expanded to the expander's cap (5000) for every event.
+  my (@rids, @items);
+  my $want = $max ? 8 * $max : undef;
+  while (1) {
+    @rids = eval { Text::JSCalendar->occurrences($master, %bound, ($want ? (max => $want) : ())) };
+    if ($@) { warn "CalendarEvent/query: $row->{eventuid}: cannot expand: $@"; @rids = () }
+    @items = ();
+    for my $rid (@rids) {
+      push @items, $item->($rid);
+      return @items if $max && @items >= $max;
+    }
+    last unless $want && @rids >= $want && $want < $Text::JSCalendar::MaxOccurrences;
+    $want *= 8;
+    $want = $Text::JSCalendar::MaxOccurrences if $want > $Text::JSCalendar::MaxOccurrences;
   }
+  my %seen = map { $_ => 1 } @rids;
   # moved overrides whose natural occurrence is outside the window
   for my $rid (sort keys %$overrides) {
     next if $seen{$rid};
@@ -568,6 +579,19 @@ sub _sort_calendar_events {
   } @$items;
 }
 
+# The active jevents rows (eventuid, jcalendarid, jcalendarids, jmodseq) that may
+# overlap [$after, $before) -- LocalDateTimes in any time zone, either undef
+# for open -- in eventuid order.  Rows of unknown span are always included.
+sub _events_in_range {
+  my ($Self, $after, $before) = @_;
+  my ($where, @bind) = JMAP::EventSpan::sql_where($after, $before);
+  my $dbh = $Self->{db}->dbh;
+  return $dbh->selectall_arrayref($dbh->prepare_cached(
+    "SELECT eventuid, jcalendarid, jcalendarids, jmodseq FROM jevents WHERE active = 1"
+    . (length $where ? " AND $where" : '') . " ORDER BY eventuid, jcalendarid, jcalendarids"),
+    {Slice => {}}, @bind);
+}
+
 sub api_CalendarEvent_query {
   my $Self = shift;
   my $args = shift;
@@ -582,7 +606,12 @@ sub api_CalendarEvent_query {
 
   my $newQueryState = "$user->{jstateCalendarEvent}";
 
-  my $data = $Self->{db}->dget('jevents', { active => 1 }, 'eventuid,jcalendarid,jcalendarids');
+  # A top-level after/before reads only the events whose span may reach the
+  # range (JMAP::EventSpan); the filter still decides on each one.
+  my $f = $args->{filter};
+  my $data = (ref $f eq 'HASH' && !exists $f->{operator})
+    ? $Self->_events_in_range($f->{after}, $f->{before})
+    : $Self->_events_in_range();
 
 
   local $Self->{_query_tz} = $args->{timeZone} // 'Etc/UTC';
@@ -903,7 +932,10 @@ sub api_CalendarEvent_queryChanges {
     if ($user->{jdeletedmodseq} and $sinceQueryState <= $user->{jdeletedmodseq})
     or ($user->{jeventidcut} and $sinceQueryState <= $user->{jeventidcut});
 
-  my $data = $Self->{db}->dget('jevents', { active => 1 }, 'eventuid,jcalendarid,jcalendarids,jmodseq');
+  my $f = $args->{filter};   # as in CalendarEvent/query
+  my $data = (ref $f eq 'HASH' && !exists $f->{operator})
+    ? $Self->_events_in_range($f->{after}, $f->{before})
+    : $Self->_events_in_range();
 
   $Self->commit();
 
@@ -1057,7 +1089,7 @@ sub api_Principal_getAvailability {
   (my $range_end   = $utc_end)   =~ s/Z$//;
 
   my $user_email = $user->{email};
-  my $jevents    = $Self->{db}->dget('jevents', {active => 1}, 'eventuid,jcalendarid,jcalendarids');
+  my $jevents    = $Self->_events_in_range($range_start, $range_end);
   $Self->commit();
 
   my @busy;
@@ -1127,14 +1159,22 @@ sub api_Principal_getAvailability {
   my @detailed = grep { ref $_->{event} } @busy;
   my @plain    = grep { !ref $_->{event} } @busy;
   my %rank = (confirmed => 3, unavailable => 2, tentative => 1);
-  my %points = map { $_ => 1 } map { ($_->{utcStart}, $_->{utcEnd}) } @plain;
-  my @points = sort keys %points;
-  my @merged;
+  # A sweep over the start and end points: at each one, how many periods of
+  # each status are open; the segment up to the next point takes the
+  # highest-ranked status open across it.
+  my %delta;
+  for my $p (@plain) {
+    next unless $p->{utcStart} lt $p->{utcEnd};
+    my $st = $p->{busyStatus} // 'unavailable';
+    $delta{$p->{utcStart}}{$st}++;
+    $delta{$p->{utcEnd}}{$st}--;
+  }
+  my @points = sort keys %delta;
+  my (%open, @merged);
   for my $i (0 .. $#points - 1) {
     my ($from, $to) = @points[$i, $i + 1];
-    my ($status) = sort { $rank{$b} <=> $rank{$a} }
-                   map { $_->{busyStatus} // 'unavailable' }
-                   grep { $_->{utcStart} le $from && $_->{utcEnd} ge $to } @plain;
+    $open{$_} += $delta{$from}{$_} for keys %{$delta{$from}};
+    my ($status) = sort { ($rank{$b} // 0) <=> ($rank{$a} // 0) || $a cmp $b } grep { $open{$_} > 0 } keys %open;
     next unless $status;
     if (@merged && $merged[-1]{utcEnd} eq $from && $merged[-1]{busyStatus} eq $status) {
       $merged[-1]{utcEnd} = $to;

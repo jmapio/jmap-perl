@@ -121,7 +121,7 @@ is_deeply([sort map { $_->[1] } grep { $_->[0] eq 'new_card' } @FakeCardDAV::cal
   $dbh->disconnect;
   JMAP::ImapDB->new('old15');
   $dbh = DBI->connect("dbi:SQLite:dbname=$file", undef, undef, { RaiseError => 1 });
-  is(($dbh->selectrow_array('PRAGMA user_version'))[0], 16, 'v15 migrates to v16');
+  is(($dbh->selectrow_array('PRAGMA user_version'))[0], 17, 'v15 migrates to the current version');
   is(($dbh->selectrow_array("SELECT jaddressbookids FROM jcontacts WHERE contactuid = 'old'"))[0], '4', 'a card keeps its address book');
 }
 
