@@ -346,6 +346,11 @@ sub api_SearchSnippet_get {
   my $Self = shift;
   my $args = shift;
 
+  # RFC 8621 S5.1: emailIds is required (without it, Email/get would fetch
+  # every Email in the account)
+  return ['error', { type => 'invalidArguments', arguments => ['emailIds'] }]
+    unless ref $args->{emailIds} eq 'ARRAY';
+
   my $messages = $Self->api_Email_get({
     accountId => $args->{accountId},
     ids => $args->{emailIds},

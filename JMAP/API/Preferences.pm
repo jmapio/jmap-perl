@@ -452,10 +452,15 @@ sub api_VacationResponse_get {
 
   my $vr = ($row && $row->{payload}) ? $json->decode($row->{payload}) : {};
 
+  # RFC 8620 S5.1: ids null is every object (the singleton); otherwise only
+  # those asked for, and any other id is notFound
+  my $want = !defined $args->{ids} || grep { $_ eq 'singleton' } @{ $args->{ids} || [] };
+  my @notFound = defined $args->{ids} ? (grep { $_ ne 'singleton' } @{ $args->{ids} }) : ();
+
   return ['VacationResponse/get', {
     accountId => $accountid,
     state => _vacation_state($row),
-    list => [{
+    list => [ $want ? {
       id        => 'singleton',
       isEnabled => $vr->{isEnabled} ? $JSON::true : $JSON::false,
       fromDate  => $vr->{fromDate},
@@ -463,8 +468,8 @@ sub api_VacationResponse_get {
       subject   => $vr->{subject},
       textBody  => $vr->{textBody},
       htmlBody  => $vr->{htmlBody},
-    }],
-    notFound => [],
+    } : () ],
+    notFound => \@notFound,
   }];
 }
 

@@ -821,9 +821,6 @@ sub _transError {
 # PushSubscription (RFC 8620 §7.2 webhook push) isn't account scoped, so
 # bin/jmap-proxy.pl answers get and set in the parent (_do_push_call) before a
 # request reaches a worker. These only remain for anything calling the API directly.
-sub api_PushSubscription_get    { return $_[0]->_transError(['error', {type => 'notImplemented'}]) }
-sub api_PushSubscription_set     { return $_[0]->_transError(['error', {type => 'notImplemented'}]) }
-sub api_PushSubscription_changes { return $_[0]->_transError(['error', {type => 'notImplemented'}]) }
 
 # Domain methods are loaded from separate files below.
 # All files use package JMAP::API; so all cross-domain calls work unchanged.

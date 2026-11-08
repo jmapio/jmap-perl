@@ -33,7 +33,7 @@ my %METHOD_CAPABILITIES;
     # RFC 8620
     'urn:ietf:params:jmap:core' => [qw(
       Core/echo Blob/copy
-      PushSubscription/get PushSubscription/set PushSubscription/changes
+      PushSubscription/get PushSubscription/set
       ClientPreferences/get ClientPreferences/set
       UserPreferences/get UserPreferences/set
     )],
@@ -115,7 +115,8 @@ sub method_capability_missing {
 }
 
 # The PushSubscription methods the parent answers itself, from accounts.sqlite3.
-# PushSubscription/changes isn't one: it stays with the worker's notImplemented.
+# There is no PushSubscription/changes (RFC 8620 S7.2 defines only /get and
+# /set): it is unknownMethod, like any name no specification defines.
 my %PUSH_METHODS = map { $_ => 1 } qw(PushSubscription/get PushSubscription/set);
 
 sub is_push_method { return $PUSH_METHODS{ $_[0] // '' } ? 1 : 0 }
