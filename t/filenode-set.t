@@ -193,7 +193,48 @@ sub rows {
   return $r;
 }
 my $home = rows()->{$R}{nodeid};
-sub set { my ($r) = $api->api_FileNode_set({ accountId => $db->accountid(), @_ }); return $r }
+# This file's checks were written against -13's names (nodeType "file" and
+# "directory", type).  set and get translate to and from -20's (@type
+# "File"/"Directory", mediaType), so every check below still runs through
+# the -20 code; t/filenode-20.t checks the -20 wire format itself.
+my %T13 = (File => 'file', Directory => 'directory');
+my %T20 = reverse %T13;
+sub _to20 {
+  my ($o, $create) = @_;
+  return $o unless ref $o eq 'HASH';
+  my %c;
+  for my $k (keys %$o) {
+    (my $n = $k) =~ s{^type(?=/|\z)}{mediaType};
+    if ($k eq 'nodeType') { $c{'@type'} = $T20{ $o->{$k} // '' } // $o->{$k}; next }
+    $c{$n} = $o->{$k};
+  }
+  $c{'@type'} //= defined $o->{blobId} ? 'File' : 'Directory' if $create;
+  return \%c;
+}
+sub _to13 {
+  my ($o) = @_;
+  return $o unless ref $o eq 'HASH';
+  my %c = %$o;
+  $c{nodeType} = $T13{ delete $c{'@type'} } if exists $c{'@type'};
+  $c{type} = delete $c{mediaType} if exists $c{mediaType};
+  return \%c;
+}
+sub _err13 {
+  my ($e) = @_;
+  return $e unless ref $e eq 'HASH' && ref $e->{properties} eq 'ARRAY';
+  return { %$e, properties => [ map { $_ eq '@type' ? 'nodeType' : s{^mediaType}{type}r } @{ $e->{properties} } ] };
+}
+sub set {
+  my %a = @_;
+  $a{create} = { map { ($_ => _to20($a{create}{$_}, 1)) } keys %{ $a{create} } } if ref $a{create} eq 'HASH';
+  $a{update} = { map { ($_ => _to20($a{update}{$_}, 0)) } keys %{ $a{update} } } if ref $a{update} eq 'HASH';
+  my ($r) = $api->api_FileNode_set({ accountId => $db->accountid(), %a });
+  if ($r->[0] eq 'FileNode/set') {
+    for my $k (qw(created updated)) { $_ = _to13($_) for values %{ $r->[1]{$k} || {} } }
+    for my $k (qw(notCreated notUpdated)) { $_ = _err13($_) for values %{ $r->[1]{$k} || {} } }
+  }
+  return $r;
+}
 
 # --- creates, ordered by #ref, WebDAV first
 my $res = set(create => {
@@ -238,11 +279,12 @@ is(rows()->{"$R/dir/sub"}{jmodseq}, $seq, 'the next sync reads the dead properti
 $set = set(create => { o => { parentId => $dirid, name => 'ow.txt', blobId => 'f-x', executable => JSON::true,
                               created => '2000-01-01T00:00:00Z' } })->[1];
 is($tree{"$R/dir/ow.txt"}{dead}{executable}, '1', 'old resource has a dead executable');
+# (-20: isSubscribed is a Directory's, so the new file sends accessed)
 $set = set(onExists => 'replace', create => { o => { parentId => $dirid, name => 'ow.txt', blobId => 'f-x',
-                                                     isSubscribed => JSON::false } })->[1];
+                                                     accessed => '2001-01-01T00:00:00Z' } })->[1];
 ok($set->{created}{o}, 'replaced') or diag explain $set;
-is_deeply($tree{"$R/dir/ow.txt"}{dead}, { isSubscribed => '0' }, 'the server keeps only what the client sent');
-is_deeply(decode_json(rows()->{"$R/dir/ow.txt"}{deadprops}), { isSubscribed => '0' }, 'and so does the mirror');
+is_deeply([ sort keys %{ $tree{"$R/dir/ow.txt"}{dead} } ], ['accessed'], 'the server keeps only what the client sent');
+is_deeply([ sort keys %{ decode_json(rows()->{"$R/dir/ow.txt"}{deadprops}) } ], ['accessed'], 'and so does the mirror');
 is($set->{created}{o}{executable}, JSON::false, 'the new node is not executable');
 features();
 $deadprops_stored = 0;
@@ -457,7 +499,7 @@ is($set->{notDestroyed}{$p}{type}, 'nodeHasChildren', 'so the parent is not dele
 ok($tree{"$R/q/c"}, 'the child is still on the server');
 
 # --- updates (Task 8): moves, renames, content, properties
-sub get { my ($r) = $api->api_FileNode_get({ accountId => $db->accountid(), ids => [ @_ ] }); return { map { $_->{id} => $_ } @{ $r->[1]{list} } } }
+sub get { my ($r) = $api->api_FileNode_get({ accountId => $db->accountid(), ids => [ @_ ] }); return { map { $_->{id} => _to13($_) } @{ $r->[1]{list} } } }
 sub content { my $h = shift; return $tree{$h} ? "$tree{$h}{size}:$tree{$h}{type}" : undef }
 $set = set(create => {
   U => { parentId => $home, name => 'U' },
@@ -588,13 +630,12 @@ $set = set(update => { $id{a} => { blobId => undef } })->[1];
 is_deeply($set->{notUpdated}{$id{a}}{properties}, ['blobId'], 'a file cannot lose its content');
 
 $set = set(update => { $id{a} => { executable => JSON::true, accessed => '2026-01-02T03:04:05Z', modified => undef,
-                                    isSubscribed => JSON::false, created => '2020-01-01T00:00:00Z' } })->[1];
+                                    created => '2020-01-01T00:00:00Z' } })->[1];
 $u = $set->{updated}{$id{a}};
 ok($u && $u->{modified}, 'a null modified is set to now, and reported') or diag explain $set;
 ok(!exists $u->{accessed}, 'a value the client gave is not');
 $g = get($id{a})->{$id{a}};
 is($g->{executable}, JSON::true, 'executable');
-is($g->{isSubscribed}, JSON::false, 'isSubscribed');
 is($g->{accessed}, '2026-01-02T03:04:05Z', 'accessed');
 is($g->{created}, '2020-01-01T00:00:00Z', 'created');
 is($g->{modified}, $u->{modified}, 'modified');
@@ -635,8 +676,10 @@ ok(exists $set->{updated}{$id{a}}, 'a whole object with one change') or diag exp
 is(get($id{a})->{$id{a}}{name}, 'whole.txt', 'applied');
 $set = set(update => { $id{a} => { nodeType => 'directory' } })->[1];
 is_deeply($set->{notUpdated}{$id{a}}{properties}, ['nodeType'], 'nodeType is immutable');
-$set = set(update => { $id{a} => { id => 'Lother', size => 1, myRights => {} } })->[1];
-is_deeply($set->{notUpdated}{$id{a}}{properties}, [ qw(id myRights size) ], 'server-set properties');
+$set = set(update => { $id{a} => { id => 'Lother', size => 1 } })->[1];
+is_deeply($set->{notUpdated}{$id{a}}{properties}, [ qw(id size) ], 'server-set properties');
+$set = set(update => { $id{a} => { myRights => {} } })->[1];
+is_deeply($set->{notUpdated}{$id{a}}{properties}, [ 'myRights' ], 'a Directory property on a File (-20 S3.1)');
 $set = set(update => { $id{a} => { shareWith => { u2 => {} } } })->[1];
 is_deeply($set->{notUpdated}{$id{a}}, { type => 'invalidProperties', properties => ['shareWith'] },
           'shareWith on a server without ACLs: invalidProperties (spec "Sharing")');
@@ -992,7 +1035,7 @@ sub files_under { my $p = shift; return [ sort grep { m{^\Q$p\E/} && !$tree{$_}{
 
   # rights: a file, and a directory without write-acl
   $set = set(update => { $x->{k} => { shareWith => { user2 => { mayRead => $t } } } })->[1];
-  is($set->{notUpdated}{$x->{k}}{type}, 'forbidden', 'a file: forbidden (no mayShare)');
+  is($set->{notUpdated}{$x->{k}}{type}, 'invalidProperties', 'a file: shareWith is a Directory property (-20 S3.1)');
   $tree{"$R/S2"}{privileges} = [qw(read write bind unbind write-content)];
   $db->sync_files();
   ok(!get($x->{T})->{$x->{T}}{myRights}{mayShare}, 'no write-acl: no mayShare');
@@ -1497,11 +1540,9 @@ sub files_under { my $p = shift; return [ sort grep { m{^\Q$p\E/} && !$tree{$_}{
   # "newest" after rename + external edit compares with the server's value, not the stale pin
   $tree{"$R/TS/n2.txt"}{etag} = 'edited'; $tree{"$R/TS/n2.txt"}{modified} = $T0 + 50_000;
   $db->sync_files();
-  $set = set(onExists => 'newest', create => { c => { parentId => $x->{P}, name => 'n2.txt', blobId => 'f-y', modified => JMAP::FileNode::utc($T0 + 40_000) } })->[1];
-  is($set->{notCreated}{c}{type}, 'alreadyExists', 'onExists newest: an older create does not replace the edited file') or diag explain $set;
-  is($tree{"$R/TS/n2.txt"}{etag}, 'edited', 'and the edit is kept');
-  $set = set(onExists => 'newest', update => { $y->{p} => { name => 'n2.txt', modified => JMAP::FileNode::utc($T0 + 40_000) } })->[1];
-  is($set->{notUpdated}{$y->{p}}{type}, 'alreadyExists', 'nor does an older move') or diag explain $set;
+  # -20 has no onExists "newest" (removed in -19): invalidArguments
+  my $r = $api->api_FileNode_set({ accountId => $db->accountid(), onExists => 'newest', create => {} });
+  is_deeply([ $r->[0], $r->[1]{type} ], [ 'error', 'invalidArguments' ], 'onExists newest is invalidArguments (-20)');
   # a server that stores dead properties: the pin is the mirror's, kept across its listings
   features(deadProps => 1); $deadprops_stored = 1;
   my $z = mk(s => { parentId => $x->{P}, name => 's.txt', blobId => 'f-x' });
@@ -1606,6 +1647,48 @@ sub files_under { my $p = shift; return [ sort grep { m{^\Q$p\E/} && !$tree{$_}{
     is($set->{notCreated}{c}{type}, 'tooLarge', 'a create from a FileNode blob over the cap: tooLarge') or diag explain $set;
   }
   set(onDestroyRemoveChildren => JSON::true, destroy => [ $x->{P} ]);
+}
+
+# --- draft-ietf-jmap-filenode-20's wire format, without the -13 shims above
+{
+  my $raw_set = sub { my ($r) = $api->api_FileNode_set({ accountId => $db->accountid(), @_ }); $r->[1] };
+  my $raw_get = sub { my ($r) = $api->api_FileNode_get({ accountId => $db->accountid(), @_ }); $r->[1] };
+  my $s = $raw_set->(create => {
+    d  => { '@type' => 'Directory', parentId => $home, name => 'W20' },
+    f  => { '@type' => 'File', parentId => '#d', name => 'w.txt', blobId => 'f-x', mediaType => undef },
+    n  => { parentId => $home, name => 'no-type' },
+    l  => { '@type' => 'SymLink', parentId => $home, name => 'link', target => 'w.txt' },
+    fs => { '@type' => 'File', parentId => '#d', name => 'sub.txt', blobId => 'f-x', isSubscribed => JSON::true },
+    fn => { '@type' => 'File', parentId => '#d', name => 'null.txt', blobId => 'f-x', isSubscribed => undef, role => undef },
+  });
+  ok($s->{created}{d} && $s->{created}{f}, 'created with @type') or diag explain $s;
+  is_deeply($s->{notCreated}{n}{properties}, ['@type'], '@type is required (S3.1.1)');
+  is_deeply($s->{notCreated}{l}{properties}, ['@type'], 'and must be in supportedNodeTypes');
+  is_deeply($s->{notCreated}{fs}{properties}, ['isSubscribed'], 'a Directory property on a File: invalidProperties');
+  ok($s->{created}{fn}, 'one given as null is ignored (S3.1)') or diag explain $s;
+  my ($fid, $did) = map { $s->{created}{$_}{id} } qw(f d);
+  my %o = map { $_->{id} => $_ } @{ $raw_get->(ids => [ $fid, $did ])->{list} };
+  is($o{$fid}{'@type'}, 'File', '@type File');
+  is($o{$fid}{mediaType}, 'application/octet-stream', 'mediaType null on create: application/octet-stream (S3.1.3)');
+  ok(!grep({ exists $o{$fid}{$_} } qw(nodeType type isSubscribed myRights shareWith role target)), 'a File has only File properties');
+  is($o{$did}{'@type'}, 'Directory', '@type Directory');
+  ok(!grep({ exists $o{$did}{$_} } qw(blobId size mediaType executable target)), 'a Directory has only Directory properties');
+  is_deeply([ sort keys %{ $raw_get->(ids => [$fid], properties => ['name'])->{list}[0] } ], [ '@type', 'id', 'name' ],
+            'get always returns @type');
+  my $u = $raw_set->(update => { $fid => { mediaType => undef } });
+  ok(exists $u->{updated}{$fid}, 'mediaType null') or diag explain $u;
+  is($raw_get->(ids => [$fid])->{list}[0]{mediaType}, 'application/octet-stream', 'is application/octet-stream (S3.1.3)');
+  $u = $raw_set->(update => { $fid => { '@type' => 'Directory' } });
+  is_deeply($u->{notUpdated}{$fid}{properties}, ['@type'], '@type is immutable');
+  my ($q) = $api->api_FileNode_query({ accountId => $db->accountid(), filter => { mediaType => 'application/octet-stream', parentId => $did } });
+  is_deeply($q->[1]{ids}, [$fid], 'the mediaType filter');
+  ($q) = $api->api_FileNode_query({ accountId => $db->accountid(), filter => { ancestorId => $home }, depth => 0 });
+  is_deeply($q->[1]{ids}, [], 'depth 0: only top-level nodes, and ancestorId selects among them (S3.2.5)');
+  ($q) = $api->api_FileNode_query({ accountId => $db->accountid(), filter => { parentId => $did }, depth => 1 });
+  is_deeply($q->[1]{ids}, [], 'depth is counted from the top, never from parentId');
+  ($q) = $api->api_FileNode_query({ accountId => $db->accountid(), filter => { parentId => $did } });
+  is(scalar @{ $q->[1]{ids} }, 2, 'parentId is exact, whatever depth');
+  $raw_set->(onDestroyRemoveChildren => JSON::true, destroy => [ $did ]);
 }
 
 ok(!$db->in_transaction(), 'no transaction left open');

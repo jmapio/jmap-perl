@@ -188,7 +188,7 @@ is_deeply($r->[1]{notCreated}{bad}{properties}, ['id'], 'naming id');
 is($r->[1]{notCreated}{nf}{type}, 'notFound', 'an unknown source: notFound');
 my ($ca) = grep { $_->{name} eq 'a.txt' } values %{ $acct{B}{nodes} };
 is($ca->{executable}, JSON::true, 'executable carried');
-is($ca->{type}, 'text/plain', 'type carried');
+is($ca->{mediaType}, 'text/plain', 'mediaType carried');
 is($acct{B}{blobs}{ $ca->{blobId} }, 'aaa', 'content carried');
 my ($q) = grep { $_->[1] eq 'jmap' && $_->[2][1][0] eq 'FileNode/query' } @log;
 is($q->[2][1][1]{calculateTotal}, JSON::true, 'the source query asks for the total');

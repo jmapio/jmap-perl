@@ -167,7 +167,7 @@ my %PARAM_SCHEMA = (
     create             => '{object}?',
     update             => '{object}?',
     destroy            => '[string]?',
-    onExists           => 'enum(replace,rename,newest)?',
+    onExists           => 'enum(replace,rename)?',
     onDestroyRemoveChildren  => 'bool?',
     compareCaseInsensitively => 'bool?',
   },
@@ -228,7 +228,7 @@ my @EMAIL_FILTER = qw(inMailbox inMailboxOtherThan before after minSize maxSize
 my @MAILBOX_FILTER = qw(parentId name role hasAnyRole isSubscribed);
 my @FILENODE_FILTER = qw(isTopLevel parentId ancestorId descendantId nodeType role hasAnyRole
   blobId isExecutable createdBefore createdAfter modifiedBefore modifiedAfter accessedBefore
-  accessedAfter minSize maxSize name nameMatch type typeMatch text);
+  accessedAfter minSize maxSize name nameMatch mediaType mediaTypeMatch text);
 my %FILTER_CONDITIONS = (
   'Email/query'          => \@EMAIL_FILTER,
   'Email/queryChanges'   => \@EMAIL_FILTER,

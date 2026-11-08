@@ -2139,10 +2139,16 @@ sub get_filenode_blob {
   return ($row->{type} || $res->{type} || 'application/octet-stream', $res->{content});
 }
 
+# a media type, type/subtype, parameters allowed (RFC 6838 S4.2)
+my $MEDIA_TYPE = qr{^[A-Za-z0-9][A-Za-z0-9!#\$&^_.+-]{0,126}/[A-Za-z0-9][A-Za-z0-9!#\$&^_.+-]{0,126}(?:\s*;.*)?\z}s;
+
 # draft S4.1: a direct HTTP PUT replaces a file's content.  If-Match makes a
 # change made behind the mirror's back a 412 (the next sync updates the mirror).
+# $direct: a Direct HTTP Write (S4), the one write after which the server
+# sets modified itself (-20 S3.1); new content through FileNode/set keeps a
+# modified the client set.
 sub put_filenode_content {
-  my ($Self, $nodeid, $bytes, $type) = @_;
+  my ($Self, $nodeid, $bytes, $type, $if_match, $direct) = @_;
   $Self->begin();
   my $row = $Self->filenode_row($nodeid);
   my $parent = $row && defined $row->{parentid} ? $Self->filenode_row($row->{parentid}) : undef;
@@ -2157,6 +2163,18 @@ sub put_filenode_content {
   my $peff = $parent ? JMAP::FileNode::effective_privs($parent, $up) : undef;
   $Self->commit();
   return { status => 403 } unless JMAP::FileNode::rights($eff, $peff)->{mayModifyContent};
+  # -20 S4.1: the entity tag is the node's blobId; a client's If-Match that
+  # is not the current one (or "*") is 412, before anything is written
+  if (defined $if_match && length $if_match) {
+    my $cur = JMAP::FileNode::blob_id($row->{nodeid}, $row->{etag});
+    return { status => 412 }
+      unless grep { $_ eq '*' || $_ eq $cur } map { s/^\s*(?:W\/)?"?|"?\s*$//gr } split /,/, $if_match;
+  }
+  # -20 S4.2: a Content-Type that is not a media type is 400
+  if (defined $type && length $type) {
+    (my $bare = $type) =~ s/\s*;.*$//s;
+    return { status => 400 } unless $bare =~ $MEDIA_TYPE;
+  }
   # the node's type as clients see it: a client-set type (FileNode/set
   # without new content) is a dead property over the server's
   my $dead = defined $row->{deadprops} ? (eval { decode_json($row->{deadprops}) } || {}) : {};
@@ -2178,6 +2196,9 @@ sub put_filenode_content {
   # MOVE did before (a pin only hides the MOVE's reset; the re-listing has
   # dropped it unless the PUT landed in the same second)
   $Self->_filenode_pin_set($new, { modified => undef }) if exists $dead->{'_pin.modified'};
+  # -20 S4.2: a write sets modified to the server's time, so a client-set
+  # modified goes
+  $Self->_filenode_dead_set($new, { modified => undef }) if $direct && exists $dead->{modified};
   return { status => 200, blobId => JMAP::FileNode::blob_id($new->{nodeid}, $new->{etag}), size => 0 + length($bytes), type => $type };
 }
 
@@ -2408,7 +2429,6 @@ my %FILENODE_CREATE_PROPS = map { $_ => 1 } qw(parentId nodeType blobId target s
   created modified accessed executable isSubscribed role shareWith);
 my %FILENODE_SERVER_SET = map { $_ => 1 } qw(id changed myRights);
 # RFC 6838 S4.2, with optional parameters
-my $MEDIA_TYPE = qr{^[A-Za-z0-9][A-Za-z0-9!#\$&^_.+-]{0,126}/[A-Za-z0-9][A-Za-z0-9!#\$&^_.+-]{0,126}(?:\s*;.*)?\z}s;
 
 # Validate one create; returns (\@badprops, \%clean) where %clean holds
 # nodetype and the dead-property values in the J: form.
@@ -2733,6 +2753,8 @@ sub update_filenodes {
     my $id = $idmap->($uid) // $uid;
     $mover{$id} = 1 if $byid{$id};
   }
+  # and the moves refused before they got here (the API's -20 checks)
+  $mover{$_} = 1 for grep { $byid{$_} } @{ $opts->{refused_movers} || [] };
 
   # 1. each update on its own
   my (%plan, %dest);   # id => { uid, patch, dead }; id => [newparentid, newname] for a move

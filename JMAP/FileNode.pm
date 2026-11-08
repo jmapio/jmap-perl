@@ -18,10 +18,11 @@ our %CAPS = (
   maxFileNodeDepth          => undef,
   maxSizeFileNodeName       => 255,
   forbiddenNameChars        => '/',
-  forbiddenNodeNames        => ['.', '..'],
+  # -20 S2.1: the @type values a client may create (no symlinks over WebDAV)
+  supportedNodeTypes        => [qw(Directory File)],
   caseInsensitiveNames      => JSON::false,
   mayCreateTopLevelFileNode => JSON::false,
-  fileNodeQuerySortOptions  => [qw(name type size created modified accessed nodeType tree)],
+  fileNodeQuerySortOptions  => [qw(name mediaType size created modified accessed nodeType tree)],
   webTrashUrl               => undef,
   webUrlTemplate            => undef,
 );
@@ -55,7 +56,8 @@ sub name_problem {
   my $chars = quotemeta $CAPS{forbiddenNameChars};
   return 'name contains a forbidden character' if $name =~ /[$chars]/;
   return 'name contains a control character' if $name =~ /[\x00-\x1f\x7f]/;
-  return 'name is forbidden' if grep { lc $_ eq lc $name } @{ $CAPS{forbiddenNodeNames} };
+  # "." and ".." are path syntax, never names (-20 S3.1.1)
+  return 'name is forbidden' if $name eq '.' || $name eq '..';
   return undef;
 }
 
@@ -714,43 +716,31 @@ sub filter_problem {
   return undef;
 }
 
-# draft S3.2.5 FilterCondition / RFC 8620 FilterOperator.
-#
-# $ctx->{depth} (draft "depth": levels of subdirectories to recurse into)
-# widens parentId and isTopLevel, and only those: ancestorId is already
-# recursive.  It applies to the top-level condition and through a top-level
-# AND; below OR or NOT the conditions keep their exact meaning.
+# draft-ietf-jmap-filenode-20 S3.2.5 FilterCondition / RFC 8620
+# FilterOperator, on FileNode objects as FileNode/get gives them.  depth is
+# not a condition: it caps the tree the query looks at (see node_depth).
+# The File-only conditions (blobId, isExecutable, minSize, maxSize,
+# mediaType, mediaTypeMatch) match only Files, and role and hasAnyRole only
+# Directories, "for both true and false values".
 sub filter_match {
   my ($o, $f, $ctx) = @_;
-  my $depth = $ctx->{depth} || 0;
   if (exists $f->{operator}) {
     my @c = @{ $f->{conditions} || [] };
-    if ($f->{operator} eq 'AND') {
-      return (grep { !filter_match($o, $_, $ctx) } @c) ? 0 : 1;
-    }
-    my $sub = { %$ctx, depth => 0 };
-    return (grep {  filter_match($o, $_, $sub) } @c) ? 1 : 0 if $f->{operator} eq 'OR';
-    return (grep {  filter_match($o, $_, $sub) } @c) ? 0 : 1;   # NOT
+    return (grep { !filter_match($o, $_, $ctx) } @c) ? 0 : 1 if $f->{operator} eq 'AND';
+    return (grep {  filter_match($o, $_, $ctx) } @c) ? 1 : 0 if $f->{operator} eq 'OR';
+    return (grep {  filter_match($o, $_, $ctx) } @c) ? 0 : 1;   # NOT
   }
   my $byid = $ctx->{byid};
   my $date = sub { epoch_frac($_[0]) // 0 };
-  if (exists $f->{isTopLevel}) {
-    my $top = !defined $o->{parentId};
-    $top = 1 if !$top && $f->{isTopLevel} && $depth && scalar(my @a = _ancestors($o->{id}, $byid)) <= $depth;
-    return 0 unless !!$top == !!$f->{isTopLevel};
-  }
-  if (defined $f->{parentId}) {
-    my $ok = ($o->{parentId} // '') eq $f->{parentId};
-    if (!$ok && $depth) {
-      my @a = _ancestors($o->{id}, $byid);
-      my ($i) = grep { $a[$_] eq $f->{parentId} } 0 .. $#a;
-      $ok = defined $i && $i <= $depth;
-    }
-    return 0 unless $ok;
-  }
+  my $file = ($o->{'@type'} // '') eq 'File';
+  my $dir  = ($o->{'@type'} // '') eq 'Directory';
+  for my $k (qw(blobId isExecutable minSize maxSize mediaType mediaTypeMatch)) { return 0 if exists $f->{$k} && !$file }
+  for my $k (qw(role hasAnyRole))                                              { return 0 if exists $f->{$k} && !$dir }
+  if (exists $f->{isTopLevel})   { return 0 unless !!(!defined $o->{parentId}) == !!$f->{isTopLevel} }
+  if (defined $f->{parentId})    { return 0 unless ($o->{parentId} // '') eq $f->{parentId} }
   if (defined $f->{ancestorId})  { return 0 unless grep { $_ eq $f->{ancestorId} } _ancestors($o->{id}, $byid) }
   if (defined $f->{descendantId}){ return 0 unless grep { $_ eq $o->{id} } _ancestors($f->{descendantId}, $byid) }
-  if (defined $f->{nodeType})    { return 0 unless $o->{nodeType} eq $f->{nodeType} }
+  if (defined $f->{nodeType})    { return 0 unless ($o->{'@type'} // '') eq $f->{nodeType} }
   if (defined $f->{role})        { return 0 unless ($o->{role} // '') eq $f->{role} }
   if (exists $f->{hasAnyRole})   { return 0 unless !!defined($o->{role}) == !!$f->{hasAnyRole} }
   if (defined $f->{blobId})      { return 0 unless ($o->{blobId} // '') eq $f->{blobId} }
@@ -763,53 +753,55 @@ sub filter_match {
   if (defined $f->{maxSize})     { return 0 unless defined $o->{size} && $o->{size} <  $f->{maxSize} }
   if (defined $f->{name})        { return 0 unless $o->{name} eq $f->{name} }
   if (defined $f->{nameMatch})   { return 0 unless $o->{name} =~ glob_regex($f->{nameMatch}) }
-  if (defined $f->{type})        { return 0 unless ($o->{type} // '') eq $f->{type} }
-  if (defined $f->{typeMatch})   { return 0 unless ($o->{type} // '') =~ glob_regex($f->{typeMatch}) }
+  if (defined $f->{mediaType})   { return 0 unless ($o->{mediaType} // '') eq $f->{mediaType} }
+  if (defined $f->{mediaTypeMatch}) { return 0 unless ($o->{mediaType} // '') =~ glob_regex($f->{mediaTypeMatch}) }
   if (defined $f->{text}) {
-    my $g = glob_regex("*$f->{text}*");
-    return 0 unless $o->{name} =~ $g || ($o->{type} // '') =~ $g;
+    # -20: name or mediaType "contains this value, compared case-
+    # insensitively" -- a substring, not a glob
+    my $needle = JMAP::Collation::key('i;unicode-casemap', $f->{text});
+    return 0 unless grep { index(JMAP::Collation::key('i;unicode-casemap', $_ // ''), $needle) >= 0 } $o->{name}, $o->{mediaType};
   }
   return 1;
 }
 
-my %NODE_ORDER = (directory => 0, symlink => 1, file => 2);
+# -20 S3.2.5 depth: a top-level node is at depth 0, its children at 1, ...
+sub node_depth {
+  my ($id, $byid) = @_;
+  return scalar(my @a = _ancestors($id, $byid));
+}
+
+# -20 S3.2.5 nodeType sort: Directories, then SymLinks, then Files
+my %NODE_ORDER = (Directory => 0, SymLink => 1, File => 2);
 
 sub sort_nodes {
   my ($objs, $sort, $byid) = @_;
   my %keys;
   my $desc = sub { defined $_[0]{isAscending} && !$_[0]{isAscending} };
+  # Each comparator answers undef when it cannot order the two by its own
+  # property: the next one decides.  -20 S3.2.5: a node without the property
+  # (size on a Directory, mediaType on one) sorts before one with it when
+  # ascending, and nodes both without it are "ordered among themselves as if
+  # that Comparator were absent".
   my $cmp_one = sub {
     my ($c, $x, $y) = @_;
     my $p = $c->{property};
     my $r;
     if ($p eq 'name') {
       $r = JMAP::Collation::compare($c->{collation}, $x->{name}, $y->{name}, \%keys);
-      $r = -$r if $desc->($c);
     }
     elsif ($p eq 'nodeType') {
-      $r = $NODE_ORDER{$x->{nodeType}} <=> $NODE_ORDER{$y->{nodeType}};
-      $r = -$r if $desc->($c);
-    }
-    elsif ($p eq 'type') {
-      # directories (non-files) stay first either way; only the media type reverses
-      $r = $NODE_ORDER{$x->{nodeType}} <=> $NODE_ORDER{$y->{nodeType}};
-      unless ($r) {
-        $r = JMAP::Collation::compare($c->{collation}, $x->{type} // '', $y->{type} // '', \%keys);
-        $r = -$r if $desc->($c);
-      }
-    }
-    elsif ($p eq 'size') {
-      # null sizes (directories) last in both directions
-      $r = (defined $x->{size} ? 0 : 1) <=> (defined $y->{size} ? 0 : 1);
-      unless ($r) {
-        $r = ($x->{size} // 0) <=> ($y->{size} // 0);
-        $r = -$r if $desc->($c);
-      }
+      $r = ($NODE_ORDER{ $x->{'@type'} } // 3) <=> ($NODE_ORDER{ $y->{'@type'} } // 3)
+        || ($x->{'@type'} // '') cmp ($y->{'@type'} // '');
     }
     else {
-      $r = (epoch_frac($x->{$p}) // 0) <=> (epoch_frac($y->{$p}) // 0);
-      $r = -$r if $desc->($c);
+      my ($hx, $hy) = (defined $x->{$p}, defined $y->{$p});
+      return 0 unless $hx || $hy;
+      $r = !$hx ? -1 : !$hy ? 1
+         : $p eq 'mediaType' ? JMAP::Collation::compare($c->{collation}, $x->{$p}, $y->{$p}, \%keys)
+         : $p eq 'size'      ? $x->{$p} <=> $y->{$p}
+         :                     (epoch_frac($x->{$p}) // 0) <=> (epoch_frac($y->{$p}) // 0);
     }
+    $r = -$r if $desc->($c);
     return $r;
   };
   my @flat = grep { ($_->{property} // '') ne 'tree' } @$sort;

@@ -8,10 +8,57 @@ use warnings;
 use JSON;
 use JMAP::FileNode;
 
+# draft-ietf-jmap-filenode-20 S3.1: every property, and which @type each
+# belongs to.  "Properties that this document defines for one type MUST
+# NOT appear on a FileNode of another type; they are omitted".
 my @FILENODE_PROPERTIES = qw(
-  id parentId nodeType blobId target size name type created modified
+  id @type parentId blobId target size name mediaType created modified
   accessed changed executable isSubscribed myRights shareWith role
 );
+my %FILENODE_ONLY = (
+  (map { $_ => 'File' }      qw(blobId size mediaType executable)),
+  (map { $_ => 'Directory' } qw(isSubscribed myRights shareWith role)),
+  target => 'SymLink',
+);
+my %NODE_TYPE_IN  = (File => 'file', Directory => 'directory');
+my %NODE_TYPE_OUT = reverse %NODE_TYPE_IN;
+
+# A create or patch in -20's names as the mirror's (nodeType "file" or
+# "directory", type), for ImapDB.  $type is the node's @type: from the
+# create, or the node being patched.  Returns ($object, @bad): a property of
+# another @type is bad unless null, when it is ignored (-20 S3.1).
+sub _filenode_in {
+  my ($obj, $type, $is_create) = @_;
+  my (%out, @bad);
+  for my $k (keys %$obj) {
+    (my $base = $k) =~ s{/.*}{}s;
+    my $v = $obj->{$k};
+    if ($base eq '@type') {
+      push @bad, '@type' if !$is_create && !(defined $v && !ref $v && $v eq $type);
+      next;
+    }
+    if (my $only = $FILENODE_ONLY{$base}) {
+      if ($only ne $type) { push @bad, $k if defined $v; next }
+    }
+    if ($base eq 'mediaType') {
+      # -20 S3.1.3: null means application/octet-stream
+      (my $rest = $k) =~ s{^mediaType}{type};
+      $out{$rest} = $v // 'application/octet-stream';
+      next;
+    }
+    $out{$k} = $v;
+  }
+  $out{nodeType} = $NODE_TYPE_IN{$type} if $is_create;
+  return (\%out, @bad);
+}
+
+# A SetError's property names back in -20's names.
+sub _filenode_error_out {
+  my ($err) = @_;
+  return $err unless ref $err eq 'HASH' && ref $err->{properties} eq 'ARRAY';
+  my %name = (nodeType => '@type', type => 'mediaType');
+  return { %$err, properties => [ map { $name{$_} // (s{^type/}{mediaType/}r) } @{ $err->{properties} } ] };
+}
 
 # draft S3.1: one mirror row as a FileNode object.  $byid maps nodeid to row,
 # for the parent's privileges (mayRename and mayDelete are rights over the
@@ -39,27 +86,33 @@ sub _filenode_object {
   # the home collection is the account's single top-level node: it cannot
   # be renamed, moved or destroyed (mayCreateTopLevelFileNode is false)
   @$rights{qw(mayRename mayDelete)} = (JSON::false, JSON::false) unless defined $row->{parentid};
-  return {
+  my %o = (
     id           => "$row->{nodeid}",
+    '@type'      => $NODE_TYPE_OUT{ $row->{nodetype} } // 'File',
     parentId     => (defined $row->{parentid} ? "$row->{parentid}" : undef),
-    nodeType     => $row->{nodetype},
-    blobId       => $isfile ? JMAP::FileNode::blob_id($row->{nodeid}, $row->{etag}) : undef,
-    target       => undef,
-    size         => $isfile ? 0 + ($row->{size} // 0) : undef,
     name         => $row->{name},
-    type         => $isfile ? ($dead->{type} // $row->{type}) : undef,
     created      => JMAP::FileNode::utc($created),
     modified     => JMAP::FileNode::utc($modified),
     accessed     => JMAP::FileNode::utc($accessed),
     changed      => JMAP::FileNode::utc($row->{changed}),
-    executable   => $executable ? JSON::true : JSON::false,
-    isSubscribed => $isSubscribed ? JSON::true : JSON::false,
-    myRights     => $rights,
+  );
+  if ($isfile) {
+    # -20: a File's rights are its parent's myRights; it has no myRights,
+    # isSubscribed or shareWith of its own
+    $o{blobId}     = JMAP::FileNode::blob_id($row->{nodeid}, $row->{etag});
+    $o{size}       = 0 + ($row->{size} // 0);
+    $o{mediaType}  = $dead->{type} // $row->{type} // 'application/octet-stream';
+    $o{executable} = $executable ? JSON::true : JSON::false;
+  }
+  else {
+    $o{isSubscribed} = $isSubscribed ? JSON::true : JSON::false;
+    $o{myRights}     = $rights;
     # draft S3.1: null unless the user may share it (and when nobody is
     # shared with); from the mirror, which every listing keeps up to date
-    shareWith    => $rights->{mayShare} ? $Self->{db}->filenode_sharewith($row) : undef,
-    role         => $row->{role},
-  };
+    $o{shareWith}    = $rights->{mayShare} ? $Self->{db}->filenode_sharewith($row) : undef;
+    $o{role}         = $row->{role};
+  }
+  return \%o;
 }
 
 # Sync first when the mirror is stale (spec "Sync": 60s on demand), even
@@ -118,7 +171,8 @@ sub api_FileNode_get {
 
   my @objs = map { $Self->_filenode_object($_, \%byid) } @list;
   if ($args->{properties}) {
-    my %want = map { $_ => 1 } 'id', @{$args->{properties}};
+    # -20 S3.1.1: get "always returns @type"
+    my %want = map { $_ => 1 } 'id', '@type', @{$args->{properties}};
     @objs = map { my $o = $_; +{ map { ($_ => $o->{$_}) } grep { $want{$_} } keys %$o } } @objs;
   }
   return ['FileNode/get', { accountId => "$accountid", state => $state,
@@ -147,10 +201,11 @@ sub api_FileNode_set {
   return ['error', { type => 'stateMismatch' }]
     if defined $args->{ifInState} && $args->{ifInState} ne $oldState;
   my $onExists = $args->{onExists};
-  # "unchanged" needs JMAP-CONDITIONAL, which the proxy does not offer
+  # -20 S3.2.3: null, "replace" or "rename"; "Any other value is rejected
+  # with invalidArguments"
   return ['error', { type => 'invalidArguments', arguments => ['onExists'],
-                     description => 'onExists must be null, "replace", "rename" or "newest"' }]
-    if defined $onExists && (ref $onExists || $onExists !~ /^(?:replace|rename|newest)\z/);
+                     description => 'onExists must be null, "replace" or "rename"' }]
+    if defined $onExists && (ref $onExists || $onExists !~ /^(?:replace|rename)\z/);
   for my $arg (qw(create update)) {
     return ['error', { type => 'invalidArguments', arguments => [$arg] }]
       if defined $args->{$arg} && ref $args->{$arg} ne 'HASH';
@@ -177,12 +232,41 @@ sub api_FileNode_set {
     my $row = $before{ $Self->idmap($uid) // $uid };
     if (ref $p eq 'HASH' && $row) {
       my $cur = $Self->_filenode_object($row, \%before);
-      # with new content, type and size describe the new blob, whatever
+      # with new content, mediaType and size describe the new blob, whatever
       # the old ones were
-      my %keep = exists $p->{blobId} && !$same->($p->{blobId}, $cur->{blobId}) ? (type => 1, size => 1) : ();
+      my %keep = exists $p->{blobId} && !$same->($p->{blobId}, $cur->{blobId}) ? (mediaType => 1, size => 1) : ();
       $p = { map { ($_ => $p->{$_}) } grep { $keep{$_} || !exists $cur->{$_} || !$same->($p->{$_}, $cur->{$_}) } keys %$p };
     }
     $update{$uid} = $p;
+  }
+
+  # -20's names to the mirror's (see _filenode_in), each patch for its
+  # node's @type.  %update itself stays as the client asked: a refused move
+  # is still a move below, so nothing in this call may delete its node.
+  my (%update_in, %pre_notUpdated);
+  for my $uid (keys %update) {
+    my $p = $update{$uid};
+    my $row = $before{ $Self->idmap($uid) // $uid };
+    unless (ref $p eq 'HASH' && $row) { $update_in{$uid} = $p; next }
+    my ($in, @bad) = _filenode_in($p, $NODE_TYPE_OUT{ $row->{nodetype} } // 'File', 0);
+    if (@bad) { $pre_notUpdated{$uid} = { type => 'invalidProperties', properties => \@bad }; next }
+    $update_in{$uid} = $in;
+  }
+  # and the creates: @type MUST be given, and be one of supportedNodeTypes
+  my $sent_create = $args->{create} || {};
+  my (%create_in, %pre_notCreated);
+  for my $cid (keys %$sent_create) {
+    my $c = $sent_create->{$cid};
+    unless (ref $c eq 'HASH') { $create_in{$cid} = $c; next }
+    my $type = $c->{'@type'};
+    unless (defined $type && !ref $type && $NODE_TYPE_IN{$type}) {
+      $pre_notCreated{$cid} = { type => 'invalidProperties', properties => ['@type'],
+                                description => '@type must be one of ' . join(', ', @{ $JMAP::FileNode::CAPS{supportedNodeTypes} }) };
+      next;
+    }
+    my ($in, @bad) = _filenode_in($c, $type, 1);
+    if (@bad) { $pre_notCreated{$cid} = { type => 'invalidProperties', properties => \@bad }; next }
+    $create_in{$cid} = $in;
   }
 
   # The set is judged by its final state (RFC 8620 S5.3; draft S3.2.3):
@@ -224,7 +308,7 @@ sub api_FileNode_set {
       $from{ ($before{$did}{parentid} // '') . "\0" . $key->($before{$did}{name}) } = 1;
     }
     my %at = map { (($_->{parentid} // '') . "\0" . $key->($_->{name}) => $_->{nodeid}) } values %before;
-    my $create = $args->{create} || {};
+    my $create = \%create_in;
     for my $cid (keys %$create) {
       my $c = $create->{$cid};
       next unless ref $c eq 'HASH' && defined $c->{parentId} && !ref $c->{parentId}
@@ -244,7 +328,7 @@ sub api_FileNode_set {
     }
   }
   $opts{protect} = \%mover;   # create_filenodes: never replace a mover, or a directory one is still inside
-  my $create = $args->{create} || {};
+  my $create = \%create_in;
   my %early_create = map { ($_ => $create->{$_}) } grep { !$late_create{$_} } keys %$create;
   my %late_create_args = map { ($_ => $create->{$_}) } keys %late_create;
 
@@ -252,9 +336,12 @@ sub api_FileNode_set {
   my ($created, $notCreated, $also) = $Self->{db}->create_filenodes(\%early_create, sub { $Self->idmap(shift) }, \%opts);
   $Self->setid($_, $created->{$_}{nodeid}) for keys %$created;
   my ($updated, $notUpdated, $also2, $nd) = ({}, {}, [], {});
-  ($updated, $notUpdated, $also2, $nd) = $Self->{db}->update_filenodes(\%update, sub { $Self->idmap(shift) },
-                                                                        { %opts, late_destroy => \@late })
-    if %update || @late;
+  my @refused_movers = map { $Self->idmap($_) // $_ }
+                       grep { ref $update{$_} eq 'HASH' && (exists $update{$_}{parentId} || exists $update{$_}{name}) }
+                       keys %pre_notUpdated;
+  ($updated, $notUpdated, $also2, $nd) = $Self->{db}->update_filenodes(\%update_in, sub { $Self->idmap(shift) },
+                                                                        { %opts, late_destroy => \@late, refused_movers => \@refused_movers })
+    if %update_in || @late;
   %$notDestroyed = (%$notDestroyed, %$nd);
   if (%late_create_args) {
     my ($c, $nc, $a) = $Self->{db}->create_filenodes(\%late_create_args, sub { $Self->idmap(shift) }, \%opts);
@@ -275,7 +362,7 @@ sub api_FileNode_set {
   $Self->commit();
   for my $cid (keys %createdOut) {
     my $full = $Self->_filenode_object($createdOut{$cid}, \%after);
-    my $sent = $args->{create}{$cid};
+    my $sent = $sent_create->{$cid};
     $createdOut{$cid} = { map { ($_ => $full->{$_}) }
                           grep { $_ eq 'id' || !exists $sent->{$_} || !$same->($sent->{$_}, $full->{$_}) } keys %$full };
   }
@@ -299,6 +386,9 @@ sub api_FileNode_set {
     }
     $updated->{$id} = %out ? \%out : undef;
   }
+  # the mirror's property names in SetErrors, as -20's
+  $notCreated = { %pre_notCreated, map { ($_ => _filenode_error_out($notCreated->{$_})) } keys %{ $notCreated || {} } };
+  $notUpdated = { %pre_notUpdated, map { ($_ => _filenode_error_out($notUpdated->{$_})) } keys %{ $notUpdated || {} } };
   my %d;
   return ['FileNode/set', {
     accountId => "$accountid", oldState => $oldState, newState => $newState,
@@ -316,10 +406,14 @@ sub _filenode_query_ids {
   my %rowbyid = map { $_->{nodeid} => $_ } @$rows;
   my @objs = map { $Self->_filenode_object($_, \%rowbyid) } @$rows;
   my %byid = map { $_->{id} => $_ } @objs;
-  # depth widens a top-level parentId / isTopLevel (see JMAP::FileNode::filter_match)
-  my $ctx = { byid => \%byid, depth => $args->{depth} // 0 };
+  my $ctx = { byid => \%byid };
   my $filter = $args->{filter};
-  my @m = grep { !$filter || JMAP::FileNode::filter_match($_, $filter, $ctx) } @objs;
+  # -20 S3.2.5 depth: "The maximum depth in the tree, counted from the top
+  # level"; null (the default) is no limit, and it is never counted from a
+  # parentId or ancestorId condition
+  my $depth = $args->{depth};
+  my @m = grep { (!defined $depth || JMAP::FileNode::node_depth($_->{id}, \%byid) <= $depth)
+                 && (!$filter || JMAP::FileNode::filter_match($_, $filter, $ctx)) } @objs;
   return [ map { $_->{id} } @{ JMAP::FileNode::sort_nodes(\@m, $args->{sort} || [], \%byid) } ];
 }
 
@@ -337,7 +431,7 @@ sub _filenode_query_problem {
 
 sub _filenode_query_params {
   my ($args) = @_;
-  return { filter => $args->{filter}, sort => $args->{sort}, depth => $args->{depth} // 0 };
+  return { filter => $args->{filter}, sort => $args->{sort}, depth => $args->{depth} };
 }
 
 sub api_FileNode_query {

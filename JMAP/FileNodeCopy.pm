@@ -20,11 +20,11 @@ use warnings;
 #     so missing), store_blob into the destination.
 #  3. One FileNode/set in the destination, each directory's contents created
 #     under it with "#" references.  The copy keeps the source's own
-#     properties (name, nodeType, type, target, created, modified, accessed,
+#     properties (name, @type, mediaType, target, created, modified, accessed,
 #     executable, isSubscribed) under whatever the client's create gives;
 #     not ids, blobId, size, myRights, role or shareWith, which are the
 #     destination's.
-#  4. With onExists "replace", "newest" or "unchanged", a directory with
+#  4. With onExists "replace", a directory with
 #     contents is staged: created under a temporary name nothing else has,
 #     then, once all of it is there, renamed to its name by one
 #     FileNode/set update carrying the client's onExists (and
@@ -53,7 +53,7 @@ use JSON;
 
 our $DEFAULT_MAX_GET = 500;
 my @USING = ('urn:ietf:params:jmap:core', 'urn:ietf:params:jmap:filenode');
-my %STAGED_ONEXISTS = map { $_ => 1 } qw(replace newest unchanged);
+my %STAGED_ONEXISTS = map { $_ => 1 } qw(replace);
 
 # @ids in runs of at most $max.
 sub chunks {
@@ -159,7 +159,7 @@ sub copy {
           if defined $args->{ifFromInState} && $args->{ifFromInState} ne ($g->[1]{state} // '');
         %node = map { ($_->{id} => $_) } @{ $g->[1]{list} || [] };
         # only a directory has anything to list
-        $list{$_}{status} = 'done' for grep { !$node{$_} || ($node{$_}{nodeType} // '') ne 'directory' } @srcids;
+        $list{$_}{status} = 'done' for grep { !$node{$_} || !_is_dir($node{$_}) } @srcids;
       }
       for my $k (0 .. $#q) {
         my $l = $list{ $q[$k] };
@@ -207,7 +207,7 @@ sub copy {
     for my $cid (sort keys %src_of) {
       my $top = $node{ $src_of{$cid} } or do { $notcreated{$cid} = { type => 'notFound' }; next };
       my @desc;
-      if (($top->{nodeType} // '') eq 'directory') {
+      if (_is_dir($top)) {
         my $l = $list{ $top->{id} };
         unless ($l->{status} eq 'done') { $notcreated{$cid} = { type => 'serverFail', description => $l->{status} }; next }
         if (grep { !$got->{$_} } @{ $l->{ids} }) {
@@ -219,9 +219,9 @@ sub copy {
       $plan{$cid} = [ $top, @desc ];
       $path{ $top->{id} } = $top->{name};
       $path{ $_->{id} } = ($path{ $_->{parentId} // '' } // '...') . "/$_->{name}" for @desc;
-      $need{ $_->{blobId} } = 1 for grep { ($_->{nodeType} // '') eq 'file' && defined $_->{blobId} } @{ $plan{$cid} };
+      $need{ $_->{blobId} } = 1 for grep { _node_type($_) eq 'File' && defined $_->{blobId} } @{ $plan{$cid} };
     }
-    my $files_of = sub { grep { ($_->{nodeType} // '') eq 'file' && defined $_->{blobId} } @{ $plan{ $_[0] } } };
+    my $files_of = sub { grep { _node_type($_) eq 'File' && defined $_->{blobId} } @{ $plan{ $_[0] } } };
     my $drop = sub {   # fail a whole item, naming the files whose blobs are in %$bad
       my ($cid, $bad, $what) = @_;
       my @names = sort map { $path{ $_->{id} } } grep { $bad->{ $_->{blobId} } } $files_of->($cid);
@@ -282,6 +282,16 @@ sub copy {
   $round->();
 }
 
+# A source node's @type (draft-ietf-jmap-filenode-20), from an account on
+# -20 or on an older revision ("nodeType": "file" / "directory").
+sub _node_type {
+  my ($n) = @_;
+  return $n->{'@type'} if defined $n->{'@type'};
+  my $t = lc($n->{nodeType} // 'file');
+  return $t eq 'directory' ? 'Directory' : $t eq 'symlink' ? 'SymLink' : 'File';
+}
+sub _is_dir { return _node_type($_[0]) eq 'Directory' }
+
 # 3 and 4: the destination.
 sub _write {
   my (%o) = @_;
@@ -293,13 +303,15 @@ sub _write {
 
   my $carry = sub {
     my ($s) = @_;
-    my %c = (name => $s->{name}, nodeType => $s->{nodeType});
-    if (($s->{nodeType} // '') eq 'file') {
+    my %c = (name => $s->{name}, '@type' => _node_type($s));
+    if ($c{'@type'} eq 'File') {
       $c{blobId} = $newblob->{ $s->{blobId} };
-      $c{type} = $s->{type} if defined $s->{type};
+      my $mt = $s->{mediaType} // $s->{type};
+      $c{mediaType} = $mt if defined $mt;
     }
     $c{target} = $s->{target} if defined $s->{target};
-    $c{$_} = $s->{$_} for grep { defined $s->{$_} } qw(created modified accessed executable isSubscribed);
+    $c{$_} = $s->{$_} for grep { defined $s->{$_} } ($c{'@type'} eq 'File' ? qw(created modified accessed executable)
+                                                                           : qw(created modified accessed isSubscribed));
     return \%c;
   };
   my (%sets, %keys_of, %srcids_of, %parentkey, %path_of_key, %final, %staged_name, %target, %dup_of);

@@ -837,7 +837,7 @@ sub run_backend_worker {
       return ['filenode_put', { status => 404 }] unless $db->can('put_filenode_content');
       my $bytes = do { local $/; open my $fh, '<:raw', $file or die "$file: $!"; <$fh> };
       unlink $file;
-      return ['filenode_put', $db->put_filenode_content($args->{id}, $bytes, $args->{type})];
+      return ['filenode_put', $db->put_filenode_content($args->{id}, $bytes, $args->{type}, $args->{if_match}, 1)];
     }
     if ($cmd eq 'download') {
       if ($db->can('proxy_blob')) {
@@ -2823,11 +2823,14 @@ sub do_filenode_write {
   _authenticate($req, $httpd, sub {
     my ($auth_aid) = @_;
     _check_account_access($auth_aid, $accountid, sub {
-      send_backend_request($accountid, 'filenode_put', { id => $id, file => $tmpfile, type => $ctype }, sub {
+      send_backend_request($accountid, 'filenode_put',
+          { id => $id, file => $tmpfile, type => $ctype, if_match => $req->headers->{'if-match'} }, sub {
         my $r = shift;
         unlink $tmpfile;
-        return $req->respond([200, 'ok', { 'Content-Type' => 'application/json' },
-          $json->encode({ blobId => $r->{blobId}, size => $r->{size}, type => $r->{type} })])
+        # -20 S4.1/S4.2: the new entity tag (the blobId) and the node's new
+        # blobId, size and mediaType
+        return $req->respond([200, 'ok', { 'Content-Type' => 'application/json', ETag => qq{"$r->{blobId}"} },
+          $json->encode({ blobId => $r->{blobId}, size => $r->{size}, mediaType => $r->{type} })])
           if ref $r eq 'HASH' && ($r->{status} // 0) == 200;
         my $st = ref $r eq 'HASH' ? ($r->{status} // 500) : 500;
         $req->respond([$st, 'error', {}, "error $st"]);

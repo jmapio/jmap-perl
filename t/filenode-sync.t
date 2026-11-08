@@ -104,7 +104,7 @@ is(rows()->{"$R/d/b.txt"}{jmodseq}, $seq, 'an idle sync changes nothing');
 $tree{"$R/d/b.txt"}{dead} = { modified => '2001-02-03T04:05:06Z', note => "caf\x{e9} \x{4e2d}" };
 $db->sync_files();
 ok(rows()->{"$R/d/b.txt"}{jmodseq} > $seq, 'a changed dead property is a change');
-ok(obj("$R/d/b.txt")->{isSubscribed}, 'and isSubscribed is back to the default');
+ok(!exists obj("$R/d/b.txt")->{isSubscribed}, 'and a File has no isSubscribed (-20 S3.1)');
 $seq = rows()->{"$R/d/b.txt"}{jmodseq};
 $db->sync_files();
 is(rows()->{"$R/d/b.txt"}{jmodseq}, $seq, 'non-ASCII dead properties compare equal on the next sync');
