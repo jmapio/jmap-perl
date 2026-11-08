@@ -1218,8 +1218,8 @@ sub dgetone {
   $Self->log('debug', $sql, _dbl(map { $filter->{$_} } @lkeys));
 
   my $data = $Self->dbh->selectall_arrayref($sql, {Slice => {}}, @vals);
-  use Data::Dumper;
-  $Self->log('debug', Dumper($data));
+  # built only when it will be logged: dgetone runs in per-row loops
+  if ($ENV{DEBUGDB}) { require Data::Dumper; $Self->log('debug', Data::Dumper::Dumper($data)) }
   return $data->[0];
 }
 
@@ -1645,6 +1645,7 @@ sub _initdb {
       $dbh->commit;
     };
     if ($@) { $dbh->rollback; die "user DB init failed: $@" }
+    $Self->_ensure_indexes($dbh);
     return;
   }
 
@@ -1907,6 +1908,34 @@ EOF
     if ($@) { $dbh->rollback; die "user DB migration to v16 failed: $@" }
     $v = 16;
   }
+  $Self->_ensure_indexes($dbh);
+}
+
+# The indexes the hot queries need, on every schema version (CREATE INDEX
+# IF NOT EXISTS is nearly free once they exist; the first open of a large
+# account builds them).  A column that is not there yet is skipped.
+#  - jmodseq: every /changes and /queryChanges reads "jmodseq > ?"; without
+#    it each was a scan of the whole table
+#  - jeventhash: a hashed CalendarEvent id is found by it; the index was only
+#    made by the v13 migration, so accounts created later had none
+#  - jmessages(active, internaldate): the mailbox listing order
+#  - jqueries(mtime): the expiry of query snapshots
+sub _ensure_indexes {
+  my ($Self, $dbh) = @_;
+  my %cols;
+  my $has = sub {
+    my ($t, @c) = @_;
+    $cols{$t} //= { map { $_->[1] => 1 } @{ $dbh->selectall_arrayref("PRAGMA table_info($t)") || [] } };
+    return !grep { !$cols{$t}{$_} } @c;
+  };
+  for my $t (qw(jmessages jmessagemap jthreads jmailboxes jevents jcalendars jcontacts
+                jcontactgroups jaddressbooks jfilenodes jsubmission)) {
+    $dbh->do("CREATE INDEX IF NOT EXISTS ${t}_jmodseq ON $t (jmodseq)") if $has->($t, 'jmodseq');
+  }
+  $dbh->do("CREATE INDEX IF NOT EXISTS jeventhash ON jevents (jeventhash)") if $has->('jevents', 'jeventhash');
+  $dbh->do("CREATE INDEX IF NOT EXISTS jmessages_date ON jmessages (active, internaldate)")
+    if $has->('jmessages', 'active', 'internaldate');
+  $dbh->do("CREATE INDEX IF NOT EXISTS jqueries_mtime ON jqueries (mtime)") if $has->('jqueries', 'mtime');
 }
 
 1;
