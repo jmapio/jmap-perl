@@ -1518,6 +1518,7 @@ EOF
 CREATE TABLE IF NOT EXISTS jrawmessage (
   msgid TEXT PRIMARY KEY,
   hasAttachment INTEGER,
+  preview TEXT,
   mtime DATE
 );
 EOF
@@ -2030,6 +2031,11 @@ EOF
           $sth->execute(JMAP::EventSpan::span($payload), $uid);
         }
       }
+      # A message's preview beside its hasAttachment, so a mailbox listing
+      # (Email/get preview, hasAttachment) need not read the whole parsed
+      # message.  NULL until the message is next parsed or read.
+      my %rcols = map { $_->[1] => 1 } @{ $dbh->selectall_arrayref("PRAGMA table_info(jrawmessage)") || [] };
+      $dbh->do("ALTER TABLE jrawmessage ADD COLUMN preview TEXT") if %rcols && !$rcols{preview};
       $dbh->do('PRAGMA user_version = 17');
       $dbh->commit;
     };

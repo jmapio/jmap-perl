@@ -616,11 +616,15 @@ sub api_Email_get {
   my %seenids;
   my %missingids;
   my @list;
+  # preview and hasAttachment (what a mailbox listing asks for) are kept
+  # apart from the parsed message (message_summaries); anything else of the
+  # content needs the whole of it
   my $need_content = 0;
-  foreach my $prop (qw(hasAttachment headers preview textBody htmlBody attachments bodyValues bodyStructure messageId inReplyTo references sender)) {
+  foreach my $prop (qw(headers textBody htmlBody body attachments attachedEmails bodyValues bodyStructure messageId inReplyTo references sender replyTo)) {
     $need_content = 1 if _prop_wanted($args, $prop);
   }
   $need_content = 1 if grep { m/^header:/ } @{$args->{properties}};
+  my $need_summary = !$need_content && (_prop_wanted($args, 'preview') || _prop_wanted($args, 'hasAttachment'));
   my %msgidmap;
   foreach my $msgid (map { $Self->idmap($_) } @{$args->{ids}}) {
     next if $seenids{$msgid};
@@ -691,11 +695,20 @@ sub api_Email_get {
   $Self->commit();
 
   # need to load messages from the server
-  if ($need_content) {
+  if ($need_content || $need_summary) {
     # RFC 8621 Section 4.2: default bodyProperties
     my $bodyProperties = $args->{bodyProperties} || [qw(partId blobId size name type charset disposition cid language location)];
 
-    my $content = $Self->{db}->fill_messages(map { $_->{id} } @list);
+    my $content;
+    if ($need_summary && $Self->{db}->can('message_summaries')) {
+      $content = $Self->{db}->message_summaries(map { $_->{id} } @list);
+      my $filled = $Self->{db}->fill_messages(grep { !$content->{$_} } map { $_->{id} } @list);
+      $Self->{db}->store_message_summaries($filled);
+      $content = { %$content, %$filled };
+    }
+    else {
+      $content = $Self->{db}->fill_messages(map { $_->{id} } @list);
+    }
     foreach my $item (@list) {
       my $data = $content->{$item->{id}};
       if (_prop_wanted($args, 'preview')) {

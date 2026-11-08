@@ -3861,6 +3861,7 @@ sub import_message {
   $Self->dinsert('jrawmessage', {
     msgid         => $msgdata->{msgid},
     hasAttachment => $message->{hasAttachment},
+    preview       => $message->{preview},
   });
   $Self->commit();
 
@@ -4264,6 +4265,34 @@ sub _envelopedata {
   );
 }
 
+# What a message listing needs of each message's content, without reading
+# it: { msgid => { preview, hasAttachment } } for those ids whose summary is
+# stored (jrawmessage, written when the message is parsed).
+sub message_summaries {
+  my ($Self, @ids) = @_;
+  my %out;
+  $Self->begin();
+  my $dbh = $Self->dbh;
+  while (my @chunk = splice @ids, 0, 500) {
+    my $rows = $dbh->selectall_arrayref('SELECT msgid, preview, hasAttachment FROM jrawmessage WHERE preview IS NOT NULL AND msgid IN ('
+      . join(',', ('?') x @chunk) . ')', {Slice => {}}, @chunk);
+    $out{$_->{msgid}} = $_ for @$rows;
+  }
+  $Self->commit();
+  return \%out;
+}
+
+# Keep the summaries of parsed messages ({ msgid => parsed message }).
+sub store_message_summaries {
+  my ($Self, $parsed) = @_;
+  my @ids = grep { $parsed->{$_} && defined $parsed->{$_}{preview} } keys %$parsed;
+  return unless @ids;
+  $Self->begin();
+  $Self->dinsert('jrawmessage', { msgid => $_, hasAttachment => $parsed->{$_}{hasAttachment},
+                                  preview => $parsed->{$_}{preview} }) for sort @ids;
+  $Self->commit();
+}
+
 sub fill_messages {
   my $Self = shift;
   my @ids = @_;
@@ -4338,6 +4367,7 @@ sub fill_messages {
     $Self->dinsert('jrawmessage', {
       msgid        => $msgid,
       hasAttachment => $message->{hasAttachment},
+      preview      => $message->{preview},
     });
   }
   $Self->commit();
