@@ -61,39 +61,9 @@ sub api_Thread_get {
 }
 
 sub api_Thread_changes {
-  my $Self = shift;
-  my $args = shift;
-
-  my ($user, $accountid) = $Self->_api_init($args);
-  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
-
-  my $newState = "$user->{jstateThread}";
-
-  my @e = $Self->_check_since_state($args, $user, $newState);
-  return @e if @e;
-
-  my $data = $Self->{db}->dget('jthreads', { jmodseq => ['>', $args->{sinceState}] }, 'thrid,active,jcreated,jmodseq');
-
-  my $partial;
-  ($data, $partial) = $Self->_limit_changes($data, $args, \$newState);
-  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]) unless defined $data;
-
-  $Self->commit();
-
-  my ($created, $updated, $destroyed) = $Self->_classify_changes($data, $args->{sinceState}, 'thrid');
-
-  my @res;
-  push @res, ['Thread/changes', {
-    accountId => $accountid,
-    oldState => $args->{sinceState},
-    newState => $newState,
-    created => $created,
-    updated => $updated,
-    destroyed => $destroyed,
-    hasMoreChanges => $partial ? JSON::true : JSON::false,
-  }];
-
-  return @res;
+  my ($Self, $args) = @_;
+  return $Self->_table_changes($args, method => 'Thread/changes',
+    table => 'jthreads', key => 'thrid', state => 'jstateThread');
 }
 
 sub _prop_wanted {

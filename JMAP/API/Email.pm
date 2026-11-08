@@ -907,39 +907,9 @@ sub downloadFile {
 }
 
 sub api_Email_changes {
-  my $Self = shift;
-  my $args = shift;
-
-  my ($user, $accountid) = $Self->_api_init($args);
-  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
-
-  my $newState = "$user->{jstateEmail}";
-
-  my @e = $Self->_check_since_state($args, $user, $newState);
-  return @e if @e;
-
-  my $data = $Self->{db}->dget('jmessages', { jmodseq => ['>', $args->{sinceState}] }, 'msgid,active,jcreated,jmodseq');
-
-  my $partial;
-  ($data, $partial) = $Self->_limit_changes($data, $args, \$newState);
-  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]) unless defined $data;
-
-  $Self->commit();
-
-  my ($created, $updated, $destroyed) = $Self->_classify_changes($data, $args->{sinceState}, 'msgid');
-
-  my @res;
-  push @res, ['Email/changes', {
-    accountId => $accountid,
-    oldState => "$args->{sinceState}",
-    newState => $newState,
-    created => [map { "$_" } @$created],
-    updated => [map { "$_" } @$updated],
-    destroyed => [map { "$_" } @$destroyed],
-    hasMoreChanges => $partial ? JSON::true : JSON::false,
-  }];
-
-  return @res;
+  my ($Self, $args) = @_;
+  return $Self->_table_changes($args, method => 'Email/changes',
+    table => 'jmessages', key => 'msgid', state => 'jstateEmail');
 }
 
 # RFC 8621 S4.1.1: a keyword is 1-255 characters of %x21-%x7e, none of

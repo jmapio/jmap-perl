@@ -765,6 +765,54 @@ sub _check_filter {
   return ();
 }
 
+# RFC 8620 S5.2 Foo/changes for a type kept in one table, rows carrying
+# jcreated, jmodseq and active (destroyed rows are tombstones).  One
+# implementation of the state checks, paging by maxChanges and the
+# created/updated/destroyed split, so the types cannot drift apart again
+# (they had: several answered cannotCalculateChanges where they should page).
+#   method   the response name ("Calendar/changes")
+#   table    the table; key, its id column
+#   state    the user row's state column, or a code ref ($user) giving it
+#   init     code ref ($args) returning ($user, $accountid), default _api_init
+#   id       code ref mapping a key to its JMAP id (default: as a string)
+#   check    code ref ($user, $sinceState): an extra reason the state cannot
+#            be calculated from (true means cannotCalculateChanges)
+#   cols     further columns, for finish
+#   finish   code ref ($response, \@rows, $sinceState) adding to the response
+sub _table_changes {
+  my ($Self, $args, %o) = @_;
+  my ($user, $accountid) = $o{init} ? $o{init}->($args) : $Self->_api_init($args);
+  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
+  my $newState = ref $o{state} ? $o{state}->($user) : "$user->{$o{state}}";
+
+  my @e = $Self->_check_since_state($args, $user, $newState);
+  return @e if @e;
+  my $since = $args->{sinceState};
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
+    if $o{check} && $o{check}->($user, $since);
+
+  my $data = $Self->{db}->dget($o{table}, { jmodseq => ['>', $since] },
+                               join(',', $o{key}, qw(active jcreated jmodseq), @{ $o{cols} || [] }));
+  my $partial;
+  ($data, $partial) = $Self->_limit_changes($data, $args, \$newState);
+  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]) unless defined $data;
+  $Self->commit();
+
+  my $id = $o{id} || sub { "$_[0]" };
+  my ($created, $updated, $destroyed) = $Self->_classify_changes($data, $since, $o{key});
+  my $res = {
+    accountId      => $accountid,
+    oldState       => "$since",
+    newState       => "$newState",
+    created        => [ map { $id->($_) } @$created ],
+    updated        => [ map { $id->($_) } @$updated ],
+    destroyed      => [ map { $id->($_) } @$destroyed ],
+    hasMoreChanges => $partial ? JSON::true : JSON::false,
+  };
+  $o{finish}->($res, $data, $since) if $o{finish};
+  return [$o{method}, $res];
+}
+
 # RFC 8620 S5.5: a Filter is a FilterCondition or a FilterOperator
 # ({operator: AND|OR|NOT, conditions: [Filter...]}, NOT meaning none of
 # them).  $leaf->($condition) says whether a FilterCondition matches.

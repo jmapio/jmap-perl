@@ -127,32 +127,9 @@ sub api_FileNode_get {
 
 sub api_FileNode_changes {
   my ($Self, $args) = @_;
-  my ($user, $accountid) = $Self->_filenode_init($args);
-  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
-
-  my $newState = "$user->{jstateFileNode}";
-  my @e = $Self->_check_since_state($args, $user, $newState);
-  return @e if @e;
-  my $sinceState = $args->{sinceState};
-
-  my $data = $Self->{db}->dget('jfilenodes', { jmodseq => ['>', $sinceState] },
-                               'nodeid,active,jcreated,jmodseq');
-  my $partial;
-  ($data, $partial) = $Self->_limit_changes($data, $args, \$newState);
-  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
-    unless defined $data;
-  $Self->commit();
-
-  my ($created, $updated, $destroyed) = $Self->_classify_changes($data, $sinceState, 'nodeid');
-  return ['FileNode/changes', {
-    accountId      => "$accountid",
-    oldState       => "$sinceState",
-    newState       => $newState,
-    hasMoreChanges => ($partial ? JSON::true : JSON::false),
-    created        => $created,
-    updated        => $updated,
-    destroyed      => $destroyed,
-  }];
+  return $Self->_table_changes($args, method => 'FileNode/changes',
+    table => 'jfilenodes', key => 'nodeid', state => 'jstateFileNode',
+    init => sub { $Self->_filenode_init($_[0]) });
 }
 
 

@@ -449,62 +449,16 @@ sub api_Mailbox_query {
 }
 
 sub api_Mailbox_changes {
-  my $Self = shift;
-  my $args = shift;
-
-  my ($user, $accountid) = $Self->_api_init($args);
-  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
-
-  my $newState = "$user->{jstateMailbox}";
-
-  my @e = $Self->_check_since_state($args, $user, $newState);
-  return @e if @e;
-  my $sinceState = $args->{sinceState};
-
-  my $data = $Self->{db}->dget('jmailboxes', { jmodseq => ['>', $sinceState] });
-
-  my $partial;
-  ($data, $partial) = $Self->_limit_changes($data, $args, \$newState);
-  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]) unless defined $data;
-
-  $Self->commit();
-
-  my @created;
-  my @updated;
-  my @destroyed;
-  my $onlyCounts = 1;
-  foreach my $item (@$data) {
-    if ($item->{active}) {
-      if ($item->{jcreated} <= $sinceState) {
-        push @updated, $item->{jmailboxid};
-        $onlyCounts = 0 if $item->{jnoncountsmodseq} > $sinceState;
-      }
-      else {
-        push @created, $item->{jmailboxid};
-        $onlyCounts = 0;
-      }
-    }
-    else {
-      if ($item->{jcreated} <= $sinceState) {
-        push @destroyed, $item->{jmailboxid};
-      }
-      # otherwise never seen
-    }
-  }
-  $onlyCounts = 0 unless @updated;
-
-  my @res = (['Mailbox/changes', {
-    accountId => $accountid,
-    oldState => "$sinceState",
-    newState => $newState,
-    created => [map { "$_" } @created],
-    updated => [map { "$_" } @updated],
-    destroyed => [map { "$_" } @destroyed],
-    hasMoreChanges => $partial ? JSON::true : JSON::false,
-    updatedProperties => $onlyCounts ? ["totalEmails", "unreadEmails", "totalThreads", "unreadThreads"] : JSON::null,
-  }]);
-
-  return @res;
+  my ($Self, $args) = @_;
+  return $Self->_table_changes($args, method => 'Mailbox/changes',
+    table => 'jmailboxes', key => 'jmailboxid', state => 'jstateMailbox', cols => ['jnoncountsmodseq'],
+    # RFC 8621 S2.2: when only the counts changed, say so
+    finish => sub {
+      my ($res, $rows, $since) = @_;
+      my $onlyCounts = @{ $res->{updated} } && !@{ $res->{created} }
+        && !grep { $_->{active} && $_->{jcreated} <= $since && ($_->{jnoncountsmodseq} // 0) > $since } @$rows;
+      $res->{updatedProperties} = $onlyCounts ? [qw(totalEmails unreadEmails totalThreads unreadThreads)] : JSON::null;
+    });
 }
 
 sub api_Mailbox_queryChanges {

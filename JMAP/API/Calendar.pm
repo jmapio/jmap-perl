@@ -266,38 +266,9 @@ sub api_Calendar_get {
 }
 
 sub api_Calendar_changes {
-  my $Self = shift;
-  my $args = shift;
-
-  my ($user, $accountid) = $Self->_api_init($args);
-  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
-
-  my $newState = "$user->{jstateCalendar}";
-
-  my @e = $Self->_check_since_state($args, $user, $newState);
-  return @e if @e;
-  my $sinceState = $args->{sinceState};
-
-  my $data = $Self->{db}->dget('jcalendars', { jmodseq => ['>', $sinceState] }, 'jcalendarid,jmodseq,active,jcreated');
-  my $partial;
-  ($data, $partial) = $Self->_limit_changes($data, $args, \$newState);
-  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]) unless defined $data;
-
-  $Self->commit();
-
-  my ($created, $updated, $destroyed) = $Self->_classify_changes($data, $sinceState, 'jcalendarid');
-
-  my @res = (['Calendar/changes', {
-    accountId => $accountid,
-    oldState => "$sinceState",
-    newState => $newState,
-    created => [map { "$_" } @$created],
-    updated => [map { "$_" } @$updated],
-    destroyed => [map { "$_" } @$destroyed],
-    hasMoreChanges => $partial ? JSON::true : JSON::false,
-  }]);
-
-  return @res;
+  my ($Self, $args) = @_;
+  return $Self->_table_changes($args, method => 'Calendar/changes',
+    table => 'jcalendars', key => 'jcalendarid', state => 'jstateCalendar');
 }
 
 sub api_Calendar_set {
@@ -858,42 +829,12 @@ sub api_CalendarEvent_get {
 }
 
 sub api_CalendarEvent_changes {
-  my $Self = shift;
-  my $args = shift;
-
-  my ($user, $accountid) = $Self->_api_init($args);
-  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
-
-  my $newState = "$user->{jstateCalendarEvent}";
-
-  my @e = $Self->_check_since_state($args, $user, $newState);
-  return @e if @e;
-  # an event's id changed past this state (schema v13): ids are not reportable
-  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}])
-    if $user->{jeventidcut} && $args->{sinceState} =~ /\A\d+\z/ && $args->{sinceState} <= $user->{jeventidcut};
-
-  my $data = $Self->{db}->dget('jevents', { jmodseq => ['>', $args->{sinceState}] }, 'eventuid,active,jcreated,jmodseq');
-  my $partial;
-  ($data, $partial) = $Self->_limit_changes($data, $args, \$newState);
-  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]) unless defined $data;
-
-  $Self->commit();
-
-  my ($created, $updated, $destroyed) = $Self->_classify_changes($data, $args->{sinceState}, 'eventuid');
-  my $ids = sub { [ map { JMAP::EventId::master_id($_) } @{$_[0]} ] };
-
-  my @res;
-  push @res, ['CalendarEvent/changes', {
-    accountId => $accountid,
-    oldState => "$args->{sinceState}",
-    newState => $newState,
-    created => $ids->($created),
-    updated => $ids->($updated),
-    destroyed => $ids->($destroyed),
-    hasMoreChanges => $partial ? JSON::true : JSON::false,
-  }];
-
-  return @res;
+  my ($Self, $args) = @_;
+  return $Self->_table_changes($args, method => 'CalendarEvent/changes',
+    table => 'jevents', key => 'eventuid', state => 'jstateCalendarEvent',
+    id => sub { JMAP::EventId::master_id($_[0]) },
+    # an event's id changed past this state (schema v13): ids are not reportable
+    check => sub { my ($user, $since) = @_; $user->{jeventidcut} && $since <= $user->{jeventidcut} });
 }
 
 sub api_CalendarEvent_queryChanges {

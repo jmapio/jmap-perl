@@ -291,37 +291,9 @@ sub api_Contact_get {
 }
 
 sub api_Contact_changes {
-  my $Self = shift;
-  my $args = shift;
-
-  my ($user, $accountid) = $Self->_api_init($args);
-  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
-
-  my $newState = "$user->{jstateContact}";
-
-  my @e = $Self->_check_since_state($args, $user, $newState);
-  return @e if @e;
-
-  my $data = $Self->{db}->dget('jcontacts', { jmodseq => ['>', $args->{sinceState}] }, 'contactuid,active,jcreated,jmodseq');
-  my $partial;
-  ($data, $partial) = $Self->_limit_changes($data, $args, \$newState);
-  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]) unless defined $data;
-  $Self->commit();
-
-  my ($created, $updated, $destroyed) = $Self->_classify_changes($data, $args->{sinceState}, 'contactuid');
-
-  my @res;
-  push @res, ['Contact/changes', {
-    accountId => $accountid,
-    oldState => "$args->{sinceState}",
-    newState => $newState,
-    created => [map { "$_" } @$created],
-    updated => [map { "$_" } @$updated],
-    destroyed => [map { "$_" } @$destroyed],
-    hasMoreChanges => $partial ? JSON::true : JSON::false,
-  }];
-
-  return @res;
+  my ($Self, $args) = @_;
+  return $Self->_table_changes($args, method => 'Contact/changes',
+    table => 'jcontacts', key => 'contactuid', state => 'jstateContact');
 }
 
 sub api_Contact_set {
@@ -435,37 +407,9 @@ sub api_ContactGroup_get {
 }
 
 sub api_ContactGroup_changes {
-  my $Self = shift;
-  my $args = shift;
-
-  my ($user, $accountid) = $Self->_api_init($args);
-  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
-
-  my $newState = "$user->{jstateContactGroup}";
-
-  my @e = $Self->_check_since_state($args, $user, $newState);
-  return @e if @e;
-
-  my $data = $Self->{db}->dget('jcontactgroups', { jmodseq => ['>', $args->{sinceState}] }, 'groupuid,active,jcreated,jmodseq');
-  my $partial;
-  ($data, $partial) = $Self->_limit_changes($data, $args, \$newState);
-  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]) unless defined $data;
-
-  my ($created, $updated, $destroyed) = $Self->_classify_changes($data, $args->{sinceState}, 'groupuid');
-  $Self->commit();
-
-  my @res;
-  push @res, ['ContactGroup/changes', {
-    accountId => $accountid,
-    oldState => "$args->{sinceState}",
-    newState => $newState,
-    created => [map { "$_" } @$created],
-    updated => [map { "$_" } @$updated],
-    destroyed => [map { "$_" } @$destroyed],
-    hasMoreChanges => $partial ? JSON::true : JSON::false,
-  }];
-
-  return @res;
+  my ($Self, $args) = @_;
+  return $Self->_table_changes($args, method => 'ContactGroup/changes',
+    table => 'jcontactgroups', key => 'groupuid', state => 'jstateContactGroup');
 }
 
 sub api_ContactGroup_set {
@@ -588,39 +532,10 @@ sub api_Addressbook_get {
 }
 
 sub api_Addressbook_changes {
-  my $Self = shift;
-  my $args = shift;
-
-  my ($user, $accountid) = $Self->_api_init($args);
-  return $Self->_transError(['error', {type => 'accountNotFound'}]) unless defined $accountid;
-
-  # we have no datatype for you yet
-  my $newState = "$user->{jhighestmodseq}";
-
-  my @e = $Self->_check_since_state($args, $user, $newState);
-  return @e if @e;
-  my $sinceState = $args->{sinceState};
-
-  my $data = $Self->{db}->dget('jaddressbooks', { jmodseq => ['>', $sinceState] }, 'jaddressbookid,jmodseq,active,jcreated');
-  my $partial;
-  ($data, $partial) = $Self->_limit_changes($data, $args, \$newState);
-  return $Self->_transError(['error', {type => 'cannotCalculateChanges', newState => $newState}]) unless defined $data;
-
-  $Self->commit();
-
-  my ($created, $updated, $destroyed) = $Self->_classify_changes($data, $sinceState, 'jaddressbookid');
-
-  my @res = (['Addressbook/changes', {
-    accountId => $accountid,
-    oldState => "$sinceState",
-    newState => $newState,
-    created => [map { "$_" } @$created],
-    updated => [map { "$_" } @$updated],
-    destroyed => [map { "$_" } @$destroyed],
-    hasMoreChanges => $partial ? JSON::true : JSON::false,
-  }]);
-
-  return @res;
+  my ($Self, $args) = @_;
+  # address books have no state of their own: the account's modseq
+  return $Self->_table_changes($args, method => 'Addressbook/changes',
+    table => 'jaddressbooks', key => 'jaddressbookid', state => 'jhighestmodseq');
 }
 
 # JSContact (RFC 9553) aliases — data is already stored in Card format
