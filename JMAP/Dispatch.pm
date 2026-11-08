@@ -168,6 +168,25 @@ sub check_accounts {
     return \%errors;
 }
 
+# After its ResultReferences resolve: is every account a call names one of
+# the session's ($key_for_aid), and on this batch's upstream ($batch_key)?
+# Returns the error to answer, or undef.
+sub resolved_account_problem {
+  my ($call, $key_for_aid, $batch_key) = @_;
+  my $args = $call->[1];
+  return undef unless ref $args eq 'HASH';
+  for my $f (qw(accountId fromAccountId toAccountId)) {
+    next unless exists $args->{$f};
+    my $aid = $args->{$f};
+    my $type = $f eq 'fromAccountId' ? 'fromAccountNotFound' : 'accountNotFound';
+    return { type => $type } unless defined $aid && !ref $aid && exists $key_for_aid->{$aid};
+    return { type => 'invalidArguments', arguments => [$f],
+             description => "$f resolved to an account that is not on this batch's server" }
+      if $f eq 'accountId' && defined $batch_key && $key_for_aid->{$aid} ne $batch_key;
+  }
+  return undef;
+}
+
 # Map a single method call to the accountid it targets.
 sub call_account { return _call_account(@_) }
 

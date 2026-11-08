@@ -2158,6 +2158,16 @@ sub _do_jmap_request {
           $resp_by_tag{ $call->[2] } //= $responses[$pos];
           next;
         }
+        # A "#accountId" (or #fromAccountId) skipped check_accounts, which runs
+        # before references resolve: the value it resolved to is checked now,
+        # or a reference could name any account and the call would go to that
+        # account's worker.  It must also be on the upstream this batch was
+        # grouped for, since the batch was formed before it was known.
+        if (my $bad = JMAP::Dispatch::resolved_account_problem($call, \%key_for_aid, $batch->{key})) {
+          $responses[$pos] = ['error', $bad, $call->[2]];
+          $resp_by_tag{ $call->[2] } //= $responses[$pos];
+          next;
+        }
         push @calls, $call; push @positions, $pos;
       }
       unless (@calls) { return $next_batch->() }

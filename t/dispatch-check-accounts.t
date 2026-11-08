@@ -87,4 +87,17 @@ is_deeply($e, {}, 'a pending ResultReference for accountId is not treated as mis
 my $ok = eval { errors_for(['notacall', ['Mailbox/get', undef, '1']]); 1 };
 ok($ok, 'malformed calls are skipped rather than dying');
 
+# A "#accountId" passes check_accounts unresolved; once resolved it is checked
+# again, or a reference could send the call to any account's worker
+{
+  my %key = (A => 'imap:A', B => 'imap:B', P => 'fp:1', Q => 'fp:1');
+  my $p = sub { JMAP::Dispatch::resolved_account_problem([ 'Email/get', $_[0], 't' ], \%key, $_[1]) };
+  is($p->({ accountId => 'A' }, 'imap:A'), undef, 'a session account on this batch\'s upstream is fine');
+  is($p->({ accountId => 'victim' }, 'imap:A')->{type}, 'accountNotFound', 'one outside the session is accountNotFound');
+  is($p->({ accountId => 'B' }, 'imap:A')->{type}, 'invalidArguments', 'one of the session, but another upstream, is refused');
+  is($p->({ accountId => 'Q' }, 'fp:1'), undef, 'a delegated account on the same login is fine');
+  is($p->({ accountId => { x => 1 } }, 'imap:A')->{type}, 'accountNotFound', 'a resolved non-string is refused');
+  is($p->({ accountId => 'A', fromAccountId => 'nope' }, 'imap:A')->{type}, 'fromAccountNotFound', 'fromAccountId too');
+}
+
 done_testing;
