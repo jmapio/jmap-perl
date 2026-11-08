@@ -142,7 +142,9 @@ sub _match {
   my $Self = shift;
   my ($item, $condition, $storage) = @_;
 
-  return $Self->_match_operator($item, $condition, $storage) if $condition->{operator};
+  # RFC 8620 S5.5 FilterOperators
+  return JMAP::API::_filter_matches($condition, sub { $Self->_match($item, $_[0], $storage) })
+    if $condition->{operator};
 
   if ($condition->{inMailbox}) {
     my $id = $Self->idmap($condition->{inMailbox});
@@ -267,27 +269,6 @@ sub _match {
   return 1;
 }
 
-
-sub _match_operator {
-  my $Self = shift;
-  my ($item, $filter, $storage) = @_;
-  if ($filter->{operator} eq 'NOT') {
-    return not $Self->_match_operator($item, {operator => 'OR', conditions => $filter->{conditions}}, $storage);
-  }
-  elsif ($filter->{operator} eq 'OR') {
-    foreach my $condition (@{$filter->{conditions}}) {
-      return 1 if $Self->_match($item, $condition, $storage);
-    }
-    return 0;
-  }
-  elsif ($filter->{operator} eq 'AND') {
-    foreach my $condition (@{$filter->{conditions}}) {
-      return 0 if not $Self->_match($item, $condition, $storage);
-    }
-    return 1;
-  }
-  die "Invalid operator $filter->{operator}";
-}
 
 sub _messages_filter {
   my $Self = shift;

@@ -83,24 +83,9 @@ sub _mailbox_match {
   my $item = shift;
   my $filter = shift;
 
-  if ($filter->{operator}) {
-    if ($filter->{operator} eq 'NOT') {
-      return not $Self->_mailbox_match($item, {operator => 'OR', conditions => $filter->{conditions}});
-    }
-    elsif ($filter->{operator} eq 'OR') {
-      for my $cond (@{$filter->{conditions}}) {
-        return 1 if $Self->_mailbox_match($item, $cond);
-      }
-      return 0;
-    }
-    elsif ($filter->{operator} eq 'AND') {
-      for my $cond (@{$filter->{conditions}}) {
-        return 0 unless $Self->_mailbox_match($item, $cond);
-      }
-      return 1;
-    }
-    die "Invalid operator $filter->{operator}";
-  }
+  # RFC 8620 S5.5 FilterOperators
+  return JMAP::API::_filter_matches($filter, sub { $Self->_mailbox_match($item, $_[0]) })
+    if $filter->{operator};
 
   if (exists $filter->{hasAnyRole}) {
     if ($filter->{hasAnyRole}) {

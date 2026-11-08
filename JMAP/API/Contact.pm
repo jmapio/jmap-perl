@@ -39,23 +39,8 @@ sub _contact_match {
   my ($item, $condition, $storage) = @_;
 
   # RFC 8620 S5.5: a FilterOperator combines its conditions
-  if (exists $condition->{operator}) {
-    my @conds = @{$condition->{conditions} || []};
-    my $op = $condition->{operator} // '';
-    if ($op eq 'AND') {
-      $Self->_contact_match($item, $_, $storage) || return 0 for @conds;
-      return 1;
-    }
-    if ($op eq 'OR') {
-      $Self->_contact_match($item, $_, $storage) && return 1 for @conds;
-      return 0;
-    }
-    if ($op eq 'NOT') {
-      $Self->_contact_match($item, $_, $storage) && return 0 for @conds;
-      return 1;
-    }
-    return 0;
-  }
+  return JMAP::API::_filter_matches($condition, sub { $Self->_contact_match($item, $_[0], $storage) })
+    if exists $condition->{operator};
 
   # RFC 9610 S3.3.1
   if (defined $condition->{inAddressBook}) {

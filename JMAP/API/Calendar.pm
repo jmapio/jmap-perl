@@ -374,6 +374,11 @@ sub _event_match {
   my $Self = shift;
   my ($item, $condition, $storage) = @_;
 
+  # RFC 8620 S5.5 FilterOperators (this matcher once ignored them, so any
+  # operator matched every event)
+  return JMAP::API::_filter_matches($condition, sub { $Self->_event_match($item, $_[0], $storage) })
+    if ref $condition eq 'HASH' && exists $condition->{operator};
+
   # an event is in every calendar of its calendarIds
   if ($condition->{inCalendar}) {
     return 0 unless grep { $_ eq $condition->{inCalendar} } JMAP::DB::event_calendar_ids($item);
