@@ -2421,7 +2421,9 @@ sub _do_copy_call {
   my $from_aid = $args->{fromAccountId} // $auth_accountid;
   my $to_aid   = $args->{accountId}     // $auth_accountid;
 
-  if ($from_aid eq $to_aid) {
+  # RFC 8620 S5.4: the two accounts differ -- except for FileNode/copy, which
+  # copies within one account too (draft-ietf-jmap-filenode-20 S3.2.4)
+  if ($from_aid eq $to_aid && $method ne 'FileNode/copy') {
     return $cb->(['error', {
       type        => 'invalidArguments',
       description => 'fromAccountId and accountId must differ',

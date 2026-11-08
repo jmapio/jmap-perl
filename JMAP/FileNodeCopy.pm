@@ -216,6 +216,13 @@ sub copy {
         }
         @desc = map { $got->{$_} } @{ $l->{ids} };
       }
+      # -20 S3.2.4: within one account, a Directory may not be copied into
+      # itself or one of its descendants
+      if ($from eq $to && defined $parent_of{$cid} && grep { $_->{id} eq $parent_of{$cid} } $top, @desc) {
+        $notcreated{$cid} = { type => 'invalidProperties', properties => ['parentId'],
+                              description => 'a directory cannot be copied into itself' };
+        next;
+      }
       $plan{$cid} = [ $top, @desc ];
       $path{ $top->{id} } = $top->{name};
       $path{ $_->{id} } = ($path{ $_->{parentId} // '' } // '...') . "/$_->{name}" for @desc;

@@ -349,4 +349,23 @@ for my $case ([ 'done', 1 ], [ 'not done', 0 ]) {
   }
 }
 
+# -20 S3.2.4: FileNode/copy within one account, but not into the subtree copied
+{
+  setup();
+  my $same = sub {
+    my (%args) = @_;
+    my $out;
+    JMAP::FileNodeCopy::copy(send => $send, args => { fromAccountId => 'A', accountId => 'A', %args },
+      from => 'A', to => 'A', tag => 't', cb => sub { $out = shift }, errcb => sub { $out = [ 'errcb', $_[0] ] });
+    return $out;
+  };
+  my $r = $same->(create => { lone => { id => 'LONE', parentId => 'D', name => 'copy.txt' },
+                              self => { id => 'D', parentId => 'SUB' }, into => { id => 'D', parentId => 'D' } });
+  ok($r->[1]{created}{lone}, 'a file copied within the account') or diag explain $r;
+  ok((grep { $_ eq 'd/copy.txt' } @{ names($acct{A}, 'home') }), 'next to the original');
+  is_deeply([ @{ $r->[1]{notCreated}{self} || {} }{qw(type properties)} ], [ 'invalidProperties', ['parentId'] ],
+            'a directory into its own descendant: invalidProperties');
+  is($r->[1]{notCreated}{into}{type}, 'invalidProperties', 'or into itself');
+}
+
 done_testing;

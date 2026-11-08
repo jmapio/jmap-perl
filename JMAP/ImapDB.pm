@@ -2436,7 +2436,10 @@ sub _filenode_check_create {
   my ($c) = @_;
   my (@bad, %v);
   push @bad, grep { !$FILENODE_CREATE_PROPS{$_} } keys %$c;
-  push @bad, 'role' if defined $c->{role};
+  # -20 S3.1.4: a server "MAY reject setting or clearing a role for policy
+  # reasons with forbidden" -- roles here are the server's (the home)
+  my $forbid;
+  $forbid = 'roles are set by the server' if defined $c->{role};
   my $nodetype = $c->{nodeType} // (defined $c->{blobId} ? 'file' : defined $c->{target} ? 'symlink' : 'directory');
   # sharing (spec "Sharing"): directories only
   my $share = JMAP::FileNode::sharewith_problem($c->{shareWith}) ? undef : JMAP::FileNode::sharewith_normal($c->{shareWith});
@@ -2451,13 +2454,14 @@ sub _filenode_check_create {
   push @bad, 'size' if defined $c->{size} && ($nodetype ne 'file' || ref $c->{size} || $c->{size} !~ /^\d+\z/);
   push @bad, 'type' if defined $c->{type} && ($nodetype ne 'file' || ref $c->{type} || $c->{type} !~ $MEDIA_TYPE);
   push @bad, 'name' if JMAP::FileNode::name_problem($c->{name});
-  push @bad, 'parentId' if !defined $c->{parentId} || ref $c->{parentId};
+  push @bad, 'parentId' if ref $c->{parentId};
+  # -20 S2.1: with mayCreateTopLevelFileNode false, a null parentId is forbidden
+  $forbid //= 'mayCreateTopLevelFileNode is false' if !defined $c->{parentId};
   my %dead;
   for my $k (qw(created modified accessed)) {
     next unless exists $c->{$k};
-    # draft S3.1: a null modified/accessed means "now", which is the
-    # server's own value; created is not nullable
-    if (!defined $c->{$k}) { push @bad, $k if $k eq 'created'; next }
+    # -20 S3.1: null is the default, "now", which is the server's own value
+    next if !defined $c->{$k};
     my $t = ref $c->{$k} ? undef : JMAP::FileNode::epoch($c->{$k});
     if (defined $t) { $dead{$k} = JMAP::FileNode::utc($t) } else { push @bad, $k }
   }
@@ -2466,7 +2470,7 @@ sub _filenode_check_create {
     if (JSON::is_bool($c->{$k})) { $dead{$k} = $c->{$k} ? 1 : 0 } else { push @bad, $k }
   }
   my %u;
-  return ([ grep { !$u{$_}++ } sort @bad ], { nodetype => $nodetype, dead => \%dead, share => $share });
+  return ([ grep { !$u{$_}++ } sort @bad ], { nodetype => $nodetype, dead => \%dead, share => $share, forbid => $forbid });
 }
 
 # A node the client asked to move or rename in the same call ($protect:
@@ -2523,12 +2527,13 @@ sub create_filenodes {
     my $parent = defined $pid && !ref $pid ? $Self->filenode_row($pid) : undef;
     my $siblings = $parent ? $Self->filenode_get({ parentid => $parent->{nodeid}, active => 1 }) : [];
     $Self->commit();
-    push @$bad, 'parentId' unless ($parent && $parent->{nodetype} eq 'directory') || grep { $_ eq 'parentId' } @$bad;
+    push @$bad, 'parentId' unless ($parent && $parent->{nodetype} eq 'directory') || !defined $c->{parentId} || grep { $_ eq 'parentId' } @$bad;
     push @$bad, 'shareWith' if $v->{share} && !$Self->filenode_features()->{acl} && !grep { $_ eq 'shareWith' } @$bad;
     if (@$bad) {
       $notcreated{$cid} = { type => 'invalidProperties', properties => [ sort @$bad ] };
       next;
     }
+    if ($v->{forbid}) { $notcreated{$cid} = { type => 'forbidden', description => $v->{forbid} }; next }
     if ($v->{share}) {
       # a new directory starts with its parent's privileges: mayShare there
       my $ff = $Self->filenode_features();
@@ -2570,6 +2575,16 @@ sub create_filenodes {
       if ($mode eq 'replace' && (my $kept = $Self->_filenode_protected_err($clash, $opts->{protect}))) {
         $notcreated{$cid} = $kept;
         next;
+      }
+      # -20 S3.2.3: replacing needs mayDelete on the node it replaces (a
+      # same-name file's PUT is authorised by write-content, so ask first)
+      if ($mode eq 'replace') {
+        my $ff = $Self->filenode_features();
+        $Self->begin();
+        my $up = sub { defined $_[0]{parentid} ? $Self->filenode_row($_[0]{parentid}) : undef };
+        my $cr = JMAP::FileNode::node_rights($clash, $up, $ff);
+        $Self->commit();
+        unless ($cr->{mayDelete}) { $notcreated{$cid} = { type => 'forbidden', description => 'no mayDelete on the node it would replace' }; next }
       }
       if ($mode eq 'rename') {
         $name = JMAP::FileNode::unique_name($name, { map { ($key->($_->{name}) => 1) } @$siblings }, $ci);
@@ -2700,7 +2715,7 @@ sub _filenode_share_patch {
 }
 
 my %FILENODE_UPDATE_PROPS = map { $_ => 1 } qw(parentId name blobId type size created modified
-  accessed executable isSubscribed shareWith);
+  accessed executable isSubscribed shareWith role);
 
 # Update nodes (draft S3.2.3): moves and renames, content (blobId), type and
 # the client-set properties.  $update is the client's { id => patch }, with
@@ -2784,19 +2799,23 @@ sub update_filenodes {
       }
     }
     push @bad, 'name' if exists $p->{name} && JMAP::FileNode::name_problem($p->{name});
+    my $forbid;
+    # -20 S3.1.4: roles are the server's here (forbidden, as a policy)
+    $forbid = 'roles are set by the server' if exists $p->{role};
     my $newparent = $row->{parentid};
     if (exists $p->{parentId}) {
       my $pid = $p->{parentId};
       $newparent = defined $pid && !ref $pid ? ($idmap->($pid) // $pid) : undef;
-      push @bad, 'parentId' unless defined $newparent && $byid{$newparent} && $byid{$newparent}{nodetype} eq 'directory';
+      if (!defined $pid) { $forbid //= 'mayCreateTopLevelFileNode is false' }   # -20 S2.1
+      else { push @bad, 'parentId' unless defined $newparent && $byid{$newparent} && $byid{$newparent}{nodetype} eq 'directory' }
     }
     push @bad, 'blobId' if exists $p->{blobId} && (!$isfile || !defined $p->{blobId} || ref $p->{blobId});
     push @bad, 'size' if exists $p->{size} && (!exists $p->{blobId} || !defined $p->{size} || ref $p->{size} || $p->{size} !~ /^\d+\z/);
     push @bad, 'type' if exists $p->{type} && (!$isfile || !defined $p->{type} || ref $p->{type} || $p->{type} !~ $MEDIA_TYPE);
     for my $k (qw(created modified accessed)) {
       next unless exists $p->{$k};
-      # draft S3.1: a null modified/accessed means "now"; created is not nullable
-      if (!defined $p->{$k}) { if ($k eq 'created') { push @bad, $k } else { $dead{$k} = JMAP::FileNode::utc($now) } next }
+      # -20 S3.1: null is the default, "now"
+      if (!defined $p->{$k}) { $dead{$k} = JMAP::FileNode::utc($now); next }
       my $t = ref $p->{$k} ? undef : JMAP::FileNode::epoch($p->{$k});
       if (defined $t) { $dead{$k} = JMAP::FileNode::utc($t) } else { push @bad, $k }
     }
@@ -2812,8 +2831,10 @@ sub update_filenodes {
     my $newname = exists $p->{name} && !ref $p->{name} ? $p->{name} : $row->{name};
     if ((exists $p->{parentId} || exists $p->{name}) && !@bad
         && (($newparent // '') ne ($row->{parentid} // '') || $newname ne $row->{name})) {
-      if (defined $row->{parentid}) { $dest{$id} = [$newparent, $newname] }
-      else { push @bad, grep { exists $p->{$_} } qw(parentId name) }   # the home stays where it is
+      # -20 S5: a Directory with a role (the home) cannot be renamed or
+      # moved -- forbidden, "without changing the rights it reports"
+      if (defined $row->{parentid} && !defined $row->{role}) { $dest{$id} = [$newparent, $newname] }
+      else { $forbid //= 'a directory with a role cannot be renamed or moved' }
     }
     if (@bad) {
       my %u;
@@ -2821,10 +2842,11 @@ sub update_filenodes {
       delete $dest{$id};
       next;
     }
+    if ($forbid) { $notupdated{$id} = { type => 'forbidden', description => $forbid }; delete $dest{$id}; next }
     my $r = $rights->($row);
     my $why = $dest{$id} && !$r->{mayRename} ? 'mayRename'
             : $dest{$id} && $dest{$id}[0] ne $row->{parentid} && !$rights->($byid{ $dest{$id}[0] })->{mayAddChildren} ? 'mayAddChildren on the new parent'
-            : (grep { exists $p->{$_} } qw(blobId type modified accessed executable)) && !$r->{mayModifyContent} ? 'mayModifyContent'
+            : (grep { exists $p->{$_} } qw(blobId type created modified accessed executable)) && !$r->{mayModifyContent} ? 'mayModifyContent'
             : $share && !$r->{mayShare} ? 'mayShare'
             : undef;
     if ($why) {

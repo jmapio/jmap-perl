@@ -83,9 +83,8 @@ sub _filenode_object {
   # inside transactions too)
   my $features = $Self->{db}->can('filenode_features_cached') ? $Self->{db}->filenode_features_cached() : {};
   my $rights = JMAP::FileNode::node_rights($row, $up, $features);
-  # the home collection is the account's single top-level node: it cannot
-  # be renamed, moved or destroyed (mayCreateTopLevelFileNode is false)
-  @$rights{qw(mayRename mayDelete)} = (JSON::false, JSON::false) unless defined $row->{parentid};
+  # (the home cannot be renamed, moved or destroyed: -20 S5 has the server
+  # refuse that with forbidden "without changing the rights it reports")
   my %o = (
     id           => "$row->{nodeid}",
     '@type'      => $NODE_TYPE_OUT{ $row->{nodetype} } // 'File',

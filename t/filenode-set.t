@@ -690,11 +690,17 @@ is_deeply($set->{notUpdated}{$id{a}}{properties}, ['name'], 'a bad name');
 is_deeply($set->{notUpdated}{$id{b}}{properties}, ['parentId'], 'a file is no parent');
 is_deeply($set->{notUpdated}{$id{c}}{properties}, ['parentId'], 'an unknown parent');
 $set = set(update => { $home => { name => 'elsewhere' }, Lnosuch => { name => 'x' }, $id{a} => 'nope' })->[1];
-is_deeply($set->{notUpdated}{$home}{properties}, ['name'], 'the home cannot be renamed');
+is($set->{notUpdated}{$home}{type}, 'forbidden', 'the home (a Directory with a role) cannot be renamed: forbidden (-20 S5)');
 is($set->{notUpdated}{Lnosuch}{type}, 'notFound', 'an unknown node');
 is($set->{notUpdated}{$id{a}}{type}, 'invalidPatch', 'a patch that is not an object is invalidPatch (RFC 8620 S5.3)');
 $set = set(update => { $id{a} => { parentId => undef } })->[1];
-is_deeply($set->{notUpdated}{$id{a}}{properties}, ['parentId'], 'no top-level nodes');
+is($set->{notUpdated}{$id{a}}{type}, 'forbidden', 'no top-level nodes: forbidden without mayCreateTopLevelFileNode (-20 S2.1)');
+$set = set(create => { t => { parentId => undef, name => 'top' } })->[1];
+is($set->{notCreated}{t}{type}, 'forbidden', 'nor created there');
+$set = set(update => { $home => { role => undef } })->[1];
+is($set->{notUpdated}{$home}{type}, 'forbidden', 'a role is the server\'s: forbidden (-20 S3.1.4)');
+$set = set(create => { r => { parentId => $home, name => 'r', role => 'trash' } })->[1];
+is($set->{notCreated}{r}{type}, 'forbidden', 'on create too');
 
 # a parked node whose final MOVE fails does not keep its temporary name
 {
