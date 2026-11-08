@@ -1352,17 +1352,33 @@ sub get_submission_changes {
 
 my $USER_SCHEMA_VERSION = 16;
 
+# The /queryChanges snapshots: one row per (type, params, state), the ids
+# in order.  The same query at the same state has the same result, so a
+# client polling an unchanged state writes nothing (its row's mtime is
+# refreshed every ten minutes, so it does not expire under it).  Ids are
+# stored newline-joined (an Id is A-Za-z0-9_- , and UIDs have no newlines);
+# a row written as JSON by an earlier version still reads.  Expired rows go
+# at most once a minute.
+my $last_query_expiry = 0;
 sub save_query {
   my ($Self, $type, $params, $state, $ids) = @_;
   my $key = sha1_hex($json->encode({ p => $params, q => $state, t => $type }));
   my $now = time();
   $Self->begin();
   eval {
-    $Self->dbh->do(
-      "INSERT OR REPLACE INTO jqueries (querykey, ids, mtime) VALUES (?, ?, ?)",
-      {}, $key, encode_json($ids), $now,
-    );
-    $Self->dbh->do("DELETE FROM jqueries WHERE mtime < ?", {}, $now - 3600);
+    my ($mtime) = $Self->dbh->selectrow_array($Self->dbh->prepare_cached(
+      "SELECT mtime FROM jqueries WHERE querykey = ?"), {}, $key);
+    if (!defined $mtime) {
+      $Self->dbh->do("INSERT OR REPLACE INTO jqueries (querykey, ids, mtime) VALUES (?, ?, ?)",
+                     {}, $key, join("\n", @$ids), $now);
+    }
+    elsif ($mtime < $now - 600) {
+      $Self->dbh->do("UPDATE jqueries SET mtime = ? WHERE querykey = ?", {}, $now, $key);
+    }
+    if ($now - $last_query_expiry >= 60) {
+      $Self->dbh->do("DELETE FROM jqueries WHERE mtime < ?", {}, $now - 3600);
+      $last_query_expiry = $now;
+    }
     $Self->commit();
   };
   $Self->reset() if $@;
@@ -1372,12 +1388,12 @@ sub load_query {
   my ($Self, $type, $params, $state) = @_;
   my $key = sha1_hex($json->encode({ p => $params, q => $state, t => $type }));
   $Self->begin();
-  my ($ids_json) = $Self->dbh->selectrow_array(
-    "SELECT ids FROM jqueries WHERE querykey = ?", {}, $key,
-  );
+  my ($ids) = $Self->dbh->selectrow_array($Self->dbh->prepare_cached(
+    "SELECT ids FROM jqueries WHERE querykey = ?"), {}, $key);
   $Self->commit();
-  return undef unless defined $ids_json;
-  return decode_json($ids_json);
+  return undef unless defined $ids;
+  return decode_json($ids) if substr($ids, 0, 1) eq '[';   # an earlier version's JSON
+  return [ length $ids ? split(/\n/, $ids, -1) : () ];
 }
 
 sub _create_user_tables {
