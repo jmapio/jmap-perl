@@ -219,6 +219,9 @@ sub _check_entry {
   }
   _fail('invalidProperties', "$path/name of a directory must end with /")
     if $et eq 'directory' && $entry->{name} !~ m{/$};
+  # blobext-03 S8.3: created, kept in a zip's extended timestamp field and
+  # ignored by tar and cpio, which cannot record it
+  _epoch($entry->{created}) if defined $entry->{created};
   if (defined $entry->{mode}) {
     _fail('invalidProperties', "$path/mode must be an octal string")
       unless $entry->{mode} =~ /^0?[0-7]{3,4}$/;
@@ -275,6 +278,9 @@ sub archive {
     my %opt = (
       Name  => $e->{name},
       Time  => _epoch($e->{modified}),
+      # the extended timestamp ("UT") field: modification and creation time.
+      # Always given: newStream carries the last entry's options over.
+      exTime => [ undef, _epoch($e->{modified}), (defined $e->{created} ? _epoch($e->{created}) : undef) ],
       Method => ($e->{compressionMethod} // 'deflate') eq 'store'
                 ? IO::Compress::Zip::ZIP_CM_STORE() : IO::Compress::Zip::ZIP_CM_DEFLATE(),
       (defined $e->{comment} ? (Comment => $e->{comment}) : ()),
@@ -288,6 +294,24 @@ sub archive {
   }
   $zip->close or _fail('conversionFailed', "zip: $IO::Compress::Zip::ZipError");
   return $out;
+}
+
+# The times in a zip entry's extended timestamp ("UT") field: a flags byte,
+# then a little-endian 32-bit time for each flag set, in the order
+# modification, access, creation.
+sub _zip_ut {
+  my ($fields) = @_;
+  my ($ut) = map { $_->[1] } grep { ref $_ eq 'ARRAY' && $_->[0] eq 'UT' } @{ $fields || [] };
+  return {} unless defined $ut && length $ut;
+  my $flags = ord substr($ut, 0, 1);
+  my @t = unpack('V*', substr($ut, 1));
+  my %out;
+  for ([1, 'mtime'], [2, 'atime'], [4, 'ctime']) {
+    next unless $flags & $_->[0];
+    last unless @t;
+    $out{ $_->[1] } = shift @t;
+  }
+  return \%out;
 }
 
 # Returns { type, entries => [ { name, content, entryType, modified, ... } ],
@@ -342,11 +366,13 @@ sub extract {
       while (($n = $u->read(my $buf)) > 0) { $content .= $buf }
       if ($n < 0) { $incomplete = 1; $why = "zip: $IO::Uncompress::Unzip::UnzipError" }
       my $is_dir = $h->{Name} =~ m{/$} && !length $content;
+      my $ut = _zip_ut($h->{ExtraField});
       push @entries, {
         name      => $h->{Name},
         entryType => $is_dir ? 'directory' : 'file',
         content   => $is_dir ? undef : $content,
-        modified  => _iso8601($h->{Time} // time()),
+        modified  => _iso8601($ut->{mtime} // $h->{Time} // time()),
+        created   => (defined $ut->{ctime} ? _iso8601($ut->{ctime}) : undef),
         comment   => (defined $h->{Comment} && length $h->{Comment}) ? $h->{Comment} : undef,
         compressionMethod => ($h->{MethodID} // 8) == 0 ? 'store' : 'deflate',
       };

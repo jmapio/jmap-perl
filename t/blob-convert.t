@@ -156,4 +156,19 @@ else {
   is($e->{type}, 'invalidProperties', 'image conversion without support is invalidProperties');
 }
 
+# blobext-03 S8.3: an ArchiveEntry's created goes into a zip's extended
+# timestamp field and comes back; tar ignores it
+{
+  my $zip = JMAP::BlobConvert::archive('application/zip', [
+    { name => 'a.txt', content => 'x', modified => '2026-03-01T12:00:00Z', created => '2025-01-02T03:04:05Z' },
+    { name => 'b.txt', content => 'y', modified => '2026-03-01T12:00:00Z' } ]);
+  my %e = map { $_->{name} => $_ } @{ JMAP::BlobConvert::extract($zip, 'application/zip')->{entries} };
+  is($e{'a.txt'}{created}, '2025-01-02T03:04:05Z', 'zip: created round-trips');
+  is($e{'a.txt'}{modified}, '2026-03-01T12:00:00Z', 'with modified');
+  ok(!defined $e{'b.txt'}{created}, 'an entry without created has none');
+  my $tar = JMAP::BlobConvert::archive('application/x-tar', [
+    { name => 'a.txt', content => 'x', created => '2025-01-02T03:04:05Z' } ]);
+  ok(!defined JMAP::BlobConvert::extract($tar, 'application/x-tar')->{entries}[0]{created}, 'tar: created is ignored');
+}
+
 done_testing;

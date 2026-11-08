@@ -235,7 +235,9 @@ sub _blob_create_all {
       $notCreated{$cid} = { type => 'invalidProperties', properties => [] };
       next;
     }
-    my @unknown = grep { !/^(data|type|noPersist)$/ } keys %$obj;
+    # blobext-03 S4: Blob/set also takes size and digest:<algorithm>, checked
+    # against the whole blob
+    my @unknown = grep { !/^(data|type|noPersist)$/ && !($strict_blob2 && /^(?:size|digest:.+)$/) } keys %$obj;
     if (@unknown) {
       $notCreated{$cid} = { type => 'invalidProperties', properties => [ sort @unknown ] };
       next;
@@ -246,8 +248,32 @@ sub _blob_create_all {
     }
     my $octets = eval { $Self->_blob_assemble($obj->{data}, $strict_blob2) };
     if (my $err = $@) {
-      $notCreated{$cid} = ref $err eq 'HASH' ? $err : { type => 'serverFail', description => "$err" };
+      $err = { type => 'serverFail', description => "$err" } unless ref $err eq 'HASH';
+      if ($strict_blob2) {
+        # blobext-03 S3: an invalid DataSourceObject is invalidProperties with
+        # properties ["data"], and a blobId that does not exist is notFound
+        $err = { type => 'notFound', description => $err->{description} } if $err->{type} eq 'blobNotFound';
+        $err = { %$err, properties => ['data'] } if $err->{type} eq 'invalidProperties';
+      }
+      $notCreated{$cid} = $err;
       next;
+    }
+    if ($strict_blob2) {
+      my @bad;
+      push @bad, 'size' if defined $obj->{size} && (ref $obj->{size} || $obj->{size} !~ /^\d+$/ || $obj->{size} != length $octets);
+      for my $k (sort grep { /^digest:/ } keys %$obj) {
+        my ($alg) = $k =~ /^digest:(.+)/;
+        next unless defined $obj->{$k};
+        # an algorithm not in supportedDigestAlgorithms is rejected, "so that a
+        # client never believes an unchecked blob was verified"
+        my $got = $DIGEST_OK{$alg} ? JMAP::BlobConvert::digest($alg, $octets) : undef;
+        push @bad, $k unless defined $got && !ref $obj->{$k} && $got eq $obj->{$k};
+      }
+      if (@bad) {
+        $notCreated{$cid} = { type => 'invalidProperties', properties => \@bad,
+                              description => 'the blob does not match its ' . join(' and ', @bad) };
+        next;
+      }
     }
     my $blob = $Self->_blob_store($accountid, $obj->{type}, $octets, $obj->{noPersist});
     $Self->{idmap}{"#$cid"} = $blob->{id};   # RFC 9404 Section 4.1: always in createdIds
@@ -278,7 +304,9 @@ sub api_Blob_set {
   my ($Self, $args) = @_;
   my ($accountid) = $Self->_blob_init($args);
   return ['error', { type => 'accountNotFound' }] unless defined $accountid;
-  return ['error', { type => 'stateMismatch' }] if defined $args->{ifInState};
+  # blobext-03 S4: blobs have no state, and "a non-null value is rejected
+  # with an invalidArguments error"
+  return ['error', { type => 'invalidArguments', arguments => ['ifInState'] }] if defined $args->{ifInState};
 
   my ($created, $notCreated) = $Self->_blob_create_all($accountid, $args->{create} // {}, 1);
 
@@ -382,7 +410,9 @@ sub api_Blob_get {
 
   my $offset = $args->{offset} // 0;
   my $length = $args->{length};
-  my @ds_props = @{ $args->{dataSourceProperties} // ['blobId', 'size'] };
+  # blobext-03 S5: the default keeps the ranges, so chunks fed back into
+  # Blob/set place their octets where they were
+  my @ds_props = @{ $args->{dataSourceProperties} // ['blobId', 'offset', 'length'] };
   for my $p (@ds_props) {
     next if $p =~ /^(blobId|size|offset|length|position)$/;
     next if $p =~ /^digest:(.+)$/ && $DIGEST_OK{$1};
