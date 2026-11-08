@@ -1371,7 +1371,7 @@ sub run_accounts_worker {
           "SELECT email, accountid, type, cred_fingerprint FROM accounts WHERE poolid = ? ORDER BY accountid",
           { Slice => {} }, $poolid);
         for my $r (@$rows) {
-          my $details = _account_details_child($r->{accountid});
+          my $details = _account_details_child($r->{accountid}, $args->{brief});
           $r->{$_} = $details->{$_} for keys %$details;
         }
         return ['get_pool', { poolid => $poolid, accounts => $rows }];
@@ -1698,8 +1698,10 @@ sub run_accounts_worker {
   }
 }
 
+# $brief: only what routing and the session need (not the folder and
+# message counts, a scan of the account's messages)
 sub _account_details_child {
-  my ($accountid) = @_;
+  my ($accountid, $brief) = @_;
   my $dbfile = "$datadir/$accountid.sqlite3";
   return {} unless -f $dbfile;
   my $udb = eval { DBI->connect("dbi:SQLite:dbname=$dbfile") };
@@ -1721,8 +1723,8 @@ sub _account_details_child {
   }
 
   my $iserver = eval { $udb->selectrow_hashref("SELECT * FROM iserver LIMIT 1") } || {};
-  my ($folders) = eval { $udb->selectrow_array("SELECT COUNT(*) FROM ifolders") } // 0;
-  my ($messages) = eval { $udb->selectrow_array("SELECT COUNT(*) FROM jmessages WHERE active = 1") } // 0;
+  my ($folders) = $brief ? (undef) : (eval { $udb->selectrow_array("SELECT COUNT(*) FROM ifolders") } // 0);
+  my ($messages) = $brief ? (undef) : (eval { $udb->selectrow_array("SELECT COUNT(*) FROM jmessages WHERE active = 1") } // 0);
   return {
     configured => (defined $iserver->{username} ? 1 : 0),
     username   => $iserver->{username},
@@ -1742,9 +1744,36 @@ sub _account_details_child {
   };
 }
 
+# The pool an account is in, for routing a request and building a session:
+# get_pool with brief (no counts), kept for $POOL_TTL seconds.  Every change
+# to accounts.sqlite3 goes through the __accounts__ worker, so any of its
+# commands but these lookups empties the cache (send_backend_request); the
+# TTL bounds what changes elsewhere (a Probe enabling FileNode, settings
+# kept in the account's own DB).
+my %pool_cache;
+my $POOL_TTL = 30;
+my %ACCOUNTS_READONLY = map { $_ => 1 } qw(get_pool resolve_token auth push_list push_targets
+  push_accounts list_tokens list_accounts get_account verify_credentials ping);
+sub get_pool_cached {
+  my ($aid, $cb, $errcb) = @_;
+  my $c = $pool_cache{$aid};
+  return $cb->($c->[1]) if $c && $c->[0] > time() - $POOL_TTL;
+  my $gen = $pool_cache{''} // 0;
+  send_backend_request('__accounts__', 'get_pool', { accountid => $aid, brief => 1 }, sub {
+    my $pool = shift;
+    # not if the accounts changed while this was asked
+    $pool_cache{$aid} = [time(), $pool] if ($pool_cache{''} // 0) == $gen;
+    $cb->($pool);
+  }, $errcb);
+}
+
 sub send_backend_request {
   my $accountid = shift;
   my $request = shift;
+  if ($accountid eq '__accounts__' && !$ACCOUNTS_READONLY{$request}) {
+    my $gen = ($pool_cache{''} // 0) + 1;
+    %pool_cache = ('' => $gen);
+  }
   my $args = shift;
   my $cb = shift;
   my $errcb = shift;
@@ -1844,7 +1873,7 @@ sub do_session {
   _authenticate($req, $httpd, sub {
     my ($auth_aid) = @_;
     # Get pool info for this account
-    send_backend_request('__accounts__', 'get_pool', { accountid => $auth_aid }, sub {
+    get_pool_cached($auth_aid, sub {
       my $pool = shift;
       my @pool = @{$pool->{accounts} || []};
 
@@ -2033,7 +2062,7 @@ sub _do_jmap_request {
   $stat{jmap_method_calls} += scalar @{$data->{methodCalls} || []};
 
   # 1. Look up routing info for the whole pool, then build per-account maps.
-  send_backend_request('__accounts__', 'get_pool', { accountid => $accountid }, sub {
+  get_pool_cached($accountid, sub {
     my $pool = shift;
     my (%key_for_aid, %backend_for_aid, %type_for_aid);
     for my $a (@{ $pool->{accounts} || [] }) {
@@ -3109,7 +3138,7 @@ my $AUTH_CACHE_TTL = 300;  # 5 minutes
 sub _check_account_access {
   my ($auth_aid, $accountid, $ok_cb, $fail_cb) = @_;
   if ($auth_aid eq $accountid) { $ok_cb->(); return; }
-  send_backend_request('__accounts__', 'get_pool', { accountid => $auth_aid }, sub {
+  get_pool_cached($auth_aid, sub {
     my $pool = shift;
     grep { $_->{accountid} eq $accountid } @{$pool->{accounts} || []}
       ? $ok_cb->() : $fail_cb->();
