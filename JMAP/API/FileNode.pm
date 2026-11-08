@@ -108,7 +108,10 @@ sub _filenode_object {
     $o{myRights}     = $rights;
     # draft S3.1: null unless the user may share it (and when nobody is
     # shared with); from the mirror, which every listing keeps up to date
-    $o{shareWith}    = $rights->{mayShare} ? $Self->{db}->filenode_sharewith($row) : undef;
+    # (the parent from $byid: asking the DB for it was a transaction and a
+    # query per directory)
+    $o{shareWith}    = $rights->{mayShare}
+      ? $Self->{db}->filenode_sharewith($row, $Self->{db}->filenode_share_effective($up->($row))) : undef;
     $o{role}         = $row->{role};
   }
   return \%o;
@@ -141,8 +144,22 @@ sub api_FileNode_get {
                                          description => "unknown properties: @bad"}]) if @bad;
   }
 
-  my $rows = $Self->{db}->filenode_rows();
-  my %byid = map { $_->{nodeid} => $_ } @$rows;
+  # Every row for ids null; for a list of ids, those rows and their
+  # ancestors (an object's rights read up the tree), not the whole tree.
+  my ($rows, %byid);
+  if (defined $args->{ids} && @{$args->{ids}} <= 500) {
+    for my $id (map { $Self->idmap($_) // $_ } @{$args->{ids}}) {
+      for (my $p = $id; defined $p && !exists $byid{$p}; ) {
+        my $row = $byid{$p} = $Self->{db}->filenode_row($p) or last;
+        $p = $row->{parentid};
+      }
+    }
+    delete $byid{$_} for grep { !$byid{$_} } keys %byid;
+  }
+  else {
+    $rows = $Self->{db}->filenode_rows();
+    %byid = map { $_->{nodeid} => $_ } @$rows;
+  }
 
   my @want = defined $args->{ids} ? (map { $Self->idmap($_) // $_ } @{$args->{ids}})
                                   : (map { $_->{nodeid} } @$rows);
@@ -411,7 +428,8 @@ sub _filenode_query_ids {
   # level"; null (the default) is no limit, and it is never counted from a
   # parentId or ancestorId condition
   my $depth = $args->{depth};
-  my @m = grep { (!defined $depth || JMAP::FileNode::node_depth($_->{id}, \%byid) <= $depth)
+  my %depth;   # memo: each node's depth is its parent's plus one
+  my @m = grep { (!defined $depth || JMAP::FileNode::node_depth($_->{id}, \%byid, \%depth) <= $depth)
                  && (!$filter || JMAP::FileNode::filter_match($_, $filter, $ctx)) } @objs;
   return [ map { $_->{id} } @{ JMAP::FileNode::sort_nodes(\@m, $args->{sort} || [], \%byid) } ];
 }

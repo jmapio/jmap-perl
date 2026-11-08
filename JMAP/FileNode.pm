@@ -765,9 +765,26 @@ sub filter_match {
 }
 
 # -20 S3.2.5 depth: a top-level node is at depth 0, its children at 1, ...
+# How many ancestors a node has.  $memo (optional, a hash) keeps each answer,
+# so the depths of a whole tree cost one step per node, not one per ancestor.
 sub node_depth {
-  my ($id, $byid) = @_;
-  return scalar(my @a = _ancestors($id, $byid));
+  my ($id, $byid, $memo) = @_;
+  return scalar(my @a = _ancestors($id, $byid)) unless $memo;
+  return $memo->{$id} if exists $memo->{$id};
+  my (@path, %seen);
+  my $p = $id;
+  while (1) {
+    if (exists $memo->{$p}) { last }
+    my $up = $byid->{$p} ? $byid->{$p}{parentId} : undef;
+    if (!defined $up || $seen{$p}++) { $memo->{$p} = 0 if !defined $up; last }
+    push @path, $p;
+    $p = $up;
+  }
+  # a cycle (never in a tree, but a mirror is not trusted): the plain walk
+  return scalar(my @cyc = _ancestors($id, $byid)) unless exists $memo->{$p};
+  my $d = $memo->{$p};
+  $memo->{$_} = ++$d for reverse @path;
+  return $memo->{$id};
 }
 
 # -20 S3.2.5 nodeType sort: Directories, then SymLinks, then Files

@@ -16,7 +16,9 @@ my $user = $ENV{CYRUS_USER} || 'user1';
 my $http = HTTP::Tiny->new;
 # the proxy's management API takes a token (JMAP_MGMT_TOKEN)
 my $mgmt_http = HTTP::Tiny->new(timeout => 60, default_headers => { Authorization => 'Bearer ' . ($ENV{JMAP_MGMT_TOKEN} // 'test-mgmt-token-for-the-local-stack') });
-my $auth = 'Basic ' . MIME::Base64::encode_base64("$user:password", '');
+# the proxy login is the account's email (the test stack registers user1@example.com)
+my $login = $ENV{JMAP_LOGIN} || "$user\@" . ($ENV{CYRUS_DOMAIN} || 'example.com');
+my $auth = 'Basic ' . MIME::Base64::encode_base64("$login:password", '');
 my @using = ('urn:ietf:params:jmap:core', 'urn:ietf:params:jmap:filenode');
 my $mgmt = ($ENV{JMAP_MGMT_URL} || 'http://localhost:8081') =~ s{/\z}{}r;
 
