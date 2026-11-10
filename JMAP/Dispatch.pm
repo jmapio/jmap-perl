@@ -155,13 +155,18 @@ sub check_accounts {
         my $args   = $call->[1];
         my @fields = is_copy_method($call->[0]) ? qw(fromAccountId accountId) : qw(accountId);
         my (@missing, %unknown);
+        my @both;
         for my $f (@fields) {
-            next if exists $args->{"#$f"};
+            # RFC 8620 S3.7: "foo" and "#foo" together is invalidArguments --
+            # here, not only when references resolve: a path that never
+            # resolves them (copy orchestration) took the unchecked "foo"
+            if (exists $args->{"#$f"}) { push @both, $f if exists $args->{$f}; next }
             my $v = $args->{$f};
             if (!defined $v || ref $v) { push @missing, $f; next }
             $unknown{$f} = 1 unless $known->{$v};
         }
-        if (@missing)                   { $errors{$pos} = { type => 'invalidArguments', arguments => \@missing } }
+        if (@both)                      { $errors{$pos} = { type => 'invalidArguments', arguments => \@both } }
+        elsif (@missing)                { $errors{$pos} = { type => 'invalidArguments', arguments => \@missing } }
         elsif ($unknown{accountId})     { $errors{$pos} = { type => 'accountNotFound' } }
         elsif ($unknown{fromAccountId}) { $errors{$pos} = { type => 'fromAccountNotFound' } }
     }

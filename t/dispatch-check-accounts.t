@@ -100,4 +100,29 @@ ok($ok, 'malformed calls are skipped rather than dying');
   is($p->({ accountId => 'A', fromAccountId => 'nope' }, 'imap:A')->{type}, 'fromAccountNotFound', 'fromAccountId too');
 }
 
+# A field given both plain and as a "#" reference is invalidArguments at
+# once (RFC 8620 S3.7): copy orchestration never resolves references, and it
+# took the plain, unchecked, fromAccountId -- any account's
+{
+  my $e = JMAP::Dispatch::check_accounts([
+    [ 'Blob/copy', { accountId => 'A', fromAccountId => 'victim', '#fromAccountId' => {} }, 'c0' ],
+    [ 'Email/get', { accountId => 'victim', '#accountId' => { resultOf => 'x', name => 'Core/echo', path => '/a' } }, 'c1' ],
+    [ 'Blob/copy', { accountId => 'A', '#fromAccountId' => { resultOf => 'x', name => 'Core/echo', path => '/a' } }, 'c2' ],
+  ], { A => 1 });
+  is_deeply($e->{0}, { type => 'invalidArguments', arguments => ['fromAccountId'] }, 'copy: fromAccountId and #fromAccountId together');
+  is_deeply($e->{1}, { type => 'invalidArguments', arguments => ['accountId'] }, 'accountId and #accountId together');
+  ok(!$e->{2}, 'a reference alone is left to resolve');
+}
+
+# The d* helpers splice an [operator, value] filter's operator into SQL:
+# only comparison operators are taken
+{
+  require JMAP::DB;
+  is(JMAP::DB::_cond('jmodseq', ['>', 3]), 'jmodseq > ?', 'a comparison is taken');
+  is(JMAP::DB::_cond('msgid', 'x'), 'msgid = ?', 'a plain value is equality');
+  for my $op ('= 1 UNION SELECT password FROM iserver --', 'LIKE', '', undef, ['>']) {
+    ok(!eval { JMAP::DB::_cond('msgid', [$op, 'x']); 1 }, 'refused operator: ' . (defined $op ? (ref $op ? 'a reference' : "'$op'") : 'undef'));
+  }
+}
+
 done_testing;

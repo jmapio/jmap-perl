@@ -572,6 +572,16 @@ sub handle_request {
           $logbit .= " (" . join(",", @list) . ")";
         }
 
+        # RFC 8620 S5.1, S5.3: ids are Ids, strings (S1.2)
+        my $bad_ids = $command =~ m{/get\z} && defined $myargs->{ids}
+          && (ref $myargs->{ids} ne 'ARRAY' || grep { !defined || ref } @{ $myargs->{ids} }) ? 'ids'
+          : $command =~ m{/set\z} && defined $myargs->{destroy}
+          && (ref $myargs->{destroy} ne 'ARRAY' || grep { !defined || ref } @{ $myargs->{destroy} }) ? 'destroy'
+          : undef;
+        if ($bad_ids) {
+          $Self->push_results($tag, ['error', { type => 'invalidArguments', arguments => [$bad_ids] }]);
+          next;
+        }
         # RFC 8620 S5.1, S5.3: more ids than maxObjectsInGet, or more objects
         # to create, update and destroy than maxObjectsInSet, is requestTooLarge
         if ($command =~ m{/get\z} && ref $myargs->{ids} eq 'ARRAY'
@@ -608,7 +618,11 @@ sub handle_request {
         @items = eval { $Self->$FuncRef($myargs, $tag) };
         if ($@) {
           warn "JMAP METHOD ERROR $command ($tag): $@\n";
-          @items = ['error', { type => "serverFail", description => "$@" }];
+          # the log has it all; the client gets its first line, without file
+          # and line (or a stack trace, or SQL), at most 200 characters
+          my ($why) = split /\n/, "$@";
+          $why =~ s/ at \S+ line \d+\.?\s*\z//;
+          @items = ['error', { type => "serverFail", description => substr($why, 0, 200) }];
         }
         # RFC 8620 S5.5/S5.6: the response carries no echo of filter or sort,
         # and "total" only "if, and only if, calculateTotal" was true.
@@ -668,6 +682,9 @@ sub setid {
 sub idmap {
   my $Self = shift;
   my $key = shift;
+  # an Id is a string (RFC 8620 S1.2); anything else names nothing -- a
+  # reference passed on reached the DB helpers as [operator, value]
+  return undef if ref $key;
   return unless $key;
   my $val = exists $Self->{idmap}{$key} ? $Self->{idmap}{$key} : $key;
   return $val;

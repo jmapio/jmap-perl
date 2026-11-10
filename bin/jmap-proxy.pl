@@ -2174,6 +2174,17 @@ sub _do_jmap_request {
       if ($batch->{key} eq 'orchestrate') {
         my ($pos, $call) = @{ $batch->{calls}[0] };
         return $next_batch->() if defined $responses[$pos];   # rejected by check_accounts
+        # Its references resolve here, and the accounts they resolve to are
+        # checked, as for every other batch: _do_copy_call acts on whatever
+        # accountId and fromAccountId it is handed.
+        my $err = $resolve_refs->($call, {});
+        $err //= JMAP::Dispatch::resolved_account_problem($call, \%key_for_aid, undef)
+          unless JMAP::Dispatch::is_push_method($call->[0]);
+        if ($err) {
+          $responses[$pos] = ['error', $err, $call->[2]];
+          $resp_by_tag{ $call->[2] } //= $responses[$pos];
+          return $next_batch->();
+        }
         my $handler = JMAP::Dispatch::is_push_method($call->[0]) ? \&_do_push_call : \&_do_copy_call;
         $handler->($call->[0], $call->[1], $call->[2], $accountid, sub {
           my $resp = shift;

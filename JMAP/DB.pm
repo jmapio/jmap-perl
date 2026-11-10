@@ -1250,6 +1250,18 @@ sub ddelete {
   $Self->dbh->do($sql, {}, map { $filter->{$_} } @lkeys);
 }
 
+# One WHERE condition of the d* helpers: "col = ?", or for [op, value]
+# "col op ?" -- op from this list only.  It is spliced into the SQL, and a
+# value can come from a client (an id sent as a JSON array): any other
+# operator text was SQL injection.
+my %SQL_OPS = map { $_ => 1 } qw(< > <= >= != <>);
+sub _cond {
+  my ($col, $v) = @_;
+  return "$col = ?" unless ref $v eq 'ARRAY';
+  confess("bad SQL operator") unless defined $v->[0] && !ref $v->[0] && $SQL_OPS{$v->[0]};
+  return "$col $v->[0] ?";
+}
+
 sub dget {
   my $Self = shift;
   my ($table, $filter, $fields) = @_;
@@ -1259,7 +1271,7 @@ sub dget {
   my @lkeys = sort keys %$filter;
   my @lvals = map { $filter->{$_} } @lkeys;
   my $sql = "SELECT $fields FROM $table";
-  $sql .= " WHERE " . join(' AND ', map { ref($filter->{$_}) eq 'ARRAY' ? "$_ $filter->{$_}[0] ?" : "$_ = ?" } @lkeys) if @lkeys;
+  $sql .= " WHERE " . join(' AND ', map { _cond($_, $filter->{$_}) } @lkeys) if @lkeys;
   $sql .= " ORDER BY $fields" unless ($fields eq '*' or $fields eq 'COUNT(*)');
   my @vals = map { ref($_) eq 'ARRAY' ? $_->[1] : $_ } @lvals;
 
@@ -1275,7 +1287,7 @@ sub dcount {
   my @lkeys = sort keys %$filter;
   my @lvals = map { $filter->{$_} } @lkeys;
   my $sql = "SELECT COUNT(*) FROM $table";
-  $sql .= " WHERE " . join(' AND ', map { ref($filter->{$_}) eq 'ARRAY' ? "$_ $filter->{$_}[0] ?" : "$_ = ?" } @lkeys) if @lkeys;
+  $sql .= " WHERE " . join(' AND ', map { _cond($_, $filter->{$_}) } @lkeys) if @lkeys;
   my @vals = map { ref($_) eq 'ARRAY' ? $_->[1] : $_ } @lvals;
 
   $Self->log('debug', $sql, _dbl(@vals));
@@ -1299,7 +1311,7 @@ sub dgetone {
   my @lkeys = sort keys %$filter;
   my @lvals = map { $filter->{$_} } @lkeys;
   my $sql = "SELECT $fields FROM $table";
-  $sql .= " WHERE " . join(' AND ', map { ref($filter->{$_}) eq 'ARRAY' ? "$_ $filter->{$_}[0] ?" : "$_ = ?" } @lkeys) if @lkeys;
+  $sql .= " WHERE " . join(' AND ', map { _cond($_, $filter->{$_}) } @lkeys) if @lkeys;
   $sql .= " LIMIT 1";
   my @vals = map { ref($_) eq 'ARRAY' ? $_->[1] : $_ } @lvals;
 
