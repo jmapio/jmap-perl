@@ -13,8 +13,8 @@ use constant SCOPES       => join(' ',
     'https://www.googleapis.com/auth/carddav',
     'email');
 use constant IMAP => {
-    imapHost   => 'imap.gmail.com',  imapPort   => 993,  imapSSL    => 1,
-    smtpHost   => 'smtp.gmail.com',  smtpPort   => 587,  smtpSSL    => 1,
+    imapHost   => 'imap.gmail.com',  imapPort   => 993,  imapSSL    => 2,
+    smtpHost   => 'smtp.gmail.com',  smtpPort   => 587,  smtpSSL    => 3,
     caldavURL  => 'https://apidata.googleusercontent.com/caldav/v2/',
     carddavURL => 'https://www.googleapis.com/.well-known/carddav',
 };

@@ -684,10 +684,12 @@ sub run_backend_worker {
         password   => $refresh_token,
         imapHost   => $args->{imapHost}   || '',
         imapPort   => $args->{imapPort}   || 993,
-        imapSSL    => $args->{imapSSL}    // 1,
+        # TLS unless the caller said otherwise (1 is plain text): a missing
+        # value sent an OAuth token over an unencrypted connection
+        imapSSL    => $args->{imapSSL}    // 2,
         smtpHost   => $args->{smtpHost}   || '',
         smtpPort   => $args->{smtpPort}   || 587,
-        smtpSSL    => $args->{smtpSSL}    // 1,
+        smtpSSL    => $args->{smtpSSL}    // 2,
         caldavURL  => $args->{caldavURL}  || '',
         carddavURL => $args->{carddavURL} || '',
         webdavURL  => $args->{webdavURL}  || '',
@@ -3513,10 +3515,13 @@ sub _discover_fallback {
           if (my $imap = $cfg->{protocols}{imap}) {
             $prefill{imapHost} = $imap->{host} if $imap->{host};
             $prefill{imapPort} = $imap->{port} if $imap->{port};
+            # PACC (draft-ietf-mailmaint-pacc S5.4.3): direct TLS, always
+            $prefill{imapSSL}  = 2;
           }
           if (my $smtp = $cfg->{protocols}{smtp}) {
             $prefill{smtpHost} = $smtp->{host} if $smtp->{host};
             $prefill{smtpPort} = $smtp->{port} if $smtp->{port};
+            $prefill{smtpSSL}  = 2;
           }
           $prefill{caldavURL}  = $cfg->{protocols}{caldav}{url}  if $cfg->{protocols}{caldav}{url};
           $prefill{carddavURL} = $cfg->{protocols}{carddav}{url} if $cfg->{protocols}{carddav}{url};
