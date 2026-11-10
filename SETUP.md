@@ -76,6 +76,8 @@ All variables are optional unless marked **required**.
 | `JMAP_PDPA_MAX_UNZIPPED` | `500000000` | How much a PDPA import may inflate to (a zip bomb is stopped while it is read). |
 | `JMAP_AUTH_FAIL_MAX` | `20` | Failed password logins (Basic auth, the OpenID Connect form) one client address may make in 15 minutes before it is answered 429 until the window passes. The address is the connecting peer, or, from a reverse proxy, the last X-Forwarded-For entry not itself a proxy (see `JMAP_TRUSTED_PROXIES`). |
 | `JMAP_TRUSTED_PROXIES` | *(unset)* | Comma-separated addresses of the reverse proxies whose X-Forwarded-For is believed. Unset, any peer on a loopback or private address is taken to be one; a client connecting from a public address never sets its own address. |
+| `JMAP_SIGNUP_MAX` | `30` | Attempts at the signup and login forms (`/signup`, `/signup_jmap`) one client address may make in an hour, whatever their outcome; then 429. `0` turns the limit off. |
+| `JMAP_TOKEN_IDLE_DAYS` | `90` | A session or bearer token not used for this many days stops working and is deleted when next presented. `0` keeps tokens for ever. |
 | `IGNORE_INVALID_CERT` | *(unset)* | Set to turn off TLS certificate checks for IMAP and every HTTPS request (DAV, upstream JMAP, OAuth, discovery). Only for a test server with a self-signed certificate. |
 | `JMAP_SYNC_INTERVAL` | `30` | Seconds between background IMAP/CalDAV/CardDAV sync polls. |
 | `JMAP_IMAP_TIMEOUT` | `120` | Seconds of silence after which an IMAP connection counts as dead. Counts from the last data received, so slow downloads aren't cut off. |

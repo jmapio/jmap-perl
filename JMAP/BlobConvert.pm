@@ -358,12 +358,17 @@ sub extract {
   else {
     my $u = IO::Uncompress::Unzip->new(\$bytes)
       or _fail('unknownFormat', "zip: $IO::Uncompress::Unzip::UnzipError");
-    my $status;
+    my ($status, $total) = (undef, 0);
     do {
       my $h = $u->getHeaderInfo;
       my $content = '';
       my $n;
-      while (($n = $u->read(my $buf)) > 0) { $content .= $buf }
+      while (($n = $u->read(my $buf)) > 0) {
+        $content .= $buf;
+        # every entry together, at most the largest blob kept (a zip bomb)
+        _fail('tooLarge', 'the extracted entries exceed maxSizeBlobSet')
+          if ($total += length $buf) > $MAX_SIZE_BLOB_SET;
+      }
       if ($n < 0) { $incomplete = 1; $why = "zip: $IO::Uncompress::Unzip::UnzipError" }
       my $is_dir = $h->{Name} =~ m{/$} && !length $content;
       my $ut = _zip_ut($h->{ExtraField});
@@ -442,23 +447,39 @@ sub decompress {
     // _fail('unknownFormat', 'could not detect the compression format');
   _fail('invalidProperties', "type $type is not a supported compression type")
     unless grep { $_ eq $type } compress_types();
+  # Read a block at a time, and stop at the largest blob this server keeps:
+  # a few kilobytes of gzip can unpack to gigabytes (a decompression bomb),
+  # and the whole of it was unpacked into memory first.
+  my %class = ('application/gzip'    => 'IO::Uncompress::Gunzip',
+               'application/x-bzip2' => 'IO::Uncompress::Bunzip2',
+               'application/x-xz'    => 'IO::Uncompress::UnXz',
+               'application/zstd'    => 'IO::Uncompress::UnZstd');
+  my $class = $class{$type};
   my $out = '';
-  my ($ok, $err);
-  if ($type eq 'application/gzip') {
-    $ok = IO::Uncompress::Gunzip::gunzip(\$bytes => \$out, MultiStream => 1);
-    $err = $IO::Uncompress::Gunzip::GunzipError;
-  }
-  elsif ($type eq 'application/x-bzip2') {
-    $ok = IO::Uncompress::Bunzip2::bunzip2(\$bytes => \$out, MultiStream => 1);
-    $err = $IO::Uncompress::Bunzip2::Bunzip2Error;
-  }
-  elsif ($type eq 'application/x-xz') {
-    $ok = IO::Uncompress::UnXz::unxz(\$bytes => \$out, MultiStream => 1);
-    $err = eval { $IO::Uncompress::UnXz::UnXzError };
-  }
-  elsif ($type eq 'application/zstd') {
-    $ok = IO::Uncompress::UnZstd::unzstd(\$bytes => \$out, MultiStream => 1);
-    $err = eval { $IO::Uncompress::UnZstd::UnZstdError };
+  my ($ok, $err) = (1, undef);
+  my $z = $class->new(\$bytes, MultiStream => 1, Transparent => 0);
+  if (!$z) { $ok = 0; $err = eval { no strict 'refs'; ${"${class}::" . ($class =~ /::(\w+)$/)[0] . 'Error'} } // 'cannot read' }
+  else {
+    my $n;
+    while (($n = $z->read(my $buf, 65536)) > 0) {
+      $out .= $buf;
+      _fail('tooLarge', 'the decompressed blob exceeds maxSizeBlobSet') if length($out) > $MAX_SIZE_BLOB_SET;
+    }
+    if ($n < 0) {
+      $ok = 0; $err = $z->error;
+      # a failed read keeps none of its block: unpack once more in one go
+      # for all the content before the break, which the stream has just
+      # shown is within the limit (to within that one block)
+      my $fn = { 'IO::Uncompress::Gunzip' => \&IO::Uncompress::Gunzip::gunzip,
+                 'IO::Uncompress::Bunzip2' => \&IO::Uncompress::Bunzip2::bunzip2,
+                 'IO::Uncompress::UnXz'   => sub { IO::Uncompress::UnXz::unxz(@_) },
+                 'IO::Uncompress::UnZstd' => sub { IO::Uncompress::UnZstd::unzstd(@_) } }->{$class};
+      my $all = '';
+      $fn->(\$bytes => \$all, MultiStream => 1, Transparent => 0) if $fn;
+      $out = $all if length $all > length $out;
+      _fail('tooLarge', 'the decompressed blob exceeds maxSizeBlobSet') if length($out) > $MAX_SIZE_BLOB_SET;
+    }
+    $z->close;
   }
   unless ($ok) {
     _fail('unknownFormat', "$type: $err") unless length $out;
@@ -575,6 +596,10 @@ sub image_convert {
     _fail('invalidProperties', "$dim must be positive") if $recipe->{$dim} < 1;
   }
 
+  # a small file can declare an enormous image (a pixel bomb), which Imager
+  # would allocate in full: refuse one beyond these before reading it
+  Imager->set_file_limits(width => 4 * $MAX_IMAGE_DIMENSION, height => 4 * $MAX_IMAGE_DIMENSION,
+                          bytes => 256_000_000);
   my $img = Imager->new;
   $img->read(data => $bytes, type => $IMAGER_TYPE{$src_type})
     or _fail('conversionFailed', 'could not read the image: ' . $img->errstr);

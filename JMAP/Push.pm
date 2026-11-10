@@ -51,7 +51,10 @@ sub _valid_types {
   my $types = shift;
   return 1 unless defined $types;
   return 0 unless ref $types eq 'ARRAY';
-  return 0 if grep { not _is_string($_) } @$types;
+  # a type name is short, and there are few of them: a list of thousands
+  # (stored, and read on every push) is not a list of types
+  return 0 if @$types > 100;
+  return 0 if grep { not _is_string($_) or length $_ > 255 } @$types;
   return 1;
 }
 

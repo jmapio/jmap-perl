@@ -1319,7 +1319,12 @@ sub dgetone {
 
   my $data = $Self->dbh->selectall_arrayref($Self->dbh->prepare_cached($sql), {Slice => {}}, @vals);
   # built only when it will be logged: dgetone runs in per-row loops
-  if ($ENV{DEBUGDB}) { require Data::Dumper; $Self->log('debug', Data::Dumper::Dumper($data)) }
+  if ($ENV{DEBUGDB}) {
+    # never a credential in the log: iserver and jserver rows hold them
+    require Data::Dumper;
+    my $shown = ref $data eq q(HASH) ? { map { ($_ => (/password|secret|token|refresh/i ? q(<redacted>) : $data->{$_})) } keys %$data } : $data;
+    $Self->log(q(debug), Data::Dumper::Dumper($shown));
+  }
   return $data->[0];
 }
 

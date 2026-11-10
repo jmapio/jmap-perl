@@ -55,6 +55,7 @@ use JMAP::OAuth::OIDC;
 use JMAP::Push;
 use JMAP::Dispatch;
 use JMAP::NetGuard ();
+use URI::Escape ();
 use JMAP::Workers;
 use JMAP::FileNodeCopy;
 use JMAP::FileNode;   # max_bytes, is_too_large: the in-memory cap on one file's content
@@ -1299,6 +1300,8 @@ sub _push_subscriptions {
 # PushSubscription creations per credential, for RFC 8620 S8.6's rate limit
 my %push_creates;
 my $PUSH_CREATES_PER_HOUR = 10;
+# live subscriptions one account may hold
+my $PUSH_MAX_PER_ACCOUNT = 50;
 
 sub run_accounts_worker {
   my ($sock) = @_;
@@ -1402,7 +1405,15 @@ sub run_accounts_worker {
       if ($cmd eq 'resolve_token') {
         my $token = $args->{token};
         my $row = $dbh->selectrow_hashref(
-          "SELECT accountid FROM tokens WHERE token = ?", {}, $token);
+          "SELECT accountid, last_used FROM tokens WHERE token = ?", {}, $token);
+        # A token not used for JMAP_TOKEN_IDLE_DAYS (90, the session cookie's
+        # life) is gone: tokens never expired, so one copied once worked for
+        # ever.  last_used is written every few minutes by touch_tokens.
+        my $idle = ($ENV{JMAP_TOKEN_IDLE_DAYS} // 90) * 86400;
+        if ($row && $idle > 0 && defined $row->{last_used} && $row->{last_used} < time() - $idle) {
+          $dbh->do("DELETE FROM tokens WHERE token = ?", {}, $token);
+          return ['resolve_token', undef];
+        }
         return ['resolve_token', $row ? $row->{accountid} : undef];
       }
 
@@ -1471,16 +1482,26 @@ sub run_accounts_worker {
         # RFC 8620 S8.6: the server MUST limit how fast subscriptions are made;
         # each one sends a verification POST to a URL the client chose. Counted
         # per credential, destroyed ones included, over the last hour.
+        # Counted per account too: every login mints a new credential, so
+        # per credential alone the limit reset with each one.  And an
+        # account holds at most $PUSH_MAX_PER_ACCOUNT live subscriptions
+        # (each verified one keeps its pool's workers alive).
         my $now = $args->{now};
         my $log = $push_creates{$credential} //= [];
-        @$log = grep { $_ > $now - 3600 } @$log;
+        my $alog = $push_creates{"account:$accountid"} //= [];
+        @$_ = grep { $_ > $now - 3600 } @$_ for $log, $alog;
+        delete @push_creates{ grep { !@{ $push_creates{$_} } } keys %push_creates };
+        my ($live) = $dbh->selectrow_array(
+          "SELECT COUNT(*) FROM push_subscriptions WHERE accountid = ? AND expires > ?", {}, $accountid, $now);
         my %limited;
         my $set = { %{ $args->{set} || {} } };
         if (ref $set->{create} eq 'HASH') {
           my %create = %{$set->{create}};
           for my $cid (sort keys %create) {
-            if (@$log >= $PUSH_CREATES_PER_HOUR) { $limited{$cid} = delete $create{$cid}; next }
-            push @$log, $now;
+            if (@$log >= $PUSH_CREATES_PER_HOUR || @$alog >= $PUSH_CREATES_PER_HOUR
+                || ($live // 0) >= $PUSH_MAX_PER_ACCOUNT) { $limited{$cid} = delete $create{$cid}; next }
+            push @$log, $now; push @$alog, $now; $live++;
+            $push_creates{$credential} = $log; $push_creates{"account:$accountid"} = $alog;
           }
           $set->{create} = \%create;
         }
@@ -3080,6 +3101,9 @@ sub do_static {
                               'Cache-Control' => 'max-age=86400' }, $content]);
 }
 
+# A session's id on the accounts page: its token's SHA-256, never the token
+sub _token_id { return Digest::SHA::sha256_hex($_[0] // '') }
+
 sub _generate_token {
   open my $fh, '<', '/dev/urandom' or die "Cannot open /dev/urandom: $!";
   my $bytes;
@@ -3105,6 +3129,24 @@ sub _session_cookie {
   return bake_cookie("jmap_proxy", { value => $value, path => '/', expires => $expires,
                                      httponly => 1, samesite => 'Lax',
                                      ($BASEURL =~ m{^https://}i ? (secure => 1) : ()) });
+}
+
+# The OAuth flow belongs to the browser that started it: the redirect to the
+# provider sets this cookie (a hash of the state), and the callback needs
+# it.  Without it an attacker could finish their own authorization in a
+# victim's browser (a link to /cb/oauth with the attacker's code and state)
+# and sign the victim in to the attacker's account (login CSRF).  Lax: the
+# provider's redirect back is a top-level GET, which carries it.
+sub _oauth_cookie {
+  my ($state_token) = @_;
+  return bake_cookie("jmap_oauth", { value => sha1_hex("oauth:" . ($state_token // '')), path => '/cb/oauth',
+                                     expires => '+30m', httponly => 1, samesite => 'Lax',
+                                     ($BASEURL =~ m{^https://}i ? (secure => 1) : ()) });
+}
+sub _oauth_cookie_ok {
+  my ($req, $state_token) = @_;
+  my $got = crush_cookie($req->headers->{cookie} || '')->{jmap_oauth} // '';
+  return _ct_eq($got, sha1_hex("oauth:" . ($state_token // '')));
 }
 
 # A request a browser sent from another site, carrying our cookie: a
@@ -3165,6 +3207,22 @@ sub _auth_failed {
   $f->[0]++;
   # the table stays small: forget windows that have passed
   if (keys %auth_fail > 10_000) { my $now = time(); delete @auth_fail{ grep { $now - $auth_fail{$_}[1] > $AUTH_FAIL_WINDOW } keys %auth_fail } }
+}
+
+# Signup and login-form attempts, per client address: each can fork a
+# worker and reach out to a server the client named, so a client gets
+# JMAP_SIGNUP_MAX (30) of them an hour, whatever their outcome.
+my %signup_hits;   # ip => [count, window start]
+my $SIGNUP_MAX = $ENV{JMAP_SIGNUP_MAX} // 30;
+sub _signup_throttled {
+  my ($req) = @_;
+  return 0 unless $SIGNUP_MAX > 0;
+  my $ip = _client_ip($req) // '';
+  my $now = time();
+  my $h = $signup_hits{$ip};
+  $h = $signup_hits{$ip} = [0, $now] if !$h || $now - $h->[1] > 3600;
+  if (keys %signup_hits > 10_000) { delete @signup_hits{ grep { $now - $signup_hits{$_}[1] > 3600 } keys %signup_hits } }
+  return ++$h->[0] > $SIGNUP_MAX;
 }
 
 # Cache auth results: key => [accountid, expire_time]
@@ -3381,7 +3439,7 @@ sub _do_fastmail_redirect {
     via           => $via,
   );
   $oauth_state{$state_token} = $state;
-  $req->respond([302, 'Found', { Location => $url }, '']);
+  $req->respond([302, 'Found', { Location => $url, 'Set-Cookie' => _oauth_cookie($state_token) }, '']);
 }
 
 sub _start_fastmail_oauth {
@@ -3435,7 +3493,7 @@ sub _start_pacc_oauth {
     client_secret => $client_secret,
   );
   $oauth_state{$state_token} = $state;
-  $req->respond([302, 'Found', { Location => $url }, '']);
+  $req->respond([302, 'Found', { Location => $url, 'Set-Cookie' => _oauth_cookie($state_token) }, '']);
 }
 
 # Try PACC, then Mozilla autoconfig, then fall back to step-2 password form.
@@ -3564,7 +3622,9 @@ sub do_discover {
     # Known provider: Google
     if ($domain =~ /^(gmail|googlemail)\.com$/) {
       if ($ENV{GOOGLE_CLIENT_ID} && $ENV{GOOGLE_CLIENT_SECRET}) {
-        $req->respond([302, 'Found', { Location => _start_google_oauth($email, $auth_aid) }, '']);
+        my $url = _start_google_oauth($email, $auth_aid);
+        my ($st) = $url =~ m{[?&]state=([^&]+)};
+        $req->respond([302, 'Found', { Location => $url, 'Set-Cookie' => _oauth_cookie(URI::Escape::uri_unescape($st // '')) }, '']);
       } else {
         warn "GOOGLE_OAUTH: $email is \@$domain but GOOGLE_CLIENT_ID/SECRET not set in this process's env\n";
         _render_step2($req, $email,
@@ -3625,6 +3685,13 @@ sub do_cb_oauth {
     return $req->respond([400, 'bad request', { 'Content-Type' => 'text/html' }, $html]);
   }
   delete $oauth_state{$state_token};
+  unless (_oauth_cookie_ok($req, $state_token)) {
+    warn "OAUTH_CB: state " . substr(sha1_hex($state_token), 0, 8) . " came back to a browser that did not start it\n";
+    my $html = '';
+    $TT->process("index.html", { baseurl => $BASEURL,
+      error => "This sign-in was started in another browser. Please start again here." }, \$html);
+    return $req->respond([400, 'bad request', { 'Content-Type' => 'text/html' }, $html]);
+  }
 
   $httpd->stop_request();
 
@@ -3774,7 +3841,13 @@ sub do_cb_oauth {
             warn "OAUTH_CB: userinfo response status=" . ($uhdrs->{Status} // '?') . "\n";
             my $info = eval { decode_json($ubody) };
             warn "OAUTH_CB: userinfo answer did not parse (" . length($ubody // '') . " bytes)\n" if !$info;
-            $get_email_cb->($info->{email});
+            # an address the provider has not verified proves nothing (OIDC
+            # Core S5.1: email_verified; Google answers it too): without it the
+            # login only types an email, as if there were no userinfo
+            my $verified = ref $info eq q(HASH) && defined $info->{email_verified}
+              && (ref $info->{email_verified} ? $info->{email_verified} : $info->{email_verified} =~ /\A(?:1|true)\z/i);
+            warn "OAUTH_CB: userinfo email not verified, not taken as proof\n" if ref $info eq q(HASH) && $info->{email} && !$verified;
+            $get_email_cb->($verified ? $info->{email} : undef);
           });
       } else {
         $get_email_cb->($state->{email});
@@ -3786,6 +3859,8 @@ sub do_signup {
   my ($httpd, $req) = @_;
 
   return invalid_request($req) unless lc $req->method eq 'post';
+  return $req->respond([429, 'too many requests', { 'Retry-After' => 3600 }, 'Too many attempts from this address; try again later'])
+    if _signup_throttled($req);
 
   my %opts;
   for my $key (qw(username password imapHost imapPort imapSSL smtpHost smtpPort smtpSSL caldavURL carddavURL webdavURL force)) {
@@ -3914,6 +3989,8 @@ sub do_signup_jmap {
   # session URL a stranger named
   return $req->respond([403, 'forbidden', {}, 'Signup is disabled on this server'])
     if $DISABLE_SIGNUP;
+  return $req->respond([429, 'too many requests', { 'Retry-After' => 3600 }, 'Too many attempts from this address; try again later'])
+    if _signup_throttled($req);
   $httpd->stop_request();
 
   _try_authenticate($req, $httpd, sub {
@@ -4071,10 +4148,23 @@ sub _do_accounts_authed {
 
   # POST /accounts/tokens/delete — revoke a token
   if ($path eq '/accounts/tokens/delete' && $method eq 'post') {
-    my $token = $req->parm('token');
-    return invalid_request($req) unless $token;
+    my $id = $req->parm('id');
+    return invalid_request($req) unless defined $id && $id =~ /\A[0-9a-f]{64}\z/;
     $httpd->stop_request();
-
+    # the session with that id among the caller's pool's: one outside it
+    # (or a token the caller merely knows) is not the caller's to revoke
+    get_pool_cached($auth_aid, sub {
+      my $pool = shift;
+      send_backend_request('__accounts__', 'list_tokens', { poolid => $pool->{poolid} }, sub {
+        my ($t) = grep { _token_id($_->{token}) eq $id } @{ shift() || [] };
+        return $req->respond([404, 'not found', {}, 'no such session']) unless $t;
+        _delete_session_token($req, $t->{token});
+      }, sub { $req->respond([500, 'error', {}, 'listing sessions failed']) });
+    }, sub { $req->respond([500, 'error', {}, 'listing sessions failed']) });
+    return;
+  }
+  sub _delete_session_token {
+    my ($req, $token) = @_;
     my $cookies = crush_cookie($req->headers->{cookie} || '');
     my $my_token = $cookies->{jmap_proxy};
     # Invalidate auth cache entry for this token
@@ -4104,7 +4194,6 @@ sub _do_accounts_authed {
       my $err = shift;
       $req->respond([500, 'error', {}, "delete token failed: $err"]);
     });
-    return;
   }
 
   # POST /accounts/tokens/delete-others — revoke every token but the current one
@@ -4207,7 +4296,11 @@ sub _do_accounts_authed {
   send_backend_request('__accounts__', 'get_pool', { accountid => $auth_aid }, sub {
     my $pool = shift;
     send_backend_request('__accounts__', 'list_tokens', { poolid => $pool->{poolid} }, sub {
-      my $tokens = shift;
+      # the page names each session by an id, not its token: a token on
+      # the page is one anything that can read the page can use
+      my $tokens = [ map { +{ id => _token_id($_->{token}), current => ($my_token && $_->{token} eq $my_token ? 1 : 0),
+                              last_used => $_->{last_used}, last_ip => $_->{last_ip}, accountid => $_->{accountid} } }
+                     @{ shift() || [] } ];
       my $html = '';
       $TT->process("accounts.html", {
         baseurl     => $BASEURL,

@@ -83,14 +83,14 @@
 [% END %]
 <table class="tokens">
 <thead>
-  <tr><th>Token</th><th>Last used</th><th>Last IP</th><th>Action</th></tr>
+  <tr><th>Session</th><th>Last used</th><th>Last IP</th><th>Action</th></tr>
 </thead>
 <tbody>
 [% FOREACH t IN tokens %]
-  [% SET is_current = (t.token == token) %]
+  [% SET is_current = t.current %]
   <tr>
     <td>
-      <code class="token-preview">[% t.token.substr(0, 12) | html %]…</code>
+      <code class="token-preview">[% t.id.substr(0, 12) | html %]…</code>
       [% IF is_current %]<span class="current-session">&#x2714; this session</span>[% END %]
     </td>
     <td>[% human_time(t.last_used) | html %]</td>
@@ -98,11 +98,11 @@
     <td>
       [% IF is_current %]
       <form method="post" action="/accounts/tokens/delete">
-        <input type="hidden" name="token" value="[% t.token | html %]">
+        <input type="hidden" name="id" value="[% t.id | html %]">
         <button class="logout" type="submit">Log out</button>
       </form>
       [% ELSE %]
-      <button class="delete" onclick="revokeToken(this, '[% t.token | js %]')">Revoke</button>
+      <button class="delete" onclick="revokeToken(this, '[% t.id | js %]')">Revoke</button>
       [% END %]
     </td>
   </tr>
@@ -142,14 +142,14 @@
 
 </article>
 <script>
-function revokeToken(btn, token) {
+function revokeToken(btn, id) {
   if (!confirm('Revoke this session?')) return;
   btn.disabled = true;
   btn.textContent = '…';
   fetch('/accounts/tokens/delete', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
-    body: 'token=' + encodeURIComponent(token),
+    body: 'id=' + encodeURIComponent(id),
   }).then(function(r) { return r.json(); }).then(function(data) {
     if (data.logout) { location.href = '/'; return; }
     var row = btn.closest('tr');
