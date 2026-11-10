@@ -80,11 +80,12 @@ All variables are optional unless marked **required**.
 | `JMAP_TOKEN_IDLE_DAYS` | `90` | A session or bearer token not used for this many days stops working and is deleted when next presented. `0` keeps tokens for ever. |
 | `JMAP_SSE_PER_ACCOUNT` | `20` | EventSource connections one login may hold; a new one beyond this closes its oldest. `0` turns the limit off. |
 | `IGNORE_INVALID_CERT` | *(unset)* | Set to turn off TLS certificate checks for IMAP and every HTTPS request (DAV, upstream JMAP, OAuth, discovery). Only for a test server with a self-signed certificate. |
+| `JMAP_DEBUG` | *(unset)* | Logs every JMAP request and response body in full: mail content, addresses, calendar and contact data go to the log. For debugging only; never on a server with other people's mail. |
+| `DEBUGDB` | *(unset)* | Logs every SQL statement and its bound values, and the rows read (credential columns masked). Even more than `JMAP_DEBUG`: for debugging only. |
 | `JMAP_SYNC_INTERVAL` | `30` | Seconds between background IMAP/CalDAV/CardDAV sync polls. |
 | `JMAP_IMAP_TIMEOUT` | `120` | Seconds of silence after which an IMAP connection counts as dead. Counts from the last data received, so slow downloads aren't cut off. |
 | `JMAP_FILES_DROPPABLE_PRINCIPALS` | _(empty)_ | Comma-separated user principal names (a bare name matches only the user principal of that name) or whole principal hrefs (matched exactly) whose ACEs FileNode sharing may drop when the WebDAV server refuses to take back an ACE it lists itself (`DAV:recognized-principal`; Cyrus lists principals it cannot resolve, such as an `admin` from `defaultacl`). Each drop is logged. Anything not listed makes the share fail (`serverFail`) and leaves the ACL alone. The test stack sets `admin`. |
 | `JMAP_FILES_MAX_BYTES` | `268435456` (256 MiB) | The most bytes of one file's content the proxy holds in memory for FileNode: a direct PUT over it is refused with 413 before the body reaches a worker, a download of a bigger file's blob is 501, and a cross-account `FileNode/copy` of one fails that item with `serverFail` naming the limit (a `FileNode/set` from such a blob is `tooLarge`). Content is not streamed yet. |
-| `JMAP_DEBUG` | _(unset)_ | Set to any value to log full JMAP request/response bodies to stderr. |
 | `JMAP_DISABLE_SIGNUP` | _(unset)_ | Set to `1`/`true` to block self-service creation of **new** accounts on `/signup`, `/signup_jmap` and `/cb/oauth`. Existing accounts are unaffected: their users log in as before, and an OAuth sign-in that proves ownership of the address can still renew an account's refresh token. The management API (`POST /api/accounts`) is deliberately **not** affected, passthrough accounts included — that stays the admin path for adding users while public signup is closed. Empty, `0`, `false`, `no` and `off` (any case) leave signup open. |
 | `JMAP_SECRET_KEY` | _(unset)_ | 64 hex chars (a 256-bit key) for credential encryption. Required, unless OpenBao is used or `JMAP_ALLOW_PLAINTEXT_CREDENTIALS` is set. |
 | `JMAP_ALLOW_PLAINTEXT_CREDENTIALS` | _(unset)_ | Set to `1` to store credentials in plaintext when no key is configured (a test server). Without it the proxy refuses to start. |
@@ -368,7 +369,8 @@ docker logs -f jmap-proxy
 
 **Debug mode**  
 Set `JMAP_DEBUG=1` to log full request/response JSON to stderr. Do not leave
-this enabled in production — it logs credentials in OAuth responses.
+it on in production: it puts the mail, calendars and contacts that pass through
+in the log.
 
 **SSE push not working behind nginx**  
 Add `proxy_buffering off` and `proxy_read_timeout 3600` to the nginx location

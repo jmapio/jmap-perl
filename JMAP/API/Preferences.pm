@@ -132,7 +132,7 @@ sub api_UserPreferences_set {
       if ($@) {
         my $err = "$@";
         $Self->{db}->reset();
-        $notUpdated->{singleton} = { type => "serverFail", description => $err };
+        $notUpdated->{singleton} = { type => "serverFail", description => JMAP::Dispatch::brief_error($err) };
       }
       else {
         $updated->{singleton} = $JSON::true,
@@ -270,7 +270,7 @@ sub api_ClientPreferences_set {
     if ($key eq 'singleton') {
       my $value = $Self->update_singleton_value('api_ClientPreferences_get', $update->{singleton});
       my $res = eval { $Self->{db}->update_prefs('ClientPreferences', $value) };
-      if ($@) { my $err = "$@"; $Self->{db}->reset(); $notUpdated->{singleton} = { type => "serverFail", description => $err } }
+      if ($@) { my $err = "$@"; $Self->{db}->reset(); $notUpdated->{singleton} = { type => "serverFail", description => JMAP::Dispatch::brief_error($err) } }
       else    { $updated->{singleton}    = $res }
     }
     else {
@@ -404,7 +404,7 @@ sub api_CalendarPreferences_set {
     if ($key eq 'singleton') {
       my $value = $Self->update_singleton_value('api_CalendarPreferences_get', $update->{singleton});
       my $res = eval { $Self->{db}->update_prefs('CalendarPreferences', $value) };
-      if ($@) { my $err = "$@"; $Self->{db}->reset(); $notUpdated->{singleton} = { type => "serverFail", description => $err } }
+      if ($@) { my $err = "$@"; $Self->{db}->reset(); $notUpdated->{singleton} = { type => "serverFail", description => JMAP::Dispatch::brief_error($err) } }
       else    { $updated->{singleton}    = $res }
     }
     else {

@@ -209,7 +209,7 @@ sub api_MDN_send {
     eval { $Self->{db}->backend_cmd('send_email', $mdn_rfc822, undef) };
     if ($@) {
       my $err = "$@"; $err =~ s/\s+at \S+ line \d+.*//s;
-      $notSent{$cid} = { type => 'serverFail', description => $err };
+      $notSent{$cid} = { type => 'serverFail', description => JMAP::Dispatch::brief_error($err) };
       next;
     }
 

@@ -173,6 +173,18 @@ sub check_accounts {
     return \%errors;
 }
 
+# What a client (or an API caller) is told of an unexpected error: its
+# first line, without the " at FILE line N." Perl adds, at most 200
+# characters.  The log keeps the whole of it; an answer carried file paths,
+# stack traces and SQL.
+sub brief_error {
+  my ($e) = @_;
+  my ($why) = split /\n/, (defined $e ? "$e" : '');
+  $why //= '';
+  $why =~ s/ at \S+ line \d+\.?\s*\z//;
+  return substr($why, 0, 200);
+}
+
 # After its ResultReferences resolve: is every account a call names one of
 # the session's ($key_for_aid), and on this batch's upstream ($batch_key)?
 # Returns the error to answer, or undef.

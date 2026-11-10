@@ -248,7 +248,7 @@ sub _blob_create_all {
     }
     my $octets = eval { $Self->_blob_assemble($obj->{data}, $strict_blob2) };
     if (my $err = $@) {
-      $err = { type => 'serverFail', description => "$err" } unless ref $err eq 'HASH';
+      $err = { type => 'serverFail', description => JMAP::Dispatch::brief_error($err) } unless ref $err eq 'HASH';
       if ($strict_blob2) {
         # blobext-03 S3: an invalid DataSourceObject is invalidProperties with
         # properties ["data"], and a blobId that does not exist is notFound
@@ -654,7 +654,7 @@ sub api_Blob_convert {
     }
     my $result = eval { $Self->_convert_one($accountid, $obj) };
     if (my $err = $@) {
-      $notCreated{$cid} = ref $err eq 'HASH' ? $err : { type => 'conversionFailed', description => "$err" };
+      $notCreated{$cid} = ref $err eq 'HASH' ? $err : { type => 'conversionFailed', description => JMAP::Dispatch::brief_error($err) };
       next;
     }
     $Self->{idmap}{"#$cid"} = $result->{id};

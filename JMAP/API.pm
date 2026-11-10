@@ -620,9 +620,7 @@ sub handle_request {
           warn "JMAP METHOD ERROR $command ($tag): $@\n";
           # the log has it all; the client gets its first line, without file
           # and line (or a stack trace, or SQL), at most 200 characters
-          my ($why) = split /\n/, "$@";
-          $why =~ s/ at \S+ line \d+\.?\s*\z//;
-          @items = ['error', { type => "serverFail", description => substr($why, 0, 200) }];
+          @items = ['error', { type => "serverFail", description => JMAP::Dispatch::brief_error($@) }];
         }
         # RFC 8620 S5.5/S5.6: the response carries no echo of filter or sort,
         # and "total" only "if, and only if, calculateTotal" was true.

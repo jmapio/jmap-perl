@@ -530,6 +530,11 @@ sub _mailbox_bad_props {
     # "at least 1 character", and maxSizeMailboxName (490) is in octets
     push @bad, 'name' unless defined $name && !ref $name && length $name
                              && length(Encode::encode_utf8($name)) <= 490;
+    # policy: no name beginning with "(".  IMAP clients and libraries
+    # (Mail::IMAPTalk among them) send such a string unquoted, as a list,
+    # so it cannot be created or renamed to reliably; RFC 8621 S2.5 lets a
+    # server refuse names it will not support.
+    push @bad, 'name' if defined $name && !ref $name && $name =~ /\A\(/ && !grep { $_ eq 'name' } @bad;
   }
   if (exists $mailbox->{sortOrder}) {
     my $so = $mailbox->{sortOrder};

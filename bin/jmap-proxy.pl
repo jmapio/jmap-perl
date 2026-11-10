@@ -1365,10 +1365,13 @@ sub run_accounts_worker {
         }
         my $poolid = $args->{poolid} || $aid;
         warn "CREATE_ACCOUNT: $aid (type=$type, email=$email, poolid=$poolid)\n";
+        # whether this made the account, or re-registered one that was there:
+        # a failed setup removes only an account it made
+        my ($existed) = $dbh->selectrow_array("SELECT 1 FROM accounts WHERE accountid = ?", {}, $aid);
         $dbh->do("INSERT OR REPLACE INTO accounts (email, accountid, type, poolid, needs_backfill) VALUES (?, ?, ?, ?, 1)",
           {}, $email, $aid, $type, $poolid);
         warn "CREATE_ACCOUNT: $aid stored in accounts.sqlite3\n";
-        return ['create_account', { accountid => $aid, type => $type, poolid => $poolid }];
+        return ['create_account', { accountid => $aid, type => $type, poolid => $poolid, existed => ($existed ? 1 : 0) }];
       }
 
       if ($cmd eq 'get_pool') {
@@ -2031,7 +2034,7 @@ sub do_session {
     }, sub {
       my $err = shift;
       $req->respond([500, 'error', { 'Content-Type' => 'application/json' },
-        JSON::XS::encode_json({ type => 'serverFail', description => "$err" })]);
+        JSON::XS::encode_json({ type => 'serverFail', description => JMAP::Dispatch::brief_error($err) })]);
     });
   }, sub {
     _require_auth($req);
@@ -2233,7 +2236,7 @@ sub _do_jmap_request {
           }
           $next_batch->();
         }, sub {
-          $responses[$pos] = ['error', { type => 'serverFail', description => "$_[0]" }, $call->[2]];
+          $responses[$pos] = ['error', { type => 'serverFail', description => JMAP::Dispatch::brief_error($_[0]) }, $call->[2]];
           $next_batch->();
         }, \%created_ids, _push_credential($req, $accountid));
         return;
@@ -2301,7 +2304,7 @@ sub _do_jmap_request {
       }, sub {
         my $err = shift;
         for my $idx (0..$#calls) {
-          $responses[$positions[$idx]] = ['error', { type => 'serverFail', description => "$err" }, $calls[$idx][2]];
+          $responses[$positions[$idx]] = ['error', { type => 'serverFail', description => JMAP::Dispatch::brief_error($err) }, $calls[$idx][2]];
         }
         $next_batch->();
       });
@@ -2310,7 +2313,7 @@ sub _do_jmap_request {
   }, sub {
     my $err = shift;
     $req->respond([200, 'ok', { 'Content-Type' => 'application/json' },
-      $json->encode({ methodResponses => [['error', { type => 'serverFail', description => "$err" }, 'a']] })]);
+      $json->encode({ methodResponses => [['error', { type => 'serverFail', description => JMAP::Dispatch::brief_error($err) }, 'a']] })]);
   });
 }
 
@@ -2718,7 +2721,7 @@ sub _copy_emails {
           } else {
             $cb->($copy_resp);
           }
-        }, sub { $cb->(['error', { type => 'serverFail', description => $_[0] }, $tag]) });
+        }, sub { $cb->(['error', { type => 'serverFail', description => JMAP::Dispatch::brief_error($_[0]) }, $tag]) });
       };
 
       my $store_next;
@@ -2861,7 +2864,7 @@ sub _copy_objects {
             return $cb->($copy_resp) unless $set_resp;
             $cb->([$copy_resp, [$set_resp->[0], $set_resp->[1], $tag]]);
           }, sub { $cb->($copy_resp) });
-        }, sub { $cb->(['error', { type => 'serverFail', description => $_[0] }, $tag]) });
+        }, sub { $cb->(['error', { type => 'serverFail', description => JMAP::Dispatch::brief_error($_[0]) }, $tag]) });
       };
 
       # For ifInState: check toAccount state manually (CalendarEvent/set doesn't support it)
@@ -4976,12 +4979,23 @@ sub mgmt_api_accounts {
             JSON::XS::encode_json({ accountid => $aid, type => $result->{type} })]);
         }, sub {
           my $err = shift;
-          # Account created but sync failed
+          # Setup failed (the server could not be reached, the login was
+          # refused): the account cannot log in, so it is not "created".
+          # One this request made is removed again; one that was there
+          # before is left as it is.
           warn "MGMT: Create Account '$aid' -> setup FAILED: $err\n";
-          $req->respond([201, 'created',
-            { 'Content-Type' => 'application/json' },
-            JSON::XS::encode_json({ accountid => $aid, type => $result->{type},
-              warning => "setup failed: $err" })]);
+          my $fail = sub {
+            $req->respond([502, 'setup failed',
+              { 'Content-Type' => 'application/json' },
+              JSON::XS::encode_json({ accountid => $aid, error => "setup failed: " . JMAP::Dispatch::brief_error($err),
+                                      removed => ($result->{existed} ? JSON::false : JSON::true) })]);
+          };
+          return $fail->() if $result->{existed};
+          my $remove = sub {
+            delete $backend{$aid};
+            send_backend_request('__accounts__', 'delete_account', { accountid => $aid }, $fail, $fail);
+          };
+          send_backend_request($aid, 'delete', {}, $remove, $remove);
         });
       }
       else {

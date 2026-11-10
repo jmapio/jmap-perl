@@ -1239,7 +1239,7 @@ sub api_Email_import {
 
     my ($msgid, $thrid, $size) = eval { $Self->{db}->import_message($file, \@ids, $message->{keywords}, $date) };
     if ($@) {
-      $notcreated{$id} = { type => 'internalError', description => $@ };
+      $notcreated{$id} = { type => 'internalError', description => JMAP::Dispatch::brief_error($@) };
       next;
     }
 

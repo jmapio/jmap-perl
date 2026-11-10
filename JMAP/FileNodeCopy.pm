@@ -1,6 +1,7 @@
 package JMAP::FileNodeCopy;
 use strict;
 use warnings;
+use JMAP::Dispatch ();
 
 # draft-ietf-jmap-filenode "FileNode/copy" between two accounts: a standard
 # /copy (RFC 8620 S5.4) that also takes FileNode/set's onExists and
@@ -101,7 +102,7 @@ sub copy {
   my $create = $args->{create} // {};
   return $cb->(['error', { type => 'invalidArguments', arguments => ['create'] }, $tag])
     unless ref $create eq 'HASH';
-  my $fail = sub { $cb->(['error', { type => 'serverFail', description => "$_[0]" }, $tag]) };
+  my $fail = sub { $cb->(['error', { type => 'serverFail', description => JMAP::Dispatch::brief_error($_[0]) }, $tag]) };
   my $onexists = $args->{onExists};
   my $staging = defined $onexists && !ref $onexists && $STAGED_ONEXISTS{$onexists};
   my $ci = $args->{compareCaseInsensitively} ? 1 : 0;

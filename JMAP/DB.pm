@@ -101,11 +101,21 @@ sub read_subdir {
   return $data;
 }
 
+# Written under a temporary name and moved into place: the jmap and the
+# backfill worker both write these files, and a reader (or the other
+# writer) saw a half-written one -- an unreadable parsed message or event
+# payload -- while it was being written, or for good after a crash.
 sub write_subdir {
   my ($Self, $subdir, $key, $data) = @_;
   my $path = $Self->_subdir_path($subdir, $key);
-  open my $fh, '>:raw', $path or die "Cannot write $path: $!";
-  print $fh $data; close $fh;
+  my $tmp = "$path.$$.tmp";
+  open my $fh, '>:raw', $tmp or die "Cannot write $tmp: $!";
+  unless ((print $fh $data) && close $fh) {
+    my $err = $!;
+    unlink $tmp;
+    die "Cannot write $tmp: $err";
+  }
+  rename $tmp, $path or do { my $err = $!; unlink $tmp; die "Cannot rename $tmp to $path: $err" };
 }
 
 sub unlink_subdir {
