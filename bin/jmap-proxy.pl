@@ -708,6 +708,11 @@ sub run_backend_worker {
       require JMAP::JmapDB;
       require MIME::Base64;
 
+      # With signup off, only a binding the parent vouches for can succeed:
+      # refuse before fetching anything from the URL a caller named
+      _deny_new_account($args->{username} // '')
+        if $DISABLE_SIGNUP && !$args->{_admin} && !$args->{_bind_existing} && !$args->{_bind_if_session_user};
+
       # Verify credentials by fetching the upstream JMAP session
       my $tmp = JMAP::JmapDB->new($accountid);
       my ($session) = $tmp->fetch_session($args);
@@ -3059,6 +3064,9 @@ sub do_static {
   my $path = $req->url->path;
   $path =~ s{^/}{};
   return not_found($req) unless $path =~ /\.(css|js|html|png|ico|svg)$/;
+  # no way out of htdocs/ or assets/: a ".." segment (or an empty one, a
+  # leading slash after the strip) is not a file we serve
+  return not_found($req) if grep { $_ eq q(..) || $_ eq q(.) || $_ eq q() } split m{/}, $path, -1;
   my $file = $path =~ m{^assets/} ? "$jmaphome/$path" : "$jmaphome/htdocs/$path";
   return not_found($req) unless -f $file;
   my %types = (css => 'text/css', js => 'text/javascript', html => 'text/html',
@@ -3204,11 +3212,30 @@ sub _check_cache {
   return undef;
 }
 
+# The client's address, for the login throttle and the logs.  X-Forwarded-For
+# is believed only from a reverse proxy: a peer on a loopback or private
+# address, or one named in JMAP_TRUSTED_PROXIES (comma-separated).  It is
+# read from the right -- each proxy appends the address it saw, and anything
+# to the left of that came from the client -- skipping trusted hops.  Taking
+# the first entry, as this did, let any client name any address (and so slip
+# the login throttle).
+my %TRUSTED_PROXY = map { $_ => 1 } grep { length } map { s/^\s+|\s+$//gr } split /,/, $ENV{JMAP_TRUSTED_PROXIES} // '';
+sub _trusted_proxy {
+  my ($ip) = @_;
+  return 0 unless defined $ip && length $ip;
+  return $TRUSTED_PROXY{$ip} ? 1 : 0 if %TRUSTED_PROXY;
+  return JMAP::Push::is_public_address($ip) ? 0 : 1;
+}
 sub _client_ip {
   my ($req) = @_;
+  my $peer = $req->client_host;
   my $xff = $req->headers->{'x-forwarded-for'};
-  return (split /\s*,\s*/, $xff)[0] if $xff;
-  return $req->client_host;
+  return $peer unless $xff && _trusted_proxy($peer);
+  my @hops = grep { length } map { s/^\s+|\s+$//gr } split /,/, $xff;
+  for my $ip (reverse @hops) {
+    return $ip unless _trusted_proxy($ip);
+  }
+  return $hops[0] // $peer;   # every hop private: the client is too
 }
 
 sub _touch_token {
@@ -3372,6 +3399,7 @@ sub _start_fastmail_oauth {
     $req->respond([500, 'error', { 'Content-Type' => 'text/html' }, $html]);
   };
   AnyEvent::HTTP::http_request('POST', JMAP::OAuth::Fastmail::REG_URL,
+    tls_ctx => JMAP::NetGuard::tls_ctx(),
     headers => { 'Content-Type' => 'application/json' },
     body    => JMAP::OAuth::Fastmail->registration_body("$BASEURL/cb/oauth"),
     timeout => 10,
@@ -3415,7 +3443,7 @@ sub _discover_fallback {
   my ($domain, $email, $auth_aid, $req) = @_;
 
   my $pacc_url = "https://ua-auto-config.$domain/.well-known/user-agent-configuration.json";
-  AnyEvent::HTTP::http_get($pacc_url, timeout => 5, tcp_connect => \&JMAP::NetGuard::tcp_connect,
+  AnyEvent::HTTP::http_get($pacc_url, timeout => 5, tcp_connect => \&JMAP::NetGuard::tcp_connect, tls_ctx => JMAP::NetGuard::tls_ctx(),
     headers => { Accept => 'application/json' },
     sub {
       my ($body, $hdrs) = @_;
@@ -3451,7 +3479,7 @@ sub _discover_fallback {
           # If PACC advertises OAuth, fetch RFC 8414 metadata
           if (my $issuer = $cfg->{authentication}{'oauth-public'}{issuer}) {
             my $meta_url = "${issuer}/.well-known/oauth-authorization-server";
-            AnyEvent::HTTP::http_get($meta_url, timeout => 5, tcp_connect => \&JMAP::NetGuard::tcp_connect,
+            AnyEvent::HTTP::http_get($meta_url, timeout => 5, tcp_connect => \&JMAP::NetGuard::tcp_connect, tls_ctx => JMAP::NetGuard::tls_ctx(),
               headers => { Accept => 'application/json' },
               sub {
                 my ($mbody, $mhdrs) = @_;
@@ -3487,7 +3515,7 @@ sub _discover_fallback {
 sub _try_mozilla_autoconfig {
   my ($domain, $email, $auth_aid, $req) = @_;
   my $url = "https://autoconfig.$domain/mail/config-v1.1.xml";
-  AnyEvent::HTTP::http_get($url, timeout => 5, tcp_connect => \&JMAP::NetGuard::tcp_connect, sub {
+  AnyEvent::HTTP::http_get($url, timeout => 5, tcp_connect => \&JMAP::NetGuard::tcp_connect, tls_ctx => JMAP::NetGuard::tls_ctx(), sub {
     my ($body, $hdrs) = @_;
     my %prefill;
     if (($hdrs->{Status} // 0) == 200 && $body) {
@@ -3617,7 +3645,7 @@ sub do_cb_oauth {
     $req->respond([500, 'error', { 'Content-Type' => 'text/html' }, $html]);
   };
 
-  AnyEvent::HTTP::http_request('POST', $state->{token_url}, tcp_connect => \&JMAP::NetGuard::tcp_connect,
+  AnyEvent::HTTP::http_request('POST', $state->{token_url}, tcp_connect => \&JMAP::NetGuard::tcp_connect, tls_ctx => JMAP::NetGuard::tls_ctx(),
     headers => { 'Content-Type' => 'application/x-www-form-urlencoded' },
     body    => $form_body,
     timeout => 15,
@@ -3738,7 +3766,7 @@ sub do_cb_oauth {
       };
 
       if ($userinfo_url) {
-        AnyEvent::HTTP::http_get($userinfo_url, tcp_connect => \&JMAP::NetGuard::tcp_connect,
+        AnyEvent::HTTP::http_get($userinfo_url, tcp_connect => \&JMAP::NetGuard::tcp_connect, tls_ctx => JMAP::NetGuard::tls_ctx(),
           headers => { Authorization => "Bearer $access_token" },
           timeout => 10,
           sub {
@@ -3876,6 +3904,16 @@ sub _do_signup_new {
 
 sub do_signup_jmap {
   my ($httpd, $req) = @_;
+  # POST only: a GET carrying a logged-in user's cookie (a link, an <img>)
+  # added an account with credentials of the link's choosing to their pool,
+  # and the cross-site check is for requests that change things, not GETs
+  return $req->respond([405, 'method not allowed', { Allow => 'POST' }, 'POST only'])
+    unless $req->method eq 'POST';
+  # Nothing this route asks for can be done with signup off (it never binds
+  # an existing account): refuse before forking a worker or fetching the
+  # session URL a stranger named
+  return $req->respond([403, 'forbidden', {}, 'Signup is disabled on this server'])
+    if $DISABLE_SIGNUP;
   $httpd->stop_request();
 
   _try_authenticate($req, $httpd, sub {
@@ -4608,12 +4646,42 @@ sub _max_body_for {
   };
 }
 
+# Headers every response carries unless it sets its own: no MIME sniffing,
+# no framing, no full URLs in Referer to other sites.  A download (/raw) is
+# also sandboxed: an attachment is served with the type its sender declared,
+# on this origin, and an HTML one ran its script as the user (with their
+# cookie on every same-origin request).
+{
+  no warnings 'redefine';
+  my $orig = \&AnyEvent::HTTPD::Request::respond;
+  *AnyEvent::HTTPD::Request::respond = sub {
+    my ($self, $res) = @_;
+    if (ref $res eq 'HASH') {
+      $res = $res->{redirect} ? [301, 'redirected', { Location => $res->{redirect} }, 'Redirected']
+           : $res->{content}  ? [200, 'ok', { 'Content-Type' => $res->{content}[0] }, $res->{content}[1]]
+           : undef;
+    }
+    if (ref $res eq 'ARRAY') {
+      my %h = %{ $res->[2] || {} };
+      my %have = map { lc $_ => 1 } keys %h;
+      $h{'X-Content-Type-Options'} = 'nosniff'     unless $have{'x-content-type-options'};
+      $h{'X-Frame-Options'}        = 'DENY'        unless $have{'x-frame-options'};
+      $h{'Referrer-Policy'}        = 'same-origin' unless $have{'referrer-policy'};
+      my $path = eval { $self->url->path } // '';
+      $h{'Content-Security-Policy'} = 'sandbox'
+        if $path =~ m{^/raw/} && !$have{'content-security-policy'};
+      $res = [ $res->[0], $res->[1], \%h, @{$res}[3 .. $#$res] ];
+    }
+    return $orig->($self, $res);
+  };
+}
+
 my $port = $ENV{JMAP_PORT} || 9000;
 my $httpd = AnyEvent::HTTPD->new(port => $port, allowed_methods => [qw(GET HEAD POST PUT PATCH)]);
 
 $httpd->reg_cb(request => sub { $stat{http_requests}++ });
 
-$httpd->reg_cb(
+my %ROUTES = (
   '/.well-known'      => \&do_wellknown,
   '/session'          => \&do_session,
   # Clients built for Stalwart (e.g. the Bulwark app) request /jmap/session first
@@ -4646,6 +4714,23 @@ $httpd->reg_cb(
   '/oauth/jwks'       => \&do_oidc_jwks,
   '/'                 => \&do_landing,
 );
+$httpd->reg_cb(%ROUTES);
+# AnyEvent::HTTPD calls a route for each prefix of the path ("/a/b", "/a",
+# then ""), never "/" but for "/" itself: a path no route covers (/x.html)
+# reached no handler and was never answered, its connection held open.
+# The "" event comes last; it answers 404 when no route covered the path
+# (one that did may still be answering, asynchronously).
+$httpd->reg_cb('' => sub {
+  my ($httpd, $req) = @_;
+  return if $req->responded;
+  my $cur = '';
+  for my $seg ($req->url->path_segments) {
+    $cur .= $seg;
+    return if length $cur && $ROUTES{$cur};
+    $cur .= '/';
+  }
+  $req->respond([404, 'not found', { 'Content-Type' => 'text/plain' }, 'not found']);
+});
 
 warn "JMAP proxy listening on port $port\n";
 warn "  Data: $datadir\n";

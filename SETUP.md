@@ -19,15 +19,17 @@ JMAP client  ──JMAP──►  jmap-proxy  ──IMAP/CalDAV/CardDAV──►
 docker run -d \
   --name jmap-proxy \
   --restart unless-stopped \
-  -p 9000:9000 \
+  -p 127.0.0.1:9000:9000 \
   -p 127.0.0.1:8080:8080 \
+  -e JMAP_MGMT_HOST=0.0.0.0 \
   -v /data/jmap-proxy:/data \
   -e BASEURL=https://jmap.example.com \
   ghcr.io/jmapio/jmap-proxy:latest
 ```
 
-- **Port 9000**: JMAP endpoint (public — put behind a TLS reverse proxy)
-- **Port 8080**: Management API (keep localhost-only)
+- **Port 9000**: JMAP endpoint, plain HTTP: published on loopback for a TLS reverse proxy on the host
+- **Port 8080**: Management API (keep localhost-only; inside the container it must bind `0.0.0.0` for the mapping to reach it, and every request needs the management token, see `JMAP_MGMT_TOKEN`)
+- The container runs the proxy as an unprivileged `jmap` user (uid 10001) and hands it `/data` at start; `JMAP_RUN_AS_ROOT=1` keeps it root
 - **`/data`**: persistent volume for SQLite databases
 
 Browse to `http://localhost:8080` to open the management dashboard.
@@ -72,7 +74,9 @@ All variables are optional unless marked **required**.
 | `JMAP_PRIVATE_ALLOW` | (none) | Private addresses that are allowed anyway, comma-separated, with optional prefix lengths: e.g. an OpenBao server, or one internal IMAP host (`10.0.0.5,192.168.1.0/24,fd00::/8`). |
 | `JMAP_PDPA_MAX_BYTES` | `200000000` | The largest PDPA archive `POST /pdpa` accepts. Every request body has a limit, checked against its Content-Length before any of it is read: `/jmap` 10 MB, `/upload` 50 MB, `/filenode` `JMAP_FILES_MAX_BYTES`, anything else 1 MB (413 over it). |
 | `JMAP_PDPA_MAX_UNZIPPED` | `500000000` | How much a PDPA import may inflate to (a zip bomb is stopped while it is read). |
-| `JMAP_AUTH_FAIL_MAX` | `20` | Failed password logins (Basic auth, the OpenID Connect form) one client address may make in 15 minutes before it is answered 429 until the window passes. The address is the first X-Forwarded-For entry, so the reverse proxy must set that header itself. |
+| `JMAP_AUTH_FAIL_MAX` | `20` | Failed password logins (Basic auth, the OpenID Connect form) one client address may make in 15 minutes before it is answered 429 until the window passes. The address is the connecting peer, or, from a reverse proxy, the last X-Forwarded-For entry not itself a proxy (see `JMAP_TRUSTED_PROXIES`). |
+| `JMAP_TRUSTED_PROXIES` | *(unset)* | Comma-separated addresses of the reverse proxies whose X-Forwarded-For is believed. Unset, any peer on a loopback or private address is taken to be one; a client connecting from a public address never sets its own address. |
+| `IGNORE_INVALID_CERT` | *(unset)* | Set to turn off TLS certificate checks for IMAP and every HTTPS request (DAV, upstream JMAP, OAuth, discovery). Only for a test server with a self-signed certificate. |
 | `JMAP_SYNC_INTERVAL` | `30` | Seconds between background IMAP/CalDAV/CardDAV sync polls. |
 | `JMAP_IMAP_TIMEOUT` | `120` | Seconds of silence after which an IMAP connection counts as dead. Counts from the last data received, so slow downloads aren't cut off. |
 | `JMAP_FILES_DROPPABLE_PRINCIPALS` | _(empty)_ | Comma-separated user principal names (a bare name matches only the user principal of that name) or whole principal hrefs (matched exactly) whose ACEs FileNode sharing may drop when the WebDAV server refuses to take back an ACE it lists itself (`DAV:recognized-principal`; Cyrus lists principals it cannot resolve, such as an `admin` from `defaultacl`). Each drop is logged. Anything not listed makes the share fail (`serverFail`) and leaves the ACL alone. The test stack sets `admin`. |

@@ -95,6 +95,26 @@ sub install {
   }
 }
 
+# TLS certificates are checked on every HTTPS request the process makes.
+# HTTP::Tiny before 0.083 (Debian bookworm's is 0.082) checks nothing unless
+# asked, and nothing here asked: a man in the middle saw the credentials
+# sent to DAV and upstream JMAP servers, OAuth tokens and secrets.  Every
+# HTTP::Tiny (Net::DAVTalk's and OAuth2::Tiny's included) now defaults to
+# verify_SSL; IGNORE_INVALID_CERT, which already turned it off for IMAP,
+# turns it off here too (a test server with a self-signed certificate).
+# The parent's AnyEvent::HTTP requests pass tls_ctx() below.
+sub tls_ctx { return $ENV{IGNORE_INVALID_CERT} ? 'low' : 'high' }
+{
+  require HTTP::Tiny;
+  no warnings 'redefine';
+  my $orig = \&HTTP::Tiny::new;
+  *HTTP::Tiny::new = sub {
+    my ($class, %args) = @_;
+    $args{verify_SSL} //= $ENV{IGNORE_INVALID_CERT} ? 0 : 1;
+    return $orig->($class, %args);
+  };
+}
+
 # AnyEvent::HTTP's tcp_connect, refusing any address allowed() refuses.
 sub tcp_connect {
   my ($host, $port, $connect_cb, $prepare_cb) = @_;

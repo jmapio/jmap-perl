@@ -40,4 +40,16 @@ perl -MDBI -e "
   # Then bump \$CURRENT above.
 "
 
+# Run as the unprivileged jmap user (see the Dockerfile).  A data directory
+# from a root-run image is handed over first; JMAP_RUN_AS_ROOT=1 keeps the
+# old behaviour.
+if [ "$(id -u)" = "0" ] && [ -z "${JMAP_RUN_AS_ROOT:-}" ] && id jmap >/dev/null 2>&1; then
+  if [ "$(stat -c %u "$JMAP_DATADIR")" != "$(id -u jmap)" ] \
+     || [ -n "$(find "$JMAP_DATADIR" ! -user jmap -print -quit 2>/dev/null)" ]; then
+    echo "handing $JMAP_DATADIR to the jmap user" >&2
+    chown -R jmap:jmap "$JMAP_DATADIR"
+  fi
+  exec setpriv --reuid=jmap --regid=jmap --init-groups --inh-caps=-all \
+    perl -I"$JMAP_HOME" "$JMAP_HOME/bin/jmap-proxy.pl"
+fi
 exec perl -I"$JMAP_HOME" "$JMAP_HOME/bin/jmap-proxy.pl"

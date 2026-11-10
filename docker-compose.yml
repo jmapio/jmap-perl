@@ -21,11 +21,14 @@ services:
       # itself keeps it on the host's loopback interface.
       JMAP_MGMT_HOST: 0.0.0.0
     ports:
-      # JMAP endpoint. Put a TLS reverse proxy in front of it
-      # (SETUP.md, "TLS Termination") and set BASEURL to its public URL.
-      - "${JMAP_PUBLISH_PORT:-9000}:9000"
-      # Management API and dashboard. They have no authentication, so this
-      # stays on 127.0.0.1; use an SSH tunnel to reach it from elsewhere.
+      # JMAP endpoint, plain HTTP: put a TLS reverse proxy in front of it
+      # (SETUP.md, "TLS Termination") and set BASEURL to its public URL.  It
+      # is published on the host's loopback only, for a reverse proxy on the
+      # host; set JMAP_PUBLISH_PORT=9000 to publish it on every interface.
+      - "${JMAP_PUBLISH_PORT:-127.0.0.1:9000}:9000"
+      # Management API and dashboard. Every request needs the management
+      # token (JMAP_MGMT_TOKEN, or the one generated into /data/mgmt-token);
+      # it stays on 127.0.0.1 all the same: use an SSH tunnel from elsewhere.
       - "127.0.0.1:${JMAP_MGMT_PUBLISH_PORT:-8080}:8080"
     volumes:
       # SQLite databases: accounts.sqlite3 plus one file per account.
@@ -33,9 +36,9 @@ services:
     # If the reverse proxy runs in a container (Caddy, Traefik, cloudflared),
     # join its network and point it at http://jmap-proxy:9000 instead of
     # publishing port 9000.
-    # WARNING: on a shared network every container can also reach the
-    # management port 8080, which has no authentication (account creation,
-    # credentials, deletion). Only join a network whose members you trust.
+    # Note: on a shared network every container can also reach the
+    # management port 8080 (account creation, credentials, deletion); only
+    # the management token stands in the way. Join a network you trust.
     # networks:
     #   - proxy
 

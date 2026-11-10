@@ -65,7 +65,13 @@ RUN cpanm --notest \
 COPY . /opt/jmap-perl
 WORKDIR /opt/jmap-perl
 
-RUN mkdir -p /data
+# The proxy runs as this user, not root: it parses hostile mail, calendars
+# and archives while holding every account's credentials.  The entrypoint
+# starts as root only to raise the file-descriptor limit and hand /data to
+# it (a volume written by an older, root-run image included), then drops to
+# it with setpriv.
+RUN useradd --uid 10001 --user-group --home-dir /data --no-create-home --shell /usr/sbin/nologin jmap \
+    && mkdir -p /data && chown jmap:jmap /data
 
 ENV JMAP_HOME=/opt/jmap-perl
 ENV JMAP_DATADIR=/data
