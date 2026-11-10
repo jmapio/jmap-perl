@@ -657,7 +657,10 @@ sub api_Identity_set {
   my $destroy = $args->{destroy} // [];
 
   my %notCreated   = map { $_ => { type => 'forbiddenFrom' } } keys %$create;
-  my %notDestroyed = map { $_ => { type => 'forbidden'     } } @$destroy;
+  # the one identity may not be destroyed; any other id names nothing, and
+  # RFC 8620 S5.3: "If an id given cannot be found, the update or destroy
+  # MUST be rejected with a notFound set error"
+  my %notDestroyed = map { $_ => { type => ($_ eq 'id1' ? 'forbidden' : 'notFound') } } @$destroy;
   my (%updated, %notUpdated);
 
   for my $id (keys %$update) {
