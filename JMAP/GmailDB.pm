@@ -34,7 +34,7 @@ sub access_token {
   my $server = $Self->dgetone('iserver');
   $Self->commit();
 
-  my $refresh_token = JMAP::CredentialStore->decrypt($server->{password});
+  my $refresh_token = JMAP::CredentialStore->decrypt($server->{password}, JMAP::CredentialStore::context($Self->accountid(), q(iserver.password)));
   my $O    = JMAP::Sync::Gmail::O();
   my $data = $O->refresh($refresh_token);
 

@@ -115,7 +115,7 @@ sub setuser {
   $args = \%iserver;
 
   # Encrypt the credential before writing
-  $args->{password} = JMAP::CredentialStore->encrypt($args->{password})
+  $args->{password} = JMAP::CredentialStore->encrypt($args->{password}, JMAP::CredentialStore::context($Self->accountid(), q(iserver.password)))
     if defined $args->{password};
 
   my $data = $Self->dgetone('iserver');
@@ -158,7 +158,7 @@ sub access_token {
   $Self->commit();
 
   return [$data->{imapHost}, $data->{username},
-          JMAP::CredentialStore->decrypt($data->{password}),
+          JMAP::CredentialStore->decrypt($data->{password}, JMAP::CredentialStore::context($Self->accountid(), q(iserver.password))),
           $data->{imapPort}, $data->{imapSSL}];
 }
 
@@ -184,7 +184,7 @@ sub backend_cmd {
   unless ($Self->{backend}) {
     require JMAP::CredentialStore;
     my $config = $Self->access_data();
-    $config->{password} = JMAP::CredentialStore->decrypt($config->{password} // '');
+    $config->{password} = JMAP::CredentialStore->decrypt($config->{password} // '', JMAP::CredentialStore::context($Self->accountid(), q(iserver.password)));
     my $backend;
     if ($config->{imapHost} eq 'imap.gmail.com') {
       $backend = JMAP::Sync::Gmail->new($config) || die "failed to setup $config->{username}";
@@ -3743,6 +3743,11 @@ sub imap_search {
       @search = ('x-gm-raw', $search[1]);
     }
   }
+
+  # The criterion's values are the client's text: Mail::IMAPTalk sends a
+  # string starting with "(" as it is (a list), so "(draft" was parsed as
+  # search syntax, not searched for.  Such a value is sent quoted.
+  @search = ($search[0], map { defined && !ref && /^\(/ ? { Quote => $_ } : $_ } @search[1 .. $#search]);
 
   $Self->begin();
   my $data = $Self->dget('ifolders');

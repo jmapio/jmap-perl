@@ -76,6 +76,7 @@
       <input type="hidden" name="client_id"    value="[% oidc.client_id    | html %]">
       <input type="hidden" name="code_challenge" value="[% oidc.code_challenge | html %]">
       <input type="hidden" name="code_challenge_method" value="[% oidc.code_challenge_method | html %]">
+      <input type="hidden" name="nonce" value="[% oidc.nonce | html %]">
       <label>Email address</label>
       <input type="email" name="username" required autofocus placeholder="you@example.com">
       <label>Password</label>

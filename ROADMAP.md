@@ -174,7 +174,23 @@ consecutive same-upstream calls into one forwarded request.
 - [x] Gmail OAuth2: GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET env vars → /cb/oauth callback
 - [x] Fastmail OAuth2 (OAUTHBEARER IMAP/SMTP via Mail::OAuthBearerTalk, PKCE flow)
 - [x] OIDC id_token generation (RS256, auto-generated or loaded RSA key) for webmail SSO
-- [x] Encrypted credential storage: pluggable backend (AES-256-GCM default, OpenBao Transit optional)
+- [x] Encrypted credential storage: pluggable backend (AES-256-GCM, OpenBao Transit optional), keys from HKDF, bound to account and field; plaintext only when asked for
+
+### Security review follow-ups (external report, 2026-11-09)
+Fixed on master 2026-11-10: A1, H3, H5, H7, H1/B1, H2, H9, H11/B3, B2, M1, M2,
+M3, M4, M7 (the PACC path), M8, M11, the per-account part of H10, and most
+low findings.  Still open, deliberately:
+- [ ] **C2 consent screen** for the built-in OIDC provider.  Clients are
+  already a registry (`JMAP_OIDC_CLIENTS`: exact redirect URIs, PKCE S256),
+  so a consent step adds nothing for first-party clients; needed before any
+  third-party client may register.
+- [ ] **H10 global limits**: a ceiling on workers and on EventSource
+  connections across all accounts (per account: `JMAP_SSE_PER_ACCOUNT`).
+- [ ] **M6 MDN**: check a read receipt's recipient against the message's
+  Return-Path (RFC 8098 S2.1) and send to one address at most.
+- [ ] **M9 supply chain**: pin the CPAN modules the image installs, pin the
+  GitHub Actions by commit, stop publishing `latest` from master.  Low
+  urgency while the modules are our own.
 
 ### Monitoring
 - [x] Prometheus metrics endpoint (`GET /metrics` on management port)

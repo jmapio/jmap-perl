@@ -22,7 +22,7 @@ sub backend_cmd {
     require JMAP::Sync::Fastmail;
     require JMAP::CredentialStore;
     my $config = $Self->access_data();
-    $config->{password} = JMAP::CredentialStore->decrypt($config->{password} // '');
+    $config->{password} = JMAP::CredentialStore->decrypt($config->{password} // '', JMAP::CredentialStore::context($Self->accountid(), q(iserver.password)));
     $Self->{backend} = JMAP::Sync::Fastmail->new($config)
       || die "failed to setup Fastmail for $config->{username}";
   }

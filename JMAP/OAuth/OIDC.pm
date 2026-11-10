@@ -16,10 +16,16 @@ sub rsa_key {
     } else {
         $_cached_key = Crypt::PK::RSA->new();
         $_cached_key->generate_key(256);  # 256 bytes = 2048-bit
-        open my $fh, '>', $keyfile or die "Cannot write $keyfile: $!";
+        # created 0600 (it was written world-readable, then chmodded), under
+        # a temporary name moved into place, so no one -- another process
+        # starting at the same moment included -- reads half of it
+        my $old_umask = umask 077;
+        my $tmp = "$keyfile.$$.tmp";
+        open my $fh, '>', $tmp or do { umask $old_umask; die "Cannot write $tmp: $!" };
         print $fh $_cached_key->export_key_pem('private');
-        close $fh;
-        chmod 0600, $keyfile;
+        close $fh or do { umask $old_umask; die "Cannot write $tmp: $!" };
+        umask $old_umask;
+        rename $tmp, $keyfile or die "Cannot rename $tmp to $keyfile: $!";
     }
     return $_cached_key;
 }
@@ -33,7 +39,10 @@ sub id_token {
         payload => {
             iss            => $args{baseurl},
             sub            => $args{aid},
-            aud            => 'tmail-web',
+            # OIDC Core S2: aud is the client the token was issued to, and a
+            # nonce the client sent at authorization comes back
+            aud            => $args{client_id} // 'tmail-web',
+            (defined $args{nonce} && length $args{nonce} ? (nonce => $args{nonce}) : ()),
             iat            => $now,
             exp            => $now + 3600,
             email          => $args{email},

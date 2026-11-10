@@ -1590,7 +1590,7 @@ sub run_accounts_worker {
           # Only basic-auth passthrough accounts have a comparable password.
           return ['auth', undef] unless ($stored->{authType} || 'basic') eq 'basic';
           require JMAP::CredentialStore;
-          my $actual = JMAP::CredentialStore->decrypt($stored->{password} // '');
+          my $actual = (eval { JMAP::CredentialStore->decrypt($stored->{password} // '', JMAP::CredentialStore::context($aid, 'jserver.password')) } // do { warn "AUTH: cannot read the stored credential of $aid: $@"; undef });
           unless (_ct_eq($actual, $password)) {
             warn "AUTH: wrong password for $email (account $aid)\n" if $ENV{JMAP_DEBUG};
             return ['auth', undef];
@@ -1603,7 +1603,7 @@ sub run_accounts_worker {
           return ['auth', undef] unless $stored;
           # Stored encrypted (ImapDB::setuser); decrypt passes plaintext through.
           require JMAP::CredentialStore;
-          my $actual = JMAP::CredentialStore->decrypt($stored->{password} // '');
+          my $actual = (eval { JMAP::CredentialStore->decrypt($stored->{password} // '', JMAP::CredentialStore::context($aid, 'iserver.password')) } // do { warn "AUTH: cannot read the stored credential of $aid: $@"; undef });
           unless (_ct_eq($actual, $password)) {
             warn "AUTH: wrong password for $email (account $aid)\n" if $ENV{JMAP_DEBUG};
             return ['auth', undef];
@@ -1645,7 +1645,7 @@ sub run_accounts_worker {
           return ['verify_credentials', undef] unless $stored;
           return ['verify_credentials', undef]
             unless ($stored->{authType} || 'basic') eq 'basic';
-          my $actual = JMAP::CredentialStore->decrypt($stored->{password} // '');
+          my $actual = (eval { JMAP::CredentialStore->decrypt($stored->{password} // '', JMAP::CredentialStore::context($aid, 'jserver.password')) } // do { warn "AUTH: cannot read the stored credential of $aid: $@"; undef });
           return ['verify_credentials', undef] unless _ct_eq($actual, $password);
           return ['verify_credentials', { accountid => $aid }];
         }
@@ -1654,7 +1654,7 @@ sub run_accounts_worker {
         # need not be the email (API.md)
         my $stored = $udb->selectrow_hashref("SELECT password FROM iserver LIMIT 1");
         return ['verify_credentials', undef] unless $stored;
-        my $actual = JMAP::CredentialStore->decrypt($stored->{password} // '');
+        my $actual = (eval { JMAP::CredentialStore->decrypt($stored->{password} // '', JMAP::CredentialStore::context($aid, 'iserver.password')) } // do { warn "AUTH: cannot read the stored credential of $aid: $@"; undef });
         return ['verify_credentials', undef] unless _ct_eq($actual, $password);
         return ['verify_credentials', { accountid => $aid }];
       }
@@ -4360,6 +4360,13 @@ sub do_logout {
 # The CODE is called with a $chunk_cb whenever the write buffer drains. Saving
 # $chunk_cb and calling it later (from PushEvent or the ping timer) writes data
 # and re-arms the drain callback for the next event.
+# EventSource connections per login account, oldest first: at most
+# JMAP_SSE_PER_ACCOUNT (20) of them; a new one beyond that closes the
+# oldest (most likely a client that went away without the server noticing:
+# a dead connection is only found when a ping fails to write).
+my %sse_by_aid;    # auth accountid => [ [conn_id, close sub], ... ]
+my $SSE_PER_ACCOUNT = $ENV{JMAP_SSE_PER_ACCOUNT} // 20;
+
 sub do_eventsource {
   my ($httpd, $req) = @_;
   $httpd->stop_request();
@@ -4367,11 +4374,15 @@ sub do_eventsource {
   _authenticate($req, $httpd, sub {
     my $auth_aid = shift;
 
+    # RFC 8620 S7.3: the server may use a longer or shorter ping interval
+    # than asked; it is also how a dead connection is found, so at most
+    # 300 s (a client asking for none, or for a year, held one for ever)
     my $ping_interval = int($req->parm('ping') || 300);
     $ping_interval = 30 unless $ping_interval > 0;  # minimum for cleanup detection
+    $ping_interval = 300 if $ping_interval > 300;
     my $close_after = $req->parm('closeafter') || '';
 
-    send_backend_request('__accounts__', 'get_pool', { accountid => $auth_aid }, sub {
+    get_pool_cached($auth_aid, sub {
       my $pool = shift;
       my @aids = map { $_->{accountid} } @{$pool->{accounts} || []};
 
@@ -4386,8 +4397,24 @@ sub do_eventsource {
         $dead = 1;
         delete $PushMap{$_}{$conn_id} for @aids;
         undef $ping_timer;
+        my $list = $sse_by_aid{$auth_aid} || [];
+        @$list = grep { $_->[0] != $conn_id } @$list;
+        delete $sse_by_aid{$auth_aid} unless @$list;
         warn "SSE $conn_id closed ($auth_aid)\n";
       };
+      # close this connection from our side: the stream ends at its next write
+      my $close = sub {
+        my $cb = $chunk_cb_slot;
+        $cleanup->();
+        $cb->(undef) if $cb;
+      };
+      my $mine = $sse_by_aid{$auth_aid} //= [];
+      while ($SSE_PER_ACCOUNT > 0 && @$mine >= $SSE_PER_ACCOUNT) {
+        my $oldest = shift @$mine;
+        warn "SSE $oldest->[0] closed: $auth_aid has $SSE_PER_ACCOUNT EventSource connections\n";
+        $oldest->[1]->();
+      }
+      push @$mine, [$conn_id, $close];
 
       # Write one SSE event. Returns 1=ok, 0=dead. If chunk_cb_slot is
       # temporarily undef (mid-flush), the event is silently dropped — the
@@ -4493,11 +4520,12 @@ sub do_oidc_authorize {
   my $client_id     = $req->parm('client_id')     // '';
   my $challenge     = $req->parm('code_challenge');
   my $method        = $req->parm('code_challenge_method');
+  my $nonce         = $req->parm('nonce');
 
   if (my $why = _oidc_request_problem($client_id, $redirect_uri, $challenge, $method)) {
     return $req->respond([400, 'bad request', { 'Content-Type' => 'text/plain' }, $why]);
   }
-  my %pkce = (client_id => $client_id, code_challenge => $challenge);
+  my %pkce = (client_id => $client_id, code_challenge => $challenge, nonce => $nonce);
 
   # If already authenticated, issue code immediately
   $httpd->stop_request();
@@ -4519,6 +4547,7 @@ sub do_oidc_authorize {
         client_id    => $client_id,
         code_challenge => $challenge,
         code_challenge_method => $method,
+        nonce        => $nonce,
       },
       ($error ? (error => $error) : ()),
     }, \$html) || return $req->respond([500, 'error', {}, $Template::ERROR]);
@@ -4536,6 +4565,7 @@ sub do_oidc_authorize_post {
   my $client_id    = $req->parm('client_id')    // '';
   my $challenge    = $req->parm('code_challenge');
   my $method       = $req->parm('code_challenge_method');
+  my $nonce        = $req->parm('nonce');
 
   unless ($redirect_uri && $username && $password) {
     return $req->respond([400, 'bad request', {}, 'Missing required fields']);
@@ -4545,7 +4575,7 @@ sub do_oidc_authorize_post {
   if (my $why = _oidc_request_problem($client_id, $redirect_uri, $challenge, $method)) {
     return $req->respond([400, 'bad request', { 'Content-Type' => 'text/plain' }, $why]);
   }
-  my %pkce = (client_id => $client_id, code_challenge => $challenge);
+  my %pkce = (client_id => $client_id, code_challenge => $challenge, nonce => $nonce);
 
   $httpd->stop_request();
   send_backend_request('__accounts__', 'auth',
@@ -4562,7 +4592,7 @@ sub do_oidc_authorize_post {
           step    => 'oidc_login',
           error   => 'Invalid email or password.',
           oidc    => { redirect_uri => $redirect_uri, state => $state, client_id => $client_id,
-                       code_challenge => $challenge, code_challenge_method => $method },
+                       code_challenge => $challenge, code_challenge_method => $method, nonce => $nonce },
         }, \$html) || return $req->respond([500, 'error', {}, $Template::ERROR]);
         return $req->respond([401, 'unauthorized',
           { 'Content-Type' => 'text/html' }, $html]);
@@ -4591,6 +4621,7 @@ sub _oidc_issue_code {
         redirect_uri => $redirect_uri,
         client_id    => $pkce->{client_id},
         code_challenge => $pkce->{code_challenge},
+        nonce        => $pkce->{nonce},
         exp          => time() + 300,
       };
       my $loc = URI->new($redirect_uri);
@@ -4656,6 +4687,8 @@ sub do_oidc_token {
         aid     => $entry->{accountid},
         email   => $entry->{email},
         baseurl => $BASEURL,
+        client_id => $entry->{client_id},
+        nonce   => $entry->{nonce},
         key     => _oidc_rsa_key(),
       );
 
@@ -4773,6 +4806,11 @@ sub _max_body_for {
     return $orig->($self, $res);
   };
 }
+
+# Credentials are encrypted, or plaintext is asked for in so many words:
+# a missing key stops the server here, not at the first signup
+require JMAP::CredentialStore;
+JMAP::CredentialStore->check_configured();
 
 my $port = $ENV{JMAP_PORT} || 9000;
 my $httpd = AnyEvent::HTTPD->new(port => $port, allowed_methods => [qw(GET HEAD POST PUT PATCH)]);

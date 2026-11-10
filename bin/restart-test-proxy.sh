@@ -15,6 +15,8 @@ CYRUS_USER="${CYRUS_USER:-user1}"
 CYRUS_PASS="${CYRUS_PASS:-password}"
 # the management API token (it is required: see JMAP_MGMT_TOKEN in SETUP.md)
 JMAP_MGMT_TOKEN="${JMAP_MGMT_TOKEN:-test-mgmt-token-for-the-local-stack}"
+# credentials are encrypted (JMAP::CredentialStore): a fixed key, for this stack only
+JMAP_SECRET_KEY="${JMAP_SECRET_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}"
 # The test image puts its users in example.com (virtdomains: userid), and its
 # Postfix takes submissions with AUTH PLAIN on 8587 (no TLS needed).
 CYRUS_DOMAIN="${CYRUS_DOMAIN:-example.com}"
@@ -108,7 +110,7 @@ export JMAP_MGMT_PORT
 export JMAP_PORT="$FRONTEND_PORT"
 
 # the test Cyrus, Postfix and WebDAV are on localhost: allow private addresses
-JMAP_ALLOW_PRIVATE_BACKENDS=1 JMAP_MGMT_TOKEN="$JMAP_MGMT_TOKEN" perl -I"$JMAP_HOME" -Ilib "$JMAP_HOME/bin/jmap-proxy.pl" 2>/tmp/jmap-proxy.log &
+JMAP_ALLOW_PRIVATE_BACKENDS=1 JMAP_MGMT_TOKEN="$JMAP_MGMT_TOKEN" JMAP_SECRET_KEY="$JMAP_SECRET_KEY" perl -I"$JMAP_HOME" -Ilib "$JMAP_HOME/bin/jmap-proxy.pl" 2>/tmp/jmap-proxy.log &
 
 # Wait for the management port to be ready
 for i in $(seq 1 30); do

@@ -101,7 +101,7 @@ sub setuser {
          VALUES (?,?,?,?,?,?,?,?,?,?)",
         {},
         $args->{username}         // '',
-        JMAP::CredentialStore->encrypt($args->{password} // ''),
+        JMAP::CredentialStore->encrypt($args->{password} // '', JMAP::CredentialStore::context($Self->accountid(), q(jserver.password))),
         $args->{authType}         || 'basic',
         $args->{sessionUrl}       // '',
         $args->{apiUrl}           // '',
@@ -173,7 +173,7 @@ sub _auth_header {
     my ($Self, $server) = @_;
     $server //= $Self->access_data();
     require JMAP::CredentialStore;
-    my $password = JMAP::CredentialStore->decrypt($server->{password} // '');
+    my $password = JMAP::CredentialStore->decrypt($server->{password} // '', JMAP::CredentialStore::context($Self->accountid(), q(jserver.password)));
     my $auth_type = $server->{authType} || 'basic';
     if ($auth_type eq 'bearer') {
         return "Bearer $password";
@@ -193,7 +193,7 @@ sub fetch_session {
     my $stored   = $Self->access_data();
     my $url      = $args->{sessionUrl} || $stored->{sessionUrl};
     my $username = $args->{username}   // $stored->{username} // '';
-    my $password = $args->{password}   // JMAP::CredentialStore->decrypt($stored->{password} // '');
+    my $password = $args->{password}   // JMAP::CredentialStore->decrypt($stored->{password} // '', JMAP::CredentialStore::context($Self->accountid(), q(jserver.password)));
     my $authType = $args->{authType}   || $stored->{authType} || 'basic';
 
     my $auth = ($authType eq 'bearer')

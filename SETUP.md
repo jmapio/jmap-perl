@@ -78,6 +78,7 @@ All variables are optional unless marked **required**.
 | `JMAP_TRUSTED_PROXIES` | *(unset)* | Comma-separated addresses of the reverse proxies whose X-Forwarded-For is believed. Unset, any peer on a loopback or private address is taken to be one; a client connecting from a public address never sets its own address. |
 | `JMAP_SIGNUP_MAX` | `30` | Attempts at the signup and login forms (`/signup`, `/signup_jmap`) one client address may make in an hour, whatever their outcome; then 429. `0` turns the limit off. |
 | `JMAP_TOKEN_IDLE_DAYS` | `90` | A session or bearer token not used for this many days stops working and is deleted when next presented. `0` keeps tokens for ever. |
+| `JMAP_SSE_PER_ACCOUNT` | `20` | EventSource connections one login may hold; a new one beyond this closes its oldest. `0` turns the limit off. |
 | `IGNORE_INVALID_CERT` | *(unset)* | Set to turn off TLS certificate checks for IMAP and every HTTPS request (DAV, upstream JMAP, OAuth, discovery). Only for a test server with a self-signed certificate. |
 | `JMAP_SYNC_INTERVAL` | `30` | Seconds between background IMAP/CalDAV/CardDAV sync polls. |
 | `JMAP_IMAP_TIMEOUT` | `120` | Seconds of silence after which an IMAP connection counts as dead. Counts from the last data received, so slow downloads aren't cut off. |
@@ -85,7 +86,8 @@ All variables are optional unless marked **required**.
 | `JMAP_FILES_MAX_BYTES` | `268435456` (256 MiB) | The most bytes of one file's content the proxy holds in memory for FileNode: a direct PUT over it is refused with 413 before the body reaches a worker, a download of a bigger file's blob is 501, and a cross-account `FileNode/copy` of one fails that item with `serverFail` naming the limit (a `FileNode/set` from such a blob is `tooLarge`). Content is not streamed yet. |
 | `JMAP_DEBUG` | _(unset)_ | Set to any value to log full JMAP request/response bodies to stderr. |
 | `JMAP_DISABLE_SIGNUP` | _(unset)_ | Set to `1`/`true` to block self-service creation of **new** accounts on `/signup`, `/signup_jmap` and `/cb/oauth`. Existing accounts are unaffected: their users log in as before, and an OAuth sign-in that proves ownership of the address can still renew an account's refresh token. The management API (`POST /api/accounts`) is deliberately **not** affected, passthrough accounts included — that stays the admin path for adding users while public signup is closed. Empty, `0`, `false`, `no` and `off` (any case) leave signup open. |
-| `JMAP_SECRET_KEY` | _(unset)_ | 64 hex chars (256-bit AES key) for credential encryption. Recommended for production. |
+| `JMAP_SECRET_KEY` | _(unset)_ | 64 hex chars (a 256-bit key) for credential encryption. Required, unless OpenBao is used or `JMAP_ALLOW_PLAINTEXT_CREDENTIALS` is set. |
+| `JMAP_ALLOW_PLAINTEXT_CREDENTIALS` | _(unset)_ | Set to `1` to store credentials in plaintext when no key is configured (a test server). Without it the proxy refuses to start. |
 | `JMAP_OPENBAO_ADDR` | _(unset)_ | OpenBao/Vault address for Transit-based credential encryption (e.g. `http://vault:8200`). |
 | `JMAP_OPENBAO_TOKEN` | _(unset)_ | Static OpenBao token (simpler; prefer AppRole for production). |
 | `JMAP_OPENBAO_ROLE_ID` | _(unset)_ | OpenBao AppRole role ID (for AppRole auth). |
@@ -225,9 +227,12 @@ that works for testing but may have rate limits.
 
 ## Credential Encryption
 
-IMAP/SMTP passwords and OAuth tokens are stored in SQLite. Without encryption
-they are stored in plaintext — acceptable for personal use but not for
-multi-user deployments.
+IMAP/SMTP passwords and OAuth tokens are stored in SQLite, encrypted: the
+proxy will not start without `JMAP_SECRET_KEY` or OpenBao, unless
+`JMAP_ALLOW_PLAINTEXT_CREDENTIALS=1` says plaintext is meant (a test server).
+
+Each credential is encrypted with associated data naming its account and
+field, so one copied into another account's database does not decrypt.
 
 ### AES-256-GCM (single-server)
 
@@ -239,6 +244,10 @@ openssl rand -hex 32
 ```
 JMAP_SECRET_KEY=<64-hex-chars>
 ```
+
+It must be a 256-bit key, 64 hex characters; a passphrase is refused. The
+encryption key and the key for credential fingerprints are derived from it
+with HKDF-SHA256, apart. Values are stored as `enc2:`.
 
 Keep the key separate from the data volume. Losing the key means losing
 access to all stored credentials.
@@ -279,7 +288,13 @@ Encrypted and plaintext credentials can coexist. To migrate:
    management API.
 
 When migrating from AES to OpenBao, keep `JMAP_SECRET_KEY` set until all
-accounts have been re-encrypted — old `enc1:` values are still readable.
+accounts have been re-encrypted — `enc2:` values are read with it.
+
+Credentials stored by versions before 2026-11 (`enc1:`: one key for both
+encryption and fingerprints, derived from a passphrase by a single
+SHA-256, no associated data) are no longer read: those accounts are set up
+again. The OpenBao transit key must be an AEAD key (`aes256-gcm96`), which
+takes the associated data.
 
 ---
 

@@ -14,25 +14,33 @@ JMAP::CredentialStore — pluggable encrypted credential storage
 
   use JMAP::CredentialStore;
 
-  # Encrypt before writing to DB
-  my $stored = JMAP::CredentialStore->encrypt($plaintext_password);
+  # Encrypt before writing to DB; the context names where the value lives,
+  # and decryption needs the same one (a ciphertext copied elsewhere fails)
+  my $ctx    = JMAP::CredentialStore::context($accountid, 'iserver.password');
+  my $stored = JMAP::CredentialStore->encrypt($plaintext_password, $ctx);
 
   # Decrypt after reading from DB (auto-detects backend by prefix)
-  my $password = JMAP::CredentialStore->decrypt($stored_value);
+  my $password = JMAP::CredentialStore->decrypt($stored_value, $ctx);
 
 =head1 BACKENDS
 
 Backend is selected at first use based on environment variables:
 
   JMAP_OPENBAO_ADDR set  → OpenBao Transit engine (recommended for production)
-  JMAP_SECRET_KEY set    → AES-256-GCM with a master key
-  (neither)              → plaintext with a startup warning
+  JMAP_SECRET_KEY set    → AES-256-GCM with a master key (64 hex characters)
+  (neither)              → refused, unless JMAP_ALLOW_PLAINTEXT_CREDENTIALS=1
+                           says plaintext is meant (a test server)
 
 Ciphertext format on disk:
-  enc1:<base64(12-byte-nonce + ciphertext + 16-byte-GCM-tag)>  — AES-GCM
+  enc2:<base64(12-byte-nonce + ciphertext + 16-byte-GCM-tag)>  — AES-GCM
   vault:v1:...                                                  — OpenBao Transit
-  (anything else)                                               — legacy plaintext
+  (anything else)                                               — plaintext
 
+Both encrypt with associated data naming the account and field (context()),
+so a value moved to another account or field does not decrypt.  The AES key
+and the MAC key are derived from JMAP_SECRET_KEY with HKDF-SHA256, apart.
+enc1: (one key for both, derived from a passphrase by a single SHA-256, no
+associated data) is no longer read: such an account is set up again.
 Decryption auto-detects the format, so data can be read regardless of which
 backend is currently configured (useful during backend migrations).
 
@@ -85,34 +93,50 @@ sub _active_backend {
     if ($ENV{JMAP_SECRET_KEY}) {
         return _aes_backend();
     }
+    die "JMAP::CredentialStore: no encryption configured: set JMAP_SECRET_KEY (openssl rand -hex 32)"
+      . " or JMAP_OPENBAO_ADDR, or JMAP_ALLOW_PLAINTEXT_CREDENTIALS=1 to store credentials in plaintext\n"
+        unless $ENV{JMAP_ALLOW_PLAINTEXT_CREDENTIALS};
     unless ($_backends{warned}++) {
-        warn "JMAP::CredentialStore: no encryption backend configured.\n";
-        warn "  Set JMAP_SECRET_KEY (run: openssl rand -hex 32) or JMAP_OPENBAO_ADDR.\n";
-        warn "  Credentials will be stored in plaintext.\n";
+        warn "JMAP::CredentialStore: JMAP_ALLOW_PLAINTEXT_CREDENTIALS is set: credentials are stored in plaintext\n";
     }
     $_backends{plain} //= JMAP::CredentialStore::_Plaintext->new();
+}
+
+# Dies unless credentials can be stored as configured: called at startup, so
+# a missing key stops the server, not the first signup.
+sub check_configured { _active_backend(); return 1 }
+
+# The associated data a credential is bound to: its account and field.
+sub context {
+    my ($accountid, $field) = @_;
+    die "JMAP::CredentialStore: a context needs an account and a field\n"
+      unless defined $accountid && length $accountid && defined $field && length $field;
+    return "jmap-perl credential\0$accountid\0$field";
 }
 
 # Encrypt a credential for storage.  Returns the ciphertext string.
 # Passing undef or empty string returns the value unchanged.
 sub encrypt {
-    my (undef, $plaintext) = @_;
+    my (undef, $plaintext, $context) = @_;
     return $plaintext unless defined $plaintext && length $plaintext;
-    return _active_backend()->encrypt($plaintext);
+    die "JMAP::CredentialStore: encrypt needs a context\n" unless defined $context;
+    return _active_backend()->encrypt($plaintext, $context);
 }
 
 # Decrypt a stored credential.  Auto-detects the backend from the stored prefix,
 # so enc1: values can always be decrypted even if the active backend is OpenBao.
 sub decrypt {
-    my (undef, $value) = @_;
+    my (undef, $value, $context) = @_;
     return $value unless defined $value && length $value;
     if ($value =~ /^enc1:/) {
-        return _aes_backend()->decrypt($value);
+        die "JMAP::CredentialStore: this credential is in the old enc1 format, no longer read: set the account up again\n";
     }
-    if ($value =~ /^vault:/) {
-        return _bao_backend()->decrypt($value);
+    if ($value =~ /^(?:enc2|vault):/) {
+        die "JMAP::CredentialStore: decrypt needs a context\n" unless defined $context;
+        return $value =~ /^enc2:/ ? _aes_backend()->decrypt($value, $context)
+                                  : _bao_backend()->decrypt($value, $context);
     }
-    return $value;  # legacy plaintext
+    return $value;  # plaintext
 }
 
 # Deterministic keyed MAC over $data.
@@ -137,7 +161,7 @@ sub mac {
 # True if the value looks like it has already been encrypted.
 sub is_encrypted {
     my (undef, $value) = @_;
-    return defined $value && $value =~ /^(?:enc1:|vault:)/;
+    return defined $value && $value =~ /^(?:enc2:|vault:)/;
 }
 
 # Reset cached backends (for testing).
@@ -156,54 +180,55 @@ package JMAP::CredentialStore::_AESGCM;
 
 use MIME::Base64 qw(encode_base64 decode_base64);
 
+# JMAP_SECRET_KEY is a 256-bit key, as 64 hex characters (openssl rand -hex
+# 32).  A passphrase is refused: one SHA-256 of it, as this took before, is
+# no defence against guessing it.  The AES key and the MAC key are derived
+# from it with HKDF-SHA256, under different labels, never used for both.
 sub new {
     my ($class) = @_;
     my $hex = $ENV{JMAP_SECRET_KEY}
         or die "JMAP_SECRET_KEY not set\n";
-
-    my $key;
-    if ($hex =~ /^[0-9a-fA-F]{64}$/) {
-        $key = pack 'H*', $hex;          # 64 hex chars → 32 raw bytes
-    } else {
-        require Digest::SHA;
-        $key = Digest::SHA::sha256($hex); # passphrase → 32-byte derived key
-    }
-    return bless { key => $key }, $class;
+    die "JMAP_SECRET_KEY must be 64 hex characters, a 256-bit key (run: openssl rand -hex 32)\n"
+        unless $hex =~ /^[0-9a-fA-F]{64}$/;
+    require Crypt::KeyDerivation;
+    my $master = pack 'H*', $hex;
+    return bless {
+        key    => Crypt::KeyDerivation::hkdf($master, 'jmap-perl', 'SHA256', 32, 'credential encryption v2'),
+        mackey => Crypt::KeyDerivation::hkdf($master, 'jmap-perl', 'SHA256', 32, 'credential fingerprint v2'),
+    }, $class;
 }
 
-# Keyed MAC — HMAC-SHA256 under the same master key, so a stolen database
-# cannot be used to guess the MAC'd input offline.
+# Keyed MAC (HMAC-SHA256), so a stolen database cannot be used to guess the
+# MAC'd input offline.
 sub mac {
     my ($self, $data) = @_;
     require Digest::SHA;
-    return Digest::SHA::hmac_sha256_hex($data, $self->{key});
+    return Digest::SHA::hmac_sha256_hex($data, $self->{mackey});
 }
 
 sub encrypt {
-    my ($self, $plaintext) = @_;
+    my ($self, $plaintext, $context) = @_;
     require Crypt::AuthEnc::GCM;
     my $nonce = '';
     open my $fh, '<:raw', '/dev/urandom' or die "Cannot open /dev/urandom: $!";
-    read $fh, $nonce, 12;
+    read($fh, $nonce, 12) == 12 or die "Cannot read /dev/urandom\n";
     close $fh;
-    my $ae  = Crypt::AuthEnc::GCM->new('AES', $self->{key}, $nonce);
-    my $ct  = $ae->encrypt_add($plaintext);
-    my $tag = $ae->encrypt_done();
-    return 'enc1:' . encode_base64($nonce . $ct . $tag, '');
+    my ($ct, $tag) = Crypt::AuthEnc::GCM::gcm_encrypt_authenticate('AES', $self->{key}, $nonce, $context, $plaintext);
+    return 'enc2:' . encode_base64($nonce . $ct . $tag, '');
 }
 
 sub decrypt {
-    my ($self, $stored) = @_;
+    my ($self, $stored, $context) = @_;
     require Crypt::AuthEnc::GCM;
-    $stored =~ s/^enc1://;
-    my $raw   = decode_base64($stored);
+    $stored =~ s/^enc2://;
+    my $raw = decode_base64($stored);
+    die "JMAP::CredentialStore: stored credential is too short\n" if length $raw < 28;
     my $nonce = substr($raw,  0, 12);
     my $tag   = substr($raw, -16);
     my $ct    = substr($raw,  12, length($raw) - 28);
-    my $ae    = Crypt::AuthEnc::GCM->new('AES', $self->{key}, $nonce);
-    my $pt    = $ae->decrypt_add($ct);
-    $ae->decrypt_done($tag)
-        or die "JMAP::CredentialStore: AES-GCM authentication tag mismatch — wrong key or corrupted data\n";
+    my $pt    = Crypt::AuthEnc::GCM::gcm_decrypt_verify('AES', $self->{key}, $nonce, $context, $ct, $tag);
+    die "JMAP::CredentialStore: AES-GCM authentication failed: wrong key, or a credential that is not this account's\n"
+        unless defined $pt;
     return $pt;
 }
 
@@ -281,11 +306,13 @@ sub _api {
     return decode_json($resp->{content});
 }
 
+# associated_data (Transit, AEAD keys such as aes256-gcm96) binds the value to
+# its account and field, as for AES-GCM above
 sub encrypt {
-    my ($self, $plaintext) = @_;
+    my ($self, $plaintext, $context) = @_;
     my $b64  = encode_base64($plaintext, '');
     my $resp = $self->_api('POST', "$self->{mount}/encrypt/$self->{key}",
-        { plaintext => $b64 });
+        { plaintext => $b64, associated_data => encode_base64($context, '') });
     return $resp->{data}{ciphertext};  # already looks like "vault:v1:..."
 }
 
@@ -300,9 +327,9 @@ sub mac {
 }
 
 sub decrypt {
-    my ($self, $ciphertext) = @_;
+    my ($self, $ciphertext, $context) = @_;
     my $resp = $self->_api('POST', "$self->{mount}/decrypt/$self->{key}",
-        { ciphertext => $ciphertext });
+        { ciphertext => $ciphertext, associated_data => encode_base64($context, '') });
     return decode_base64($resp->{data}{plaintext});
 }
 

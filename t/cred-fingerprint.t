@@ -7,6 +7,8 @@ my $dir;
 BEGIN { require File::Temp; $dir = File::Temp::tempdir(CLEANUP => 1); $ENV{JMAP_DATADIR} = $dir; }
 
 use lib '.';
+# the first fingerprints are unkeyed: no master key, plaintext allowed
+$ENV{JMAP_ALLOW_PLAINTEXT_CREDENTIALS} = 1;
 use JMAP::JmapDB;
 
 my $fp1 = JMAP::JmapDB::cred_fingerprint({
