@@ -43,6 +43,10 @@ BEGIN {
                 IO::Uncompress::UnZstd Imager Image::ExifTool)) {
     $HAVE{$m} = eval "require $m; 1" ? 1 : 0;
   }
+  # Imager lists a format its plugin supplies (WebP, TIFF) only once that
+  # plugin is loaded, which it otherwise is on first use: load them here, or
+  # those formats are never advertised
+  if ($HAVE{Imager}) { eval "require $_; 1" for qw(Imager::File::WEBP Imager::File::TIFF) }
 }
 
 our $MAX_SIZE_BLOB_SET   = 50_000_000;
