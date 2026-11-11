@@ -60,6 +60,7 @@ use JMAP::Workers;
 use JMAP::FileNodeCopy;
 use JMAP::FileNode;   # max_bytes, is_too_large: the in-memory cap on one file's content
 use JMAP::Collation;
+use JMAP::DavDiscovery;
 use JMAP::Capabilities qw(imap_account_capabilities);
 
 # Backend modules (loaded in child after fork)
@@ -487,6 +488,7 @@ sub run_backend_worker {
 
       my $detail = { %$args };
       my $force = delete $detail->{force};
+      my $dav_checked = delete $detail->{davChecked};
 
       # Reject unknown addresses up front, otherwise a locked-down server still runs
       # the full DNS autodiscovery + IMAP login probe and drags the user through the
@@ -523,10 +525,13 @@ sub run_backend_worker {
       my $domain = $detail->{username};
       $domain =~ s/.*\@//;
 
+      # Best record first (RFC 2782: lowest priority, then highest weight);
+      # the resolver hands the answers back in no particular order.
       my $srv_lookup = sub {
         my ($name) = @_;
         my $reply = $resolver->query($name, 'SRV') or return ();
-        return grep { $_->type eq 'SRV' && $_->target ne '.' && $_->port > 0 } $reply->answer;
+        return sort { $a->priority <=> $b->priority || $b->weight <=> $a->weight }
+               grep { $_->type eq 'SRV' && $_->target ne '.' && $_->port > 0 } $reply->answer;
       };
 
       unless ($detail->{imapHost}) {
@@ -553,19 +558,51 @@ sub run_backend_worker {
         }
       }
 
-      # Always look up CalDAV/CardDAV via SRV if not already provided
-      # (Mozilla autoconfig doesn't include DAV URLs)
-      for my $try (['_caldavs._tcp',  'caldavURL',  'https', 443],
-                   ['_caldav._tcp',   'caldavURL',  'http',  80 ],
-                   ['_carddavs._tcp', 'carddavURL', 'https', 443],
-                   ['_carddav._tcp',  'carddavURL', 'http',  80 ]) {
-        next if $detail->{$try->[1]};
-        my @d = $srv_lookup->("$try->[0].$domain");
-        if (@d) {
-          my $url = "$try->[2]://" . $d[0]->target;
-          $url .= ":" . $d[0]->port unless $d[0]->port == $try->[3];
-          $detail->{$try->[1]} = $url;
-        }
+      # CalDAV/CardDAV (RFC 6764): SRV + TXT path, else the well-known URI on
+      # the domain and on the IMAP host, kept only where this login finds a
+      # principal. Autoconfig rarely carries DAV URLs and most domains publish
+      # no SRV for them, so without the well-known step nearly every account
+      # ended up without calendars and contacts.
+      # Skipped once the user has seen the DAV fields on the confirmation
+      # form (davChecked): a field left empty there means "no DAV".
+      unless ($dav_checked) {
+        require JMAP::Sync::CalDAVTalk;
+        require Net::CardDAVTalk;
+        require HTTP::Tiny;
+        my $found = JMAP::DavDiscovery::discover(
+          detail => $detail,
+          domain => $domain,
+          srv    => sub {
+            map { +{ target => $_->target, port => $_->port } } $srv_lookup->(@_);
+          },
+          txt    => sub {
+            my $reply = $resolver->query($_[0], 'TXT') or return ();
+            return map { $_->txtdata } grep { $_->type eq 'TXT' } $reply->answer;
+          },
+          probe  => sub {
+            my ($service, $url) = @_;
+            my $class = $service eq 'caldav' ? 'JMAP::Sync::CalDAVTalk' : 'Net::CardDAVTalk';
+            # The same lookup the sync does later (principal, then home set).
+            # A guessed host gets the password, so its certificate has to
+            # hold; one that never answers must not stall the signup.
+            my $ok = eval {
+              $class->new(
+                user      => $detail->{username},
+                password  => $detail->{password},
+                url       => $url,
+                expandurl => 1,
+                ua        => HTTP::Tiny->new(agent => 'jmap-proxy', timeout => 8, verify_SSL => 1),
+              );
+              1;
+            };
+            my ($why) = split /\n/, ($@ // '');
+            warn "SIGNUP: $service at $url " . ($ok ? "works\n" : "not usable: " . ($why // '?') . "\n");
+            return $ok;
+          },
+        );
+        warn "SIGNUP: DAV for $detail->{username}: "
+           . join(', ', map { "$_=" . ($detail->{$_} || '-') . ($found->{$_} ? " ($found->{$_})" : '') }
+                        qw(caldavURL carddavURL)) . "\n";
       }
 
       unless ($force) {
@@ -3602,6 +3639,8 @@ sub _try_mozilla_autoconfig {
           $prefill{smtpSSL} = ($1 eq 'SSL') ? 2 : (($1 eq 'STARTTLS') ? 3 : 1);
         }
       }
+      # Thunderbird ignores these blocks, but a provider may still publish them
+      %prefill = (%prefill, %{ JMAP::DavDiscovery::autoconfig_urls($body, $email) });
       $prefill{force} = 1 if $prefill{imapHost};
     }
     _render_step2($req, $email, undef, \%prefill);
@@ -3871,7 +3910,7 @@ sub do_signup {
     if _signup_throttled($req);
 
   my %opts;
-  for my $key (qw(username password imapHost imapPort imapSSL smtpHost smtpPort smtpSSL caldavURL carddavURL webdavURL force)) {
+  for my $key (qw(username password imapHost imapPort imapSSL smtpHost smtpPort smtpSSL caldavURL carddavURL webdavURL force davChecked)) {
     $opts{$key} = $req->parm($key);
   }
 

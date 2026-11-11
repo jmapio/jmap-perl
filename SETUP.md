@@ -192,6 +192,10 @@ The web UI at `$BASEURL/` includes a sign-up form for self-service account
 registration. Users enter their email address; the proxy performs SRV DNS
 auto-discovery for IMAP/SMTP and PACC (draft-ietf-mailmaint-pacc) for OAuth2
 providers, then redirects to OAuth or a password form as appropriate.
+CalDAV/CardDAV are found per RFC 6764: SRV records (with the TXT `path`) if the
+domain has them, otherwise `/.well-known/caldav` and `/.well-known/carddav` on
+the mail domain and then on the IMAP host. A guessed URL is only kept when the
+user's login finds a principal there over HTTPS with a valid certificate.
 
 ---
 
