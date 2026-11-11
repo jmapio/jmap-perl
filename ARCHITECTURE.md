@@ -132,8 +132,14 @@ For a given email address:
    - If `authentication.oauth-public.issuer` present → RFC 8414 OAuth metadata → OAuth flow
    - Otherwise → pre-fill IMAP/SMTP settings from `protocols` block
 3. **Mozilla autoconfig**: `https://autoconfig.{domain}/mail/config-v1.1.xml`
-   - Pre-fills IMAP/SMTP settings
+   - Pre-fills IMAP/SMTP settings, and CalDAV/CardDAV from `<calendar>` / `<addressBook>` blocks if present
 4. **Fallback**: password form with no pre-fill (DNS SRV lookup runs in the background worker)
+
+CalDAV/CardDAV URLs still missing are then looked up by the `signup` worker
+command (`JMAP::DavDiscovery`, RFC 6764): SRV + TXT `path` on the mail domain,
+else the well-known URI on the mail domain and then on the IMAP host, kept only
+if that login finds a principal and home set there. Once the user has seen the
+confirmation form (`davChecked`), an empty DAV field stays empty.
 
 ## Credential Encryption
 

@@ -208,7 +208,7 @@ The proxy syncs calendars and contacts from CalDAV/CardDAV backends and exposes
 them via the JMAP Calendars (JSCalendar) and Contacts (JSContact) extensions.
 
 ### Done
-- [x] SRV-based CalDAV/CardDAV discovery (falling back to well-known URLs)
+- [x] CalDAV/CardDAV discovery at signup (RFC 6764): SRV + TXT path, else the well-known URI on the mail domain and the IMAP host, verified with the login
 - [x] IMAP hierarchy separator auto-detected from IMAP NAMESPACE (stored in iserver.imapSep)
 - [x] Calendar/get, Calendar/changes, Calendar/query, Calendar/set (create/update/destroy)
 - [x] CalendarEvent/get, CalendarEvent/changes, CalendarEvent/query, CalendarEvent/set (create/update)
