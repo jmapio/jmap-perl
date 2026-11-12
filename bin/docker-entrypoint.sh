@@ -22,24 +22,6 @@ fi
 echo "file descriptor limit: $(ulimit -n)" >&2
 
 # Initialize and migrate accounts DB
-perl -MDBI -e "
-  my \$CURRENT = 1;
-  my \$dbh = DBI->connect('dbi:SQLite:dbname=$JMAP_DATADIR/accounts.sqlite3');
-  my (\$v) = \$dbh->selectrow_array('PRAGMA user_version');
-  if (\$v == 0) {
-    # Fresh install — create full schema at version 1 (the baseline).
-    \$dbh->begin_work;
-    \$dbh->do(q{CREATE TABLE accounts (email TEXT PRIMARY KEY, accountid TEXT, type TEXT, poolid TEXT, needs_backfill INTEGER NOT NULL DEFAULT 1)});
-    \$dbh->do(q{CREATE TABLE tokens (token TEXT PRIMARY KEY, accountid TEXT NOT NULL, last_used INTEGER, last_ip TEXT)});
-    \$dbh->do(\"PRAGMA user_version = \$CURRENT\");
-    \$dbh->commit;
-    exit 0;
-  }
-  # Incremental migrations. To add version 2:
-  #   if (\$v < 2) { \$dbh->begin_work; ... ALTER TABLE ...; \$dbh->do('PRAGMA user_version = 2'); \$dbh->commit; \$v = 2; }
-  # Then bump \$CURRENT above.
-"
-
 # Run as the unprivileged jmap user (see the Dockerfile).  A data directory
 # from a root-run image is handed over first; JMAP_RUN_AS_ROOT=1 keeps the
 # old behaviour.
