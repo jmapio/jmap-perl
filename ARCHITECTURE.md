@@ -60,17 +60,14 @@ Each message is one JSON array, newline-terminated, in both directions.
 | Process | Owns | Never |
 |---|---|---|
 | Parent | HTTP routing, auth caches, session state, EventSource connections, outbound push POSTs, `/copy` orchestration across upstreams, timers | blocking I/O of any kind: IMAP/DAV, `DBI`, `JMAP::ImapDB->new`, `setuser`, `firstsync`, `sync_*` |
-| `__accounts__` | `accounts.sqlite3`: account rows, tokens, pools, push subscriptions, `needs_backfill`, `nextsend`. It also reads per-account DBs for login checks (`auth`, `verify_credentials` read the `jserver`/`iserver` row) and stats | IMAP/DAV connections |
+| `__accounts__` | `accounts.sqlite3`, its only writer: account rows (which account a signup lands on, `claim_account`), tokens, pools, push subscriptions, `needs_backfill`, `nextsend`, `cred_fingerprint`. It also reads per-account DBs for login checks (`auth`, `verify_credentials` read the `jserver`/`iserver` row) and stats | IMAP/DAV connections |
 | `<accountid>` | the account's `<accountid>.sqlite3`, every backend connection (IMAP, SMTP, CalDAV, CardDAV, WebDAV, upstream JMAP), all JMAP method handling, periodic sync, sending held submissions | backfill |
 | `<accountid>:backfill` | backfill of older mail; the account's first FileNode walk | JMAP methods, sync |
+| `<fresh id>:signup` | one signup probe: autodiscovery and a login, or fetching an upstream Session; then dropped | any database: a passthrough probe's `JmapDB` is in memory |
 
-Two exceptions to the ownership rule:
-
-- The parent opens `accounts.sqlite3` once at startup, before `EV::run`, to run
-  its migrations. Then every worker sees the current schema.
-- The signup commands in an account worker (`signup`, `signup_oauth`,
-  `signup_jmap`) insert their own account's row into `accounts.sqlite3`. An account
-  being created has no worker of its own yet, so the worker that creates it does it.
+The parent never opens `accounts.sqlite3`: at startup it pings `__accounts__`,
+which migrates the file before it reads its first command. An account worker
+opens it read-only, for its own `email`/`type`.
 
 ## Account worker commands
 
@@ -86,8 +83,9 @@ Two exceptions to the ownership rule:
 | `upload`, `download`, `raw`, `filenode_put` | Blob I/O (FileNode content goes straight to WebDAV). |
 | `fetch_blobs`, `store_blob` | Blob transfer for parent-orchestrated cross-account `/copy`. |
 | `session_caps` | Passthrough: this account's slice of the upstream Session. |
-| `signup`, `signup_oauth`, `signup_jmap`, `setup` | Create or bind the account, `setuser`, `firstsync`. |
-| `get_settings`, `update_settings` | Backend connection settings (verified by logging in first). |
+| `signup`, `signup_jmap` | Probes, in a `:signup` worker: verify the credentials and answer the resolved settings. They store nothing. |
+| `setup` | `setuser` and `firstsync` (plus `sync_imap` unless `skip_sync`); passthrough: store the probed settings and answer the `cred_fingerprint`. |
+| `get_settings`, `update_settings` | Backend connection settings (verified by logging in first; a passthrough login's new fingerprint goes back to the parent). |
 | `pdpa_export`, `pdpa_import` | Whole-account export/import (`JMAP::PDPA`). |
 | `delete` | Drop the account's data; the worker exits. |
 | `ping`, `getinfo` | Liveness; `[email, type]`. |
@@ -174,23 +172,42 @@ CLAUDE.md lists the rules for this path ("Passthrough request dispatch").
 
 ### Account creation
 
-There are three routes in, and each ends in an account worker running
-`setuser` and `firstsync`:
+Every route but one has the same three steps, driven by the parent
+(`_claim_and_setup`):
 
-- **Management API** (`POST /api/accounts`): `create_account` in `__accounts__`,
-  then `setup` in the new account's worker; the API answers 201 when both have
-  finished. A passthrough account goes through `signup_jmap` instead.
-- **Signup form** (`/discover`, then `/signup`): `signup` in a worker forked
-  under a fresh UUID. That worker:
-  1. discovers servers by DNS SRV lookup;
-  2. checks the login;
-  3. inserts the account row;
-  4. runs `firstsync`.
+1. **Probe**, in a worker of its own (`<fresh id>:signup`): `signup` (DNS SRV
+   discovery and an IMAP login) or `signup_jmap` (fetch the upstream Session,
+   resolve `backendAccountId` and the URLs). It stores nothing.
+2. **Claim**, in `__accounts__` (`claim_account`, `JMAP::AccountClaim`), in one
+   transaction:
+   - an email with no account gets a new one under the fresh id, unless
+     `JMAP_DISABLE_SIGNUP` closes signup;
+   - an email that has one lands on it only if the caller proved it owns it:
+     the management API (an admin), an OAuth provider vouching for the
+     address, or Fastmail's session naming the login;
+   - otherwise the claim is refused, and the owner logs in instead
+     (`verify_credentials`).
+3. **Setup**, in the claimed account's own worker: `setuser` and `firstsync`.
+   A re-bound account's worker is restarted first. A failed setup removes an
+   account the claim made, and leaves one that was there before.
 
-  The parent then issues a session token. `JMAP_DISABLE_SIGNUP` blocks new
-  accounts here, in the worker.
-- **OAuth** (`/cb/oauth`): the parent exchanges the code, then sends
-  `signup_oauth`.
+Doing setup anywhere else is the bug this order prevents: a probing worker
+that stored the credentials put a re-bound account's new login in a file
+nothing reads (`t/account-rebind.t`).
+
+The routes:
+
+- **Signup form** (`/discover`, then `/signup`): probe, claim, setup. Then the
+  parent sends `sync`, starts the backfill and issues a session token. With
+  signup closed, an address with no account is refused before the probe.
+- **OAuth** (`/cb/oauth`): the parent exchanges the code; there is no probe
+  (the provider checked the login), so it goes straight to claim and setup.
+- **Passthrough** (`/signup_jmap`, Fastmail over OAuth, and the management API
+  with a `sessionUrl`): probe with `signup_jmap`, claim, setup, then
+  `set_cred_fingerprint`.
+- **Management API**, IMAP: the exception. `create_account` (keyed by the
+  accountid the admin chose), then `setup`; the API answers 201 once the mail
+  has synced.
 
 Discovery order for an address at `/discover`:
 
@@ -208,8 +225,8 @@ for clients that sign in to it.
 
 ## Lifecycle
 
-- **Startup**: migrate `accounts.sqlite3`. After 5 s, resume pending backfills
-  and re-arm held-send timers.
+- **Startup**: start `__accounts__`, which migrates `accounts.sqlite3`. After
+  5 s, resume pending backfills and re-arm held-send timers.
 - **Idle reaper** (every 60 s): closes account workers idle for longer than
   `JMAP_IDLE_TIMEOUT` (default 300; 0 disables it). `__accounts__` is never
   closed, and neither is a worker that is busy, backfilling, or has push

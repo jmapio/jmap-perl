@@ -39,6 +39,13 @@ Hard rules that are easy to violate:
   sends the worker `send_due`, which delivers what is due and answers the next time. Startup
   re-arms from `accounts.nextsend`. Destroying a submission must not cancel its delivery
   (RFC 8621 S7.5), so `send_due` ignores `active`; only `undoStatus: canceled` stops it.
+- **`accounts.sqlite3` has one writer, `__accounts__`.** The parent never opens it (it
+  pings `__accounts__` at startup, which migrates it); an account worker opens it read-only
+  for its own row. A signup is probe (a `"<fresh id>:signup"` worker, which stores nothing),
+  then `claim_account` (`JMAP::AccountClaim`: new, or an existing account the caller proved
+  it owns), then `setup` **in the claimed account's own worker** (`_claim_and_setup`). Setting
+  up in the probing worker wrote a re-bound account's credentials to an orphan file
+  (`t/account-rebind.t`).
 - **Never call `get_user()` outside a transaction** — Perl autovivification of
   `$Self->{t}{user}` leaves a phantom `$Self->{t}={}` and corrupts later transaction state.
   Cache values you need inside the transaction for use in closures.
@@ -57,6 +64,9 @@ Hard rules that are easy to violate:
   proxy never defaults it), `group_batches` (order-preserving same-upstream batching) and
   `resolve_pointer` (JSON Pointer with JMAP `*` semantics).
   No I/O, no DB — keep it that way; `t/dispatch-*.t` covers it.
+- `JMAP/AccountClaim.pm` — which account a signup lands on, run by `__accounts__` in one
+  transaction: the bind rules, `JMAP_DISABLE_SIGNUP`, a taken id. Pure apart from the `$dbh`;
+  `t/account-claim.t`.
 - `JMAP/Collation.pm` — the sort collations (`i;octet`, `i;ascii-casemap`, and the default
   `i;unicode-casemap`) advertised in `collationAlgorithms`. Every string comparator in a
   `/query` sort goes through `JMAP::Collation::compare` with the Comparator's `collation`;

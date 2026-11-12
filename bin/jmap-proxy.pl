@@ -71,18 +71,12 @@ my $datadir = $ENV{JMAP_DATADIR} || '/data';
 
 # When JMAP_DISABLE_SIGNUP is set, no *new* accounts may be created through the public
 # signup and OAuth routes. Existing accounts are unaffected: their users log in as
-# before, and an OAuth sign-in that proves ownership (see _bind_existing) can still
+# before, and an OAuth sign-in that proves ownership (see _claim_and_setup) can still
 # renew an account's refresh token. The management API is the admin path and stays
-# open. Enforced in the worker (see the signup/signup_oauth/signup_jmap handlers) so
+# open. Enforced where the account is claimed (JMAP::AccountClaim, deny_new) so
 # it covers every route into account creation, not just POST /signup.
 # Empty, 0, false, no and off (any case) leave signup open; anything else closes it.
 my $DISABLE_SIGNUP = ($ENV{JMAP_DISABLE_SIGNUP} // '') =~ /^\s*(?:0|false|no|off)?\s*$/i ? 0 : 1;
-
-sub _deny_new_account {
-  my ($email) = @_;
-  warn "SIGNUP_DISABLED: refusing to create new account for $email (JMAP_DISABLE_SIGNUP is set)\n";
-  die "Registration is disabled on this server\n";
-}
 
 mkdir "$datadir/tmp" unless -d "$datadir/tmp";
 
@@ -383,11 +377,6 @@ sub _dav_sync_safely {
   }
 }
 
-# A signup may only take over an existing account when the caller has proved it
-# owns it; anyone can name an email and a backend that accepts their password.
-# The parent sets _bind_existing only for the management API (an admin) and for
-# an OAuth login whose provider vouched for the address. A returning user with
-# the account's own credentials logs in through verify_credentials instead.
 sub run_backend_worker {
   my ($sock, $name) = @_;
 
@@ -404,17 +393,24 @@ sub run_backend_worker {
 
   my ($read_json, $write_json) = _make_json_io($sock);
 
-  # Load the account database — may not exist yet (signup creates it)
-  my $dbh = DBI->connect("dbi:SQLite:dbname=$datadir/accounts.sqlite3");
-  my ($email, $type) = $dbh->selectrow_array(
-    "SELECT email, type FROM accounts WHERE accountid = ?", {}, $accountid);
+  # This account's row in accounts.sqlite3, which __accounts__ alone writes:
+  # a worker only reads it, so it opens it read-only. Not there (no such
+  # account yet, or a fresh install before __accounts__ made the file): none.
+  my $account_row = sub {
+    require DBD::SQLite;
+    my $dbh = DBI->connect("dbi:SQLite:dbname=$datadir/accounts.sqlite3", '', '',
+      { PrintError => 0, sqlite_open_flags => DBD::SQLite::OPEN_READONLY() }) or return ();
+    my @row = eval { $dbh->selectrow_array(
+      "SELECT email, type FROM accounts WHERE accountid = ?", {}, $accountid) };
+    $dbh->disconnect;
+    return @row;
+  };
+  my ($email, $type) = $account_row->();
 
   my ($db, $api);
   my $init_db = sub {
     return if $db;
-    ($email, $type) = $dbh->selectrow_array(
-      "SELECT email, type FROM accounts WHERE accountid = ?", {}, $accountid)
-      unless $type;
+    ($email, $type) = $account_row->() unless $type;
     die "No such account: $accountid\n" unless $type;
     if ($type eq 'imap') {
       $db = JMAP::ImapDB->new($accountid);
@@ -449,7 +445,8 @@ sub run_backend_worker {
   };
 
   # Initialize now if account exists, otherwise defer to signup/setup
-  eval { $init_db->() } if $type;
+  # (not in a signup probe: it never touches the account it is named after)
+  eval { $init_db->() } if $type && $name !~ /:signup\z/;
 
   my $last_activity = time();
 
@@ -465,8 +462,9 @@ sub run_backend_worker {
       return ['info', [$email, $type]];
     }
 
-    # Initialize DB for commands that need it (not signup/signup_oauth/signup_jmap — they create the account first)
-    $init_db->() if $cmd ne 'signup' && $cmd ne 'signup_oauth' && $cmd ne 'signup_jmap' && !$db;
+    # Initialize DB for commands that need it (not the signup probes: they run
+    # in a "<fresh id>:signup" worker with no account behind it)
+    $init_db->() if $cmd ne 'signup' && $cmd ne 'signup_jmap' && !$db;
 
     # Defensive: clean up stale transactions between commands
     if ($db && $db->in_transaction()) {
@@ -480,15 +478,6 @@ sub run_backend_worker {
 
       my $detail = { %$args };
       my $force = delete $detail->{force};
-
-      # Reject unknown addresses up front, otherwise a locked-down server still runs
-      # the full DNS autodiscovery + IMAP login probe and drags the user through the
-      # two-step form before refusing at the INSERT.
-      if ($DISABLE_SIGNUP) {
-        my $known = $dbh->selectrow_array(
-          "SELECT accountid FROM accounts WHERE email = ?", {}, $detail->{username});
-        _deny_new_account($detail->{username}) unless $known;
-      }
 
       $detail->{imapPort} ||= 993;
       $detail->{imapSSL} ||= 2;
@@ -589,128 +578,19 @@ sub run_backend_worker {
       warn "SIGNUP: IMAP login OK for $detail->{username}\n";
       $imap->logout();
 
-      # Create account in accounts DB
-      my $existing_aid = $dbh->selectrow_array(
-        "SELECT accountid FROM accounts WHERE email = ?", {}, $detail->{username});
-      die "An account for $detail->{username} already exists: log in with its password\n"
-        if $existing_aid && !$detail->{_bind_existing};
-      delete $detail->{_bind_existing};
-      my $final_aid;
-      if ($existing_aid) {
-        $final_aid = $existing_aid;
-        warn "SIGNUP: $detail->{username} already has account $existing_aid, reusing it\n";
-        # Join pool if requested
-        if ($detail->{poolid}) {
-          $dbh->do("UPDATE accounts SET poolid = ? WHERE accountid = ?",
-            {}, $detail->{poolid}, $existing_aid);
-          warn "SIGNUP: joined pool $detail->{poolid} for $existing_aid\n";
-        }
-      } else {
-        _deny_new_account($detail->{username}) if $DISABLE_SIGNUP;
-        $final_aid = $accountid;
-        my $poolid = $detail->{poolid} || $accountid;
-        $dbh->do("INSERT INTO accounts (email, accountid, type, poolid) VALUES (?, ?, ?, ?)",
-          {}, $detail->{username}, $accountid, 'imap', $poolid);
-        warn "SIGNUP: created account $accountid (poolid=$poolid) for $detail->{username}\n";
-      }
-
-      # Initialize DB now that the account exists
-      $type = 'imap';
-      $init_db->();
-
-      # Set up the account
-      warn "SIGNUP: running setuser + firstsync for $final_aid\n";
-      $db->setuser($detail);
-      $db->firstsync();
-      warn "SIGNUP: firstsync complete for $final_aid\n";
-
-      return ['signup', ['done', $final_aid, $detail->{username}]];
-    }
-    if ($cmd eq 'signup_oauth') {
-      # Called after parent completes OAuth code exchange.
-      # $args: email, refresh_token, account_type (gmail/imap), imapHost, imapPort,
-      #        imapSSL, smtpHost, smtpPort, smtpSSL, caldavURL, carddavURL, poolid
-      my $email         = $args->{email}         or die "email required\n";
-      my $refresh_token = $args->{refresh_token} or die "refresh_token required\n";
-      my $acct_type     = $args->{account_type}  || 'gmail';
-      warn "OAUTH_SIGNUP: starting for $email (type=$acct_type, accountid=$accountid)\n";
-
-      my $existing_aid = $dbh->selectrow_array(
-        "SELECT accountid FROM accounts WHERE email = ?", {}, $email);
-      die "An account for $email already exists, and this sign-in does not prove you own it\n"
-        if $existing_aid && !$args->{_bind_existing};
-      my ($final_aid, $target_aid);
-      if ($existing_aid) {
-        $final_aid  = $existing_aid;
-        $target_aid = $existing_aid;
-        warn "OAUTH_SIGNUP: $email already has account $existing_aid, reusing it\n";
-        if ($args->{poolid}) {
-          $dbh->do("UPDATE accounts SET poolid = ? WHERE accountid = ?",
-            {}, $args->{poolid}, $existing_aid);
-        }
-      } else {
-        _deny_new_account($email) if $DISABLE_SIGNUP;
-        $final_aid  = $accountid;
-        $target_aid = $accountid;
-        my $poolid = $args->{poolid} || $accountid;
-        $dbh->do(
-          "INSERT INTO accounts (email, accountid, type, poolid) VALUES (?,?,?,?)",
-          {}, $email, $accountid, $acct_type, $poolid);
-        warn "OAUTH_SIGNUP: created account $accountid (poolid=$poolid) for $email\n";
-      }
-
-      # Create/open the per-account DB for the right account ID
-      my $target_db;
-      if ($acct_type eq 'gmail') {
-        require JMAP::GmailDB;
-        $target_db = JMAP::GmailDB->new($target_aid);
-      } elsif ($acct_type eq 'fastmail') {
-        require JMAP::FastmailDB;
-        $target_db = JMAP::FastmailDB->new($target_aid);
-      } else {
-        require JMAP::ImapDB;
-        $target_db = JMAP::ImapDB->new($target_aid);
-      }
-      warn "OAUTH_SIGNUP: running setuser for $target_aid\n";
-      $target_db->setuser({
-        username   => $email,
-        password   => $refresh_token,
-        imapHost   => $args->{imapHost}   || '',
-        imapPort   => $args->{imapPort}   || 993,
-        # TLS unless the caller said otherwise (1 is plain text): a missing
-        # value sent an OAuth token over an unencrypted connection
-        imapSSL    => $args->{imapSSL}    // 2,
-        smtpHost   => $args->{smtpHost}   || '',
-        smtpPort   => $args->{smtpPort}   || 587,
-        smtpSSL    => $args->{smtpSSL}    // 2,
-        caldavURL  => $args->{caldavURL}  || '',
-        carddavURL => $args->{carddavURL} || '',
-        webdavURL  => $args->{webdavURL}  || '',
-      });
-      warn "OAUTH_SIGNUP: running firstsync for $target_aid\n";
-      $target_db->firstsync();
-      warn "OAUTH_SIGNUP: firstsync complete for $target_aid ($email)\n";
-
-      # Make $db point to the right instance for subsequent commands
-      if ($target_aid eq $accountid) {
-        $type = $acct_type;
-        $db   = $target_db;
-        $api  = JMAP::API->new($db);
-      }
-
-      return ['signup_oauth', [$final_aid, $email]];
+      # A probe only: the parent claims the account in __accounts__ and runs
+      # setup in that account's own worker (see _claim_and_setup).
+      return ['signup', ['ok', $detail]];
     }
     if ($cmd eq 'signup_jmap') {
       require JMAP::JmapDB;
       require MIME::Base64;
 
-      # With signup off, only a binding the parent vouches for can succeed:
-      # refuse before fetching anything from the URL a caller named
-      _deny_new_account($args->{username} // '')
-        if $DISABLE_SIGNUP && !$args->{_admin} && !$args->{_bind_existing} && !$args->{_bind_if_session_user};
-
-      # Verify credentials by fetching the upstream JMAP session
-      my $tmp = JMAP::JmapDB->new($accountid);
+      # A probe only, like 'signup': verify the credentials by fetching the
+      # upstream session and resolve what setup will store.  The JmapDB is in
+      # memory, so a probe leaves no account file behind; the parent claims
+      # the account and runs setup in its own worker (_signup_jmap).
+      my $tmp = JMAP::JmapDB->new($accountid, memory => 1);
       my ($session) = $tmp->fetch_session($args);
 
       # Resolve URLs relative to the session URL (some servers return relative paths).
@@ -748,59 +628,41 @@ sub run_backend_worker {
         // ($backend_aid eq $primary_aid ? ($args->{username} || $backend_aid)
                                          : $backend_aid);
 
-      # Create the account entry in accounts.sqlite3
-      my $existing_aid = $dbh->selectrow_array(
-        "SELECT accountid FROM accounts WHERE email = ?", {}, $display_email);
-      # A fixed, trusted upstream (Fastmail's) proves who the login is by the
-      # username in its own session
-      my $session_proves = $args->{_bind_if_session_user}
-        && lc($session->{username} // '') eq lc $display_email;
-      die "An account for $display_email already exists: log in with its password\n"
-        if $existing_aid && !$args->{_bind_existing} && !$session_proves;
-      my $final_aid;
-      if ($existing_aid) {
-        $final_aid = $existing_aid;
-        if ($args->{poolid}) {
-          $dbh->do("UPDATE accounts SET poolid = ? WHERE accountid = ?",
-            {}, $args->{poolid}, $existing_aid);
-        }
-      } else {
-        _deny_new_account($display_email) if $DISABLE_SIGNUP && !$args->{_admin};
-        $final_aid = $accountid;
-        my $poolid = $args->{poolid} || $accountid;
-        $dbh->do(
-          "INSERT INTO accounts (email, accountid, type, poolid, needs_backfill)
-           VALUES (?,?,?,?,?)",
-          {}, $display_email, $accountid, 'jmap', $poolid, 0);
-      }
-
-      # Initialise JmapDB and store credentials
-      $type = 'jmap';
-      $init_db->();
-
-      $db->setuser({
-        username         => $args->{username} // '',
-        password         => $args->{password} // '',
-        authType         => $args->{authType} || 'basic',
-        sessionUrl       => $args->{sessionUrl},
-        apiUrl           => $api_url,
-        uploadUrl        => $abs_url->($session->{uploadUrl}   // ''),
-        downloadUrl      => $abs_url->($session->{downloadUrl} // ''),
-        backendAccountId => $backend_aid,
-        capabilities     => $capabilities,
-      });
-
-      my $fp = JMAP::JmapDB::cred_fingerprint({
-        apiUrl   => $api_url,
-        username => $args->{username} // '',
-        authType => $args->{authType} || 'basic',
-        secret   => $args->{password} // '',
-      });
-      $dbh->do("UPDATE accounts SET cred_fingerprint = ? WHERE accountid = ?", {}, $fp, $final_aid);
-
-      return ['signup_jmap', [$final_aid, $display_email]];
+      return ['signup_jmap', {
+        email        => $display_email,
+        # who the upstream says this login is: a fixed, trusted upstream
+        # (Fastmail's) proves an existing account's ownership with it
+        session_user => $session->{username},
+        settings     => {
+          username         => $args->{username} // '',
+          password         => $args->{password} // '',
+          authType         => $args->{authType} || 'basic',
+          sessionUrl       => $args->{sessionUrl},
+          apiUrl           => $api_url,
+          uploadUrl        => $abs_url->($session->{uploadUrl}   // ''),
+          downloadUrl      => $abs_url->($session->{downloadUrl} // ''),
+          backendAccountId => $backend_aid,
+          capabilities     => $capabilities,
+        },
+      }];
     }
+    # Store an account's backend settings and do its first sync.  Every route
+    # that makes or re-binds an account ends here, in the worker of the
+    # account that __accounts__ claimed (JMAP::AccountClaim), never in the
+    # worker that probed the credentials.
     if ($cmd eq 'setup') {
+      if ($db->can('handle_jmap')) {
+        # passthrough: the settings the signup_jmap probe resolved
+        my $s = $args->{settings} or die "settings required\n";
+        $db->setuser($s);
+        # only the fingerprint goes back, for __accounts__ to keep
+        return ['setup', { cred_fingerprint => JMAP::JmapDB::cred_fingerprint({
+          apiUrl   => $s->{apiUrl},
+          username => $s->{username} // '',
+          authType => $s->{authType} || 'basic',
+          secret   => $s->{password} // '',
+        }) }];
+      }
       # Default to implicit SSL/STARTTLS — plaintext on the standard SSL ports (993/587)
       # just makes the server wait out its login-grace-time before dropping the connection.
       my $imap_ssl = $args->{imapSSL} // 2;
@@ -823,10 +685,14 @@ sub run_backend_worker {
       });
       warn "SETUP: $accountid credentials stored, running firstsync\n";
       $db->firstsync();
-      warn "SETUP: $accountid firstsync done, running sync_imap\n";
-      $db->sync_imap();
+      # A signup answers its user after firstsync and sends 'sync' itself;
+      # the management API answers once the mail is there.
+      unless ($args->{skip_sync}) {
+        warn "SETUP: $accountid firstsync done, running sync_imap\n";
+        $db->sync_imap();
+      }
       warn "SETUP: $accountid complete\n";
-      return ['setup', $JSON::true];
+      return ['setup', {}];
     }
     if ($cmd eq 'upload') {
       my ($aid, $utype, $file) = @{$args}{qw(accountId type file)};
@@ -1135,8 +1001,8 @@ sub run_backend_worker {
           authType => $args->{authType} || 'basic',
           secret   => $args->{password} // '',
         });
-        $dbh->do("UPDATE accounts SET cred_fingerprint = ? WHERE accountid = ?", {}, $fp, $accountid);
-        return ['update_settings', $JSON::true];
+        # __accounts__ keeps it: the parent passes it on
+        return ['update_settings', { cred_fingerprint => $fp }];
       }
       require Mail::IMAPTalk;
       my $host = $args->{imapHost} or die "imapHost required\n";
@@ -1367,6 +1233,24 @@ sub run_accounts_worker {
         return ['create_account', { accountid => $aid, type => $type, poolid => $poolid, existed => ($existed ? 1 : 0) }];
       }
 
+      # Which account a signup lands on: new, or an existing one the caller
+      # proved it owns (JMAP::AccountClaim). The parent then runs setup there.
+      if ($cmd eq 'claim_account') {
+        require JMAP::AccountClaim;
+        return ['claim_account', JMAP::AccountClaim::claim($dbh, $args)];
+      }
+      if ($cmd eq 'set_cred_fingerprint') {
+        require JMAP::AccountClaim;
+        JMAP::AccountClaim::set_cred_fingerprint($dbh, $args->{accountid}, $args->{cred_fingerprint});
+        return ['set_cred_fingerprint', $JSON::true];
+      }
+      # The account an email logs in to, if any.
+      if ($cmd eq 'find_account') {
+        my ($aid) = $dbh->selectrow_array(
+          "SELECT accountid FROM accounts WHERE email = ?", {}, $args->{email} // '');
+        return ['find_account', $aid];
+      }
+
       if ($cmd eq 'get_pool') {
         my $aid = $args->{accountid};
         my $row = $dbh->selectrow_hashref(
@@ -1581,7 +1465,7 @@ sub run_accounts_worker {
           # One jserver row per account DB.  Do NOT key this on $email: an account
           # bound to a delegated upstream account stores the primary's username.
           my $stored = $udb->selectrow_hashref(
-            "SELECT password, authType FROM jserver LIMIT 1");
+            "SELECT password, authType FROM jserver ORDER BY mtime DESC, rowid DESC LIMIT 1");
           return ['auth', undef] unless $stored;
           # Only basic-auth passthrough accounts have a comparable password.
           return ['auth', undef] unless ($stored->{authType} || 'basic') eq 'basic';
@@ -1637,7 +1521,7 @@ sub run_accounts_worker {
           # As in 'auth': one row per account DB, keyed on the upstream login,
           # which differs from $email for a delegated binding.
           my $stored = $udb->selectrow_hashref(
-            "SELECT password, authType FROM jserver LIMIT 1");
+            "SELECT password, authType FROM jserver ORDER BY mtime DESC, rowid DESC LIMIT 1");
           return ['verify_credentials', undef] unless $stored;
           return ['verify_credentials', undef]
             unless ($stored->{authType} || 'basic') eq 'basic';
@@ -1737,7 +1621,7 @@ sub _account_details_child {
       "SELECT name FROM sqlite_master WHERE type='table' AND name='jserver'");
   };
   if ($has_jserver) {
-    my $j = eval { $udb->selectrow_hashref("SELECT * FROM jserver LIMIT 1") } || {};
+    my $j = eval { $udb->selectrow_hashref("SELECT * FROM jserver ORDER BY mtime DESC, rowid DESC LIMIT 1") } || {};
     return {
       configured       => (defined $j->{username} && length $j->{username} ? 1 : 0),
       username         => $j->{username},
@@ -1779,7 +1663,7 @@ my $POOL_TTL = 30;
 # __accounts__ commands that cannot change a pool (lookups, and the frequent
 # bookkeeping ones)
 my %POOL_KEEPS = map { $_ => 1 } qw(get_pool resolve_token auth push_list push_targets
-  push_accounts list_tokens list_accounts get_account verify_credentials ping
+  push_accounts list_tokens list_accounts get_account verify_credentials ping find_account
   create_token touch_tokens set_nextsend get_nextsends set_needs_backfill get_needs_backfill
   clear_backfill push_set push_delete);
 # Commands (to any worker) that can end a credential's validity: a token
@@ -1789,7 +1673,7 @@ my %POOL_KEEPS = map { $_ => 1 } qw(get_pool resolve_token auth push_list push_t
 # back.  Without this a deleted token or an old password kept working for
 # $AUTH_CACHE_TTL.
 my %AUTH_CHANGES = map { $_ => 1 } qw(delete_token delete_tokens delete_account set_poolid
-  signup signup_jmap signup_oauth create_account update_settings setup);
+  claim_account create_account update_settings setup);
 sub get_pool_cached {
   my ($aid, $cb, $errcb) = @_;
   my $c = $pool_cache{$aid};
@@ -1829,6 +1713,85 @@ sub send_backend_request {
   $backend->[3] = time() unless $background;
   $waiting{$accountid}{$cmd} = [$cb || sub { 1 }, $errcb || sub { 1 }, $background];
   $backend->[0]->push_write(json => [$request, $args, $cmd]);
+}
+
+# Drop a worker: it sees EOF and exits once its current command is done.
+# What was queued on it is failed now; left in %waiting it would hold its
+# client connection for ever.
+sub _drop_backend {
+  my ($name, $reason) = @_;
+  delete $backend{$name};
+  _fail_pending($name, $reason // 'worker restarted');
+}
+
+# The second half of every signup.  A signup's own worker only probes the
+# credentials; __accounts__ then decides the account (JMAP::AccountClaim: a
+# new one under $o{claim}{accountid}, or the existing account for the email
+# when the caller proved it owns it -- an admin, or an OAuth provider
+# vouching for the address), and setup runs in THAT account's worker.
+# Setting up in the probing worker put a re-bound account's new credentials
+# in a file nothing reads.  A failed setup removes an account this made; one
+# that was there before is left as it is.
+#   $o{claim}  claim_account args      $o{setup}  setup args
+#   $o{ok}     sub ($accountid, $claimed)   $o{err}  sub ($error)
+sub _claim_and_setup {
+  my (%o) = @_;
+  send_backend_request('__accounts__', 'claim_account', $o{claim}, sub {
+    my $c   = shift;
+    my $aid = $c->{accountid};
+    # a re-bound account's worker holds connections made with the old settings
+    _drop_backend($aid, 'account settings replaced') if $c->{existed};
+    send_backend_request($aid, 'setup', $o{setup}, sub {
+      my $r  = shift;
+      my $fp = ref $r eq 'HASH' ? $r->{cred_fingerprint} : undef;
+      return $o{ok}->($aid, $c) unless $fp;
+      send_backend_request('__accounts__', 'set_cred_fingerprint',
+        { accountid => $aid, cred_fingerprint => $fp },
+        sub { $o{ok}->($aid, $c) }, $o{err});
+    }, sub {
+      my $err = shift;
+      warn "SIGNUP: setup of $aid failed: $err";
+      return $o{err}->($err) if $c->{existed};
+      my $fail   = sub { $o{err}->($err) };
+      my $remove = sub {
+        delete $backend{$aid};
+        send_backend_request('__accounts__', 'delete_account', { accountid => $aid }, $fail, $fail);
+      };
+      send_backend_request($aid, 'delete', {}, $remove, $remove);
+    });
+  }, $o{err});
+}
+
+# A passthrough signup: probe the upstream session in a worker of its own
+# ("<newid>:signup"), then claim and set up.
+#   $o{newid}  the id a new account gets    $o{args}  signup_jmap args
+#   $o{bind}   the caller proved it owns an existing account
+#   $o{session_proves}  a fixed, trusted upstream (Fastmail's): its session's
+#              username proves the login owns the account for that address
+#   $o{admin}  the management API: not closed by JMAP_DISABLE_SIGNUP
+#   $o{ok}     sub ($accountid, $email)     $o{err}  sub ($error)
+sub _signup_jmap {
+  my (%o) = @_;
+  # with signup off only a binding can succeed: refuse before fetching
+  # anything from the URL a caller named
+  return $o{err}->("Registration is disabled on this server\n")
+    if $DISABLE_SIGNUP && !$o{admin} && !$o{bind} && !$o{session_proves};
+  my $probe = "$o{newid}:signup";
+  send_backend_request($probe, 'signup_jmap', $o{args}, sub {
+    my $p = shift;
+    _drop_backend($probe);
+    my $email = $p->{email};
+    my $bind  = $o{bind}
+      || ($o{session_proves} && lc($p->{session_user} // '') eq lc $email);
+    _claim_and_setup(
+      claim => { email => $email, accountid => $o{newid}, type => 'jmap',
+                 poolid => $o{args}{poolid}, needs_backfill => 0,
+                 bind => ($bind ? 1 : 0), deny_new => ($DISABLE_SIGNUP && !$o{admin} ? 1 : 0) },
+      setup => { settings => $p->{settings} },
+      ok    => sub { $o{ok}->($_[0], $email) },
+      err   => $o{err},
+    );
+  }, sub { _drop_backend($probe); $o{err}->(@_) });
 }
 
 #
@@ -3764,55 +3727,13 @@ sub do_cb_oauth {
         my $imap         = $state->{imap} // {};
         my $accountid    = new_uuid_string();
 
-        # Fastmail JMAP passthrough via OAuth: use signup_jmap with Bearer token refresh.
-        if ($account_type eq 'fastmail_jmap') {
-          send_backend_request($accountid, 'signup_jmap', {
-            username   => $email,
-            password   => $refresh_token,   # stored as encrypted refresh token
-            authType   => 'fastmail_oauth',
-            sessionUrl => 'https://api.fastmail.com/jmap/session',
-            _bind_if_session_user => 1,
-            ($auth_aid ? (poolid => $auth_aid) : ()),
-          }, sub {
-            my $result = shift;
-            my ($final_aid, $final_email) = @$result;
-            delete $backend{$accountid} unless $final_aid eq $accountid;
-            if ($auth_aid) {
-              $req->respond([302, 'Found', { Location => "$BASEURL/accounts" }, '']);
-              return;
-            }
-            my $token = _generate_token();
-            send_backend_request('__accounts__', 'create_token',
-              { token => $token, accountid => $final_aid,
-                last_ip => _client_ip($req), last_used => time() }, sub {
-              $auth_cache{"bearer:$token"} = [$final_aid, time() + $AUTH_CACHE_TTL];
-              my $cookie = _session_cookie($token, '+3M');
-              $req->respond([302, 'Found',
-                { 'Set-Cookie' => $cookie, Location => "$BASEURL/accounts" }, '']);
-            }, sub { $err_html->('Failed to create session after OAuth login') });
-          }, sub {
-            my $err = shift;
-            delete $backend{$accountid};
-            $err_html->("Account setup failed: $err");
-          });
-          return;
-        }
-
-        send_backend_request($accountid, 'signup_oauth', {
-          _bind_existing => ($proven ? 1 : 0),
-          email         => $email,
-          refresh_token => $refresh_token,
-          account_type  => $account_type,
-          %$imap,
-          ($auth_aid ? (poolid => $auth_aid) : ()),
-        }, sub {
-          my $result = shift;
-          my ($final_aid, $final_email) = @$result;
-          delete $backend{$accountid} unless $final_aid eq $accountid;
-
-          send_backend_request($final_aid, 'sync', {});
-          prod_backfill($final_aid);
-
+        my $done = sub {
+          my ($final_aid, $local) = @_;
+          # passthrough accounts have nothing to sync or backfill locally
+          unless ($local) {
+            send_backend_request($final_aid, 'sync', {});
+            prod_backfill($final_aid);
+          }
           if ($auth_aid) {
             $req->respond([302, 'Found', { Location => "$BASEURL/accounts" }, '']);
             return;
@@ -3826,11 +3747,45 @@ sub do_cb_oauth {
             $req->respond([302, 'Found',
               { 'Set-Cookie' => $cookie, Location => "$BASEURL/accounts" }, '']);
           }, sub { $err_html->('Failed to create session after OAuth login') });
-        }, sub {
-          my $err = shift;
-          delete $backend{$accountid};
-          $err_html->("Account setup failed: $err");
-        });
+        };
+        my $fail = sub { $err_html->("Account setup failed: $_[0]") };
+
+        # Fastmail JMAP passthrough via OAuth: a Bearer token from the refresh
+        # token, and Fastmail's own session vouches for the login.
+        if ($account_type eq 'fastmail_jmap') {
+          _signup_jmap(
+            newid => $accountid,
+            args  => {
+              username   => $email,
+              password   => $refresh_token,   # stored as encrypted refresh token
+              authType   => 'fastmail_oauth',
+              sessionUrl => 'https://api.fastmail.com/jmap/session',
+              ($auth_aid ? (poolid => $auth_aid) : ()),
+            },
+            session_proves => 1,
+            ok  => sub { $done->($_[0], 1) },
+            err => $fail,
+          );
+          return;
+        }
+
+        _claim_and_setup(
+          claim => { email => $email, accountid => $accountid, type => $account_type,
+                     poolid => $auth_aid, bind => ($proven ? 1 : 0), deny_new => $DISABLE_SIGNUP,
+                     exists_error => "An account for $email already exists, and this sign-in does not prove you own it\n" },
+          setup => {
+            %$imap,
+            username  => $email,
+            password  => $refresh_token,
+            # TLS unless the provider said otherwise (1 is plain text): a missing
+            # value sent an OAuth token over an unencrypted connection
+            imapSSL   => $imap->{imapSSL} // 2,
+            smtpSSL   => $imap->{smtpSSL} // 2,
+            skip_sync => 1,
+          },
+          ok  => sub { $done->($_[0]) },
+          err => $fail,
+        );
       };
 
       if ($userinfo_url) {
@@ -3923,50 +3878,10 @@ sub _do_signup_new {
 
   $opts->{poolid} = $auth_aid if $auth_aid;
   my $accountid = new_uuid_string();
+  my $probe = "$accountid:signup";
 
-  # Step 1: send signup to a per-account child for DNS resolution + IMAP test
-  send_backend_request($accountid, 'signup', $opts, sub {
-    my $result = shift;
-
-    if ($result->[0] eq 'continue') {
-      # Need user confirmation — show signup.html with resolved details
-      my $html = '';
-      $TT->process("signup.html", $result->[1], \$html)
-        || return $req->respond([500, 'error', {}, $Template::ERROR]);
-      delete $backend{$accountid};
-      $req->respond({ content => ['text/html', $html] });
-      return;
-    }
-
-    if ($result->[0] eq 'done') {
-      my ($final_accountid, $username) = @{$result}[1, 2];
-      send_backend_request($final_accountid, 'sync', {});
-      prod_backfill($final_accountid);
-      delete $backend{$accountid} unless $final_accountid eq $accountid;
-
-      if ($auth_aid) {
-        # Already logged in — just redirect, keep existing session
-        $req->respond([301, 'redirected', { Location => "$BASEURL/accounts" }, "Redirected"]);
-        return;
-      }
-
-      # Not logged in — create new token
-      my $token = _generate_token();
-      send_backend_request('__accounts__', 'create_token',
-        { token => $token, accountid => $final_accountid,
-          last_ip => _client_ip($req), last_used => time() }, sub {
-        $auth_cache{"bearer:$token"} = [$final_accountid, time() + $AUTH_CACHE_TTL];
-        my $cookie = _session_cookie($token, '+3M');
-        $req->respond([301, 'redirected',
-          { 'Set-Cookie' => $cookie, Location => "$BASEURL/accounts" }, "Redirected"]);
-      }, sub {
-        $req->respond([500, 'error', {}, 'failed to create session']);
-      });
-      return;
-    }
-  }, sub {
+  my $fail = sub {
     my $err = shift;
-    delete $backend{$accountid};
     if ($auth_aid) {
       $req->respond([301, 'redirected', { Location => "$BASEURL/accounts" }, "Redirected"]);
     } else {
@@ -3975,7 +3890,70 @@ sub _do_signup_new {
         || return $req->respond([500, 'error', {}, $Template::ERROR]);
       $req->respond({ content => ['text/html', $html] });
     }
-  });
+  };
+
+  my $done = sub {
+    my ($final_accountid) = @_;
+    send_backend_request($final_accountid, 'sync', {});
+    prod_backfill($final_accountid);
+
+    if ($auth_aid) {
+      # Already logged in — just redirect, keep existing session
+      $req->respond([301, 'redirected', { Location => "$BASEURL/accounts" }, "Redirected"]);
+      return;
+    }
+
+    # Not logged in — create new token
+    my $token = _generate_token();
+    send_backend_request('__accounts__', 'create_token',
+      { token => $token, accountid => $final_accountid,
+        last_ip => _client_ip($req), last_used => time() }, sub {
+      $auth_cache{"bearer:$token"} = [$final_accountid, time() + $AUTH_CACHE_TTL];
+      my $cookie = _session_cookie($token, '+3M');
+      $req->respond([301, 'redirected',
+        { 'Set-Cookie' => $cookie, Location => "$BASEURL/accounts" }, "Redirected"]);
+    }, sub {
+      $req->respond([500, 'error', {}, 'failed to create session']);
+    });
+  };
+
+  # Step 1: a probe worker of its own for DNS resolution + the IMAP login test
+  my $signup = sub {
+    send_backend_request($probe, 'signup', $opts, sub {
+      my $result = shift;
+      _drop_backend($probe);
+
+      if ($result->[0] eq 'continue') {
+        # Need user confirmation — show signup.html with resolved details
+        my $html = '';
+        $TT->process("signup.html", $result->[1], \$html)
+          || return $req->respond([500, 'error', {}, $Template::ERROR]);
+        $req->respond({ content => ['text/html', $html] });
+        return;
+      }
+
+      # Step 2: the account, then its setup in its own worker. A signup never
+      # binds an existing account: its owner logs in (verify_credentials).
+      my $detail = $result->[1];
+      _claim_and_setup(
+        claim => { email => $detail->{username}, accountid => $accountid, type => 'imap',
+                   poolid => $opts->{poolid}, deny_new => $DISABLE_SIGNUP },
+        setup => { %$detail, skip_sync => 1 },
+        ok    => $done,
+        err   => $fail,
+      );
+    }, sub { _drop_backend($probe); $fail->(@_) });
+  };
+
+  # With signup closed, refuse an address with no account before the DNS
+  # autodiscovery and login probe, not after dragging the user through the
+  # two-step form.
+  return $signup->() unless $DISABLE_SIGNUP;
+  send_backend_request('__accounts__', 'find_account', { email => $opts->{username} }, sub {
+    return $signup->() if shift;
+    warn "SIGNUP_DISABLED: refusing to create new account for $opts->{username} (JMAP_DISABLE_SIGNUP is set)\n";
+    $fail->("Registration is disabled on this server\n");
+  }, $fail);
 }
 
 sub do_signup_jmap {
@@ -4010,10 +3988,9 @@ sub do_signup_jmap {
 
     my $accountid = new_uuid_string();
 
-    send_backend_request($accountid, 'signup_jmap', \%opts, sub {
-      my $result = shift;
-      my ($final_aid, $email) = @$result;
-      delete $backend{$accountid} unless $final_aid eq $accountid;
+    # never binds an existing account: its owner logs in with its password
+    _signup_jmap(newid => $accountid, args => \%opts, ok => sub {
+      my ($final_aid, $email) = @_;
 
       if ($auth_aid) {
         $req->respond([301, 'redirected', { Location => "$BASEURL/accounts" }, "Redirected"]);
@@ -4032,9 +4009,8 @@ sub do_signup_jmap {
       }, sub {
         $req->respond([500, 'error', {}, 'failed to create session']);
       });
-    }, sub {
+    }, err => sub {
       my $err = shift;
-      delete $backend{$accountid};
       # Show error on the accounts page if logged in, otherwise on index
       if ($auth_aid) {
         my $html = '';
@@ -4122,13 +4098,19 @@ sub _do_accounts_authed {
 
     _check_account_access($auth_aid, $aid, sub {
       send_backend_request($aid, 'update_settings', \%args, sub {
+        my $r = shift;
         # Drop our end of the worker's socket so it sees EOF and exits; the
         # next request respawns it with the new settings. NOTE: do NOT send
         # the 'delete' RPC here -- that unlinks the account's sqlite3
         # database and data directory (see JMAP::DB::delete), including the
         # iserver row just written.
-        delete $backend{$aid};
-        $req->respond([301, 'redirected', { Location => "$BASEURL/accounts" }, "Redirected"]);
+        _drop_backend($aid, 'account settings replaced');
+        my $redirect = sub { $req->respond([301, 'redirected', { Location => "$BASEURL/accounts" }, "Redirected"]) };
+        # a passthrough login's new fingerprint, for __accounts__ to keep
+        my $fp = ref $r eq 'HASH' ? $r->{cred_fingerprint} : undef;
+        return $redirect->() unless $fp;
+        send_backend_request('__accounts__', 'set_cred_fingerprint',
+          { accountid => $aid, cred_fingerprint => $fp }, $redirect, $redirect);
       }, sub {
         my $err = shift;
         # Show error back on the edit form
@@ -4933,20 +4915,17 @@ sub mgmt_api_accounts {
        . ($data->{sessionUrl} ? 'jmap' : ($data->{type} || 'imap')) . ")\n";
 
     if ($data->{sessionUrl}) {
-      # JMAP passthrough account — signup_jmap creates the accounts.sqlite3 entry itself.
-      # The worker is keyed by $aid so signup_jmap uses it as the new accountid.
-      delete $backend{$aid} if $backend{$aid};
-      send_backend_request($aid, 'signup_jmap', { %$data, _bind_existing => 1, _admin => 1 }, sub {
-        my ($final_aid, $email) = @{shift()};
+      # JMAP passthrough account: $aid is the id a new account gets. An admin
+      # may re-bind the existing account for the email, which keeps its id.
+      _signup_jmap(newid => $aid, args => $data, bind => 1, admin => 1, ok => sub {
+        my ($final_aid, $email) = @_;
         warn "MGMT: Create Account '$aid' -> signup_jmap OK (final accountid=$final_aid)\n";
-        delete $backend{$aid} if $aid ne $final_aid;
         $req->respond([201, 'created',
           { 'Content-Type' => 'application/json' },
           JSON::XS::encode_json({ accountid => $final_aid, type => 'jmap', email => $email })]);
-      }, sub {
+      }, err => sub {
         my $err = shift;
         warn "MGMT: Create Account '$aid' -> signup_jmap FAILED: $err\n";
-        delete $backend{$aid};
         $req->respond([500, 'error',
           { 'Content-Type' => 'application/json' },
           JSON::XS::encode_json({ error => "$err" })]);
@@ -4959,8 +4938,8 @@ sub mgmt_api_accounts {
       my $result = shift;
       warn "MGMT: Create Account '$aid' -> create_account OK\n";
 
-      # Kill existing backend child so it reconnects with new config
-      delete $backend{$aid} if $backend{$aid};
+      # Restart an existing backend child so it reconnects with the new config
+      _drop_backend($aid, 'account settings replaced');
 
       # Step 2: If IMAP config provided, set up via per-account child
       if ($data->{imapHost}) {
@@ -5578,13 +5557,12 @@ my $shutdown = sub {
 my $sig_term = AnyEvent->signal(signal => 'TERM', cb => $shutdown);
 my $sig_int  = AnyEvent->signal(signal => 'INT',  cb => $shutdown);
 
-# Eagerly initialize accounts.sqlite3 before the event loop so all child workers
-# see a properly-schemaed DB from the moment they open it (avoids race conditions
-# when per-account workers are spawned before the __accounts__ worker runs).
-{
-  my $_dbh = DBI->connect("dbi:SQLite:dbname=$datadir/accounts.sqlite3");
-  _migrate_accounts_db($_dbh);
-  $_dbh->disconnect;
-}
+# Start __accounts__ now: it migrates accounts.sqlite3 before it reads its
+# first command, and every write to that file goes through it, so nothing
+# needs the schema before it is there. (An account worker only reads its own
+# row, and finds none on a fresh install, which is right: there are no
+# accounts.) The parent never opens the file itself.
+send_backend_request('__accounts__', 'ping', {}, sub {},
+  sub { warn "accounts worker failed to start: $_[0]\n" });
 
 EV::run();
