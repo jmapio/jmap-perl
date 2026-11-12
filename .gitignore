@@ -3,3 +3,6 @@ jmap-proxy.local.dhparam
 jmap-proxy.local.privatekey
 jmap-proxy.local.publiccert
 .env
+.DS_Store
+cover_db/
+.superpowers/

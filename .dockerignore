@@ -3,7 +3,6 @@
 *.sqlite3
 *.lock
 /data
-/doc
 /t
 *.tar.gz
 *.dhparam
