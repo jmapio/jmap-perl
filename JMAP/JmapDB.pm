@@ -66,8 +66,10 @@ the upstream server.
 =cut
 
 sub new {
-    my ($class, $accountid) = @_;
-    my $dbpath = "$datadir/$accountid.sqlite3";
+    my ($class, $accountid, %opt) = @_;
+    # memory: a signup probe, which only fetches the upstream session and
+    # must leave no account file behind
+    my $dbpath = $opt{memory} ? ':memory:' : "$datadir/$accountid.sqlite3";
     my $dbh = DBI->connect("dbi:SQLite:dbname=$dbpath", '', '',
         { RaiseError => 1, AutoCommit => 1 });
     $dbh->do(<<'SQL');
@@ -94,29 +96,42 @@ sub setuser {
     my ($Self, $args) = @_;
     require JMAP::CredentialStore;
     my $dbh = $Self->{dbh};
-    $dbh->do(
-        "INSERT OR REPLACE INTO jserver
-         (username, password, authType, sessionUrl, apiUrl, uploadUrl, downloadUrl,
-          backendAccountId, capabilities, mtime)
-         VALUES (?,?,?,?,?,?,?,?,?,?)",
-        {},
-        $args->{username}         // '',
-        JMAP::CredentialStore->encrypt($args->{password} // '', JMAP::CredentialStore::context($Self->accountid(), q(jserver.password))),
-        $args->{authType}         || 'basic',
-        $args->{sessionUrl}       // '',
-        $args->{apiUrl}           // '',
-        $args->{uploadUrl}        // '',
-        $args->{downloadUrl}      // '',
-        $args->{backendAccountId} // '',
-        encode_json($args->{capabilities} || {}),
-        time(),
-    );
+    # One row: the account's current upstream login. The key is the username,
+    # so a REPLACE under a new one (a re-bound account, changed settings) kept
+    # the old row too, and readers went on using it. Readers take the newest,
+    # for databases that already have two.
+    # encrypt first: nothing that can die inside the transaction but the SQL
+    my $secret = JMAP::CredentialStore->encrypt($args->{password} // '',
+        JMAP::CredentialStore::context($Self->accountid(), q(jserver.password)));
+    $dbh->begin_work;
+    eval {
+        $dbh->do("DELETE FROM jserver");
+        $dbh->do(
+            "INSERT INTO jserver
+             (username, password, authType, sessionUrl, apiUrl, uploadUrl, downloadUrl,
+              backendAccountId, capabilities, mtime)
+             VALUES (?,?,?,?,?,?,?,?,?,?)",
+            {},
+            $args->{username}         // '',
+            $secret,
+            $args->{authType}         || 'basic',
+            $args->{sessionUrl}       // '',
+            $args->{apiUrl}           // '',
+            $args->{uploadUrl}        // '',
+            $args->{downloadUrl}      // '',
+            $args->{backendAccountId} // '',
+            encode_json($args->{capabilities} || {}),
+            time(),
+        );
+        $dbh->commit;
+        1;
+    } or do { my $err = $@; eval { $dbh->rollback }; die $err };
 }
 
 # Return the jserver row as a hashref (password included — caller must strip for display).
 sub access_data {
     my ($Self) = @_;
-    my $row = $Self->{dbh}->selectrow_hashref("SELECT * FROM jserver LIMIT 1") || {};
+    my $row = $Self->{dbh}->selectrow_hashref("SELECT * FROM jserver ORDER BY mtime DESC, rowid DESC LIMIT 1") || {};
     $row->{capabilities} = eval { decode_json($row->{capabilities} || '{}') } || {};
     $row->{type} = 'jmap';
     return $row;
