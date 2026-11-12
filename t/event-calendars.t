@@ -143,7 +143,7 @@ is_deeply([sort map { $_->[1] } grep { $_->[0] eq 'new_event' } @FakeCalDAV::cal
   $dbh->disconnect;
   JMAP::ImapDB->new('old14');
   $dbh = DBI->connect("dbi:SQLite:dbname=$file", undef, undef, { RaiseError => 1 });
-  is(($dbh->selectrow_array('PRAGMA user_version'))[0], 17, 'v14 migrates to the current version');
+  is(($dbh->selectrow_array('PRAGMA user_version'))[0], 18, 'v14 migrates to the current version');
   is(($dbh->selectrow_array("SELECT jcalendarids FROM jevents WHERE eventuid = 'old'"))[0], '7',
      'an event keeps its calendar');
 }

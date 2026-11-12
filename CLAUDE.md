@@ -196,6 +196,17 @@ but a different `backendAccountId` (validated against the upstream session's `ac
   removed loses its copy, and a destroy deletes them all. ContactCards work the same way with
   `icards` copies and `addressBookIds` (`jcontacts.jaddressbookids`, schema v16). Account ids must be
   valid Ids too: `POST /api/accounts` refuses any other.
+- **CalDAV/CardDAV hrefs are unescaped**, in `ievents`/`icalendars`/`icards`/`iaddressbooks`
+  (schema v18 unescaped the CardDAV ones). That is the Net::\*DAVTalk rule (Net::DAVTalk 0.26,
+  Net::CalDAVTalk 0.19, Net::CardDAVTalk 0.14): every href they return is unescaped and every
+  path they take is escaped by them, in URLs and request bodies alike. Servers spell one href
+  differently (Google's CardDAV writes `@` in a PROPFIND, its CalDAV `%40`), so compare hrefs
+  only in that form; one compared raw is a card "removed and created" on every sync.
+- **A DAV collection with no usable sync token** is synced from nothing by
+  `ImapDB::_dav_links_from_nothing`: a token-less sync-collection where the server allows it,
+  else a PROPFIND listing plus the collection's `DAV:sync-token`. Google refuses the
+  token-less REPORT (400) and pages every sync (a 507 on the collection, RFC 6578 S3.6, which
+  `SyncCollection` follows). Neither shows on Cyrus, so `t/dav-collection-sync.t` fakes them.
 
 ## Local development & testing
 

@@ -45,8 +45,9 @@ RUN cpanm --notest \
     IO::LockedFile                  \
     Mail::IMAPTalk                  \
     Moose                           \
-    Net::CalDAVTalk                 \
-    Net::CardDAVTalk                \
+    Net::DAVTalk~0.26               \
+    Net::CalDAVTalk~0.19            \
+    Net::CardDAVTalk~0.14           \
     Net::DNS                        \
     Template                        \
     MIME::Base64::URLSafe           \

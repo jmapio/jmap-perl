@@ -15,6 +15,7 @@ use Data::UUID::LibUUID;
 use IO::LockedFile;
 use JSON::XS qw(decode_json encode_json);
 use Digest::SHA qw(sha1_hex);
+use URI::Escape ();
 use JMAP::EventId;
 use JMAP::EventSpan;
 use Email::MIME;
@@ -1380,7 +1381,7 @@ sub get_submission_changes {
     {}, $since_modseq);
 }
 
-my $USER_SCHEMA_VERSION = 17;
+my $USER_SCHEMA_VERSION = 18;
 
 # The /queryChanges snapshots: one row per (type, params, state), the ids
 # in order.  The same query at the same state has the same result, so a
@@ -2068,6 +2069,47 @@ EOF
     };
     if ($@) { $dbh->rollback; die "user DB migration to v17 failed: $@" }
     $v = 17;
+  }
+
+  if ($v < 18) {
+    # CardDAV hrefs unescaped, as Net::CardDAVTalk 0.14 returns them (and
+    # Net::CalDAVTalk always has): one stored as the server wrote it would
+    # match nothing in the next sync, so every card would look removed and
+    # created again.  A card stored under two spellings of one href ('@'
+    # and %40, which Google mixes) keeps one row.  The sync tokens stay
+    # good: what they report from now on is unescaped too.
+    $dbh->begin_work;
+    eval {
+      my %tables = map { $_ => 1 }
+        @{ $dbh->selectcol_arrayref("SELECT name FROM sqlite_master WHERE type = 'table'") || [] };
+      if ($tables{iaddressbooks}) {
+        my $sth = $dbh->prepare("UPDATE iaddressbooks SET href = ? WHERE iaddressbookid = ?");
+        for my $row (@{ $dbh->selectall_arrayref("SELECT iaddressbookid, href FROM iaddressbooks", { Slice => {} }) }) {
+          next unless defined $row->{href};
+          my $href = URI::Escape::uri_unescape($row->{href});
+          $sth->execute($href, $row->{iaddressbookid}) if $href ne $row->{href};
+        }
+      }
+      if ($tables{icards}) {
+        my $upd = $dbh->prepare("UPDATE icards SET href = ? WHERE icardid = ?");
+        my $del = $dbh->prepare("DELETE FROM icards WHERE icardid = ?");
+        my %seen;
+        for my $row (@{ $dbh->selectall_arrayref(
+            "SELECT icardid, iaddressbookid, href FROM icards ORDER BY icardid", { Slice => {} }) }) {
+          next unless defined $row->{href};
+          my $href = URI::Escape::uri_unescape($row->{href});
+          if ($seen{$row->{iaddressbookid} // ''}{$href}++) {
+            $del->execute($row->{icardid});
+            next;
+          }
+          $upd->execute($href, $row->{icardid}) if $href ne $row->{href};
+        }
+      }
+      $dbh->do('PRAGMA user_version = 18');
+      $dbh->commit;
+    };
+    if ($@) { $dbh->rollback; die "user DB migration to v18 failed: $@" }
+    $v = 18;
   }
   $Self->_ensure_indexes($dbh);
 }

@@ -637,6 +637,20 @@ sub sync_jcalendars {
   }
 }
 
+# Everything in a calendar ($kind 'event') or address book ('card'), for a
+# collection with no sync token or one the server no longer takes: a
+# sync-collection without a token where the server allows it, else a PROPFIND
+# listing and the collection's DAV:sync-token (Google refuses the token-less
+# REPORT with a 400 but syncs from the token it lists). Returns what
+# sync_*_links does; dies if neither gives a listing.
+sub _dav_links_from_nothing {
+  my ($Self, $kind, $href) = @_;
+  my @res = eval { $Self->backend_cmd("sync_${kind}_links", $href) };
+  return @res if ref $res[0] eq 'HASH';
+  my ($links, $token) = $Self->backend_cmd("list_${kind}_links", $href);
+  return ($links, [], [], $token);
+}
+
 sub do_calendars {
   my $Self = shift;
   my $cals = shift;
@@ -661,11 +675,12 @@ sub do_calendars {
     # every other calendar's changes unwritten as well.
     my $ok = eval {
       my $oldtoken = $cal->{syncToken};
-      my ($added, $removed, $errors, $newToken) = eval { $Self->backend_cmd('sync_event_links', $href, $oldtoken) };
+      my ($added, $removed, $errors, $newToken);
+      ($added, $removed, $errors, $newToken) = eval { $Self->backend_cmd('sync_event_links', $href, $oldtoken) }
+        if defined $oldtoken && length $oldtoken;
 
       unless (defined $newToken && length $newToken) {
-        # try fetching from nothing
-        ($added, $removed, $errors, $newToken) = $Self->backend_cmd('sync_event_links', $href);
+        ($added, $removed, $errors, $newToken) = $Self->_dav_links_from_nothing('event', $href);
         # without a listing, every event we hold would count as removed
         die "no event listing\n" unless ref($added) eq 'HASH';
         # calculate removed by comparing exists to fetched list
@@ -1186,10 +1201,11 @@ sub do_addressbooks {
     # the next sync instead of costing the others their changes.
     my $ok = eval {
       my $oldtoken = $book->{syncToken};
-      my ($added, $removed, $errors, $newToken) = eval { $Self->backend_cmd('sync_card_links', $href, $oldtoken) };
-      unless ($newToken) {
-        # fake up a sync by getting everything
-        ($added, $removed, $errors, $newToken) = $Self->backend_cmd('sync_card_links', $href);
+      my ($added, $removed, $errors, $newToken);
+      ($added, $removed, $errors, $newToken) = eval { $Self->backend_cmd('sync_card_links', $href, $oldtoken) }
+        if defined $oldtoken && length $oldtoken;
+      unless (defined $newToken && length $newToken) {
+        ($added, $removed, $errors, $newToken) = $Self->_dav_links_from_nothing('card', $href);
         # without a listing, every card we hold would count as removed
         die "no card listing\n" unless ref($added) eq 'HASH';
         # calculate removed by comparing exists to fetched list

@@ -24,7 +24,9 @@ sub vcard {
 }
 
 # the fake server: collection href => { name, token, items => { href => [etag, data] },
-#   broken (every REPORT dies), nolisting (a listing without a token comes back empty) }
+#   broken (every request dies), nolisting (a listing without a token comes back
+#   empty, by REPORT and by PROPFIND), reportless (a sync-collection REPORT without
+#   a token dies, as Google's does, but PROPFIND lists and has the token) }
 my (%cals, %books, %calls);
 
 sub links {
@@ -35,8 +37,17 @@ sub links {
     die "invalid sync token\n" unless $token eq $c->{token};
     return ({}, [], [], $c->{token});
   }
+  die "400 INVALID_ARGUMENT\n" if $c->{reportless};
   return if $c->{nolisting};
   return ({ map { $_ => $c->{items}{$_}[0] } keys %{$c->{items}} }, [], [], $c->{token});
+}
+# PROPFIND: the collection's links and its DAV:sync-token
+sub propfind {
+  my ($colls, $href) = @_;
+  my $c = $colls->{$href} or die "no collection $href\n";
+  die "PROPFIND failed\n" if $c->{broken};
+  return if $c->{nolisting};
+  return ({ map { $_ => $c->{items}{$_}[0] } keys %{$c->{items}} }, $c->{token});
 }
 sub multi {
   my ($colls, $href, $hrefs) = @_;
@@ -54,10 +65,13 @@ no warnings qw(redefine once);
   my ($Self, $cmd, @args) = @_;
   die "in transaction\n" if $Self->in_transaction();
   $calls{$cmd}++;
+  $calls{"$cmd $args[0]"}++ if @args;
   return listing(\%cals)        if $cmd eq 'get_calendars';
   return listing(\%books)       if $cmd eq 'get_addressbooks';
   return links(\%cals, @args)   if $cmd eq 'sync_event_links';
   return links(\%books, @args)  if $cmd eq 'sync_card_links';
+  return propfind(\%cals, @args)  if $cmd eq 'list_event_links';
+  return propfind(\%books, @args) if $cmd eq 'list_card_links';
   return multi(\%cals, @args)   if $cmd eq 'get_events_multi';
   return multi(\%books, @args)  if $cmd eq 'get_cards_multi';
   die "unexpected $cmd\n";
@@ -172,5 +186,32 @@ is_deeply(cards_in('/ab/x/'), ['x-1'], 'the broken address book keeps its cards'
 is(rows('iaddressbooks')->{'/ab/x/'}{syncToken}, 'x1', 'and its old token');
 is_deeply(cards_in('/ab/z/'), ['z-1', 'z-2'], 'the other address book still gets its changes');
 like($warned, qr{address book sync of /ab/x/ failed}, 'and the failure is logged');
+
+# --- a server that will not start a sync without a token (Google): the
+# collection is listed by PROPFIND, and its listed token is kept, so the next
+# sync is a sync-collection from that token instead of another listing
+$books{'/ab/g/'} = { name => 'G', token => 'g1', reportless => 1,
+                     items => { '/ab/g/1.vcf' => ['eg1', vcard('g-1')], '/ab/g/2.vcf' => ['eg2', vcard('g-2')] } };
+$warned = quietly('address book refusing a token-less sync', 'sync_addressbooks');
+is_deeply(cards_in('/ab/g/'), ['g-1', 'g-2'], 'its cards arrive by listing');
+is(rows('iaddressbooks')->{'/ab/g/'}{syncToken}, 'g1', 'and it keeps the token it lists');
+unlike($warned, qr{/ab/g/}, 'with nothing logged');
+%calls = ();
+quietly('address book synced from its listed token', 'sync_addressbooks');
+is($calls{"list_card_links /ab/g/"} // 0, 0, 'the next sync does not list again');
+is_deeply(cards_in('/ab/g/'), ['g-1', 'g-2'], 'and keeps its cards');
+
+# the same for a calendar, whose stored token the server has also forgotten
+$cals{'/cal/g/'} = { name => 'G', token => 'g1', reportless => 1,
+                     items => { '/cal/g/1.ics' => ['eg1', ical('g-1')] } };
+quietly('calendar refusing a token-less sync', 'sync_calendars');
+is_deeply(events_in('/cal/g/'), ['g-1'], 'its events arrive by listing');
+is(rows('icalendars')->{'/cal/g/'}{syncToken}, 'g1', 'and it keeps the token it lists');
+$cals{'/cal/g/'}{token} = 'g2';   # g1 is no longer valid
+delete $cals{'/cal/g/'}{items}{'/cal/g/1.ics'};
+$cals{'/cal/g/'}{items}{'/cal/g/2.ics'} = ['eg2', ical('g-2')];
+quietly('calendar whose token expired', 'sync_calendars');
+is_deeply(events_in('/cal/g/'), ['g-2'], 'a fresh listing finds what came and what went');
+is(rows('icalendars')->{'/cal/g/'}{syncToken}, 'g2', 'and the new token is kept');
 
 done_testing();

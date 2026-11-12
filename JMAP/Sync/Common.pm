@@ -14,7 +14,9 @@ use Mail::IMAPTalk;
 use Email::Simple;
 use Email::Sender::Simple qw(sendmail);
 use Email::Sender::Transport::SMTPS;
-use Net::CardDAVTalk;
+use Net::CardDAVTalk 0.14;   # hrefs unescaped, as stored since schema v18
+use URI::Escape ();
+use XML::Spice;
 use MIME::Base64 qw(decode_base64);
 use MIME::QuotedPrint qw(decode_qp);
 use Sys::Hostname;
@@ -308,6 +310,72 @@ sub sync_event_links {
   my ($added, $removed, $errors, $newtoken) = $talk->SyncEventLinks($collection, syncToken => $oldtoken);
 
   return ($added, $removed, $errors, $newtoken);
+}
+
+# Everything in a DAV collection by PROPFIND, as href => etag, and the
+# collection's DAV:sync-token: the start of a sync on a server that will not
+# begin a sync-collection without a token. Google answers a token-less
+# sync-collection REPORT 400 (INVALID_ARGUMENT, however the request is put),
+# but lists a token as the collection's DAV:sync-token and syncs from that.
+# The token is read before the listing, so a change made in between comes
+# again in the next sync instead of being lost. Hrefs are unescaped, as
+# every href from Net::CalDAVTalk and Net::CardDAVTalk (0.14) is, so a
+# listing and a sync name a resource the same way however the server
+# spells it (Google's CardDAV writes '@' in a PROPFIND, its CalDAV %40).
+sub _dav_links {
+  my ($Self, $talk, $collection) = @_;
+  my $D = $talk->ns('D');
+
+  # a server without the property still lists, and the next sync lists again
+  my $token = eval {
+    my $r = $talk->Request('PROPFIND', "$collection/",
+      x('D:propfind', $talk->NS(), x('D:prop', x('D:sync-token'))), Depth => 0);
+    my ($found) = grep { defined and length }
+      map { $_->{"{$D}prop"}{"{$D}sync-token"}{content} }
+      map { @{ $_->{"{$D}propstat"} || [] } } @{ $r->{"{$D}response"} || [] };
+    $found;
+  };
+
+  my $r = $talk->Request('PROPFIND', "$collection/",
+    x('D:propfind', $talk->NS(), x('D:prop', x('D:getetag'), x('D:resourcetype'))), Depth => 1);
+
+  my %links;
+  foreach my $resp (@{ $r->{"{$D}response"} || [] }) {
+    my $href = $resp->{"{$D}href"}{content};
+    next unless defined $href and length $href;
+    $href = URI::Escape::uri_unescape($href);
+    my ($etag, $iscollection);
+    # a 404 propstat for one property may come beside the 200 for the other
+    foreach my $ps (@{ $resp->{"{$D}propstat"} || [] }) {
+      my $prop = $ps->{"{$D}prop"};
+      next unless ref $prop eq 'HASH';
+      my $type = $prop->{"{$D}resourcetype"};
+      $iscollection = 1 if ref $type eq 'HASH' and $type->{"{$D}collection"};
+      my $e = ref $prop->{"{$D}getetag"} eq 'HASH' ? $prop->{"{$D}getetag"}{content} : undef;
+      $etag = $e if defined $e and length $e;
+    }
+    # the collection itself (Depth 1 lists it first) and any child collection
+    next if $iscollection;
+    $links{$href} = $etag // '';
+  }
+
+  return (\%links, $token);
+}
+
+sub list_event_links {
+  my ($Self, $collection) = @_;
+  my $talk = $Self->connect_calendars();
+  return unless $talk;
+  $collection =~ s{/$}{};
+  return $Self->_dav_links($talk, $collection);
+}
+
+sub list_card_links {
+  my ($Self, $collection) = @_;
+  my $talk = $Self->connect_contacts();
+  return unless $talk;
+  $collection =~ s{/$}{};
+  return $Self->_dav_links($talk, $collection);
 }
 
 sub new_calendar {

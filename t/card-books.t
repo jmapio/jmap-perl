@@ -121,8 +121,33 @@ is_deeply([sort map { $_->[1] } grep { $_->[0] eq 'new_card' } @FakeCardDAV::cal
   $dbh->disconnect;
   JMAP::ImapDB->new('old15');
   $dbh = DBI->connect("dbi:SQLite:dbname=$file", undef, undef, { RaiseError => 1 });
-  is(($dbh->selectrow_array('PRAGMA user_version'))[0], 17, 'v15 migrates to the current version');
+  is(($dbh->selectrow_array('PRAGMA user_version'))[0], 18, 'v15 migrates to the current version');
   is(($dbh->selectrow_array("SELECT jaddressbookids FROM jcontacts WHERE contactuid = 'old'"))[0], '4', 'a card keeps its address book');
+}
+
+# a v17 database: CardDAV hrefs as the server wrote them (Net::CardDAVTalk
+# before 0.14), one card under two spellings of its href
+{
+  require DBI;
+  my $file = "$ENV{JMAP_DATADIR}/old17.sqlite3";
+  JMAP::ImapDB->new('old17');
+  my $dbh = DBI->connect("dbi:SQLite:dbname=$file", undef, undef, { RaiseError => 1 });
+  $dbh->do("INSERT INTO iaddressbooks (iaddressbookid, href, mtime) VALUES (1, '/card/a%40b.com/Book%20One/', 0)");
+  $dbh->do("INSERT INTO iaddressbooks (iaddressbookid, href, mtime) VALUES (2, '/card/a\@b.com/plain/', 0)");
+  $dbh->do("INSERT INTO icards (icardid, iaddressbookid, href, uid, mtime) VALUES (1, 1, '/card/a%40b.com/Book%20One/x%40y.vcf', 'x', 0)");
+  $dbh->do("INSERT INTO icards (icardid, iaddressbookid, href, uid, mtime) VALUES (2, 1, '/card/a\@b.com/Book One/x\@y.vcf', 'x', 0)");
+  $dbh->do("INSERT INTO icards (icardid, iaddressbookid, href, uid, mtime) VALUES (3, 2, '/card/a\@b.com/plain/x\@y.vcf', 'x', 0)");
+  $dbh->do("INSERT INTO icards (icardid, iaddressbookid, href, uid, mtime) VALUES (4, 1, '/card/a%40b.com/Book%20One/z.vcf', 'z', 0)");
+  $dbh->do('PRAGMA user_version = 17');
+  $dbh->disconnect;
+  JMAP::ImapDB->new('old17');
+  $dbh = DBI->connect("dbi:SQLite:dbname=$file", undef, undef, { RaiseError => 1 });
+  is(($dbh->selectrow_array('PRAGMA user_version'))[0], 18, 'v17 migrates to the current version');
+  is_deeply($dbh->selectcol_arrayref('SELECT href FROM iaddressbooks ORDER BY iaddressbookid'),
+    ['/card/a@b.com/Book One/', '/card/a@b.com/plain/'], 'address book hrefs unescaped');
+  is_deeply($dbh->selectall_arrayref('SELECT icardid, href FROM icards ORDER BY icardid'),
+    [[1, '/card/a@b.com/Book One/x@y.vcf'], [3, '/card/a@b.com/plain/x@y.vcf'], [4, '/card/a@b.com/Book One/z.vcf']],
+    'card hrefs unescaped; the same card under two spellings keeps one row, a copy in another book stays');
 }
 
 done_testing;
