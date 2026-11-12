@@ -232,13 +232,6 @@ sub mk_json {
     elsif ($res->[0] eq 'sendat') {
       schedule_send($accountid, $res->[1]);
     }
-    elsif ($res->[0] eq 'bye') {
-      warn "Backend closing $accountid\n";
-      delete $backend{$accountid};
-      # The child is gone: nothing queued on it will ever be answered.
-      _fail_pending($accountid, 'backend closed');
-      _maybe_finish_shutdown() if $shutting_down;
-    }
     elsif (my $entry = _take_pending($accountid, $res->[2])) {
       if ($res->[0] eq 'error' and JMAP::Workers::survives_error($accountid)) {
         # The accounts worker answers the error and carries on: only this
