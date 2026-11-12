@@ -224,6 +224,23 @@ FASTMAIL_CLIENT_ID=<your-client-id>
 If `FASTMAIL_CLIENT_ID` is not set, the proxy uses a built-in app registration
 that works for testing but may have rate limits.
 
+### Other providers (PACC)
+
+A domain that publishes a PACC configuration
+(`https://ua-auto-config.<domain>/.well-known/user-agent-configuration.json`) with
+`authentication.oauth-public.issuer` gets an OAuth2 + PKCE signup, using the
+issuer's RFC 8414 metadata. The proxy needs a client registration for each such
+domain:
+
+```
+OAUTH_EXAMPLE_COM_CLIENT_ID=...
+OAUTH_EXAMPLE_COM_CLIENT_SECRET=...
+```
+
+To form the variable name, uppercase the domain and replace each non-alphanumeric
+character with `_`. Register `$BASEURL/cb/oauth` as the redirect URI. Without
+credentials, the user gets the password form instead.
+
 ---
 
 ## Credential Encryption
