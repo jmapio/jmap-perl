@@ -1724,6 +1724,27 @@ sub _drop_backend {
   _fail_pending($name, $reason // 'worker restarted');
 }
 
+# An account whose backend settings changed (a re-bind, edited settings):
+# both its workers hold connections made with the old ones.  The jmap/sync
+# worker is dropped and finishes the command it is on (a client's write is
+# not cut short).  The backfill worker is stopped now: one backfill command
+# can run for minutes, fetching through the old login -- for a re-bind to
+# another mailbox, the old mailbox's mail -- into this account.  A backfill
+# is resumable (a batch it is cut off in is rolled back), so the caller
+# starts it again once the new settings are stored, when this answers true.
+sub _restart_account {
+  my ($aid) = @_;
+  my $was_backfilling = $backfilling{$aid} ? 1 : 0;
+  _drop_backend($aid, 'account settings replaced');
+  if (my $b = $backend{"$aid:backfill"}) {
+    kill 'TERM', $b->[2] if $b->[2];
+    _drop_backend("$aid:backfill", 'account settings replaced');
+  }
+  # the failed backfill request has ended its prod_backfill loop
+  delete $backfilling{$aid};
+  return $was_backfilling;
+}
+
 # The second half of every signup.  A signup's own worker only probes the
 # credentials; __accounts__ then decides the account (JMAP::AccountClaim: a
 # new one under $o{claim}{accountid}, or the existing account for the email
@@ -1739,10 +1760,12 @@ sub _claim_and_setup {
   send_backend_request('__accounts__', 'claim_account', $o{claim}, sub {
     my $c   = shift;
     my $aid = $c->{accountid};
-    # a re-bound account's worker holds connections made with the old settings
-    _drop_backend($aid, 'account settings replaced') if $c->{existed};
+    # a re-bound account's workers hold connections made with the old settings
+    my $backfill = $c->{existed} ? _restart_account($aid) : 0;
     send_backend_request($aid, 'setup', $o{setup}, sub {
       my $r  = shift;
+      # (a signup's own ok prods it too; prod_backfill runs one loop at a time)
+      prod_backfill($aid) if $backfill;
       my $fp = ref $r eq 'HASH' ? $r->{cred_fingerprint} : undef;
       return $o{ok}->($aid, $c) unless $fp;
       send_backend_request('__accounts__', 'set_cred_fingerprint',
@@ -4104,7 +4127,8 @@ sub _do_accounts_authed {
         # the 'delete' RPC here -- that unlinks the account's sqlite3
         # database and data directory (see JMAP::DB::delete), including the
         # iserver row just written.
-        _drop_backend($aid, 'account settings replaced');
+        # the settings are stored: a backfill it stops starts again under them
+        prod_backfill($aid) if _restart_account($aid);
         my $redirect = sub { $req->respond([301, 'redirected', { Location => "$BASEURL/accounts" }, "Redirected"]) };
         # a passthrough login's new fingerprint, for __accounts__ to keep
         my $fp = ref $r eq 'HASH' ? $r->{cred_fingerprint} : undef;
@@ -4938,14 +4962,15 @@ sub mgmt_api_accounts {
       my $result = shift;
       warn "MGMT: Create Account '$aid' -> create_account OK\n";
 
-      # Restart an existing backend child so it reconnects with the new config
-      _drop_backend($aid, 'account settings replaced');
+      # Restart an existing account's workers so they reconnect with the new config
+      my $backfill = _restart_account($aid);
 
       # Step 2: If IMAP config provided, set up via per-account child
       if ($data->{imapHost}) {
         warn "MGMT: Create Account '$aid' -> starting setup (imapHost=$data->{imapHost})\n";
         send_backend_request($aid, 'setup', $data, sub {
           warn "MGMT: Create Account '$aid' -> setup OK\n";
+          prod_backfill($aid) if $backfill;
           $req->respond([201, 'created',
             { 'Content-Type' => 'application/json' },
             JSON::XS::encode_json({ accountid => $aid, type => $result->{type} })]);

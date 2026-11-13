@@ -45,7 +45,10 @@ Hard rules that are easy to violate:
   then `claim_account` (`JMAP::AccountClaim`: new, or an existing account the caller proved
   it owns), then `setup` **in the claimed account's own worker** (`_claim_and_setup`). Setting
   up in the probing worker wrote a re-bound account's credentials to an orphan file
-  (`t/account-rebind.t`).
+  (`t/account-rebind.t`). **A settings change restarts both of the account's workers**
+  (`_restart_account`): the backfill worker is stopped at once and its loop restarted under
+  the new login. Dropping only the main worker left the backfill fetching through the old
+  login, fighting the new one over INBOX (`t/account-rebind-backfill.t`).
 - **Never call `get_user()` outside a transaction** — Perl autovivification of
   `$Self->{t}{user}` leaves a phantom `$Self->{t}={}` and corrupts later transaction state.
   Cache values you need inside the transaction for use in closures.
