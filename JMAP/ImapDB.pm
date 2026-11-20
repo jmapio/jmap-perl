@@ -5082,8 +5082,28 @@ sub _event_calendarids_ok {
 # The recurrenceOverrides problems: an excluded one "MUST be a JSON object
 # with a single member ... excluded ... true" (jscalendarbis S3.3.4 /
 # RFC 8984 S4.3.5), and utcStart/utcEnd "cannot be set inside
-# recurrenceOverrides" (S5.9). Pointers the JSCalendar rules say to ignore
-# (uid, @type, ...) are left alone.
+# recurrenceOverrides" (S5.9).
+#
+# And the pointers a patch may not have (jscalendarbis-22 S3.3.4): one that
+# exactly matches %OVERRIDE_FORBIDDEN (participants/*/calendarAddress for any
+# participant), or whose first token is recurrenceOverrides or
+# recurrenceRule.  "A PatchObject violating these restrictions is invalid";
+# RFC 8984 had them ignored, which is what this did until JMAP Calendars
+# moved to jscalendarbis.
+my %OVERRIDE_FORBIDDEN = map { $_ => 1 } qw(@type method organizerCalendarAddress
+  privacy prodId recurrenceId recurrenceIdTimeZone sentBy uid);
+my %OVERRIDE_FORBIDDEN_FIRST = map { $_ => 1 } qw(recurrenceOverrides recurrenceRule);
+
+sub _override_pointer_forbidden {
+  my ($pointer) = @_;
+  # RFC 6901 reference tokens, unescaped (~1 is "/", ~0 is "~")
+  my @tok = map { s/~1/\//gr =~ s/~0/~/gr } split m{/}, $pointer, -1;
+  return 1 if $OVERRIDE_FORBIDDEN_FIRST{$tok[0] // ''};
+  return 1 if @tok == 1 && $OVERRIDE_FORBIDDEN{$tok[0]};
+  return 1 if @tok == 3 && $tok[0] eq 'participants' && $tok[2] eq 'calendarAddress';
+  return 0;
+}
+
 sub _event_override_bad {
   my ($ov) = @_;
   return () unless ref $ov eq 'HASH';
@@ -5098,6 +5118,8 @@ sub _event_override_bad {
     }
     push @bad, "recurrenceOverrides/$rid"
       if grep { exists $patch->{$_} } qw(utcStart utcEnd);
+    push @bad, "recurrenceOverrides/$rid"
+      if grep { _override_pointer_forbidden($_) } keys %$patch;
   }
   my %u; return grep { !$u{$_}++ } @bad;
 }
