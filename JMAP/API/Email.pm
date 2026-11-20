@@ -784,7 +784,8 @@ sub api_Email_get {
     foreach my $item (@list) {
       my $data = $content->{$item->{id}};
       if (_prop_wanted($args, 'preview')) {
-        $item->{preview} = $data->{preview};
+        # RFC 8621 S4.1.4: a String, empty for a message with no text
+        $item->{preview} = $data->{preview} // '';
       }
       # replyTo and sender come from parsed content, not DB envelope
       for my $email (qw(replyTo sender)) {
@@ -1433,7 +1434,7 @@ sub api_Email_parse {
       $item{hasAttachment} = $data->{hasAttachment} ? $JSON::true : $JSON::false;
     }
     if (_prop_wanted($args, 'preview')) {
-      $item{preview} = $data->{preview};
+      $item{preview} = $data->{preview} // '';
     }
     for my $addr (qw(from to cc bcc replyTo sender)) {
       if (_prop_wanted($args, $addr)) {

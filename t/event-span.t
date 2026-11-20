@@ -101,7 +101,7 @@ $again->begin();
 my ($v) = $again->dbh->selectrow_array('PRAGMA user_version');
 my ($unknown) = $again->dbh->selectrow_array('SELECT COUNT(*) FROM jevents WHERE active = 1 AND firststart IS NULL');
 $again->commit();
-is($v, 18, 'migrated to the current version');
+is($v, 19, 'migrated to the current version');
 is($unknown, 0, 'every event has its span');
 
 done_testing;

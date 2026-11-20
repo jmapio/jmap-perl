@@ -1383,7 +1383,7 @@ sub get_submission_changes {
     {}, $since_modseq);
 }
 
-my $USER_SCHEMA_VERSION = 18;
+my $USER_SCHEMA_VERSION = 19;
 
 # The /queryChanges snapshots: one row per (type, params, state), the ids
 # in order.  The same query at the same state has the same result, so a
@@ -1549,6 +1549,7 @@ CREATE TABLE IF NOT EXISTS jrawmessage (
   msgid TEXT PRIMARY KEY,
   hasAttachment INTEGER,
   preview TEXT,
+  summarised INTEGER,
   mtime DATE
 );
 EOF
@@ -2112,6 +2113,23 @@ EOF
     };
     if ($@) { $dbh->rollback; die "user DB migration to v18 failed: $@" }
     $v = 18;
+  }
+  if ($v < 19) {
+    eval {
+      $dbh->begin_work;
+      # When a message's summary (preview, hasAttachment) was worked out:
+      # whether it has been is this, not whether there is a preview -- a
+      # message with no text part has none, and was fetched again for every
+      # listing.  The rows with a preview were summarised.
+      my %rcols = map { $_->[1] => 1 } @{ $dbh->selectall_arrayref("PRAGMA table_info(jrawmessage)") || [] };
+      $dbh->do("ALTER TABLE jrawmessage ADD COLUMN summarised INTEGER") if %rcols && !$rcols{summarised};
+      $dbh->do("UPDATE jrawmessage SET summarised = CAST(strftime('%s', 'now') AS INTEGER)"
+               . " WHERE preview IS NOT NULL AND summarised IS NULL") if %rcols;
+      $dbh->do('PRAGMA user_version = 19');
+      $dbh->commit;
+    };
+    if ($@) { $dbh->rollback; die "user DB migration to v19 failed: $@" }
+    $v = 19;
   }
   $Self->_ensure_indexes($dbh);
 }

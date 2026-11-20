@@ -3929,6 +3929,7 @@ sub import_message {
     msgid         => $msgdata->{msgid},
     hasAttachment => $message->{hasAttachment},
     preview       => $message->{preview},
+    summarised    => time(),
   });
   $Self->commit();
 
@@ -4343,7 +4344,7 @@ sub message_summaries {
   $Self->begin();
   my $dbh = $Self->dbh;
   while (my @chunk = splice @ids, 0, 500) {
-    my $rows = $dbh->selectall_arrayref('SELECT msgid, preview, hasAttachment FROM jrawmessage WHERE preview IS NOT NULL AND msgid IN ('
+    my $rows = $dbh->selectall_arrayref('SELECT msgid, preview, hasAttachment FROM jrawmessage WHERE summarised IS NOT NULL AND msgid IN ('
       . join(',', ('?') x @chunk) . ')', {Slice => {}}, @chunk);
     $out{$_->{msgid}} = $_ for @$rows;
   }
@@ -4354,11 +4355,13 @@ sub message_summaries {
 # Keep the summaries of parsed messages ({ msgid => parsed message }).
 sub store_message_summaries {
   my ($Self, $parsed) = @_;
-  my @ids = grep { $parsed->{$_} && defined $parsed->{$_}{preview} } keys %$parsed;
+  # Every one, an empty preview too (a message with no text part):
+  # `summarised` says it was worked out, so none is fetched again for it.
+  my @ids = grep { $parsed->{$_} } keys %$parsed;
   return unless @ids;
   $Self->begin();
   $Self->dinsert('jrawmessage', { msgid => $_, hasAttachment => $parsed->{$_}{hasAttachment},
-                                  preview => $parsed->{$_}{preview} }) for sort @ids;
+                                  preview => $parsed->{$_}{preview}, summarised => time() }) for sort @ids;
   $Self->commit();
 }
 
@@ -4511,6 +4514,7 @@ sub fill_messages {
       msgid        => $msgid,
       hasAttachment => $message->{hasAttachment},
       preview      => $message->{preview},
+      summarised   => time(),
     });
   }
   $Self->commit();
