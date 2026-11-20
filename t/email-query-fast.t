@@ -85,6 +85,11 @@ my @shapes = (
   { sort => [{ property => 'hasKeyword', keyword => '$seen' }, { property => 'receivedAt' }] },
   { sort => [$pinned, { property => 'hasKeyword', keyword => '$flagged', isAscending => JSON::false }] },
   { filter => { notKeyword => '$nosuch' }, sort => [{ property => 'hasKeyword', keyword => '$nosuch' }] },
+  # what arrived since (bulwark's getRecentEmailIds), and a window; the
+  # fixture's dates are 1700000000 .. +49, so these cut through ties
+  { filter => { inMailbox => 'mb2', after => '2023-11-14T22:13:40Z' }, sort => [{ property => 'receivedAt', isAscending => JSON::false }] },
+  { filter => { after => '2023-11-14T22:13:30Z', before => '2023-11-14T22:13:45Z' } },
+  { filter => { operator => 'AND', conditions => [{ before => '2023-11-14T22:13:25Z' }, { notKeyword => '$seen' }] } },
 );
 for my $shape (@shapes) {
   for my $c (0, 1) {
@@ -102,6 +107,7 @@ for my $shape (@shapes) {
 for my $other ({ filter => { operator => 'OR', conditions => [{ inMailbox => 'mb1' }] } },
                { filter => { from => 'x' } },
                { filter => { hasKeyword => 'a"b' } },
+               { filter => { after => 'not a date' } },
                { sort => [{ property => 'subject' }] }) {
   ok(!fast_path($other), 'not the SQL path: ' . JSON->new->canonical->encode($other));
 }

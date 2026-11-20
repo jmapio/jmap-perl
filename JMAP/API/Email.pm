@@ -394,9 +394,10 @@ sub api_SearchSnippet_get {
 # answers, in order.  Called inside the transaction; commits it.
 #
 # The shapes nearly every client sends are answered by SQLite: a filter of
-# inMailbox, inMailboxOtherThan, hasKeyword and notKeyword (one condition, or
-# an AND of them), sorted by any run of receivedAt and hasKeyword -- a mailbox
-# listing, pinned messages first, an unread count leaving out Trash and Spam.
+# inMailbox, inMailboxOtherThan, hasKeyword, notKeyword, before and after (one
+# condition, or an AND of them), sorted by any run of receivedAt and
+# hasKeyword -- a mailbox listing, pinned messages first, an unread count
+# leaving out Trash and Spam, what arrived since a time.
 # Anything else loads every message in the account and filters and sorts it
 # in Perl, which on a large account takes seconds.  Both give the same order:
 # _post_sort's, whose final tie-break is msgid ascending.
@@ -425,7 +426,7 @@ sub _email_query_rows {
 # A keyword is looked up in the JSON object jmessages.keywords holds, by
 # exact name as _kw does.  A JMAP keyword cannot contain '"' or '\\' (RFC 8621
 # S4.1.1), so it goes into the JSON path quoted; one that does is refused.
-my %FAST_CONDITION = map { $_ => 1 } qw(inMailbox inMailboxOtherThan hasKeyword notKeyword);
+my %FAST_CONDITION = map { $_ => 1 } qw(inMailbox inMailboxOtherThan hasKeyword notKeyword before after);
 
 sub _email_query_fast {
   my ($Self, $args) = @_;
@@ -470,6 +471,16 @@ sub _email_query_fast {
       push @where, 'EXISTS (SELECT 1 FROM jmessagemap mm WHERE mm.msgid = m.msgid AND mm.active = 1'
         . ' AND mm.jmailboxid IS NOT NULL AND mm.jmailboxid NOT IN (' . join(',', ('?') x @$ids) . '))';
       push @bind, map { $Self->idmap($_) } @$ids;
+    }
+    # _match: before is internaldate < it, after is internaldate >= it, and a
+    # missing date compares as 0; a date str2time cannot read is Perl's to judge
+    for my $field (qw(before after)) {
+      next unless $c->{$field};
+      return undef if ref $c->{$field};
+      my $time = str2time($c->{$field}) // return undef;
+      # CAST: bound as text it would compare as text, above every number
+      push @where, 'COALESCE(m.internaldate, 0) ' . ($field eq 'before' ? '<' : '>=') . ' CAST(? AS REAL)';
+      push @bind, $time;
     }
     for my $field (qw(hasKeyword notKeyword)) {
       next unless $c->{$field};
