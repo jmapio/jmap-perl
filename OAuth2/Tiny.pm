@@ -11,6 +11,26 @@ use JSON::XS;
 use MIME::Base64 qw(encode_base64);
 use Digest::SHA qw(sha256);
 
+# Why a token request failed. The status alone ("400 Bad Request") does not
+# say: the reason is in the body (RFC 6749 S5.2), and the one that matters
+# most -- invalid_grant, a refresh token the provider has expired or revoked
+# (Google does after 7 days for an app still in "Testing") -- means the user
+# has to sign in again, which nothing else in the message would tell anyone.
+sub _token_failure {
+    my ($res) = @_;
+    my $why = "$res->{status} $res->{reason}";
+    my $body = eval { decode_json($res->{content} // '') };
+    if (ref $body eq 'HASH' && defined $body->{error} && !ref $body->{error}) {
+        $why .= " ($body->{error}"
+            . (defined $body->{error_description} && !ref $body->{error_description}
+                 ? ": $body->{error_description}" : '')
+            . ')';
+        $why .= ' -- sign in again to authorise this account'
+            if $body->{error} eq 'invalid_grant';
+    }
+    return $why;
+}
+
 sub new {
     my ($class, %args) = @_;
 
@@ -97,7 +117,7 @@ sub finish {
     my $res = $self->{ua}->post_form($self->{token_url}, $form);
 
     unless ($res->{success}) {
-        croak "couldn't get refresh token from $self->{token_url}: $res->{status} $res->{reason}";
+        croak "couldn't get refresh token from $self->{token_url}: " . _token_failure($res);
     }
 
     my $data = decode_json($res->{content});
@@ -132,7 +152,7 @@ sub refresh {
     my $res = $self->{ua}->post_form($self->{token_url}, $form);
 
     unless ($res->{success}) {
-        croak "couldn't get access token from $self->{token_url}: $res->{status} $res->{reason}";
+        croak "couldn't get access token from $self->{token_url}: " . _token_failure($res);
     }
 
     my $data = decode_json($res->{content});
