@@ -54,4 +54,20 @@ is(JMAP::CallSummary::result(['error', { type => 'requestTooLarge' }]), 'error=r
 is(JMAP::CallSummary::result(['Email/copy', { created => { a => {} } }], ['Email/set', { destroyed => ['a'] }]),
    'Email/copy: created=1; Email/set: destroyed=1', 'two answers, each named');
 
+# looking must not change what it looks at: a number it put into the line
+# went out as a string ("total": "5")
+{
+  # counted at run time, as the methods' answers are: a literal is kept
+  # differently by perl, and passed with the bug
+  my @found = (1 .. 5);
+  my ($one, $fifty, $back, $ten) = map { $_ - 0 } (scalar(@found) - 4, 50, -1, 10);
+  my $answer = ['Email/query', { total => scalar(@found), position => $one, ids => ['a'] }];
+  my $args = { position => $one, limit => $fifty, anchorOffset => $back, maxChanges => $ten };
+  JMAP::CallSummary::result($answer);
+  JMAP::CallSummary::args($args);
+  my $json = JSON::XS->new->canonical;
+  is($json->encode($answer->[1]), '{"ids":["a"],"position":1,"total":5}', 'the answer still encodes its numbers as numbers');
+  is($json->encode($args), '{"anchorOffset":-1,"limit":50,"maxChanges":10,"position":1}', 'and so do the arguments');
+}
+
 done_testing;

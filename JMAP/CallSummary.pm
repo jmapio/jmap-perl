@@ -12,6 +12,14 @@ use JSON::XS ();
 # dates, sizes, mailbox and calendar ids, keywords, flags, paging.  Anything
 # else (search text, addresses, subjects, uids, names) is shown as its length.
 # Pure: no I/O, no DB; t/call-summary.t.
+#
+# It must not change what it looks at: interpolating a number into a string
+# makes Perl keep it as a string too, and JSON::XS then sends it as one --
+# "total": "5" for 5 (RFC 8620 S5.5 says UnsignedInt).  So every value is
+# copied before it is turned into text (_str).
+
+# A copy of $v as text, leaving $v as it was.
+sub _str { my $copy = $_[0]; return "$copy" }
 
 # FilterCondition properties whose values are shown
 my %SHOW = map { $_ => 1 } qw(
@@ -63,13 +71,13 @@ sub args {
   push @out, 'filter=' . filter($args->{filter}) if exists $args->{filter};
   push @out, 'sort=' . sort_spec($args->{sort}) if defined $args->{sort};
   for my $k (qw(position anchorOffset limit maxChanges)) {
-    push @out, "$k=$args->{$k}" if defined $args->{$k} && !ref $args->{$k};
+    push @out, "$k=" . _str($args->{$k}) if defined $args->{$k} && !ref $args->{$k};
   }
   push @out, 'anchor' if defined $args->{anchor};
   for my $k (qw(calculateTotal collapseThreads expandRecurrences fetchAllBodyValues onSuccessDestroyOriginal)) {
     push @out, $k if $args->{$k};
   }
-  push @out, "timeZone=$args->{timeZone}" if defined $args->{timeZone} && !ref $args->{timeZone};
+  push @out, 'timeZone=' . _str($args->{timeZone}) if defined $args->{timeZone} && !ref $args->{timeZone};
   push @out, 'since' if defined $args->{sinceState} || defined $args->{sinceQueryState};
   for my $k (qw(create update)) {
     push @out, "$k=" . keys %{ $args->{$k} } if ref $args->{$k} eq 'HASH';
@@ -96,7 +104,7 @@ sub result {
       push @bits, "$k=" . (ref $v eq 'HASH' ? scalar keys %$v : ref $v eq 'ARRAY' ? scalar @$v : 0)
         if ref $v;
     }
-    push @bits, "total=$r->{total}" if defined $r->{total} && !ref $r->{total};
+    push @bits, 'total=' . _str($r->{total}) if defined $r->{total} && !ref $r->{total};
     push @bits, 'more' if $r->{hasMoreChanges};
     push @out, @items > 1 ? "$name: @bits" : "@bits";
   }
