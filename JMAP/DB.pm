@@ -445,7 +445,9 @@ sub _thread_contrib {
   my $rows = $Self->dbh->selectall_arrayref($Self->dbh->prepare_cached(
     "SELECT jmessagemap.jmailboxid, jmessages.msgid, jmessages.isUnread, jmessages.isDraft"
     . " FROM jmessages JOIN jmessagemap USING (msgid)"
-    . " WHERE jmessages.thrid = ? AND jmessages.active = 1 AND jmessagemap.active = 1"), {}, $thrid) || [];
+    . " WHERE jmessages.thrid = ? AND jmessages.active = 1 AND jmessagemap.active = 1"
+    # a row with no mailbox counts towards none
+    . " AND jmessagemap.jmailboxid IS NOT NULL"), {}, $thrid) || [];
   my $unread_thread = grep { $_->[2] && !$_->[3] } @$rows;
   my (%c, %seen);
   for my $r (@$rows) {

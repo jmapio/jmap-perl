@@ -99,6 +99,8 @@ sub _load_msgmap {
   $Self->commit();
   my %map;
   foreach my $row (@$data) {
+    # a row with no mailbox puts its message in none (_email_query_fast agrees)
+    next unless defined $row->{jmailboxid};
     $map{$row->{msgid}}{$row->{jmailboxid}} = $row;
   }
   return \%map;
@@ -391,10 +393,12 @@ sub api_SearchSnippet_get {
 # The rows (msgid, thrid, jmodseq at least) an Email/query or queryChanges
 # answers, in order.  Called inside the transaction; commits it.
 #
-# The shapes nearly every client sends -- a mailbox listing (no filter, or
-# just inMailbox) in receivedAt order, or no sort -- are answered by SQLite
-# from the mailbox's rows alone.  Anything else loads every message in the
-# account and filters and sorts it in Perl.  Both give the same order:
+# The shapes nearly every client sends are answered by SQLite: a filter of
+# inMailbox, inMailboxOtherThan, hasKeyword and notKeyword (one condition, or
+# an AND of them), sorted by any run of receivedAt and hasKeyword -- a mailbox
+# listing, pinned messages first, an unread count leaving out Trash and Spam.
+# Anything else loads every message in the account and filters and sorts it
+# in Perl, which on a large account takes seconds.  Both give the same order:
 # _post_sort's, whose final tie-break is msgid ascending.
 sub _email_query_rows {
   my ($Self, $args) = @_;
@@ -417,32 +421,86 @@ sub _email_query_rows {
 }
 
 # The SQL path for _email_query_rows, or undef when the query has another shape.
+#
+# A keyword is looked up in the JSON object jmessages.keywords holds, by
+# exact name as _kw does.  A JMAP keyword cannot contain '"' or '\\' (RFC 8621
+# S4.1.1), so it goes into the JSON path quoted; one that does is refused.
+my %FAST_CONDITION = map { $_ => 1 } qw(inMailbox inMailboxOtherThan hasKeyword notKeyword);
+
 sub _email_query_fast {
   my ($Self, $args) = @_;
   return undef if $ENV{JMAP_NO_QUERY_FASTPATH};   # t/email-query-fast.t compares the two
   my $filter = $args->{filter};
   my $sort = $args->{sort} || [];
-  return undef if defined $filter
-    and !(ref $filter eq 'HASH' && keys %$filter == 1 && defined $filter->{inMailbox} && !ref $filter->{inMailbox});
-  return undef if @$sort > 1;
-  my $order = 'm.msgid';
-  if (@$sort) {
-    return undef unless ref $sort->[0] eq 'HASH' && ($sort->[0]{property} // '') eq 'receivedAt';
-    my $desc = defined $sort->[0]{isAscending} && !$sort->[0]{isAscending};
-    # COALESCE: _post_sort compares a missing date as 0
-    $order = 'COALESCE(m.internaldate, 0)' . ($desc ? ' DESC' : '') . ', m.msgid';
+
+  # the conditions, ANDed: one FilterCondition, or an AND of FilterConditions
+  my @conditions;
+  if (!defined $filter) { }
+  elsif (ref $filter ne 'HASH') { return undef }
+  elsif (exists $filter->{operator}) {
+    return undef unless ($filter->{operator} // '') eq 'AND' && ref $filter->{conditions} eq 'ARRAY';
+    @conditions = @{ $filter->{conditions} };
   }
+  else { @conditions = ($filter) }
+
+  my $kwpath = sub {
+    my $k = shift;
+    return undef if !defined $k || ref $k || $k =~ /["\\]/;
+    return '$."' . $k . '"';
+  };
+  my $kwvalue = "COALESCE(json_extract(COALESCE(NULLIF(m.keywords, ''), '{}'), ?), 0) <> 0";
+
+  my (@where, @bind);
   my $dbh = $Self->{db}->dbh;
-  if (defined $filter) {
-    my $jmailboxid = $Self->idmap($filter->{inMailbox});
-    return $dbh->selectall_arrayref($dbh->prepare_cached(
-      "SELECT m.msgid, m.thrid, m.jmodseq FROM jmessagemap mm JOIN jmessages m ON m.msgid = mm.msgid"
-      . " WHERE mm.jmailboxid = ? AND mm.active = 1 AND m.active = 1 ORDER BY $order"),
-      {Slice => {}}, $jmailboxid);
+  for my $c (@conditions) {
+    return undef unless ref $c eq 'HASH' && !exists $c->{operator};
+    for my $field (keys %$c) {
+      return undef unless $FAST_CONDITION{$field};
+    }
+    # the Perl path tests each one for truth, and skips a false one
+    if ($c->{inMailbox}) {
+      return undef if ref $c->{inMailbox};
+      push @where, 'EXISTS (SELECT 1 FROM jmessagemap mm WHERE mm.msgid = m.msgid AND mm.jmailboxid = ? AND mm.active = 1)';
+      push @bind, $Self->idmap($c->{inMailbox});
+    }
+    if ($c->{inMailboxOtherThan}) {
+      my $ids = $c->{inMailboxOtherThan};
+      $ids = [$ids] unless ref $ids eq 'ARRAY';
+      return undef if grep { !defined || ref } @$ids;
+      push @where, 'EXISTS (SELECT 1 FROM jmessagemap mm WHERE mm.msgid = m.msgid AND mm.active = 1'
+        . ' AND mm.jmailboxid IS NOT NULL AND mm.jmailboxid NOT IN (' . join(',', ('?') x @$ids) . '))';
+      push @bind, map { $Self->idmap($_) } @$ids;
+    }
+    for my $field (qw(hasKeyword notKeyword)) {
+      next unless $c->{$field};
+      my $path = $kwpath->($c->{$field}) // return undef;
+      push @where, $field eq 'hasKeyword' ? $kwvalue : "NOT ($kwvalue)";
+      push @bind, $path;
+    }
   }
-  return $dbh->selectall_arrayref($dbh->prepare_cached(
-    "SELECT m.msgid, m.thrid, m.jmodseq FROM jmessages m WHERE m.active = 1 ORDER BY $order"),
-    {Slice => {}});
+
+  # _post_sort: each comparator ascending unless isAscending is false; a
+  # missing date compares as 0; ties last broken by msgid ascending
+  my (@order, @orderbind);
+  for my $s (@$sort) {
+    return undef unless ref $s eq 'HASH';
+    my $desc = defined $s->{isAscending} && !$s->{isAscending} ? ' DESC' : '';
+    my $property = $s->{property} // '';
+    if ($property eq 'receivedAt') {
+      push @order, "COALESCE(m.internaldate, 0)$desc";
+    }
+    elsif ($property eq 'hasKeyword') {
+      my $path = $kwpath->($s->{keyword} // '') // return undef;
+      push @order, "($kwvalue)$desc";
+      push @orderbind, $path;
+    }
+    else { return undef }
+  }
+  push @order, 'm.msgid';
+
+  my $sql = 'SELECT m.msgid, m.thrid, m.jmodseq FROM jmessages m WHERE m.active = 1'
+    . join('', map { " AND $_" } @where) . ' ORDER BY ' . join(', ', @order);
+  return $dbh->selectall_arrayref($dbh->prepare_cached($sql), {Slice => {}}, @bind, @orderbind);
 }
 
 sub api_Email_query {
