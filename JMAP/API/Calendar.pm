@@ -780,8 +780,19 @@ sub api_CalendarEvent_get {
 
   my $newState = "$user->{jstateCalendarEvent}";
 
+  # A standard /get (S5.7): null ids, or none, is every event (RFC 8620 S5.1)
   return $Self->_transError(['error', {type => 'invalidArguments', arguments => ['ids']}])
-    unless $args->{ids};
+    if defined $args->{ids} && ref $args->{ids} ne 'ARRAY';
+  my @ids;
+  if (defined $args->{ids}) {
+    @ids = map { $Self->idmap($_) } @{$args->{ids}};
+  }
+  else {
+    my $uids = $Self->{db}->dbh->selectcol_arrayref('SELECT eventuid FROM jevents WHERE active = 1');
+    return $Self->_transError(['error', {type => 'requestTooLarge'}])
+      if @$uids > $JMAP::Capabilities::MAX_OBJECTS_IN_GET;
+    @ids = map { JMAP::EventId::master_id($_) } @$uids;
+  }
   for my $arg (qw(recurrenceOverridesBefore recurrenceOverridesAfter)) {
     next unless defined $args->{$arg};
     return $Self->_transError(['error', {type => 'invalidArguments', arguments => [$arg]}])
@@ -804,7 +815,7 @@ sub api_CalendarEvent_get {
   # the user's participant identities (see ParticipantIdentity/get)
   my $mine = { map { lc("mailto:$_") => 1 } grep { length } $user->{email} // '' };
   my $resolve = $Self->_event_id_resolver();
-  foreach my $id (map { $Self->idmap($_) } @{$args->{ids}}) {
+  foreach my $id (@ids) {
     next unless defined $id;
     next if $seenids{$id}++;
 
