@@ -3220,8 +3220,11 @@ sub _check_account_access {
   if ($auth_aid eq $accountid) { $ok_cb->(); return; }
   get_pool_cached($auth_aid, sub {
     my $pool = shift;
-    grep { $_->{accountid} eq $accountid } @{$pool->{accounts} || []}
-      ? $ok_cb->() : $fail_cb->();
+    # Parenthesised: a bare `grep BLOCK LIST ? a : b` takes the whole ternary
+    # as its LIST, so it ran $ok_cb for any pool that was not empty -- every
+    # login's -- and then grepped its return value (t/account-access.t).
+    my $member = grep { $_->{accountid} eq $accountid } @{$pool->{accounts} || []};
+    $member ? $ok_cb->() : $fail_cb->();
   }, sub { $fail_cb->() });
 }
 
