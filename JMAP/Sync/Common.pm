@@ -11,6 +11,7 @@ use Text::JSContact ();
 use JMAP::Sync::IMAPSocket;
 use JSON ();
 use Mail::IMAPTalk;
+use JMAP::EmailSummary;
 use Email::Simple;
 use Email::Sender::Simple qw(sendmail);
 use Email::Sender::Transport::SMTPS;
@@ -853,6 +854,150 @@ sub imap_fill {
     $ids{$uid} = $data->{$uid}{rfc822};
   }
   $res{data} = \%ids;
+  return \%res;
+}
+
+# preview and hasAttachment of each of $uids without fetching the messages:
+# BODYSTRUCTURE (and the server's RFC 8970 PREVIEW where it has one), then
+# the start of the one text part a preview comes from (JMAP::EmailSummary).
+# {data => {uid => {preview, hasAttachment}}}; a uid left out is one this
+# could not answer, for the caller to fetch whole.
+sub imap_summary {
+  my $Self = shift;
+  my $imapname = shift;
+  my $olduidvalidity = shift || 0;
+  my $uids = shift;
+
+  my $imap = $Self->connect_imap();
+
+  my $r = $imap->examine($imapname);
+  die "EXAMINE FAILED $imapname" unless $r;
+
+  my $uidvalidity = $imap->get_response_code('uidvalidity') + 0;
+
+  my %res = (
+    imapname => $imapname,
+    olduidvalidity => $olduidvalidity,
+    newuidvalidity => $uidvalidity,
+  );
+
+  if ($olduidvalidity != $uidvalidity) {
+    return \%res;
+  }
+
+  # The server's own RFC 8970 PREVIEW only when asked for: Cyrus's (3.13)
+  # differs from Data::JSEmail's in most messages (it prefers the HTML
+  # part, drops the trailing space, and cuts at 256 octets, splitting a
+  # UTF-8 character), so a message's preview would change once it was read
+  # whole.  See t/email-summary-fetch.t.
+  my $usepreview = ($ENV{JMAP_IMAP_USE_PREVIEW} && $imap->capability->{preview}) ? 1 : 0;
+  my $data = $imap->fetch($uids, $usepreview ? '(BODYSTRUCTURE PREVIEW)' : 'BODYSTRUCTURE') || {};
+
+  my %out;
+  my %state;
+  foreach my $uid (keys %$data) {
+    my $bs = $data->{$uid}{bodystructure};
+    next unless ref $bs eq 'HASH';
+    my $hasatt = eval { JMAP::EmailSummary::has_attachment($bs) };
+    next unless defined $hasatt;
+    my $item = { hasAttachment => ($hasatt ? $JSON::true : $JSON::false) };
+    if ($usepreview && defined $data->{$uid}{preview}) {
+      $item->{preview} = JMAP::EmailSummary::normalise_server_preview($data->{$uid}{preview});
+      $out{$uid} = $item;
+      next;
+    }
+    my @cands = JMAP::EmailSummary::preview_candidates($bs);
+    unless (@cands) {
+      $item->{preview} = undef;
+      $out{$uid} = $item;
+      next;
+    }
+    $state{$uid} = { item => $item, cands => \@cands, idx => 0,
+                     window => $JMAP::EmailSummary::FIRST_WINDOW };
+  }
+
+  # A part's preview was empty (or Data::JSEmail died on it, which preview
+  # takes as empty for a subpart): on to the next candidate, if any.
+  my $next_cand = sub {
+    my $uid = shift;
+    my $st = $state{$uid};
+    if (++$st->{idx} >= @{$st->{cands}}) {
+      $st->{item}{preview} = undef;
+      $out{$uid} = $st->{item};
+      delete $state{$uid};
+      return;
+    }
+    @$st{qw(window hdr body)} = ($JMAP::EmailSummary::FIRST_WINDOW, undef, '');
+  };
+  $_->{body} = '' for values %state;
+
+  # Each round fetches, for every message still open, more of the part it
+  # is on (its header too, the first time): one FETCH per distinct section
+  # and octet range.
+  for (my $round = 0; %state && $round < 12; $round++) {
+    my %groups;
+    foreach my $uid (keys %state) {
+      my $st = $state{$uid};
+      my $cand = $st->{cands}[$st->{idx}];
+      my $key = join("\0", $cand->{section}, $cand->{top}, length($st->{body}), $st->{window} // '');
+      push @{$groups{$key}}, $uid;
+    }
+    foreach my $key (sort keys %groups) {
+      my @guids = sort { $a <=> $b } @{$groups{$key}};
+      my $st0 = $state{$guids[0]};
+      my $cand0 = $st0->{cands}[$st0->{idx}];
+      my $window = $st0->{window};
+      my $start = length $st0->{body};
+      my ($hitem, $bitem, $hkey, $bkey) = JMAP::EmailSummary::fetch_items($cand0, $start, $window, $start > 0);
+      my $got = $imap->fetch({ FullBody => 1 }, \@guids, '(' . join(' ', grep { defined } $hitem, $bitem) . ')') || {};
+      foreach my $uid (@guids) {
+        my $st = $state{$uid};
+        my $cand = $st->{cands}[$st->{idx}];
+        my $msg = $got->{$uid};
+        unless ($msg && defined $msg->{$bkey}) {
+          delete $state{$uid};    # gone, or the server would not say: fetch it whole
+          next;
+        }
+        $st->{hdr} //= $cand->{top} ? JMAP::EmailSummary::header_from_hash($msg->{headers}) : ($msg->{$hkey} // '');
+        my $chunk = $msg->{$bkey};
+        $st->{body} .= $chunk;
+        my $complete = !defined($window) || length($chunk) < $window - $start
+                    || length($st->{body}) >= $cand->{size};
+        my ($status, $preview) = JMAP::EmailSummary::part_preview($st->{hdr}, $st->{body}, $complete);
+        if ($status eq 'done') {
+          if ($preview || $cand->{top}) {
+            $st->{item}{preview} = $preview;
+            $out{$uid} = $st->{item};
+            delete $state{$uid};
+          }
+          else {
+            $next_cand->($uid);
+          }
+        }
+        elsif ($status eq 'error') {
+          # Data::JSEmail::preview died on the part: on a subpart it moves
+          # on (preview evals each), on a single-part message parse dies
+          if ($cand->{top}) {
+            delete $state{$uid};
+          }
+          else {
+            $next_cand->($uid);
+          }
+        }
+        elsif ($complete) {
+          delete $state{$uid};    # the whole part and still no answer
+        }
+        else {
+          $st->{window} = $status eq 'whole' ? undef : JMAP::EmailSummary::next_window($window);
+        }
+      }
+    }
+  }
+  undef $next_cand;
+
+  $Self->_unselect($imap);
+
+  $res{data} = \%out;
   return \%res;
 }
 

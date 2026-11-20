@@ -771,7 +771,10 @@ sub api_Email_get {
     my $content;
     if ($need_summary && $Self->{db}->can('message_summaries')) {
       $content = $Self->{db}->message_summaries(map { $_->{id} } @list);
-      my $filled = $Self->{db}->fill_messages(grep { !$content->{$_} } map { $_->{id} } @list);
+      my @missing = grep { !$content->{$_} } map { $_->{id} } @list;
+      my $filled = $Self->{db}->can('fill_summaries')
+        ? $Self->{db}->fill_summaries(@missing)
+        : $Self->{db}->fill_messages(@missing);
       $Self->{db}->store_message_summaries($filled);
       $content = { %$content, %$filled };
     }

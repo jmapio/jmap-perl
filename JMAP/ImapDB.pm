@@ -4362,6 +4362,80 @@ sub store_message_summaries {
   $Self->commit();
 }
 
+# { msgid => { preview, hasAttachment } } for messages with no stored
+# summary, without downloading them: a parsed copy where there is one, else
+# the backend's imap_summary (BODYSTRUCTURE and the start of one text
+# part), else -- for any it cannot answer -- fill_messages, which fetches
+# and parses the whole message.  Nothing partial is written to the parsed
+# cache: a later request for the content still fetches all of it.
+sub fill_summaries {
+  my $Self = shift;
+  my @ids = @_;
+
+  return {} unless @ids;
+
+  $Self->begin();
+
+  my %result;
+  my %where;    # ifolderid => { uid => msgid }, one copy of each message
+  my @need;
+  for my $msgid (@ids) {
+    my $msg = $Self->read_parsed_msg($msgid);
+    if ($msg) {
+      $result{$msgid} = { preview => $msg->{preview}, hasAttachment => $msg->{hasAttachment} };
+    } else {
+      push @need, $msgid;
+    }
+  }
+
+  my %foldermap;
+  if (@need) {
+    my %seen;
+    while (my @chunk = splice @need, 0, 500) {
+      my $rows = $Self->dbh->selectall_arrayref("SELECT ifolderid, uid, msgid FROM imessages WHERE msgid IN ("
+        . join(', ', map { "?" } @chunk) . ") ORDER BY ifolderid, uid", {}, @chunk);
+      foreach my $row (@$rows) {
+        my ($ifolderid, $uid, $msgid) = @$row;
+        next if $seen{$msgid}++;
+        $where{$ifolderid}{$uid} = $msgid;
+      }
+    }
+    foreach my $ifolderid (sort keys %where) {
+      my $data = $Self->dgetone('ifolders', { ifolderid => $ifolderid }, 'imapname,uidvalidity');
+      $foldermap{$ifolderid} = [$data->{imapname}, $data->{uidvalidity}] if $data;
+    }
+  }
+
+  # drop out of transaction to actually fetch the data
+  $Self->commit();
+
+  foreach my $ifolderid (sort keys %where) {
+    my $uhash = $where{$ifolderid};
+    my $data = $foldermap{$ifolderid};
+    next unless $data;
+    my ($imapname, $uidvalidity) = @$data;
+    my $uids = join(',', sort { $a <=> $b } keys %$uhash);
+    my $res = eval { $Self->backend_cmd('imap_summary', $imapname, $uidvalidity, $uids) };
+    if ($@) {
+      warn "imap_summary $imapname: $@";
+      next;
+    }
+    foreach my $uid (keys %{$res->{data} || {}}) {
+      my $msgid = $uhash->{$uid} or next;
+      $result{$msgid} = $res->{data}{$uid};
+    }
+  }
+
+  # whatever that could not answer is fetched whole, as before
+  my @rest = grep { not $result{$_} } @ids;
+  if (@rest) {
+    my $full = $Self->fill_messages(@rest);
+    $result{$_} = $full->{$_} for keys %$full;
+  }
+
+  return \%result;
+}
+
 sub fill_messages {
   my $Self = shift;
   my @ids = @_;

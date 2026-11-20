@@ -81,6 +81,12 @@ Hard rules that are easy to violate:
 - `JMAP/EventSpan.pm` — each event's span (`jevents.firststart`/`lastend`, naive epochs,
   schema v17) and the widened SQL prefilter range queries use; the exact check still runs on
   what passes. Pure; `t/event-span.t` requires the same answers with spans and without.
+- `JMAP/EmailSummary.pm` — `preview`/`hasAttachment` from BODYSTRUCTURE plus the start of one
+  text part (`Common::imap_summary`, via `ImapDB::fill_summaries`), so a message list never
+  downloads whole messages. Data::JSEmail's own `parseStructure` and `preview` decide; the
+  answer must equal a full parse (`t/email-summary-fetch.t`; `CYRUS_IMAP=localhost:8143` adds a
+  real server). The server's RFC 8970 PREVIEW only with `JMAP_IMAP_USE_PREVIEW=1`: Cyrus's
+  differs (prefers HTML, cuts at 256 octets mid-character).
 - `JMAP/FileNode.pm` — pure FileNode logic: ids, blob ids, name rules, globs, rights,
   reconciliation, `/set` ordering, filters and sorts. No I/O, no DB; `t/filenode-*.t`.
 - `JMAP/Sync/WebDAVTalk.pm` — a `Net::DAVTalk` subclass for FileNode: PROPFIND normalised to
