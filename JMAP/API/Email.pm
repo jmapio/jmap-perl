@@ -715,7 +715,7 @@ sub api_Email_get {
 
     if (_prop_wanted($args, 'mailboxIds')) {
       my $ids = $Self->{db}->dgetcol('jmessagemap', { msgid => $msgid, active => 1 }, 'jmailboxid');
-      $item->{mailboxIds} = {map { $_ => $JSON::true } @$ids};
+      $item->{mailboxIds} = {map { $_ => $JSON::true } grep { defined } @$ids};
     }
 
     if (_prop_wanted($args, 'inReplyToEmailId')) {

@@ -375,6 +375,9 @@ sub sync_jmailboxes {
     next if lc $folder->{label} eq "\\allmail";
     my ($role, $byname) = _folder_role($folder);
     next unless $role;
+    # on Gmail the archive is the synthetic one below, not a label called so:
+    # moving mail into the archive takes every label off it
+    next if $role eq 'archive' and $Self->{is_gmail};
     $folderrole{$folder->{ifolderid}} = [$role, $byname];
     if ($byname) { push @{$guessers{$role}}, $folder } else { $byattr{$role}++ }
   }
@@ -524,6 +527,8 @@ sub sync_jmailboxes {
     $Self->dmaybeupdate('ifolders', {jmailboxid => $id}, {ifolderid => $folder->{ifolderid}});
   }
 
+  $seen{ $Self->_gmail_archive(\%roletoid, \%jbyid) } = 1 if $Self->{is_gmail};
+
   foreach my $mailbox (@$jmailboxes) {
     my $id = $mailbox->{jmailboxid};
     next unless $mailbox->{active};
@@ -532,6 +537,41 @@ sub sync_jmailboxes {
   }
 
   $Self->commit();
+}
+
+# Gmail's synthetic Archive: a message with no label is in All Mail alone,
+# which is not shown, so sync_jmap_msgid puts it here; moving a message here
+# takes its labels off (update_messages).  No folder is behind it.  Made when
+# missing, and kept: the loop after this would retire a mailbox no folder
+# claimed.  Returns its id.  Call in a transaction.
+#
+# From 2017 (f06ed8c) until this was put back there was none, and such mail
+# was stored in a mailbox with no id -- Email/get gave it mailboxIds {"": true}.
+# Those rows go, and their messages are synced again, into here.
+sub _gmail_archive {
+  my ($Self, $roletoid, $jbyid) = @_;
+  my $id = $roletoid->{archive};
+  if (!$id) {
+    $id = new_uuid_string();
+    $Self->dmake('jmailboxes', {
+      jmailboxid => $id, role => 'archive', name => 'Archive', parentId => undef,
+      sortOrder => 2, isSubscribed => 1,
+      mayReadItems => 1, mayAddItems => 1, mayRemoveItems => 1, maySetSeen => 1,
+      maySetKeywords => 1, mayCreateChild => 0, mayRename => 0, mayDelete => 0,
+      maySubmit => 1, mayAdmin => 0,
+    }, 'jnoncountsmodseq');
+    $roletoid->{archive} = $id;
+  }
+  elsif (!$jbyid->{$id}{active}) {
+    $Self->dmaybedirty('jmailboxes', {active => 1}, {jmailboxid => $id}, 'jnoncountsmodseq');
+  }
+  my $stranded = $Self->dbh->selectcol_arrayref(
+    'SELECT DISTINCT msgid FROM jmessagemap WHERE jmailboxid IS NULL');
+  if (@$stranded) {
+    $Self->dbh->do('DELETE FROM jmessagemap WHERE jmailboxid IS NULL');
+    $Self->sync_jmap_msgid($_) for @$stranded;
+  }
+  return $id;
 }
 
 # synchronise list from CalDAV server to local folder cache
@@ -4184,7 +4224,9 @@ sub sync_jmap_msgid {
 
   # check for archive folder for gmail
   if ($Self->{is_gmail} and @$imessages and not @list) {
-    @jmailboxids = ($Self->dgetfield('jmailboxes', { role => 'archive' }, 'jmailboxid'));
+    # (no archive yet, until sync_jmailboxes makes it: then none, not undef,
+    # which stored the message in a mailbox with no id)
+    @jmailboxids = grep { defined } ($Self->dgetfield('jmailboxes', { role => 'archive', active => 1 }, 'jmailboxid'));
   }
 
   return $Self->delete_message($msgid) if (not @jmailboxids);
