@@ -3,6 +3,7 @@
 package JMAP::API;
 
 use JMAP::Dispatch;
+use JMAP::CallSummary;
 use JMAP::Collation;
 use JMAP::Capabilities ();
 use Carp;
@@ -646,6 +647,12 @@ sub handle_request {
     }
     $Self->push_results($tag, @items);
     my $elapsed = tv_interval ($t0);
+    if ($ENV{JMAP_LOG_CALLS}) {
+      # the arguments' shape and the answer's size (JMAP::CallSummary)
+      my ($in, $out) = (JMAP::CallSummary::args($args), JMAP::CallSummary::result(@items));
+      $logbit .= " {$in}" if length $in;
+      $logbit .= " => $out" if length $out;
+    }
     warn "JMAP CMD $command$logbit took " . $elapsed . "\n";
   }
 

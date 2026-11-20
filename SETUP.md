@@ -80,6 +80,7 @@ All variables are optional unless marked **required**.
 | `JMAP_TOKEN_IDLE_DAYS` | `90` | A session or bearer token not used for this many days stops working and is deleted when next presented. `0` keeps tokens for ever. |
 | `JMAP_SSE_PER_ACCOUNT` | `20` | EventSource connections one login may hold; a new one beyond this closes its oldest. `0` turns the limit off. |
 | `IGNORE_INVALID_CERT` | *(unset)* | Set to turn off TLS certificate checks for IMAP and every HTTPS request (DAV, upstream JMAP, OAuth, discovery). Only for a test server with a self-signed certificate. |
+| `JMAP_LOG_CALLS` | *(unset)* | Adds to each method's `JMAP CMD ... took` line the shape of its arguments (filter, sort, window, flags; dates, mailbox and calendar ids and keywords shown, search terms and anything else only by length) and the size of its answer (`ids=50 total=36725`, `list=3 notFound=1`, `error=...`). For finding what is slow; safe to leave on. |
 | `JMAP_DEBUG` | *(unset)* | Logs every JMAP request and response body in full: mail content, addresses, calendar and contact data go to the log. For debugging only; never on a server with other people's mail. |
 | `DEBUGDB` | *(unset)* | Logs every SQL statement and its bound values, and the rows read (credential columns masked). Even more than `JMAP_DEBUG`: for debugging only. |
 | `JMAP_SYNC_INTERVAL` | `30` | Seconds between background IMAP/CalDAV/CardDAV sync polls. |
