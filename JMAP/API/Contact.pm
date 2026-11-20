@@ -248,6 +248,9 @@ sub api_Contact_get {
   }
   else {
     $data = $Self->{db}->dgetby('jcontacts', 'contactuid', { active => 1 }, 'contactuid,jaddressbookid,jaddressbookids');
+    # RFC 8620 S5.1: null ids is every record, unless that is more than maxObjectsInGet
+    return $Self->_transError(['error', {type => 'requestTooLarge'}])
+      if keys %$data > $JMAP::Capabilities::MAX_OBJECTS_IN_GET;
     %want = map { $_ => 1 } keys %$data;
   }
 

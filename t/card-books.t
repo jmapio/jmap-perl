@@ -45,6 +45,16 @@ $db->commit();
 my $get = sub { my ($r) = $api->api_ContactCard_get({ accountId => 'cardbooks', ids => ['k1'],
   properties => ['addressBookIds'] }); return $r->[1]{list}[0] };
 is_deeply([sort keys %{ $get->()->{addressBookIds} }], [sort ($ja, $jb)], 'addressBookIds holds both address books');
+
+# RFC 8620 S5.1: null ids is every card, unless there are more than maxObjectsInGet
+{
+  my ($all) = $api->api_ContactCard_get({ accountId => 'cardbooks', ids => undef, properties => ['uid'] });
+  is_deeply([map { $_->{id} } @{ $all->[1]{list} }], ['k1'], 'ids null: every card');
+  local $JMAP::Capabilities::MAX_OBJECTS_IN_GET = 0;
+  my ($big) = $api->api_ContactCard_get({ accountId => 'cardbooks', ids => undef });
+  is_deeply($big, ['error', { type => 'requestTooLarge' }], 'ids null past maxObjectsInGet: requestTooLarge');
+  is($get->()->{id}, 'k1', 'named ids are not limited by it here (the dispatcher checks their count)');
+}
 for my $ab ($ja, $jb) {
   my ($q) = $api->api_ContactCard_query({ accountId => 'cardbooks', filter => { inAddressBook => "$ab" } });
   is_deeply($q->[1]{ids}, ['k1'], "inAddressBook $ab finds it");
