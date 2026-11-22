@@ -99,7 +99,10 @@ sub imap_labels {
     return \%res;
   }
 
-  $imap->store($uids, "x-gm-labels", "(@$labels)");
+  # Pass the labels as a list so IMAPTalk quotes each one; joined into one
+  # string, a label with a space ("Work Projects") went to Gmail as two
+  # labels, which it then created.
+  $imap->store($uids, "x-gm-labels", [@$labels]);
   $Self->_unselect($imap);
 
   $res{updated} = $uids;
