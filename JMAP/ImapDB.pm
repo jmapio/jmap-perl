@@ -3890,6 +3890,10 @@ sub import_message {
   my $appendres = $Self->backend_cmd('imap_append', $imapname, "(@flags)", $date, $rfc822);
   # XXX - compare $appendres->[2] with uidvalidity
   my $uid = $appendres->[3];
+  # X-GM-MSGID of the appended message (Gmail only), see imap_append
+  my $gmmsgid = $appendres->[4];
+  die "APPEND to $imapname gave no X-GM-MSGID; refusing to guess which message it is\n"
+    if $Self->{is_gmail} and !$gmmsgid;
 
   # make sure we're up to date: XXX - imap only
   my $ifolderid;
@@ -3913,7 +3917,11 @@ sub import_message {
   }
 
   $Self->begin();
-  my $msgdata = $Self->dgetone('imessages', { ifolderid => $ifolderid, uid => $uid }, 'msgid,thrid,size');
+  # On Gmail $uid is the APPENDUID in the target folder, not in
+  # All Mail ($ifolderid) - look the message up by its X-GM-MSGID instead.
+  my $msgdata = $Self->{is_gmail}
+    ? $Self->dgetone('imessages', { ifolderid => $ifolderid, msgid => $gmmsgid }, 'msgid,thrid,size')
+    : $Self->dgetone('imessages', { ifolderid => $ifolderid, uid => $uid }, 'msgid,thrid,size');
   $Self->commit();
 
   # XXX - did we fail to sync this back?  Annoying

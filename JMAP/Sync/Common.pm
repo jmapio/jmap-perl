@@ -1317,10 +1317,22 @@ sub imap_append {
   my $response = $imap->get_response_code('appenduid');
   my ($uidvalidity, $uid) = @$response;
 
-  # XXX - fetch the x-gm-msgid or envelope from the server so we know the
-  # the ID that the server gave this message
+  # On Gmail the APPENDUID uid is only valid in $imapname, while the
+  # caller looks the message up in All Mail.  Fetch the X-GM-MSGID the server
+  # gave the appended message so the caller can find it by that instead.
+  my $gmmsgid;
+  if ($uid and $imap->capability->{'x-gm-ext-1'}) {
+    $imap->examine($imapname) or die "EXAMINE FAILED $imapname";
+    my $uv = $imap->get_response_code('uidvalidity');
+    if (defined $uv and $uv == $uidvalidity) {
+      my $data = $imap->fetch($uid, '(uid x-gm-msgid)') || {};
+      my ($row) = grep { ref $_ eq 'HASH' and ($_->{uid} // '') eq "$uid" } values %$data;
+      $gmmsgid = $row->{'x-gm-msgid'} if $row;
+    }
+    $Self->_unselect($imap);
+  }
 
-  return ['append', $imapname, $uidvalidity, $uid];
+  return ['append', $imapname, $uidvalidity, $uid, $gmmsgid];
 }
 
 sub imap_search {
