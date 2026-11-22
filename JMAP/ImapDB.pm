@@ -3398,7 +3398,12 @@ sub labels {
   my $Self = shift;
 
   my $data = $Self->dget('ifolders');
-  return { map { $_->{label} => [$_->{ifolderid}, $_->{jmailboxid}, $_->{imapname}] } @$data };
+  my %labels = map { $_->{label} => [$_->{ifolderid}, $_->{jmailboxid}, $_->{imapname}] } @$data;
+  # Gmail names the drafts folder \Drafts (XLIST/LIST) but a draft's
+  # X-GM-LABELS say \Draft; without this a draft maps to no mailbox at all
+  # and never becomes an Email.
+  $labels{'\\Draft'} //= $labels{'\\Drafts'} if $Self->{is_gmail} and $labels{'\\Drafts'};
+  return \%labels;
 }
 
 # Give a folder's stored messages the ids _msgid_for gives them now (schema
@@ -4033,6 +4038,8 @@ sub update_messages {
                                         # because 'archive' is synthetic on gmail we strip it here
                                         (@mboxes) = grep { $jidmap{$_} ne 'archive' } @mboxes;
                                         my @labels = grep { $_ and lc $_ ne '\\allmail' } map { $jmailmap{$_}{label} } @mboxes;
+                                        # X-GM-LABELS calls the drafts label \Draft, not \Drafts
+                                        @labels = map { $_ eq '\\Drafts' ? '\\Draft' : $_ } @labels;
                                         $Self->backend_cmd('imap_labels', $imapname, $uidvalidity, $uid, \@labels);
                                 }
                                 else {
