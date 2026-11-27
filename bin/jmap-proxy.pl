@@ -44,6 +44,7 @@ use Crypt::PK::RSA;
 use MIME::Base64 qw(decode_base64 encode_base64);
 use MIME::Base64::URLSafe;
 use POSIX qw(:sys_wait_h strftime);
+use Scalar::Util qw(refaddr);
 use Socket;
 use Template;
 use URI;
@@ -60,6 +61,7 @@ use JMAP::Workers;
 use JMAP::FileNodeCopy;
 use JMAP::FileNode;   # max_bytes, is_too_large: the in-memory cap on one file's content
 use JMAP::Collation;
+use JMAP::CORS;
 use JMAP::Capabilities qw(imap_account_capabilities);
 
 # Backend modules (loaded in child after fork)
@@ -4782,11 +4784,23 @@ sub _max_body_for {
   };
 }
 
+# CORS, for a browser client on another origin (a webmail on its own host):
+# the origins in JMAP_CORS_ORIGINS, or those of the OIDC clients' http(s)
+# redirect URIs.  Only the JMAP port answers it: the respond hook below is
+# every server's, and the management port must never be readable from
+# another origin, so it checks the request's server against $cors_httpd.
+my $CORS = JMAP::CORS->new(origins => $ENV{JMAP_CORS_ORIGINS}, oidc_clients => \%OIDC_CLIENTS);
+warn "$_\n" for $CORS->warnings;
+my $cors_httpd;   # the JMAP port's server, once it exists
+
 # Headers every response carries unless it sets its own: no MIME sniffing,
 # no framing, no full URLs in Referer to other sites.  A download (/raw) is
 # also sandboxed: an attachment is served with the type its sender declared,
 # on this origin, and an HTML one ran its script as the user (with their
-# cookie on every same-origin request).
+# cookie on every same-origin request).  On the JMAP port, the CORS headers
+# too: every answer goes through here (redirects, 401s and the EventSource
+# stream included), and a 401 without them reaches a browser client as an
+# opaque network error, not as a 401.
 {
   no warnings 'redefine';
   my $orig = \&AnyEvent::HTTPD::Request::respond;
@@ -4806,6 +4820,8 @@ sub _max_body_for {
       my $path = eval { $self->url->path } // '';
       $h{'Content-Security-Policy'} = 'sandbox'
         if $path =~ m{^/raw/} && !$have{'content-security-policy'};
+      $CORS->decorate(\%h, ($self->headers || {})->{origin})
+        if $cors_httpd && ref $self->{httpd} && refaddr($self->{httpd}) == refaddr($cors_httpd);
       $res = [ $res->[0], $res->[1], \%h, @{$res}[3 .. $#$res] ];
     }
     return $orig->($self, $res);
@@ -4818,9 +4834,26 @@ require JMAP::CredentialStore;
 JMAP::CredentialStore->check_configured();
 
 my $port = $ENV{JMAP_PORT} || 9000;
-my $httpd = AnyEvent::HTTPD->new(port => $port, allowed_methods => [qw(GET HEAD POST PUT PATCH)]);
+# OPTIONS is taken for CORS preflights: without it, AnyEvent::HTTPD answers
+# 501 before any route runs, and a browser client gets no further.
+my $httpd = AnyEvent::HTTPD->new(port => $port, allowed_methods => [@JMAP::CORS::METHODS, 'OPTIONS']);
+$cors_httpd = $httpd;
 
-$httpd->reg_cb(request => sub { $stat{http_requests}++ });
+# Every OPTIONS is answered here, 204, and no route ever sees one: the
+# "request" event comes before the path events, and stop_request ends the
+# walk.  A preflight from an allowed origin gets the Access-Control-Allow-*
+# headers; anything else only Allow.  Header arithmetic only: the parent
+# never blocks.  A 204 has no body and must not carry Content-Length (RFC
+# 9110 S8.6); undef keeps AnyEvent::HTTPD from adding one.
+$httpd->reg_cb(request => sub {
+  my ($httpd, $req) = @_;
+  $stat{http_requests}++;
+  return unless $req->method eq 'OPTIONS';
+  $httpd->stop_request;
+  my $hdr = $req->headers || {};
+  my $h = $CORS->preflight($hdr->{origin}, $hdr->{'access-control-request-headers'});
+  $req->respond([204, 'No Content', { %$h, 'Content-Length' => undef }, '']);
+});
 
 my %ROUTES = (
   '/.well-known'      => \&do_wellknown,
@@ -4876,6 +4909,7 @@ $httpd->reg_cb('' => sub {
 warn "JMAP proxy listening on port $port\n";
 warn "  Data: $datadir\n";
 warn "  Base URL: $BASEURL\n";
+warn "  CORS origins: " . $CORS->describe . "\n";
 
 #
 # Management API & UI

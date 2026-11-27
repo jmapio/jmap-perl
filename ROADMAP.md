@@ -50,6 +50,8 @@ supports direct JMAP-to-JMAP passthrough for backends that already speak JMAP.
 - [x] Docker container with Caddy reverse proxy + auto TLS
 - [x] Webmail: Bulwark at webmail.jmap.io, TMail at tmail.jmap.io
 - [x] CORS headers for cross-origin webmail clients
+- [x] CORS in the proxy itself (`JMAP_CORS_ORIGINS`, defaulting to the OIDC clients' origins),
+      so a webmail on its own host works with no reverse-proxy configuration
 - [x] Static demo webmail at /demo/
 
 ## Phase 2: Auth & Multi-Account ✅
