@@ -69,6 +69,7 @@ All variables are optional unless marked **required**.
 | `JMAP_IDLE_TIMEOUT` | `300` | Seconds of inactivity before a per-account worker is killed. Set to `0` to disable. |
 | `JMAP_WORKER_TIMEOUT` | `1800` | Seconds a worker with requests waiting may go without answering before it is killed and those requests fail (a read from a server that never answers). `0` disables. |
 | `JMAP_OIDC_CLIENTS` | (none) | The OpenID Connect clients (e.g. a webmail doing SSO) the proxy issues codes to: a JSON object `{"client_id": ["https://exact/redirect/uri", ...]}`. Redirect URIs match exactly; clients must use PKCE (S256) and send `client_id`, `redirect_uri` and `code_verifier` to `/oauth/token`. Unset, `/oauth/authorize` and `/oauth/token` are off. |
+| `JMAP_CORS_ORIGINS` | the origins of the `http(s)` redirect URIs in `JMAP_OIDC_CLIENTS` | The origins a browser client on another host (a webmail such as Bulwark) may call the JMAP port from: space- or comma-separated, each `scheme://host[:port]` with no path (e.g. `https://webmail.example.com`), or `*` for any. The proxy answers the CORS preflight (`OPTIONS`) itself and adds `Access-Control-Allow-Origin` to every answer for those origins; it never sends `Access-Control-Allow-Credentials` (browser clients authenticate with the `Authorization` header). Unset or empty, a webmail registered in `JMAP_OIDC_CLIENTS` is allowed with no further setting; with neither set, CORS is off. The management port never answers CORS. The effective list is logged at startup. |
 | `JMAP_MGMT_TOKEN` | generated | The management API's token: send it as `Authorization: Bearer <token>` (or as the password of Basic auth, for the dashboard in a browser). Unset, one is generated on first start into `$JMAP_DATADIR/mgmt-token` (mode 0600). `/healthz` and `/metrics` need none. |
 | `JMAP_ALLOW_PRIVATE_BACKENDS` | (unset) | Every server a user names (IMAP, SMTP, CalDAV/CardDAV/WebDAV, a JMAP upstream and the URLs its session lists, autodiscovery) must be at a public address: a worker refuses to connect to loopback, private, link-local or similar addresses, so a user cannot make the proxy reach its own management API or the network behind it. Set to `1` when the mail servers are on the proxy's own network. |
 | `JMAP_PRIVATE_ALLOW` | (none) | Private addresses that are allowed anyway, comma-separated, with optional prefix lengths: e.g. an OpenBao server, or one internal IMAP host (`10.0.0.5,192.168.1.0/24,fd00::/8`). |
@@ -105,6 +106,10 @@ All variables are optional unless marked **required**.
 ## TLS Termination
 
 The proxy speaks plain HTTP. Put a reverse proxy in front.
+
+The proxy answers CORS itself (see `JMAP_CORS_ORIGINS`), so the reverse proxy
+must pass `OPTIONS` requests through and must not add `Access-Control-*`
+headers of its own: a header sent twice fails the browser's check.
 
 ### Caddy (recommended — automatic TLS via Let's Encrypt)
 

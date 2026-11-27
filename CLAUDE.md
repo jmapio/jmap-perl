@@ -74,6 +74,12 @@ Hard rules that are easy to violate:
   `i;unicode-casemap`) advertised in `collationAlgorithms`. Every string comparator in a
   `/query` sort goes through `JMAP::Collation::compare` with the Comparator's `collation`;
   a bare `cmp` there ignores it. Pure, like `Dispatch`; `t/collation.t` covers it.
+- `JMAP/CORS.pm` — which origins may call the JMAP port from a browser (`JMAP_CORS_ORIGINS`,
+  else the origins of the http(s) redirect URIs in `JMAP_OIDC_CLIENTS`) and the
+  `Access-Control-*` headers: the parent answers every `OPTIONS` 204 in the `request` event,
+  before any route, and the `respond` hook decorates every answer, but only the JMAP port's
+  (it is every server's, so it compares the request's server). Never `Allow-Credentials`.
+  Pure; `t/cors-origins.t`, and `t/cors.t` against a stack started with `JMAP_CORS_ORIGINS`.
 - `JMAP/QueryChanges.pm` — the `removed`/`added` lists of a `/queryChanges` from the old
   snapshot, the new results and the set of results that may have changed; also reports
   ids that moved without changing (the fewest: those outside the longest run that kept its
